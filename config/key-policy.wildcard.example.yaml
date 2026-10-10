@@ -1,9 +1,0 @@
-# 通配权限仍受用户当前实际权限约束；YAML 中的 * 必须加引号。
-schema_version: 1
-statements:
-  - effect: allow
-    actions: ['*']
-    resource:
-      kind: '*'
-      all_in_system: true
-    conditions: {}
