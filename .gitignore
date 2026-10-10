@@ -1,0 +1,14 @@
+node_modules/
+dist/
+bin/
+.data/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+*.secret
+.DS_Store
+config/production.yaml
+config/production.yml
+playwright-report/
+test-results/

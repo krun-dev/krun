@@ -1,0 +1,12 @@
+# 本地开发服务；仅绑定 loopback。
+listen: 127.0.0.1:8080
+public_url: http://127.0.0.1:8080
+development: true
+db: postgres://krun:CHANGE_ME@127.0.0.1:25432/krun_dev?sslmode=disable
+static_dir: dist
+providers:
+  - id: local
+    enabled: true # 改为 false 禁用本地开发登录
+    source_id: local-development
+    type: dev
+    name: 本地开发登录
