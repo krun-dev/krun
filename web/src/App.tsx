@@ -4,7 +4,6 @@ import { useTranslation } from "react-i18next";
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import {
   Activity,
-  ArrowLeft,
   ArrowUpRight,
   Building2,
   Check,
@@ -316,19 +315,6 @@ export default function App() {
                 </button>
               ))}
             </nav>
-            <button
-              onClick={() => {
-                setSystemView(false);
-                setSection("overview");
-                setMenu(false);
-              }}
-              className={cn(
-                "mt-5 flex items-center gap-3 rounded-md px-3 py-2.5 text-left text-[13px] text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
-              )}
-            >
-              <ArrowLeft size={17} />
-              {t("返回组织")}
-            </button>
           </>
         ) : (
         <>
@@ -390,19 +376,6 @@ export default function App() {
         </nav>
         </>
         )}
-        {me.system_admin && !systemView ? (
-          <button
-            onClick={() => {
-              setSystemView(true);
-              setSection("orgs");
-              setMenu(false);
-            }}
-            className="mt-5 flex items-center gap-3 rounded-md border border-primary/20 bg-primary/5 px-3 py-2.5 text-left text-[13px] text-primary hover:bg-primary/10"
-          >
-            <ShieldCheck size={17} />
-            {t("平台管理")}
-          </button>
-        ) : null}
         <div className="mt-auto pt-8">
           <div className="rounded-md border bg-background/50 p-4">
             <Terminal size={19} className="text-primary" />
@@ -454,6 +427,20 @@ export default function App() {
           </span>
         </div>
         <div className="ml-3 flex shrink-0 items-center gap-3">
+          {me.system_admin ? (
+            <Button
+              variant={systemView ? "default" : "ghost"}
+              size="icon-sm"
+              aria-label={systemView ? t("返回组织") : t("平台管理")}
+              title={systemView ? t("返回组织") : t("平台管理")}
+              onClick={() => {
+                setSystemView((v) => !v);
+                setSection(systemView ? "overview" : "orgs");
+              }}
+            >
+              <ShieldCheck size={16} />
+            </Button>
+          ) : null}
           <LanguageSwitch />
           <Button
             variant="ghost"
