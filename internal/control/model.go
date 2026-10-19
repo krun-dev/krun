@@ -128,6 +128,7 @@ type Audit struct {
 	Revision     int       `json:"revision"`
 }
 type State struct {
+	Workers       *WorkerState
 	Revision      int
 	Bootstrapped  bool
 	Sources       map[string]string
@@ -149,7 +150,7 @@ type State struct {
 }
 
 func newState() *State {
-	return &State{Sources: map[string]string{}, Users: map[string]User{}, Organizations: map[string]Organization{}, Members: map[string]Member{}, Groups: map[string]Group{}, Assignments: map[string]Assignment{}, Resources: map[string]Resource{}, Keys: map[string]APIKey{}, KeyHashes: map[string]string{}, Sessions: map[string]Session{}, Browsers: map[string]Browser{}, Logins: map[string]Login{}, EmailLogins: map[string]EmailLogin{}, Devices: map[string]Device{}, Invitations: map[string]time.Time{}, Audits: []Audit{}}
+	return &State{Workers: newWorkerState(), Sources: map[string]string{}, Users: map[string]User{}, Organizations: map[string]Organization{}, Members: map[string]Member{}, Groups: map[string]Group{}, Assignments: map[string]Assignment{}, Resources: map[string]Resource{}, Keys: map[string]APIKey{}, KeyHashes: map[string]string{}, Sessions: map[string]Session{}, Browsers: map[string]Browser{}, Logins: map[string]Login{}, EmailLogins: map[string]EmailLogin{}, Devices: map[string]Device{}, Invitations: map[string]time.Time{}, Audits: []Audit{}}
 }
 func contains(xs []string, x string) bool {
 	for _, v := range xs {

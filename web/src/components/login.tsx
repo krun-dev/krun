@@ -33,14 +33,14 @@ export function Login({
     setBusy(true);
     setFailed("");
     try {
-      const response = await fetch("/auth/csrf", {
+      const response = await fetch("/api/auth/csrf", {
         credentials: "same-origin",
         headers: { "Accept-Language": locale() },
       });
       if (!response.ok) throw new Error(t("无法获取登录令牌"));
       const { csrf_token } = await response.json();
-      const returnTo = `/console/${window.location.search.includes("cli=") ? window.location.search : ""}`;
-      const login = await fetch(`/auth/${encodeURIComponent(provider)}/login`, {
+      const returnTo = `/${window.location.search}`;
+      const login = await fetch(`/api/auth/${encodeURIComponent(provider)}/login`, {
         method: "POST",
         credentials: "same-origin",
         headers: {
@@ -78,7 +78,7 @@ export function Login({
             {t("尽在掌握。")}
           </h1>
           <p className="mt-6 max-w-sm text-base leading-relaxed text-slate-400">
-            {t("让团队在同一个工作空间协作。")}
+            {t("让团队在同一个组织协作。")}
             <br />
             {t("从身份认证到资源授权，每一次访问都有明确的边界。")}
           </p>
@@ -117,7 +117,7 @@ export function Login({
             {t("Welcome to krun")}
           </p>
           <h2 className="text-3xl font-semibold tracking-tight">
-            {t("登录工作空间")}
+            {t("登录组织")}
           </h2>
           <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
             {t("使用团队的身份来源继续。首次登录后，")}
@@ -141,7 +141,7 @@ export function Login({
               <form
                 key={p.id}
                 method="post"
-                action={`/auth/${encodeURIComponent(p.id)}/login`}
+                action={`/api/auth/${encodeURIComponent(p.id)}/login`}
                 onSubmit={(e) => {
                   e.preventDefault();
                   void begin(p.id);
@@ -150,7 +150,7 @@ export function Login({
                 <input
                   type="hidden"
                   name="return_to"
-                  value={`/console/${window.location.search.includes("cli=") ? window.location.search : ""}`}
+                  value={`/${window.location.search}`}
                 />
                 <Button
                   type="submit"

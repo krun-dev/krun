@@ -83,16 +83,55 @@ test("language switches persist, interpolate data safely, and preserve policy id
 
 test("all literal translation keys are cataloged", async () => {
   const ts = await import("typescript");
-  const zh = JSON.parse(fs.readFileSync(new URL("../locales/zh-CN.json", import.meta.url)));
-  const runtime = JSON.parse(fs.readFileSync(new URL("../../../internal/localize/zh-CN.json", import.meta.url)));
-  const keys = new Set([...Object.keys(zh), ...Object.keys(runtime), ...Object.values(runtime)]);
-  const files = ["../App.tsx", "../components/common.tsx", "../components/login.tsx", "../components/email-login.tsx", "../components/management.tsx", "../components/keys.tsx", "../components/audit.tsx", "../components/language.tsx", "../components/ui/dialog.tsx", "./api.ts", "./i18n.ts", "./permissions.ts"];
+  const zh = JSON.parse(
+    fs.readFileSync(new URL("../locales/zh-CN.json", import.meta.url)),
+  );
+  const runtime = JSON.parse(
+    fs.readFileSync(
+      new URL("../../../internal/localize/zh-CN.json", import.meta.url),
+    ),
+  );
+  const keys = new Set([
+    ...Object.keys(zh),
+    ...Object.keys(runtime),
+    ...Object.values(runtime),
+  ]);
+  const files = [
+    "../App.tsx",
+    "../components/common.tsx",
+    "../components/login.tsx",
+    "../components/email-login.tsx",
+    "../components/management.tsx",
+    "../components/keys.tsx",
+    "../components/audit.tsx",
+    "../components/workers.tsx",
+    "../components/workers-repository.tsx",
+    "../components/language.tsx",
+    "../components/ui/dialog.tsx",
+    "./api.ts",
+    "./i18n.ts",
+    "./permissions.ts",
+  ];
   for (const file of files) {
     const source = fs.readFileSync(new URL(file, import.meta.url), "utf8");
-    const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith("tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+    const ast = ts.createSourceFile(
+      file,
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      file.endsWith("tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    );
     const walk = (node) => {
-      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "t" && ts.isStringLiteral(node.arguments[0])) {
-        assert.ok(keys.has(node.arguments[0].text), `${file}: ${node.arguments[0].text}`);
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === "t" &&
+        ts.isStringLiteral(node.arguments[0])
+      ) {
+        assert.ok(
+          keys.has(node.arguments[0].text),
+          `${file}: ${node.arguments[0].text}`,
+        );
       }
       ts.forEachChild(node, walk);
     };

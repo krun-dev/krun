@@ -1,0 +1,5 @@
+generated/
+kubeconfig
+evidence/
+*.log
+__pycache__/

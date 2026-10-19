@@ -13,14 +13,19 @@ export async function api<T>(
   path: string,
   method = "GET",
   input?: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
+  signal = signal
+    ? AbortSignal.any([signal, AbortSignal.timeout(20000)])
+    : AbortSignal.timeout(20000);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "Accept-Language": locale(),
   };
   if (method !== "GET") {
-    const response = await fetch("/auth/csrf", {
+    const response = await fetch("/api/auth/csrf", {
       credentials: "same-origin",
+      signal,
       headers: { "Accept-Language": locale() },
     });
     if (!response.ok)
@@ -35,10 +40,21 @@ export async function api<T>(
     method,
     headers,
     credentials: "same-origin",
+    signal,
     body: input === undefined ? undefined : JSON.stringify(input),
   });
   if (response.status === 204) return undefined as T;
-  const data = await response.json();
+  const raw = await response.text();
+  let data;
+  try {
+    data = raw ? JSON.parse(raw) : {};
+  } catch {
+    throw new APIError(
+      response.status,
+      "INVALID_RESPONSE",
+      t("控制服务响应异常，请稍后刷新。"),
+    );
+  }
   if (!response.ok)
     throw new APIError(
       response.status,

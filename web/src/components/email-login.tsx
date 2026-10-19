@@ -22,7 +22,7 @@ export function EmailLogin({ provider, busy, onBusy }: {
   const [retryAt, setRetryAt] = useState(0);
   const [remaining, setRemaining] = useState(0);
   const [failed, setFailed] = useState("");
-  const endpoint = `/auth/${encodeURIComponent(provider)}/email`;
+  const endpoint = `/api/auth/${encodeURIComponent(provider)}/email`;
 
   useEffect(() => {
     if (!retryAt) return;
@@ -36,7 +36,7 @@ export function EmailLogin({ provider, busy, onBusy }: {
     onBusy(true);
     setFailed("");
     try {
-      const returnTo = `/console/${window.location.search.includes("cli=") ? window.location.search : ""}`;
+      const returnTo = `/${window.location.search.includes("cli=") ? window.location.search : ""}`;
       const result = await api<Challenge>(`${endpoint}/code`, "POST", { email, return_to: returnTo });
       setChallenge(result);
       setCode("");

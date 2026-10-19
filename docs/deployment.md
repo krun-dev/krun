@@ -2,6 +2,8 @@
 
 前端是 Vite 静态构建，后端是独立 Go 服务，可以部署在不同机器或容器。浏览器通过一个公开 origin 访问前端：`/console/` 由静态服务器提供，`/auth/` 和 `/api/` 代理到 Go。前端不需要 Node.js 运行时。
 
+Workers 的构建与发布为后端可选能力，见 [接口与流程](workers-backend.md) 和 [kind 部署](../deploy/workers-kind/README.md)。该实验部署仅运行后端，不包含控制台前端。
+
 `static_dir` 只控制 Go 是否托管静态文件：
 
 | 配置 | 后端行为 |

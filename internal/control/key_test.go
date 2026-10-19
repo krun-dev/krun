@@ -99,7 +99,7 @@ func TestWildcardConditionsKindsAndDeny(t *testing.T) {
 	st, admin, viewer := fixture()
 	st.Resources["model-a"] = Resource{ID: "model-a", Kind: "model", Organization: "org-a"}
 	policy := Policy{Version: 1, Statements: []Statement{
-		{Effect: "allow", Actions: []string{"*"}, Resource: Selector{Kind: "service", AllSystem: true}, Conditions: Conditions{Environments: []string{"staging"}}},
+		{Effect: "allow", Actions: []string{"*"}, Resource: Selector{Kind: "service", AllSystem: true}, Conditions: Conditions{Environments: []string{"release-candidate"}}},
 		{Effect: "deny", Actions: []string{"*"}, Resource: Selector{Kind: "service", Organization: "org-a", IDs: []string{"svc-a"}}, Conditions: Conditions{Environments: []string{"production"}}},
 	}}
 	if e := validatePolicy(st, Principal{User: viewer}, "", "system", policy); e != nil {
@@ -109,14 +109,14 @@ func TestWildcardConditionsKindsAndDeny(t *testing.T) {
 	for _, tc := range []struct {
 		kind, id, env string
 		allowed       bool
-	}{{"service", "svc-a", "staging", true}, {"service", "svc-a", "production", false}, {"model", "model-a", "staging", false}} {
+	}{{"service", "svc-a", "release-candidate", true}, {"service", "svc-a", "production", false}, {"model", "model-a", "release-candidate", false}} {
 		target, _ := resolve(st, tc.kind, tc.id, tc.env)
 		d, e := Authorize(st, Principal{User: viewer, Key: &key}, tc.kind+".read", target)
 		if e != nil || d.Allowed != tc.allowed {
 			t.Fatalf("%+v: %+v %v", tc, d, e)
 		}
 	}
-	model, _ := resolve(st, "model", "model-a", "staging")
+	model, _ := resolve(st, "model", "model-a", "release-candidate")
 	shared, err := Authorize(st, Principal{User: admin, Key: &key}, "log.read", model)
 	if err != nil || !shared.UserAllowed || shared.KeyAllowed || shared.Allowed {
 		t.Fatal("shared action escaped the key's selected resource kind", shared, err)

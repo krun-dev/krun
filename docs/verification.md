@@ -2,6 +2,8 @@
 
 项目使用 Go 自动化测试、前端权限与国际化测试，以及浏览器联调验证认证和授权流程。测试数据使用独立 PostgreSQL 数据库，不使用生产数据。
 
+Workers 后端另有独立 kind 端到端验收，覆盖真实构建 Job、S3 制品、workerd 加载、发布与回滚。见 [Workers 验证报告](workers-kind-verification.md)。
+
 ## 运行检查
 
 在仓库根目录运行：

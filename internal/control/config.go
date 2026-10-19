@@ -65,13 +65,15 @@ type SMTPConfig struct {
 }
 
 type Config struct {
-	SMTP        SMTPConfig       `json:"smtp"`
-	Listen      string           `json:"listen"`
-	PublicURL   string           `json:"public_url"`
-	DB          string           `json:"db"`
-	Development bool             `json:"development"`
-	StaticDir   string           `json:"static_dir"`
-	Providers   []ProviderConfig `json:"providers"`
+	Workers        *WorkersConfig   `json:"workers,omitempty"`
+	SMTP           SMTPConfig       `json:"smtp"`
+	Listen         string           `json:"listen"`
+	InternalListen string           `json:"internal_listen"`
+	PublicURL      string           `json:"public_url"`
+	DB             string           `json:"db"`
+	Development    bool             `json:"development"`
+	StaticDir      string           `json:"static_dir"`
+	Providers      []ProviderConfig `json:"providers"`
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -92,13 +94,21 @@ func LoadConfig(path string) (Config, error) {
 var slug = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
 func (c *Config) Validate() error {
+	if err := c.Workers.validate(); err != nil {
+		return err
+	}
 	if c.Listen == "" {
 		c.Listen = "127.0.0.1:8080"
 	}
-	if c.Development {
-		host, _, err := net.SplitHostPort(c.Listen)
-		if err != nil || (host != "127.0.0.1" && host != "localhost" && host != "::1") {
-			return errors.New("development server must bind loopback")
+	if _, _, err := net.SplitHostPort(c.Listen); err != nil {
+		return errors.New("listen must be host:port")
+	}
+	if c.InternalListen != "" {
+		if _, _, err := net.SplitHostPort(c.InternalListen); err != nil {
+			return errors.New("internal_listen must be host:port")
+		}
+		if c.InternalListen == c.Listen {
+			return errors.New("internal_listen must differ from listen")
 		}
 	}
 	u, e := url.Parse(c.PublicURL)

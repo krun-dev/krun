@@ -1,0 +1,213 @@
+[
+  {
+    "name": "authenticated real Kubernetes build finalizes S3 archive",
+    "state": "pass",
+    "detail": {
+      "build_id": "bld_xaVakRzNaOafja2Y",
+      "artifact": {
+        "id": "art_a683d76b25d4d143cfe4e1f5855467ee78e3ee164c4be6b478defecf8fe4b33a",
+        "organization_id": "org_EDcGm1XfTA9lv5fm",
+        "state": "finalized",
+        "archive_sha256": "40b7c896a680e77f65dafb02fd228a6887e37ab9e0feebe5d6d0cb0a4665444c",
+        "manifest_sha256": "79d3162cb6fa0bd62e7c611aeeecd38203e1be30a2d609b69265a0605be87f56",
+        "module_sha256": "be07594fecb0e077f4361dfebf6c3824909be2041a03de871dbb9b567d96eb4b",
+        "archive_size_bytes": 878,
+        "object_key": "v1/org_EDcGm1XfTA9lv5fm/sha256/40b7c896a680e77f65dafb02fd228a6887e37ab9e0feebe5d6d0cb0a4665444c/bundle.tar.gz",
+        "storage_location_id": "primary",
+        "bucket": "krun-artifacts",
+        "created_at": "2026-10-13T08:43:40.991367982Z"
+      },
+      "job": "krun-build-68a7a27156ce670a212298b9"
+    }
+  },
+  {
+    "name": "test release waits for actual runtime and Gateway adoption",
+    "state": "pass",
+    "detail": {
+      "operation": "op_jtlO9hYM0ZaG0CHH",
+      "response": {
+        "version": "v1-6f920eb0",
+        "environment": "test",
+        "greeting": "default",
+        "url": "http://w-311564e3dac21ec0-test.workers.test/orders?id=1"
+      }
+    }
+  },
+  {
+    "name": "same Artifact publishes with production configuration",
+    "state": "pass",
+    "detail": {
+      "deployment": "dep_bb8790dab905a210420a6e07689570a2ec4e4b0af7355bc60c1daf9acecb45c0",
+      "response": {
+        "version": "v1-6f920eb0",
+        "environment": "production",
+        "greeting": "production-value",
+        "url": "http://w-311564e3dac21ec0-production.workers.test/"
+      }
+    }
+  },
+  {
+    "name": "v2 build and publish changes production without changing test",
+    "state": "pass",
+    "detail": {
+      "build_id": "bld_g1wjlY-s3EN9T8Qi"
+    }
+  },
+  {
+    "name": "stale Release revision rejected",
+    "state": "pass",
+    "detail": "REVISION_CONFLICT"
+  },
+  {
+    "name": "historical deployment rollback restores code and immutable configuration",
+    "state": "pass",
+    "detail": {
+      "version": "v1-6f920eb0",
+      "environment": "production",
+      "greeting": "production-value",
+      "url": "http://w-311564e3dac21ec0-production.workers.test/"
+    }
+  },
+  {
+    "name": "syntax error fails build and retains production",
+    "state": "pass",
+    "detail": {
+      "build_id": "bld_U_pbF_S_17Oqrpb2",
+      "error": "Builder failed"
+    }
+  },
+  {
+    "name": "compiler cannot read files outside project",
+    "state": "pass",
+    "detail": {
+      "build_id": "bld_t3z5LI2fL7MHou0r"
+    }
+  },
+  {
+    "name": "candidate module initialization failure leaves current Release",
+    "state": "pass",
+    "detail": {
+      "operation": "op_Xz5kx7BKJkPGf90v",
+      "error": "Candidate validation failed on runtime-default-8444fff448-9m8gv"
+    }
+  },
+  {
+    "name": "API Key is scoped to environment and cannot publish production",
+    "state": "pass",
+    "detail": {
+      "denied": 403,
+      "visible": [
+        "test"
+      ]
+    }
+  },
+  {
+    "name": "disabled staging rejects publish; enabling supplies a separate Release",
+    "state": "pass",
+    "detail": {
+      "name": "staging",
+      "enabled": true,
+      "host": "w-311564e3dac21ec0-staging.workers.test",
+      "visibility": "private",
+      "configuration_revision": 2,
+      "variables": {
+        "GREETING": "staging-value"
+      },
+      "release_revision": 1,
+      "deployment_id": "dep_82bdc141be72813226eb6186e939faef16b06cdcc83afa2b045b8ef572e54247",
+      "confirmed_deployment_id": "dep_82bdc141be72813226eb6186e939faef16b06cdcc83afa2b045b8ef572e54247"
+    }
+  },
+  {
+    "name": "business network and platform credentials are absent",
+    "state": "pass",
+    "detail": {
+      "blocked": true,
+      "tcpBlocked": true,
+      "bindings": [
+        "KRUN_ENVIRONMENT",
+        "KRUN_SERVICE_ID",
+        "KRUN_DEPLOYMENT_ID"
+      ]
+    }
+  },
+  {
+    "name": "build idempotency and content addressed Artifact deduplication",
+    "state": "pass",
+    "detail": {
+      "same_build": "bld_c_fAiqL_Totmml1e",
+      "artifact": "art_a683d76b25d4d143cfe4e1f5855467ee78e3ee164c4be6b478defecf8fe4b33a"
+    }
+  },
+  {
+    "name": "invalid paths and cross-service Artifact access rejected",
+    "state": "pass",
+    "detail": {
+      "path": 422,
+      "other_service": 404
+    }
+  },
+  {
+    "name": "publishing never restarted the runtime Pods",
+    "state": "pass",
+    "detail": [
+      {
+        "name": "runtime-default-8444fff448-9m8gv",
+        "uid": "8c28617d-b501-4814-9bef-7234c541d11b",
+        "restarts": 0
+      },
+      {
+        "name": "runtime-default-8444fff448-qmwzp",
+        "uid": "8fdba132-e813-4e89-80e6-d6005f53ffc9",
+        "restarts": 0
+      }
+    ]
+  },
+  {
+    "name": "control restart recovers durable state and object-backed code",
+    "state": "pass",
+    "detail": {
+      "history": 3
+    }
+  },
+  {
+    "name": "control interruption during build resumes the durable Job",
+    "state": "pass",
+    "detail": {
+      "build": "bld_4R2s7Bo0Wg-Fs6wl",
+      "job": "krun-build-092d03f483af77b6d944178d"
+    }
+  },
+  {
+    "name": "control interruption during publish resumes the Operation",
+    "state": "pass",
+    "detail": {
+      "operation": "op_q-UDtoQo8w3-VEUs",
+      "state": "available",
+      "rollback": "op_7hbOWKtblDNmpTKp"
+    }
+  },
+  {
+    "name": "rollback recovers a committed release with stalled runtime adoption",
+    "state": "pass",
+    "detail": {
+      "previous": "op_8d2LktkuQWdWpvzD",
+      "previous_state": "available",
+      "recovery": "op_7uOL2farbO3H5Ehm"
+    }
+  },
+  {
+    "name": "replacement runtime Pod cold-loads the current object-backed Release",
+    "state": "pass",
+    "detail": {
+      "replaced": "8c28617d-b501-4814-9bef-7234c541d11b",
+      "replacement": "c29a1931-d532-4322-8243-d2db66765f36",
+      "response": {
+        "version": "v1-6f920eb0",
+        "environment": "production",
+        "greeting": "production-value",
+        "url": "http://w-311564e3dac21ec0-production.workers.test/"
+      }
+    }
+  }
+]

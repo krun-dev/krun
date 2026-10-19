@@ -35,10 +35,16 @@ var actions = map[string][]string{
 }
 var roleActions = map[string][]string{
 	"viewer":    {"organization.read", "service.list", "service.read", "model.list", "model.read"},
-	"developer": {"organization.read", "service.list", "service.read", "service.create", "service.update", "service.version.create", "service.version.read", "model.list", "model.read", "model.create", "model.update", "model.version.create", "model.version.read", "build.start"},
-	"publisher": {"organization.read", "service.list", "service.read", "service.version.read", "service.publish", "service.rollback", "model.list", "model.read", "model.version.read", "model.publish", "model.rollback"},
+	"developer": {"organization.read", "service.list", "service.read", "service.create", "service.update", "service.version.create", "service.version.read", "model.list", "model.read", "model.create", "model.update", "model.version.create", "model.version.read", "build.start", "log.read", "source.read", "service.invoke"},
+	"publisher": {"organization.read", "service.list", "service.read", "service.version.read", "service.publish", "service.rollback", "service.invoke", "model.list", "model.read", "model.version.read", "model.publish", "model.rollback"},
 }
-var environments = []string{"global", "development", "staging", "production"}
+// Environment values: the reserved scopes ("global", "development") plus the
+// baseline and any preview slug a service may define.
+var environments = []string{"global", "development", "production"}
+
+func environmentValid(v string) bool {
+	return contains(environments, v) || (v != "test" && v != "staging" && workerPreviewValid(v))
+}
 
 func entityType(kind string) string {
 	switch kind {
@@ -279,7 +285,7 @@ func evaluate(ps *cedar.PolicySet, kind, id, action string, t Target) (bool, err
 }
 func Authorize(st *State, p Principal, action string, t Target) (Decision, error) {
 	d := Decision{Revision: st.Revision, KeyAllowed: p.Key == nil, Reason: "PERMISSION_DENIED"}
-	if !contains(actions[action], t.Kind) || !contains(environments, t.Environment) || p.User.Status != "active" || !sourceAllowed(st, p.User, t.Organization) {
+	if !contains(actions[action], t.Kind) || !environmentValid(t.Environment) || p.User.Status != "active" || !sourceAllowed(st, p.User, t.Organization) {
 		return d, nil
 	}
 	ps, e := compileUser(st, p.User)
@@ -371,7 +377,7 @@ func validatePolicy(st *State, p Principal, org, scope string, policy Policy) er
 			envs = environments
 		}
 		for _, env := range envs {
-			if !contains(environments, env) {
+			if !environmentValid(env) {
 				return problem(422, "POLICY_INVALID", "unknown environment")
 			}
 		}

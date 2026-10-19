@@ -104,12 +104,12 @@ func newProvider(ctx context.Context, c Config, p ProviderConfig, client *http.C
 	} else {
 		endpoint.AuthStyle = oauth2.AuthStyleInParams
 	}
-	out.oauth = &oauth2.Config{ClientID: p.ClientID, ClientSecret: p.ClientSecret, Endpoint: endpoint, Scopes: p.Scopes, RedirectURL: c.PublicURL + "/auth/" + p.ID + "/callback"}
+	out.oauth = &oauth2.Config{ClientID: p.ClientID, ClientSecret: p.ClientSecret, Endpoint: endpoint, Scopes: p.Scopes, RedirectURL: c.PublicURL + "/api/auth/" + p.ID + "/callback"}
 	return out, nil
 }
 func (p *provider) begin(state, verifier, nonce string) string {
 	if p.config.Type == "dev" {
-		return "/auth/" + p.config.ID + "/callback?state=" + url.QueryEscape(state) + "&code=dev"
+		return "/api/auth/" + p.config.ID + "/callback?state=" + url.QueryEscape(state) + "&code=dev"
 	}
 	options := []oauth2.AuthCodeOption{oauth2.S256ChallengeOption(verifier)}
 	for name, value := range p.config.AuthorizeParams {
@@ -289,10 +289,10 @@ func lookup(data any, path string) (any, error) {
 }
 func loginReturnPath(value string) (string, error) {
 	if value == "" {
-		return "/console/", nil
+		return "/", nil
 	}
 	u, err := url.Parse(value)
-	if err != nil || u.IsAbs() || u.Host != "" || !strings.HasPrefix(u.Path, "/console/") || strings.ContainsAny(value, "\\\r\n") {
+	if err != nil || u.IsAbs() || u.Host != "" || !strings.HasPrefix(u.Path, "/") || strings.ContainsAny(value, "\\\r\n") {
 		return "", problem(400, "INVALID_REQUEST", "Invalid return path")
 	}
 	return value, nil
@@ -444,7 +444,7 @@ func (s *Server) callbackError(w http.ResponseWriter, r *http.Request, code stri
 		s.audit(st, Principal{Kind: "anonymous"}, r, "auth.login.failed."+code, r.PathValue("provider"), false)
 		return nil
 	})
-	http.Redirect(w, r, "/console/?error="+url.QueryEscape(code)+"&request_id="+url.QueryEscape(r.Header.Get("X-Krun-Request-ID")), http.StatusSeeOther)
+	http.Redirect(w, r, "/?error="+url.QueryEscape(code)+"&request_id="+url.QueryEscape(r.Header.Get("X-Krun-Request-ID")), http.StatusSeeOther)
 }
 func (s *Server) deviceStart(w http.ResponseWriter, r *http.Request) {
 	if s.limited(r) {
@@ -467,7 +467,7 @@ func (s *Server) deviceStart(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, e)
 		return
 	}
-	s.json(w, 200, map[string]any{"device_code": device, "user_code": user, "verification_uri": s.Config.PublicURL + "/console/?cli=" + user, "expires_in": 300, "interval": 3})
+	s.json(w, 200, map[string]any{"device_code": device, "user_code": user, "verification_uri": s.Config.PublicURL + "/?cli=" + user, "expires_in": 300, "interval": 3})
 }
 func (s *Server) devicePoll(w http.ResponseWriter, r *http.Request) {
 	if s.limited(r) {

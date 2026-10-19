@@ -619,7 +619,7 @@ export function IAMPage({
                         <Field
                           label={t("环境条件（可选）")}
                           hint={t(
-                            "逗号分隔：global, development, staging, production。留空表示全部环境。",
+                            "逗号分隔：global, development, test, staging, production。留空表示全部环境。",
                           )}
                         >
                           <Input
@@ -741,7 +741,7 @@ export function CheckPage({
               </Field>
               <Field label={t("目标环境")}>
                 <SelectField value={environment} onChange={setEnvironment}>
-                  {["global", "development", "staging", "production"].map(
+                  {["global", "development", "test", "staging", "production"].map(
                     (env) => (
                       <option key={env} value={env}>
                         {environmentLabel(env)}
@@ -936,7 +936,7 @@ export function ResourcesPage({
         eyebrow={t("Resource catalog")}
         title={t("资源目录")}
         description={t(
-          "管理用于授权的服务与模型元数据。构建与部署执行器将在后续接入。",
+          "管理服务与模型元数据；Workers 构建与发布可从 Workers 页面操作。",
         )}
         action={
           <Button onClick={() => setOpen(true)}>

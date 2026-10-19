@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -46,13 +47,17 @@ type rateEntry struct {
 	Count int
 }
 type Server struct {
-	Config    Config
-	Store     *Store
-	mux       *http.ServeMux
-	providers map[string]*provider
-	rateMu    sync.Mutex
-	rates     map[string]rateEntry
-	sendEmail func(context.Context, string, string, string) error
+	workers                *workersController
+	workerInvokeClient     *http.Client
+	workerRepositoryClient *http.Client
+	Config                 Config
+	Store                  *Store
+	mux                    *http.ServeMux
+	internalMux            *http.ServeMux
+	providers              map[string]*provider
+	rateMu                 sync.Mutex
+	rates                  map[string]rateEntry
+	sendEmail              func(context.Context, string, string, string) error
 }
 
 func NewServer(ctx context.Context, c Config, store *Store) (*Server, error) {
@@ -60,6 +65,8 @@ func NewServer(ctx context.Context, c Config, store *Store) (*Server, error) {
 		return nil, e
 	}
 	s := &Server{Config: c, Store: store, providers: map[string]*provider{}, rates: map[string]rateEntry{}}
+	s.workerInvokeClient = newWorkerInvokeClient()
+	s.workerRepositoryClient = newWorkerRepositoryClient()
 	s.sendEmail = c.sendVerificationEmail
 	client := upstreamClient(c)
 	for _, pc := range c.Providers {
@@ -94,33 +101,48 @@ func NewServer(ctx context.Context, c Config, store *Store) (*Server, error) {
 	}); e != nil {
 		return nil, e
 	}
+	if c.Workers != nil {
+		var err error
+		s.workers, err = newWorkersController(s)
+		if err != nil {
+			return nil, err
+		}
+	}
 	s.routes()
 	return s, nil
 }
 func (s *Server) routes() {
 	m := http.NewServeMux()
 	s.mux = m
-	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+	m.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if e := s.Store.Update(r.Context(), func(*State) error { return nil }); e != nil {
 			s.writeError(w, r, e)
 			return
 		}
 		s.json(w, 200, map[string]string{"status": "ok"})
 	})
-	m.HandleFunc("GET /auth/providers", s.providersHandler)
-	m.HandleFunc("GET /auth/csrf", s.csrfHandler)
-	m.HandleFunc("POST /auth/{provider}/login", s.loginHandler)
-	m.HandleFunc("POST /auth/{provider}/email/code", s.emailCodeHandler)
-	m.HandleFunc("POST /auth/{provider}/email/verify", s.emailVerifyHandler)
-	m.HandleFunc("GET /auth/{provider}/callback", s.callbackHandler)
-	m.HandleFunc("GET /auth/me", s.protected(false, s.me))
-	m.HandleFunc("POST /auth/logout", s.protected(true, s.logout))
-	m.HandleFunc("POST /auth/cli/start", s.deviceStart)
-	m.HandleFunc("POST /auth/cli/poll", s.devicePoll)
-	m.HandleFunc("POST /auth/cli/approve", s.protected(true, s.deviceApprove))
+	m.HandleFunc("GET /api/auth/providers", s.providersHandler)
+	m.HandleFunc("GET /api/auth/csrf", s.csrfHandler)
+	m.HandleFunc("POST /api/auth/{provider}/login", s.loginHandler)
+	m.HandleFunc("POST /api/auth/{provider}/email/code", s.emailCodeHandler)
+	m.HandleFunc("POST /api/auth/{provider}/email/verify", s.emailVerifyHandler)
+	m.HandleFunc("GET /api/auth/{provider}/callback", s.callbackHandler)
+	m.HandleFunc("GET /api/auth/me", s.protected(false, s.me))
+	m.HandleFunc("POST /api/auth/logout", s.protected(true, s.logout))
+	m.HandleFunc("POST /api/auth/cli/start", s.deviceStart)
+	m.HandleFunc("POST /api/auth/cli/poll", s.devicePoll)
+	m.HandleFunc("POST /api/auth/cli/approve", s.protected(true, s.deviceApprove))
 	s.apiRoutes(m)
+	s.workersRoutes(m)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { s.writeError(w, r, notFound()) })
-	m.HandleFunc("/auth/", func(w http.ResponseWriter, r *http.Request) { s.writeError(w, r, notFound()) })
+	s.internalMux = http.NewServeMux()
+	if s.Config.Workers != nil {
+		s.internalMux.HandleFunc("GET /api/internal/workers/snapshot", s.workerRuntimeSnapshot)
+		s.internalMux.HandleFunc("GET /api/internal/workers/deployments/{deployment}", s.workerRuntimeDeployment)
+		s.internalMux.HandleFunc("GET /api/internal/workers/artifacts/{artifact}", s.workerRuntimeArtifact)
+		s.internalMux.HandleFunc("POST /api/internal/workers/ack", s.workerRuntimeAck)
+	}
+	s.internalMux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { s.writeError(w, r, notFound()) })
 	if s.Config.StaticDir == "" {
 		m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { s.writeError(w, r, notFound()) })
 		return
@@ -132,22 +154,13 @@ func (s *Server) routes() {
 			s.writeError(w, r, notFound())
 			return
 		}
-		consolePath := r.URL.Path == "/" || r.URL.Path == "/console" || strings.HasPrefix(r.URL.Path, "/console/")
-		if s.Config.Development && consolePath && r.Host != publicOrigin.Host {
-			path := r.URL.EscapedPath()
-			if r.URL.Path == "/" || r.URL.Path == "/console" {
-				path = "/console/"
-			}
-			target := s.Config.PublicURL + path
+		if s.Config.Development && r.Host != publicOrigin.Host {
+			target := s.Config.PublicURL + r.URL.EscapedPath()
 			if r.URL.RawQuery != "" {
 				target += "?" + r.URL.RawQuery
 			}
 			w.Header().Set("Cache-Control", "no-store")
 			http.Redirect(w, r, target, http.StatusSeeOther)
-			return
-		}
-		if r.URL.Path == "/" {
-			http.Redirect(w, r, "/console/", http.StatusSeeOther)
 			return
 		}
 		fs.ServeHTTP(w, r)
@@ -161,10 +174,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
-	if strings.HasPrefix(r.URL.Path, "/auth/") || strings.HasPrefix(r.URL.Path, "/api/") {
+	if strings.HasPrefix(r.URL.Path, "/api/") {
 		w.Header().Set("Cache-Control", "no-store")
 	}
 	s.mux.ServeHTTP(w, r)
+}
+
+// serveInternal fronts the runtime-only listener: /api/internal/* only, never static files.
+func (s *Server) serveInternal(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
+	s.internalMux.ServeHTTP(w, r)
 }
 func (s *Server) json(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -272,6 +292,23 @@ func (s *Server) authenticate(st *State, r *http.Request) (Principal, error) {
 
 type endpoint func(*State, Principal, *http.Request) (any, int, error)
 
+// Shared credential and CSRF checks for handlers that use a state transaction.
+func (s *Server) protectedPrincipal(st *State, r *http.Request, sessionOnly bool) (Principal, error) {
+	principal, err := s.authenticate(st, r)
+	if err != nil {
+		return Principal{}, err
+	}
+	if sessionOnly && principal.Kind == "api_key" {
+		return Principal{}, forbidden()
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && principal.Kind == "session" {
+		if !s.validCSRF(r, st.Sessions[principal.SessionHash].CSRF) {
+			return Principal{}, problem(403, "CSRF_INVALID", "CSRF verification failed")
+		}
+	}
+	return principal, nil
+}
+
 func (s *Server) protected(sessionOnly bool, fn endpoint) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Read the bounded request outside the shared state transaction; slow clients must not hold the IAM lock.
@@ -288,17 +325,9 @@ func (s *Server) protected(sessionOnly bool, fn endpoint) http.HandlerFunc {
 		var appErr error
 		err := s.Store.Update(r.Context(), func(st *State) error {
 			s.cleanup(st)
-			p, e := s.authenticate(st, r)
+			p, e := s.protectedPrincipal(st, r, sessionOnly)
 			if e != nil {
 				appErr = e
-				return nil
-			}
-			if sessionOnly && p.Kind == "api_key" {
-				appErr = forbidden()
-				return nil
-			}
-			if r.Method != "GET" && r.Method != "HEAD" && p.Kind == "session" && !s.validCSRF(r, st.Sessions[p.SessionHash].CSRF) {
-				appErr = problem(403, "CSRF_INVALID", "CSRF verification failed")
 				return nil
 			}
 			raw, e := json.Marshal(st)
@@ -466,6 +495,9 @@ func Serve(ctx context.Context, c Config) error {
 	if e != nil {
 		return e
 	}
+	if handler.workers != nil {
+		go handler.workers.run(ctx)
+	}
 	retentionCtx, stopRetention := context.WithCancel(ctx)
 	retentionDone := make(chan struct{})
 	go func() {
@@ -474,13 +506,27 @@ func Serve(ctx context.Context, c Config) error {
 	}()
 	defer func() { stopRetention(); <-retentionDone }()
 	server := &http.Server{Addr: c.Listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 25 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
+	servers := []*http.Server{server}
+	if c.InternalListen != "" {
+		servers = append(servers, &http.Server{Addr: c.InternalListen, Handler: http.HandlerFunc(handler.serveInternal), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 35 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10})
+	}
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = server.Shutdown(shutdown)
+		for _, srv := range servers {
+			_ = srv.Shutdown(shutdown)
+		}
 	}()
 	fmt.Print(localize.Format(localize.Language(ctx), "krun control server: %s/console/\n", c.PublicURL))
+	for _, srv := range servers[1:] {
+		go func(srv *http.Server) {
+			e := srv.ListenAndServe()
+			if !errors.Is(e, http.ErrServerClosed) && e != nil {
+				fmt.Fprintln(os.Stderr, "internal listener:", e)
+			}
+		}(srv)
+	}
 	e = server.ListenAndServe()
 	if errors.Is(e, http.ErrServerClosed) {
 		return nil

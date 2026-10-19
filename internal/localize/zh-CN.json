@@ -214,5 +214,15 @@
   "Invalid or expired verification code": "验证码错误或已失效",
   "a valid email address is required": "请输入有效的邮箱地址",
   "unencrypted SMTP is only allowed on loopback in development": "不加密的 SMTP 仅允许在开发环境的本地回环地址使用",
-  "invalid SMTP port": "SMTP 端口无效"
+  "invalid SMTP port": "SMTP 端口无效",
+  "Repository provider is not enabled for this organization": "当前组织未启用该仓库来源",
+  "Repository URL must belong to the selected provider": "仓库地址必须属于所选平台",
+  "Use a repository namespace/name": "请填写仓库 namespace/name",
+  "Repository is not allowed by administrator configuration": "该仓库不在管理员配置的允许范围内",
+  "Use a valid branch, tag or commit": "请填写有效的分支、Tag 或 Commit",
+  "Use a relative project directory and JS or TS entrypoint": "请填写相对项目目录和 JS / TS 入口文件",
+  "Repository configuration changed": "仓库配置已变更，请重新加载后保存",
+  "Connect a repository before starting a repository build": "请先关联仓库再发起仓库构建",
+  "A ref is only supported for repository builds": "仅仓库构建支持指定 ref",
+  "Use repository or upload as source_type": "source_type 必须是 repository 或 upload"
 }

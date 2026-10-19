@@ -463,7 +463,7 @@ export function KeysPage(p: Props) {
                 <p className="text-xs leading-5 text-muted-foreground">
                   {t(
                     "{{scope}}的 * 范围包含未来资源；每次请求仍检查你的实时权限。撤销角色或成员资格后，Key 会立即失去相应访问权限。",
-                    { scope: p.system ? t("跨工作空间") : t("当前组织") },
+                    { scope: p.system ? t("跨组织") : t("当前组织") },
                   )}
                 </p>
               </div>
@@ -714,7 +714,7 @@ export function KeysPage(p: Props) {
                       </span>
                     </p>
                     <div className="flex flex-wrap gap-5">
-                      {["global", "development", "staging", "production"].map(
+                      {["global", "development", "test", "staging", "production"].map(
                         (env) => (
                           <label
                             key={env}

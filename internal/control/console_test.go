@@ -27,7 +27,7 @@ func TestAPIOnlyDoesNotServeFilesOrRedirectConsole(t *testing.T) {
 			t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
 		}
 	}
-	for _, path := range []string{"/auth/providers", "/healthz"} {
+	for _, path := range []string{"/api/auth/providers", "/api/healthz"} {
 		if w := request(s, http.MethodGet, path, "", ""); w.Code != http.StatusOK {
 			t.Fatalf("API-only endpoint %s: %d", path, w.Code)
 		}
@@ -41,9 +41,8 @@ func TestSeparatedFrontendProxyLogin(t *testing.T) {
 	backendURL, _ := url.Parse(backend.URL)
 	proxy := httputil.NewSingleHostReverseProxy(backendURL)
 	frontendMux := http.NewServeMux()
-	frontendMux.Handle("/auth/", proxy)
 	frontendMux.Handle("/api/", proxy)
-	frontendMux.HandleFunc("/console/", func(w http.ResponseWriter, r *http.Request) {
+	frontendMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "independent frontend")
 	})
 	frontend := httptest.NewServer(frontendMux)
@@ -52,7 +51,7 @@ func TestSeparatedFrontendProxyLogin(t *testing.T) {
 	s.routes()
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{Jar: jar, Timeout: 5 * time.Second}
-	response, err := client.Get(frontend.URL + "/auth/csrf")
+	response, err := client.Get(frontend.URL + "/api/auth/csrf")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +63,7 @@ func TestSeparatedFrontendProxyLogin(t *testing.T) {
 	if err != nil || csrf.Token == "" {
 		t.Fatal(err)
 	}
-	loginRequest, _ := http.NewRequest(http.MethodPost, frontend.URL+"/auth/local/login", strings.NewReader(url.Values{"return_to": {"/console/"}}.Encode()))
+	loginRequest, _ := http.NewRequest(http.MethodPost, frontend.URL+"/api/auth/local/login", strings.NewReader(url.Values{"return_to": {"/?page=workers"}}.Encode()))
 	loginRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	loginRequest.Header.Set("Origin", frontend.URL)
 	loginRequest.Header.Set("X-CSRF-Token", csrf.Token)
@@ -75,10 +74,10 @@ func TestSeparatedFrontendProxyLogin(t *testing.T) {
 	}
 	content, _ := io.ReadAll(response.Body)
 	response.Body.Close()
-	if response.StatusCode != http.StatusOK || string(content) != "independent frontend" || response.Request.URL.String() != frontend.URL+"/console/" {
+	if response.StatusCode != http.StatusOK || string(content) != "independent frontend" || response.Request.URL.String() != frontend.URL+"/?page=workers" {
 		t.Fatal("login did not return to the independent frontend", response.StatusCode, response.Request.URL, string(content))
 	}
-	response, err = client.Get(frontend.URL + "/auth/me")
+	response, err = client.Get(frontend.URL + "/api/auth/me")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +96,7 @@ func TestSeparatedFrontendProxyLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Fetch session CSRF via the same origin and log out through the proxy.
-	response, err = client.Get(frontend.URL + "/auth/csrf")
+	response, err = client.Get(frontend.URL + "/api/auth/csrf")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +105,7 @@ func TestSeparatedFrontendProxyLogin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	logoutRequest, _ := http.NewRequest(http.MethodPost, frontend.URL+"/auth/logout", nil)
+	logoutRequest, _ := http.NewRequest(http.MethodPost, frontend.URL+"/api/auth/logout", nil)
 	logoutRequest.Header.Set("Origin", frontend.URL)
 	logoutRequest.Header.Set("X-CSRF-Token", csrf.Token)
 	response, err = client.Do(logoutRequest)
@@ -131,34 +130,30 @@ func TestDevelopmentConsoleUsesPublicOrigin(t *testing.T) {
 	s, _ := testServer(t)
 	s.Config.PublicURL = "http://127.0.0.1:5173"
 	s.Config.StaticDir = t.TempDir()
-	if err := os.Mkdir(filepath.Join(s.Config.StaticDir, "console"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(s.Config.StaticDir, "console", "index.html"), []byte("console"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(s.Config.StaticDir, "index.html"), []byte("console"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	s.routes()
 	for _, tc := range []struct{ path, target string }{
-		{"/", "/console/"},
-		{"/console", "/console/"},
-		{"/console/?cli=ABCD", "/console/?cli=ABCD"},
-		{"/console/assets/app.js", "/console/assets/app.js"},
+		{"/", "/"},
+		{"/?cli=ABCD", "/?cli=ABCD"},
+		{"/assets/app.js", "/assets/app.js"},
 	} {
 		w := request(s, http.MethodGet, "http://127.0.0.1:8080"+tc.path, "", "")
 		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != s.Config.PublicURL+tc.target {
 			t.Fatalf("%s: status=%d location=%q", tc.path, w.Code, w.Header().Get("Location"))
 		}
 	}
-	if w := request(s, http.MethodGet, s.Config.PublicURL+"/console/", "", ""); w.Code != http.StatusOK || w.Body.String() != "console" {
+	if w := request(s, http.MethodGet, s.Config.PublicURL+"/", "", ""); w.Code != http.StatusOK || w.Body.String() != "console" {
 		t.Fatalf("canonical console did not render: %d %s", w.Code, w.Body.String())
 	}
-	for _, path := range []string{"/auth/providers", "/healthz"} {
+	for _, path := range []string{"/api/auth/providers", "/api/healthz"} {
 		if w := request(s, http.MethodGet, "http://127.0.0.1:8080"+path, "", ""); w.Code != http.StatusOK {
 			t.Fatalf("backend endpoint %s unexpectedly redirected: %d", path, w.Code)
 		}
 	}
 	// Redirecting the console must not relax origin checks on login writes.
-	csrf := browserRequest(s, http.MethodGet, "/auth/csrf", nil, nil)
+	csrf := browserRequest(s, http.MethodGet, "/api/auth/csrf", nil, nil)
 	var token struct {
 		Value string `json:"csrf_token"`
 	}
@@ -166,7 +161,7 @@ func TestDevelopmentConsoleUsesPublicOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	form := url.Values{"csrf_token": {token.Value}}
-	r := httptest.NewRequest(http.MethodPost, "/auth/local/login", strings.NewReader(form.Encode()))
+	r := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(form.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.Header.Set("Origin", "http://127.0.0.1:8080")
 	for _, cookie := range csrf.Result().Cookies() {
@@ -188,7 +183,7 @@ func TestDevelopmentConsoleUsesPublicOrigin(t *testing.T) {
 	// Production proxy routing keeps its existing behavior.
 	s.Config.Development = false
 	s.routes()
-	if w := request(s, http.MethodGet, "http://127.0.0.1:8080/console/", "", ""); w.Code != http.StatusOK {
+	if w := request(s, http.MethodGet, "http://127.0.0.1:8080/", "", ""); w.Code != http.StatusOK {
 		t.Fatalf("production console routing changed: %d", w.Code)
 	}
 }

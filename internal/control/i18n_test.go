@@ -14,7 +14,7 @@ func TestAPIErrorLanguageKeepsProtocol(t *testing.T) {
 		{"en-US", "Authentication required", "en"},
 		{"zh-CN", "请先登录", "zh-CN"},
 	} {
-		r := httptest.NewRequest("GET", "/auth/me", nil)
+		r := httptest.NewRequest("GET", "/api/auth/me", nil)
 		r.Header.Set("Accept-Language", tc.language)
 		w := httptest.NewRecorder()
 		s.ServeHTTP(w, r)

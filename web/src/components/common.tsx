@@ -59,11 +59,13 @@ export function SelectField({
   onChange,
   children,
   label,
+  disabled,
 }: {
   value: string;
   onChange: (value: string) => void;
   children: ReactNode;
   label?: string;
+  disabled?: boolean;
 }) {
   useTranslation();
   return (
@@ -71,6 +73,7 @@ export function SelectField({
       aria-label={label}
       className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20"
       value={value}
+      disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
     >
       {children}
@@ -79,7 +82,7 @@ export function SelectField({
 }
 export function Empty({
   title = t("暂无数据"),
-  description = t("创建第一条记录，开始管理你的工作空间。"),
+  description = t("创建第一条记录，开始管理你的组织。"),
   action,
 }: {
   title?: string;

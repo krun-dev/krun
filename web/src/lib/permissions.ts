@@ -123,7 +123,7 @@ export function parseSelections(
     if (
       !Array.isArray(environments) ||
       !environments.every((env) =>
-        ["global", "development", "staging", "production"].includes(env),
+        ["global", "development", "test", "staging", "production"].includes(env),
       )
     )
       return null;

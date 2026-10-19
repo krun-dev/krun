@@ -40,7 +40,7 @@ func emailTestServer(t *testing.T, store *Store) (*Server, *string) {
 
 func emailBrowser(t *testing.T, s *Server) ([]*http.Cookie, string) {
 	t.Helper()
-	w := browserRequest(s, "GET", "/auth/csrf", nil, nil)
+	w := browserRequest(s, "GET", "/api/auth/csrf", nil, nil)
 	var data struct {
 		Token string `json:"csrf_token"`
 	}
@@ -67,7 +67,7 @@ func emailRequest(s *Server, path string, value any, cookies []*http.Cookie, csr
 
 func emailChallenge(t *testing.T, s *Server, cookies []*http.Cookie, csrf string) string {
 	t.Helper()
-	w := emailRequest(s, "/auth/email/email/code", map[string]string{"email": " Person@Example.COM ", "return_to": "/console/?cli=ABCDEFG"}, cookies, csrf)
+	w := emailRequest(s, "/api/auth/email/email/code", map[string]string{"email": " Person@Example.COM ", "return_to": "/console/?cli=ABCDEFG"}, cookies, csrf)
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
@@ -92,12 +92,12 @@ func TestEmailLoginIdentitySessionAndReplay(t *testing.T) {
 		t.Fatal("invalid code length")
 	}
 	input := map[string]string{"challenge_id": challenge, "code": *code}
-	w := emailRequest(s, "/auth/email/email/verify", input, cookies, csrf)
+	w := emailRequest(s, "/api/auth/email/email/verify", input, cookies, csrf)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "/console/?cli=ABCDEFG") {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	cookies = append(cookies, w.Result().Cookies()...)
-	me := browserRequest(s, "GET", "/auth/me", nil, cookies)
+	me := browserRequest(s, "GET", "/api/auth/me", nil, cookies)
 	var data struct {
 		User  User
 		Admin bool `json:"system_admin"`
@@ -116,7 +116,7 @@ func TestEmailLoginIdentitySessionAndReplay(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if w := emailRequest(s, "/auth/email/email/verify", input, cookies, csrf); w.Code != 400 {
+	if w := emailRequest(s, "/api/auth/email/email/verify", input, cookies, csrf); w.Code != 400 {
 		t.Fatal("replayed code accepted", w.Code)
 	}
 	// A fresh browser can log in to the same local identity without merging SSO identities.
@@ -130,11 +130,11 @@ func TestEmailLoginIdentitySessionAndReplay(t *testing.T) {
 	})
 	cookies, csrf = emailBrowser(t, s)
 	challenge = emailChallenge(t, s, cookies, csrf)
-	w = emailRequest(s, "/auth/email/email/verify", map[string]string{"challenge_id": challenge, "code": *code}, cookies, csrf)
+	w = emailRequest(s, "/api/auth/email/email/verify", map[string]string{"challenge_id": challenge, "code": *code}, cookies, csrf)
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	me = browserRequest(s, "GET", "/auth/me", nil, append(cookies, w.Result().Cookies()...))
+	me = browserRequest(s, "GET", "/api/auth/me", nil, append(cookies, w.Result().Cookies()...))
 	var second struct{ User User }
 	_ = json.Unmarshal(me.Body.Bytes(), &second)
 	if second.User.ID != data.User.ID {
@@ -154,7 +154,7 @@ func TestEmailCodeSecurityBoundaries(t *testing.T) {
 					input["email"] = "Person <person@example.com>"
 					input["return_to"] = "/console/"
 				}
-				w := emailRequest(s, "/auth/email/email/code", input, cookies, csrf)
+				w := emailRequest(s, "/api/auth/email/email/code", input, cookies, csrf)
 				if w.Code != 400 {
 					t.Fatal(w.Code, w.Body.String())
 				}
@@ -162,7 +162,7 @@ func TestEmailCodeSecurityBoundaries(t *testing.T) {
 			}
 			if test == "delivery-failure" {
 				s.sendEmail = func(context.Context, string, string, string) error { return errors.New("smtp credential SECRET") }
-				w := emailRequest(s, "/auth/email/email/code", map[string]string{"email": "person@example.com"}, cookies, csrf)
+				w := emailRequest(s, "/api/auth/email/email/code", map[string]string{"email": "person@example.com"}, cookies, csrf)
 				if w.Code != 503 || strings.Contains(w.Body.String(), "SECRET") {
 					t.Fatal(w.Code, w.Body.String())
 				}
@@ -200,7 +200,7 @@ func TestEmailCodeSecurityBoundaries(t *testing.T) {
 			case "attempt-limit":
 				wrong := map[string]string{"challenge_id": challenge, "code": "wrong"}
 				for i := 0; i < 5; i++ {
-					if w := emailRequest(s, "/auth/email/email/verify", wrong, cookies, csrf); w.Code != 400 {
+					if w := emailRequest(s, "/api/auth/email/email/verify", wrong, cookies, csrf); w.Code != 400 {
 						t.Fatal(w.Code)
 					}
 				}
@@ -215,7 +215,7 @@ func TestEmailCodeSecurityBoundaries(t *testing.T) {
 				s.providers["email"].config.Name = "changed"
 			case "cooldown":
 				otherCookies, otherCSRF := emailBrowser(t, s)
-				w := emailRequest(s, "/auth/email/email/code", map[string]string{"email": "person@example.com"}, otherCookies, otherCSRF)
+				w := emailRequest(s, "/api/auth/email/email/code", map[string]string{"email": "person@example.com"}, otherCookies, otherCSRF)
 				if w.Code != 429 {
 					t.Fatal(w.Code, w.Body.String())
 				}
@@ -233,7 +233,7 @@ func TestEmailCodeSecurityBoundaries(t *testing.T) {
 			if test == "origin" {
 				s.Config.PublicURL = "http://127.0.0.1:8080"
 				raw, _ := json.Marshal(input)
-				r := httptest.NewRequest("POST", "/auth/email/email/verify", strings.NewReader(string(raw)))
+				r := httptest.NewRequest("POST", "/api/auth/email/email/verify", strings.NewReader(string(raw)))
 				r.Header.Set("Content-Type", "application/json")
 				r.Header.Set("Origin", "https://evil.example.com")
 				r.Header.Set("X-CSRF-Token", csrf)
@@ -243,7 +243,7 @@ func TestEmailCodeSecurityBoundaries(t *testing.T) {
 				w = httptest.NewRecorder()
 				s.ServeHTTP(w, r)
 			} else {
-				w = emailRequest(s, "/auth/email/email/verify", input, cookies, csrf)
+				w = emailRequest(s, "/api/auth/email/email/verify", input, cookies, csrf)
 			}
 			if w.Code != want {
 				t.Fatal(w.Code, w.Body.String())
@@ -264,10 +264,10 @@ func TestDisabledLoginSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w := browserRequest(disabled, "GET", "/auth/providers", nil, nil); strings.Contains(w.Body.String(), `"id":"local"`) {
+	if w := browserRequest(disabled, "GET", "/api/auth/providers", nil, nil); strings.Contains(w.Body.String(), `"id":"local"`) {
 		t.Fatal("disabled source advertised")
 	}
-	if w := browserRequest(disabled, "POST", "/auth/local/login", url.Values{}, nil); w.Code != 404 {
+	if w := browserRequest(disabled, "POST", "/api/auth/local/login", url.Values{}, nil); w.Code != 404 {
 		t.Fatal(w.Code)
 	}
 	if w := request(disabled, "GET", "/api/v1/me", "krun_cli_admin", ""); w.Code != 401 {
@@ -280,7 +280,7 @@ func TestDisabledLoginSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/auth/email/email/code", "/auth/email/email/verify", "/auth/email/login"} {
+	for _, path := range []string{"/api/auth/email/email/code", "/api/auth/email/email/verify", "/api/auth/email/login"} {
 		if w := emailRequest(emailDisabled, path, map[string]string{}, nil, ""); w.Code != 404 {
 			t.Fatal(path, w.Code)
 		}
@@ -417,7 +417,7 @@ func TestPostgresEmailLoginRestartAndConcurrentConsumption(t *testing.T) {
 		wg.Add(1)
 		go func(server *Server) {
 			defer wg.Done()
-			w := emailRequest(server, "/auth/email/email/verify", map[string]string{"challenge_id": challenge, "code": *code}, cookies, csrf)
+			w := emailRequest(server, "/api/auth/email/email/verify", map[string]string{"challenge_id": challenge, "code": *code}, cookies, csrf)
 			results <- w.Code
 		}(replica)
 	}

@@ -1,7 +1,7 @@
 import { LanguageSwitch } from "@/components/language";
 import { errorMessage, t } from "@/lib/i18n";
 import { useTranslation } from "react-i18next";
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import {
   Activity,
   ArrowUpRight,
@@ -11,6 +11,7 @@ import {
   Clipboard,
   KeyRound,
   LayoutDashboard,
+  Layers3,
   LogOut,
   Sun,
   Moon,
@@ -68,6 +69,9 @@ import {
 } from "@/components/management";
 
 import { AuditPage } from "@/components/audit";
+const WorkersPage = lazy(() =>
+  import("@/components/workers").then((m) => ({ default: m.WorkersPage })),
+);
 import { KeysPage } from "@/components/keys";
 
 type Section =
@@ -79,16 +83,19 @@ type Section =
   | "check"
   | "audit"
   | "users"
-  | "resources";
-const navigation: { id: Section; name: string; icon: typeof Users }[] = [
-  { id: "overview", name: "概览", icon: LayoutDashboard },
-  { id: "members", name: "组织成员", icon: Users },
-  { id: "groups", name: "用户组", icon: UsersRound },
-  { id: "roles", name: "角色授权", icon: ShieldCheck },
-  { id: "keys", name: "API Keys", icon: KeyRound },
-  { id: "resources", name: "资源目录", icon: Building2 },
-  { id: "check", name: "权限检查", icon: Search },
-  { id: "audit", name: "审计记录", icon: Activity },
+  | "resources"
+  | "workers";
+const navigation: { id: Section; name: string; icon: typeof Users; group: string }[] = [
+  { id: "overview", name: "概览", icon: LayoutDashboard, group: "" },
+  { id: "workers", name: "Workers", icon: Layers3, group: "计算服务" },
+  { id: "members", name: "组织成员", icon: Users, group: "组织管理" },
+  { id: "groups", name: "用户组", icon: UsersRound, group: "组织管理" },
+  { id: "roles", name: "角色授权", icon: ShieldCheck, group: "组织管理" },
+  { id: "keys", name: "API Keys", icon: KeyRound, group: "组织管理" },
+  { id: "resources", name: "资源目录", icon: Building2, group: "组织管理" },
+  { id: "check", name: "权限检查", icon: Search, group: "组织管理" },
+  { id: "audit", name: "审计记录", icon: Activity, group: "组织管理" },
+  { id: "users", name: "系统用户", icon: Users, group: "系统" },
 ];
 export default function App() {
   useTranslation();
@@ -109,11 +116,18 @@ export default function App() {
     [loading, setLoading] = useState(true),
     [fatal, setFatal] = useState("");
   const [orgs, setOrgs] = useState<Organization[]>([]),
-    [scope, setScope] = useState(""),
-    [section, setSection] = useState<Section>("overview"),
+    [scope, setScope] = useState(
+      new URLSearchParams(window.location.search).get("workspace") || "",
+    ),
+    [section, setSection] = useState<Section>(
+      new URLSearchParams(window.location.search).get("page") === "workers"
+        ? "workers"
+        : "overview",
+    ),
     [notice, setNotice] = useState(""),
     [refresh, setRefresh] = useState(0),
     [menu, setMenu] = useState(false);
+  const [workersNavigation, setWorkersNavigation] = useState(0);
   const [orgDialog, setOrgDialog] = useState(false),
     [orgName, setOrgName] = useState(""),
     [saving, setSaving] = useState(false),
@@ -126,8 +140,8 @@ export default function App() {
   useEffect(() => {
     let active = true;
     Promise.all([
-      api<{ providers: Provider[]; development: boolean }>("/auth/providers"),
-      api<Me>("/auth/me").catch((e) => {
+      api<{ providers: Provider[]; development: boolean }>("/api/auth/providers"),
+      api<Me>("/api/auth/me").catch((e) => {
         if (e instanceof APIError && e.status === 401) return null;
         throw e;
       }),
@@ -185,7 +199,7 @@ export default function App() {
   }
   const org = orgs.find((o) => o.id === scope),
     system = scope === "system",
-    scopeName = system ? t("全部工作空间") : (org?.name ?? t("选择组织"));
+    scopeName = system ? t("全部组织") : (org?.name ?? t("选择组织"));
   async function copyID() {
     try {
       await navigator.clipboard.writeText(me!.user.user_id);
@@ -240,11 +254,11 @@ export default function App() {
         <div className="mt-6 rounded-md border bg-background/50 p-3">
           <div className="mb-2 flex items-center gap-2 text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
             <Building2 size={12} />
-            {t("工作空间")}
+            {t("组织")}
           </div>
           <div className="relative">
             <SelectField
-              label={t("切换工作空间")}
+              label={t("切换组织")}
               value={scope}
               onChange={(v) => {
                 setScope(v);
@@ -260,66 +274,72 @@ export default function App() {
                   {o.name}
                 </option>
               ))}
-              <option value="system">{t("全部工作空间")}</option>
+              <option value="system">{t("全部组织")}</option>
             </SelectField>
           </div>
         </div>
         <div className="mt-7 px-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-          {t("访问管理")}
+          {t("平台控制台")}
         </div>
         <nav className="mt-3 grid gap-1">
-          {navigation
+          {[
+            ...navigation.filter((n) => n.group === ""),
+            ...navigation.filter((n) => n.group === "计算服务"),
+            ...navigation.filter((n) => n.group === "组织管理"),
+            ...navigation.filter((n) => n.group === "系统"),
+          ]
             .filter(
               (n) =>
                 !system ||
                 me.system_admin ||
                 ["overview", "keys", "check"].includes(n.id),
             )
-            .map((n) => (
-              <button
-                key={n.id}
-                onClick={() => {
-                  setSection(n.id);
-                  setMenu(false);
-                }}
-                className={cn(
-                  "flex items-center gap-3 rounded-md px-3 py-2.5 text-left text-[13px] transition",
-                  section === n.id
-                    ? "bg-secondary font-medium text-foreground"
-                    : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
+            .map((n, index, all) => (
+              <div key={n.id} className="contents">
+                {index > 0 && n.group !== all[index - 1].group && (
+                  <div className="mt-5 px-3 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/80">
+                    {n.group === "" ? t("通用") : t(n.group)}
+                  </div>
                 )}
-              >
-                <n.icon size={17} />
-                {t(n.name)}
-                {section === n.id && (
-                  <span className="ml-auto size-1.5 rounded-full bg-primary" />
-                )}
-              </button>
+                <button
+                  onClick={() => {
+                    if (n.id === "workers") {
+                      const url = new URL(location.href);
+                      url.searchParams.set("page", "workers");
+                      if (scope) url.searchParams.set("workspace", scope);
+                      url.searchParams.delete("worker");
+                      url.searchParams.delete("environment");
+                      history.replaceState(null, "", url);
+                      setWorkersNavigation((v) => v + 1);
+                    }
+                    setSection(n.id);
+                    setMenu(false);
+                  }}
+                  className={cn(
+                    "flex items-center gap-3 rounded-md px-3 py-2.5 text-left text-[13px] transition",
+                    section === n.id
+                      ? "bg-secondary font-medium text-foreground"
+                      : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
+                  )}
+                >
+                  {n.group === "" ? null : (
+                    <span className="w-[17px] shrink-0" />
+                  )}
+                  <n.icon size={17} />
+                  {t(n.name)}
+                  {section === n.id && (
+                    <span className="ml-auto size-1.5 rounded-full bg-primary" />
+                  )}
+                </button>
+              </div>
             ))}
-          {me.system_admin && (
-            <button
-              onClick={() => {
-                setSection("users");
-                setMenu(false);
-              }}
-              className={cn(
-                "flex items-center gap-3 rounded-md px-3 py-2.5 text-left text-[13px]",
-                section === "users"
-                  ? "bg-secondary font-medium text-foreground"
-                  : "text-muted-foreground",
-              )}
-            >
-              <Users size={17} />
-              {t("系统用户")}
-            </button>
-          )}
         </nav>
         <div className="mt-auto pt-8">
           <div className="rounded-md border bg-background/50 p-4">
             <Terminal size={19} className="text-primary" />
             <p className="mt-3 text-sm font-medium">{t("连接终端")}</p>
             <p className="my-2 text-xs leading-relaxed text-muted-foreground">
-              {t("通过浏览器登录，安全地管理你的工作空间。")}
+              {t("通过浏览器登录，安全地管理你的组织。")}
             </p>
             <code className="block rounded-md bg-secondary/60 px-2 py-1.5 text-[11px]">
               $ krun login
@@ -353,7 +373,7 @@ export default function App() {
             <PanelLeft size={18} />
           </Button>
           <span className="hidden shrink-0 text-sm text-muted-foreground sm:inline">
-            {t("工作空间")}
+            {t("组织")}
           </span>
           <span className="hidden text-muted-foreground/40 sm:inline">/</span>
           <span className="truncate text-sm font-medium">{scopeName}</span>
@@ -398,8 +418,8 @@ export default function App() {
             onClick={async () => {
               setSaving(true);
               try {
-                await api("/auth/logout", "POST", {});
-                window.location.assign("/console/");
+                await api("/api/auth/logout", "POST", {});
+                window.location.assign("/");
               } catch (e) {
                 notify(errorMessage(e));
                 setSaving(false);
@@ -435,7 +455,7 @@ export default function App() {
                   variant="outline"
                   onClick={() => {
                     setDevice("");
-                    window.history.replaceState(null, "", "/console/");
+                    window.history.replaceState(null, "", "/");
                   }}
                 >
                   {t("取消")}
@@ -444,11 +464,11 @@ export default function App() {
                   disabled={saving}
                   onClick={() =>
                     mutate(async () => {
-                      await api("/auth/cli/approve", "POST", {
+                      await api("/api/auth/cli/approve", "POST", {
                         user_code: device,
                       });
                       setDevice("");
-                      window.history.replaceState(null, "", "/console/");
+                      window.history.replaceState(null, "", "/");
                     }, t("已批准 CLI 登录，可返回终端。"))
                   }
                 >
@@ -462,7 +482,7 @@ export default function App() {
           <>
             <PageHeader
               eyebrow={t("Workspace overview")}
-              title={t("工作空间概览")}
+              title={t("组织概览")}
               description={t("从这里管理团队身份、访问权限与自动化凭据。")}
               action={
                 me.system_admin ? (
@@ -504,7 +524,7 @@ export default function App() {
                 <CardHeader className="border-b pb-5">
                   <CardTitle className="text-base">{t("我的组织")}</CardTitle>
                   <CardDescription>
-                    {t("协作与权限隔离的工作空间")}
+                    {t("协作与权限隔离的组织")}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="pt-5">
@@ -597,7 +617,7 @@ export default function App() {
         ) : !scope ? (
           <Empty
             title={t("请先选择一个组织")}
-            description={t("加入组织并获得角色后，即可管理此工作空间。")}
+            description={t("加入组织并获得角色后，即可管理此组织。")}
           />
         ) : ["members", "groups", "roles"].includes(section) ? (
           <IAMPage
@@ -620,6 +640,15 @@ export default function App() {
             refresh={refresh}
             reload={reload}
           />
+        ) : section === "workers" ? (
+          <Suspense fallback={<Loading />}>
+            <WorkersPage
+              key={`${scope}:${workersNavigation}`}
+              base={base}
+              system={system}
+              notify={notify}
+            />
+          </Suspense>
         ) : section === "resources" ? (
           <ResourcesPage
             key={scope}
@@ -648,7 +677,12 @@ export default function App() {
             onSubmit={async (e) => {
               e.preventDefault();
               await mutate(async () => {
-                await api("/api/v1/orgs", "POST", { name: orgName });
+                const organization = await api<Organization>(
+                  "/api/v1/orgs",
+                  "POST",
+                  { name: orgName },
+                );
+                setScope(organization.id);
                 setOrgDialog(false);
                 setOrgName("");
               }, t("组织已创建。"));

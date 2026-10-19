@@ -2,6 +2,8 @@
 
 首版存储使用完整 `State` 快照。开发和生产统一使用 PostgreSQL；内存 Store 的构造入口仅存在于测试文件中。
 
+可选 Workers 后端将构建 / 发布状态放入同一事务快照，归档内容放入独立 S3 存储；对象键、hash 和存储位置登记见 [Workers 制品与流程](workers-backend.md)。
+
 ```sql
 CREATE TABLE IF NOT EXISTS krun_control_state (
   id integer PRIMARY KEY CHECK (id = 1),

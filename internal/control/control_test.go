@@ -36,7 +36,7 @@ func TestAuthorizationBoundaries(t *testing.T) {
 	tests := []struct {
 		name, user, action, kind, id, environment string
 		allow                                     bool
-	}{{"system admin cross organization", "admin", "service.read", "service", "svc-b", "global", true}, {"viewer reads own organization", "viewer", "service.read", "service", "svc-a", "global", true}, {"cross organization denied", "viewer", "service.read", "service", "svc-b", "global", false}, {"viewer cannot publish", "viewer", "service.publish", "service", "svc-a", "production", false}, {"unknown action denied", "admin", "service.magic", "service", "svc-a", "global", false}, {"action kind mismatch denied", "admin", "model.read", "service", "svc-a", "global", false}, {"unknown environment denied", "admin", "service.read", "service", "svc-a", "fake", false}}
+	}{{"system admin cross organization", "admin", "service.read", "service", "svc-b", "global", true}, {"viewer reads own organization", "viewer", "service.read", "service", "svc-a", "global", true}, {"cross organization denied", "viewer", "service.read", "service", "svc-b", "global", false}, {"viewer cannot publish", "viewer", "service.publish", "service", "svc-a", "production", false}, {"unknown action denied", "admin", "service.magic", "service", "svc-a", "global", false}, {"action kind mismatch denied", "admin", "model.read", "service", "svc-a", "global", false}, {"unknown environment denied", "admin", "service.read", "service", "svc-a", "bad env!", false}}
 	_ = admin
 	_ = viewer
 	for _, tc := range tests {
@@ -57,9 +57,9 @@ func TestAuthorizationBoundaries(t *testing.T) {
 }
 func TestKeyIntersectionExplicitDenyAndRevocation(t *testing.T) {
 	st, admin, viewer := fixture()
-	policy := Policy{Version: 1, Statements: []Statement{{Effect: "allow", Actions: []string{"service.read", "service.publish"}, Resource: Selector{Organization: "org-a", Kind: "service", IDs: []string{"svc-a"}}, Conditions: Conditions{Environments: []string{"staging"}}}, {Effect: "deny", Actions: []string{"service.publish"}, Resource: Selector{Organization: "org-a", Kind: "service", IDs: []string{"svc-a"}}}}}
+	policy := Policy{Version: 1, Statements: []Statement{{Effect: "allow", Actions: []string{"service.read", "service.publish"}, Resource: Selector{Organization: "org-a", Kind: "service", IDs: []string{"svc-a"}}, Conditions: Conditions{Environments: []string{"release-candidate"}}}, {Effect: "deny", Actions: []string{"service.publish"}, Resource: Selector{Organization: "org-a", Kind: "service", IDs: []string{"svc-a"}}}}}
 	key := APIKey{ID: "key-a", ScopeKind: "organization", Organization: "org-a", Owner: admin.ID, Policy: policy}
-	target, _ := resolve(st, "service", "svc-a", "staging")
+	target, _ := resolve(st, "service", "svc-a", "release-candidate")
 	p := Principal{User: admin, Key: &key}
 	d, e := Authorize(st, p, "service.read", target)
 	if e != nil || !d.Allowed {
@@ -74,14 +74,14 @@ func TestKeyIntersectionExplicitDenyAndRevocation(t *testing.T) {
 	if e != nil || d.Allowed {
 		t.Fatal("environment constraint ignored")
 	}
-	target.Environment = "staging"
+	target.Environment = "release-candidate"
 	p.User = viewer
 	delete(st.Assignments, "viewer")
 	d, e = Authorize(st, p, "service.read", target)
 	if e != nil || d.Allowed || !d.KeyAllowed {
 		t.Fatalf("key bypassed current user permissions %+v %v", d, e)
 	}
-	target, _ = resolve(st, "service", "svc-b", "staging")
+	target, _ = resolve(st, "service", "svc-b", "release-candidate")
 	p.User = admin
 	d, e = Authorize(st, p, "service.read", target)
 	if e != nil || d.Allowed {
@@ -92,8 +92,8 @@ func TestGroupsAndIndependentSources(t *testing.T) {
 	st, _, viewer := fixture()
 	delete(st.Assignments, "viewer")
 	st.Groups["publishers"] = Group{ID: "publishers", ScopeKind: "organization", ScopeID: "org-a", Members: []string{viewer.ID}}
-	st.Assignments["publish"] = Assignment{ID: "publish", SubjectKind: "group", SubjectID: "publishers", Role: "publisher", ScopeKind: "service", ScopeID: "svc-a", Conditions: Conditions{Environments: []string{"staging"}}}
-	target, _ := resolve(st, "service", "svc-a", "staging")
+	st.Assignments["publish"] = Assignment{ID: "publish", SubjectKind: "group", SubjectID: "publishers", Role: "publisher", ScopeKind: "service", ScopeID: "svc-a", Conditions: Conditions{Environments: []string{"release-candidate"}}}
+	target, _ := resolve(st, "service", "svc-a", "release-candidate")
 	d, e := Authorize(st, Principal{User: viewer}, "service.publish", target)
 	if e != nil || !d.Allowed {
 		t.Fatalf("group scoped role failed %+v %v", d, e)
@@ -241,14 +241,14 @@ func browserRequest(s *Server, method, path string, form url.Values, cookies []*
 }
 func TestLoginCSRFReplayLogoutAndStableIdentity(t *testing.T) {
 	s, store := testServer(t)
-	csrfResponse := browserRequest(s, "GET", "/auth/csrf", nil, nil)
+	csrfResponse := browserRequest(s, "GET", "/api/auth/csrf", nil, nil)
 	var csrf struct {
 		Token string `json:"csrf_token"`
 	}
 	_ = json.Unmarshal(csrfResponse.Body.Bytes(), &csrf)
 	cookies := csrfResponse.Result().Cookies()
-	form := url.Values{"csrf_token": {csrf.Token}, "return_to": {"/console/"}}
-	begin := browserRequest(s, "POST", "/auth/local/login", form, cookies)
+	form := url.Values{"csrf_token": {csrf.Token}, "return_to": {"/"}}
+	begin := browserRequest(s, "POST", "/api/auth/local/login", form, cookies)
 	if begin.Code != 303 {
 		t.Fatal(begin.Code, begin.Body.String())
 	}
@@ -258,12 +258,12 @@ func TestLoginCSRFReplayLogoutAndStableIdentity(t *testing.T) {
 		t.Fatal("unbound callback accepted")
 	}
 	complete := browserRequest(s, "GET", callback, nil, cookies)
-	if complete.Header().Get("Location") != "/console/" {
+	if complete.Header().Get("Location") != "/" {
 		t.Fatal("login failed", complete.Header().Get("Location"))
 	}
 	sessionCookies := complete.Result().Cookies()
 	cookies = append(cookies, sessionCookies...)
-	me := browserRequest(s, "GET", "/auth/me", nil, cookies)
+	me := browserRequest(s, "GET", "/api/auth/me", nil, cookies)
 	if me.Code != 200 {
 		t.Fatal(me.Code, me.Body.String())
 	}
@@ -274,28 +274,28 @@ func TestLoginCSRFReplayLogoutAndStableIdentity(t *testing.T) {
 		t.Fatal("callback replay accepted")
 	}
 	badForm := url.Values{"csrf_token": {"bad"}}
-	if browserRequest(s, "POST", "/auth/local/login", badForm, cookies).Code != 403 {
+	if browserRequest(s, "POST", "/api/auth/local/login", badForm, cookies).Code != 403 {
 		t.Fatal("invalid csrf accepted")
 	}
-	csrfResponse = browserRequest(s, "GET", "/auth/csrf", nil, cookies)
+	csrfResponse = browserRequest(s, "GET", "/api/auth/csrf", nil, cookies)
 	_ = json.Unmarshal(csrfResponse.Body.Bytes(), &csrf)
 	form.Set("csrf_token", csrf.Token)
-	logout := browserRequest(s, "POST", "/auth/logout", form, cookies)
+	logout := browserRequest(s, "POST", "/api/auth/logout", form, cookies)
 	if logout.Code != 204 {
 		t.Fatal(logout.Code, logout.Body.String())
 	}
-	if browserRequest(s, "GET", "/auth/me", nil, cookies).Code != 401 {
+	if browserRequest(s, "GET", "/api/auth/me", nil, cookies).Code != 401 {
 		t.Fatal("logout cookie replay accepted")
 	}
 	// The next authenticated login maps to the same stable source/subject account.
-	csrfResponse = browserRequest(s, "GET", "/auth/csrf", nil, csrfResponse.Result().Cookies())
+	csrfResponse = browserRequest(s, "GET", "/api/auth/csrf", nil, csrfResponse.Result().Cookies())
 	_ = json.Unmarshal(csrfResponse.Body.Bytes(), &csrf)
 	cookies = csrfResponse.Result().Cookies()
 	form.Set("csrf_token", csrf.Token)
-	begin = browserRequest(s, "POST", "/auth/local/login", form, cookies)
+	begin = browserRequest(s, "POST", "/api/auth/local/login", form, cookies)
 	complete = browserRequest(s, "GET", begin.Header().Get("Location"), nil, cookies)
 	cookies = append(cookies, complete.Result().Cookies()...)
-	me = browserRequest(s, "GET", "/auth/me", nil, cookies)
+	me = browserRequest(s, "GET", "/api/auth/me", nil, cookies)
 	var second struct{ User User }
 	_ = json.Unmarshal(me.Body.Bytes(), &second)
 	if second.User.ID != first.User.ID {
@@ -329,17 +329,17 @@ func TestSessionCSRFAndAmbiguousCredential(t *testing.T) {
 }
 func TestDeviceApprovalAndSingleConsumption(t *testing.T) {
 	s, store := testServer(t)
-	w := request(s, "POST", "/auth/cli/start", "", `{}`)
+	w := request(s, "POST", "/api/auth/cli/start", "", `{}`)
 	var device struct {
 		DeviceCode string `json:"device_code"`
 		UserCode   string `json:"user_code"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &device)
 	raw := fmt.Sprintf(`{"device_code":%q}`, device.DeviceCode)
-	if request(s, "POST", "/auth/cli/poll", "", raw).Code != 409 {
+	if request(s, "POST", "/api/auth/cli/poll", "", raw).Code != 409 {
 		t.Fatal("unapproved device issued token")
 	}
-	if request(s, "POST", "/auth/cli/approve", "krun_cli_admin", fmt.Sprintf(`{"user_code":%q}`, device.UserCode)).Code != 403 {
+	if request(s, "POST", "/api/auth/cli/approve", "krun_cli_admin", fmt.Sprintf(`{"user_code":%q}`, device.UserCode)).Code != 403 {
 		t.Fatal("CLI may not approve another CLI")
 	}
 	_ = store.Update(context.Background(), func(st *State) error {
@@ -349,10 +349,10 @@ func TestDeviceApprovalAndSingleConsumption(t *testing.T) {
 		st.Devices[d.CodeHash] = d
 		return nil
 	})
-	if request(s, "POST", "/auth/cli/poll", "", raw).Code != 200 {
+	if request(s, "POST", "/api/auth/cli/poll", "", raw).Code != 200 {
 		t.Fatal("approved device cannot poll")
 	}
-	if request(s, "POST", "/auth/cli/poll", "", raw).Code != 400 {
+	if request(s, "POST", "/api/auth/cli/poll", "", raw).Code != 400 {
 		t.Fatal("device token issued twice")
 	}
 }
@@ -369,21 +369,21 @@ func TestMappingPreservesLargeInteger(t *testing.T) {
 
 func TestLoginGenerationAndSessionExpiration(t *testing.T) {
 	s, store := testServer(t)
-	w := browserRequest(s, "GET", "/auth/csrf", nil, nil)
+	w := browserRequest(s, "GET", "/api/auth/csrf", nil, nil)
 	var csrf struct {
 		Token string `json:"csrf_token"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &csrf)
 	cookies := w.Result().Cookies()
 	form := url.Values{"csrf_token": {csrf.Token}}
-	first := browserRequest(s, "POST", "/auth/local/login", form, cookies)
-	second := browserRequest(s, "POST", "/auth/local/login", form, cookies)
+	first := browserRequest(s, "POST", "/api/auth/local/login", form, cookies)
+	second := browserRequest(s, "POST", "/api/auth/local/login", form, cookies)
 	late := browserRequest(s, "GET", first.Header().Get("Location"), nil, cookies)
 	if !strings.Contains(late.Header().Get("Location"), "AUTH_STATE_INVALID") {
 		t.Fatal("superseded login accepted")
 	}
 	good := browserRequest(s, "GET", second.Header().Get("Location"), nil, cookies)
-	if good.Header().Get("Location") != "/console/" {
+	if good.Header().Get("Location") != "/" {
 		t.Fatal("current generation login failed")
 	}
 	_ = store.Update(context.Background(), func(st *State) error {
@@ -405,12 +405,17 @@ func TestRemovedSourceInvalidatesExistingCredentials(t *testing.T) {
 	}
 }
 func TestConfigurationGuardsAndSourceTombstones(t *testing.T) {
-	c := Config{DB: "postgres://test-only/krun_test", Development: true, PublicURL: "http://127.0.0.1:8080", Listen: "0.0.0.0:8080"}
+	c := Config{DB: "postgres://test-only/krun_test", Development: true, PublicURL: "http://0.0.0.0:8080"}
 	if c.Validate() == nil {
-		t.Fatal("development exposed outside loopback")
+		t.Fatal("development public_url must stay on loopback HTTP")
+	}
+	c = Config{DB: "postgres://test-only/krun_test", Development: true, PublicURL: "http://127.0.0.1:8080", Listen: "0.0.0.0:9000", InternalListen: "0.0.0.0:9000"}
+	if c.Validate() == nil {
+		t.Fatal("internal_listen must differ from listen")
 	}
 	store := memoryStore()
 	c.Listen = "127.0.0.1:8080"
+	c.InternalListen = ""
 	c.Providers = []ProviderConfig{{ID: "local", Source: "source1", Type: "dev", Registration: "jit"}}
 	if _, e := NewServer(context.Background(), c, store); e != nil {
 		t.Fatal(e)
@@ -425,13 +430,13 @@ func TestInviteOnlyRequiresExactUnexpiredIdentity(t *testing.T) {
 	s, store := testServer(t)
 	s.providers["local"].config.Registration = "invite_only"
 	login := func() string {
-		w := browserRequest(s, "GET", "/auth/csrf", nil, nil)
+		w := browserRequest(s, "GET", "/api/auth/csrf", nil, nil)
 		var csrf struct {
 			Token string `json:"csrf_token"`
 		}
 		_ = json.Unmarshal(w.Body.Bytes(), &csrf)
 		cookies := w.Result().Cookies()
-		begin := browserRequest(s, "POST", "/auth/local/login", url.Values{"csrf_token": {csrf.Token}}, cookies)
+		begin := browserRequest(s, "POST", "/api/auth/local/login", url.Values{"csrf_token": {csrf.Token}}, cookies)
 		return browserRequest(s, "GET", begin.Header().Get("Location"), nil, cookies).Header().Get("Location")
 	}
 	if !strings.Contains(login(), "REGISTRATION_DENIED") {
@@ -444,7 +449,7 @@ func TestInviteOnlyRequiresExactUnexpiredIdentity(t *testing.T) {
 	if e := Invite(context.Background(), store, "local", "developer"); e != nil {
 		t.Fatal(e)
 	}
-	if login() != "/console/" {
+	if login() != "/" {
 		t.Fatal("exact invitation rejected")
 	}
 	_ = store.Update(context.Background(), func(st *State) error {
