@@ -430,15 +430,17 @@ export default function App() {
           {me.system_admin ? (
             <Button
               variant={systemView ? "default" : "ghost"}
-              size="icon-sm"
+              className="gap-1.5 px-2.5 text-[12px]"
               aria-label={systemView ? t("返回组织") : t("平台管理")}
-              title={systemView ? t("返回组织") : t("平台管理")}
               onClick={() => {
                 setSystemView((v) => !v);
                 setSection(systemView ? "overview" : "orgs");
               }}
             >
-              <ShieldCheck size={16} />
+              <ShieldCheck size={15} />
+              <span className="hidden sm:inline">
+                {systemView ? t("返回组织") : t("平台管理")}
+              </span>
             </Button>
           ) : null}
           <LanguageSwitch />
