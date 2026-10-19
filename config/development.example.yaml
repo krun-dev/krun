@@ -1,0 +1,16 @@
+# 本地开发配置模板。复制为 config/development.yaml 并填入真实值：
+#   cp config/development.example.yaml config/development.yaml
+# development.yaml 已被 .gitignore 排除，凭据不会进入版本库。
+# 本地 Postgres 准备：bash scripts/dev-postgres.sh（首次会 initdb 并要求设定密码）。
+listen: 127.0.0.1:8080
+public_url: http://127.0.0.1:8080
+development: true
+db: postgres://krun:CHANGE_ME@127.0.0.1:25432/krun_dev?sslmode=disable
+static_dir: dist
+providers:
+  - id: local
+    enabled: true # 改为 false 禁用本地开发登录
+    source_id: local-development
+    type: dev
+    name: 本地开发登录
+  # 接入真实 SSO 时参考 config/example.yaml；kind/Workers 开发参考 config/workers.example.yaml。

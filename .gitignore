@@ -10,5 +10,9 @@ bin/
 .DS_Store
 config/production.yaml
 config/production.yml
+# 本地实际配置（从 config/*.example.yaml 复制后填写真实凭据）
+config/development.yaml
+config/development.yml
+config/local*.yaml
 playwright-report/
 test-results/
