@@ -8,7 +8,6 @@
   "审计记录": "Audit log",
   "无法连接控制服务，请检查服务状态后刷新。": "Unable to connect to the control service. Check its status and refresh.",
   "操作失败": "Operation failed",
-  "全部组织": "All organizations",
   "选择组织": "Select an organization",
   "复制失败，请手动选中用户 ID。": "Could not copy. Select the user ID manually.",
   "重试": "Retry",
@@ -510,5 +509,13 @@
   "删除中…": "Deleting…",
   "确认删除": "Confirm delete",
   "通用": "General",
-  "计算服务": "Compute"
+  "计算服务": "Compute",
+  "平台管理": "Platform administration",
+  "返回组织": "Back to organizations",
+  "组织目录": "Organization catalog",
+  "全平台审计": "Platform-wide audit",
+  "全平台 API 密钥": "Platform-wide API keys",
+  "平台上的全部组织。点按进入该组织的控制台。": "All organizations on the platform. Click to open its console.",
+  "暂无组织": "No organizations yet",
+  "还没有任何组织。": "No organizations exist yet."
 }

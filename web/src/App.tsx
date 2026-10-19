@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import {
   Activity,
+  ArrowLeft,
   ArrowUpRight,
   Building2,
   Check,
@@ -76,6 +77,7 @@ import { KeysPage } from "@/components/keys";
 
 type Section =
   | "overview"
+  | "orgs"
   | "members"
   | "groups"
   | "roles"
@@ -96,6 +98,12 @@ const navigation: { id: Section; name: string; icon: typeof Users; group: string
   { id: "check", name: "权限检查", icon: Search, group: "组织管理" },
   { id: "audit", name: "审计记录", icon: Activity, group: "组织管理" },
   { id: "users", name: "系统用户", icon: Users, group: "系统" },
+];
+const adminNavigation: { id: Section; name: string }[] = [
+  { id: "orgs", name: "组织目录" },
+  { id: "users", name: "系统用户" },
+  { id: "audit", name: "全平台审计" },
+  { id: "keys", name: "全平台 API 密钥" },
 ];
 export default function App() {
   useTranslation();
@@ -128,6 +136,8 @@ export default function App() {
     [refresh, setRefresh] = useState(0),
     [menu, setMenu] = useState(false);
   const [workersNavigation, setWorkersNavigation] = useState(0);
+  const [systemView, setSystemView] = useState(false);
+  const [orgCatalog, setOrgCatalog] = useState<Organization[]>([]);
   const [orgDialog, setOrgDialog] = useState(false),
     [orgName, setOrgName] = useState(""),
     [saving, setSaving] = useState(false),
@@ -171,10 +181,11 @@ export default function App() {
       .then((data) => {
         if (active) {
           setOrgs(data.items);
+          setOrgCatalog(data.items);
           setScope((current) =>
             current === "system" || data.items.some((o) => o.id === current)
               ? current
-              : (data.items[0]?.id ?? "system"),
+              : (data.items[0]?.id ?? ""),
           );
         }
       })
@@ -198,8 +209,8 @@ export default function App() {
     }
   }
   const org = orgs.find((o) => o.id === scope),
-    system = scope === "system",
-    scopeName = system ? t("全部组织") : (org?.name ?? t("选择组织"));
+    system = systemView,
+    scopeName = systemView ? t("平台管理") : (org?.name ?? t("选择组织"));
   async function copyID() {
     try {
       await navigator.clipboard.writeText(me!.user.user_id);
@@ -262,7 +273,7 @@ export default function App() {
               value={scope}
               onChange={(v) => {
                 setScope(v);
-                if (v === "system" && !me.system_admin) setSection("keys");
+
                 setMenu(false);
               }}
             >
@@ -274,10 +285,53 @@ export default function App() {
                   {o.name}
                 </option>
               ))}
-              <option value="system">{t("全部组织")}</option>
             </SelectField>
           </div>
         </div>
+        {systemView ? (
+          <>
+            <div className="mt-7 px-3 text-[10px] font-semibold uppercase tracking-widest text-primary/80">
+              {t("平台管理")}
+            </div>
+            <nav className="mt-3 grid gap-1">
+              {adminNavigation.map((n) => (
+                <button
+                  key={n.id}
+                  onClick={() => {
+                    setSection(n.id);
+                    setMenu(false);
+                  }}
+                  className={cn(
+                    "flex items-center gap-3 rounded-md px-3 py-2.5 text-left text-[13px] transition",
+                    section === n.id
+                      ? "bg-secondary font-medium text-foreground"
+                      : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
+                  )}
+                >
+                  <ShieldCheck size={17} />
+                  {t(n.name)}
+                  {section === n.id && (
+                    <span className="ml-auto size-1.5 rounded-full bg-primary" />
+                  )}
+                </button>
+              ))}
+            </nav>
+            <button
+              onClick={() => {
+                setSystemView(false);
+                setSection("overview");
+                setMenu(false);
+              }}
+              className={cn(
+                "mt-5 flex items-center gap-3 rounded-md px-3 py-2.5 text-left text-[13px] text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
+              )}
+            >
+              <ArrowLeft size={17} />
+              {t("返回组织")}
+            </button>
+          </>
+        ) : (
+        <>
         <div className="mt-7 px-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
           {t("平台控制台")}
         </div>
@@ -334,6 +388,21 @@ export default function App() {
               </div>
             ))}
         </nav>
+        </>
+        )}
+        {me.system_admin && !systemView ? (
+          <button
+            onClick={() => {
+              setSystemView(true);
+              setSection("orgs");
+              setMenu(false);
+            }}
+            className="mt-5 flex items-center gap-3 rounded-md border border-primary/20 bg-primary/5 px-3 py-2.5 text-left text-[13px] text-primary hover:bg-primary/10"
+          >
+            <ShieldCheck size={17} />
+            {t("平台管理")}
+          </button>
+        ) : null}
         <div className="mt-auto pt-8">
           <div className="rounded-md border bg-background/50 p-4">
             <Terminal size={19} className="text-primary" />
@@ -373,13 +442,15 @@ export default function App() {
             <PanelLeft size={18} />
           </Button>
           <span className="hidden shrink-0 text-sm text-muted-foreground sm:inline">
-            {t("组织")}
+            {systemView ? t("平台管理") : t("组织")}
           </span>
           <span className="hidden text-muted-foreground/40 sm:inline">/</span>
           <span className="truncate text-sm font-medium">{scopeName}</span>
           <span className="hidden text-muted-foreground/40 xl:inline">/</span>
           <span className="hidden shrink-0 text-xs text-muted-foreground xl:inline">
-            {t(navigation.find((n) => n.id === section)?.name ?? "系统用户")}
+            {t(
+              (systemView ? adminNavigation : navigation).find((n) => n.id === section)?.name ?? "系统用户",
+            )}
           </span>
         </div>
         <div className="ml-3 flex shrink-0 items-center gap-3">
@@ -612,6 +683,8 @@ export default function App() {
               </Card>
             </div>
           </>
+        ) : section === "orgs" ? (
+          <OrgCatalogPage orgs={orgCatalog} onSelect={(id) => { setScope(id); setSystemView(false); setSection("overview"); }} />
         ) : section === "users" ? (
           <UsersPage notify={notify} refresh={refresh} reload={reload} />
         ) : !scope ? (
@@ -704,5 +777,43 @@ export default function App() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+function OrgCatalogPage({ orgs, onSelect }: { orgs: Organization[]; onSelect: (id: string) => void }) {
+  const { t } = useTranslation();
+  return (
+    <section className="grid gap-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
+            {t("平台管理")}
+          </p>
+          <h1 className="mt-1 text-xl font-semibold">{t("组织目录")}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {t("平台上的全部组织。点按进入该组织的控制台。")}
+          </p>
+        </div>
+      </div>
+      {orgs.length === 0 ? (
+        <Empty title={t("暂无组织")} description={t("还没有任何组织。")} />
+      ) : (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {orgs.map((o) => (
+            <button
+              key={o.id}
+              onClick={() => onSelect(o.id)}
+              className="rounded-lg border bg-card p-4 text-left hover:border-primary/40"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <strong className="truncate">{o.name}</strong>
+                <Building2 size={16} className="shrink-0 text-muted-foreground" />
+              </div>
+              <code className="mt-2 block break-all text-[11px] text-muted-foreground">{o.id}</code>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
