@@ -15,7 +15,8 @@ export type RepositoryProvider = {
   name: string;
   priority: number;
   base_url: string;
-  credential_configured: boolean;
+  connected: boolean;
+  oauth: boolean;
 };
 export type WorkerServiceSummary = Resource & {
   repository_source?: RepositorySource;

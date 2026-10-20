@@ -36,7 +36,18 @@ func repositoryAPIOrigin(provider WorkerRepositoryProvider) string {
 	return provider.BaseURL
 }
 
-func (s *Server) repositoryRequest(ctx context.Context, provider WorkerRepositoryProvider, target string) (*http.Response, error) {
+// repositoryCredential picks the token for a fetch: the connecting user's
+// OAuth grant first, the provider's shared PAT as a fallback.
+func (s *Server) repositoryCredential(st *State, provider WorkerRepositoryProvider, userID string) string {
+	if st != nil && userID != "" {
+		if c, ok := st.RepositoryConnections[userID+"\x00"+provider.ID]; ok && c.AccessToken != "" {
+			return c.AccessToken
+		}
+	}
+	return provider.Token
+}
+
+func (s *Server) repositoryRequestWithToken(ctx context.Context, provider WorkerRepositoryProvider, target, token string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
@@ -44,11 +55,11 @@ func (s *Server) repositoryRequest(ctx context.Context, provider WorkerRepositor
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "krun-workers")
 	origin, _ := url.Parse(repositoryAPIOrigin(provider))
-	if provider.Token != "" && req.URL.Scheme == origin.Scheme && req.URL.Host == origin.Host {
+	if token != "" && req.URL.Scheme == origin.Scheme && req.URL.Host == origin.Host {
 		if provider.Type == "github" {
-			req.Header.Set("Authorization", "Bearer "+provider.Token)
+			req.Header.Set("Authorization", "Bearer "+token)
 		} else {
-			req.Header.Set("PRIVATE-TOKEN", provider.Token)
+			req.Header.Set("PRIVATE-TOKEN", token)
 		}
 	}
 	if provider.Type == "github" {
@@ -57,14 +68,14 @@ func (s *Server) repositoryRequest(ctx context.Context, provider WorkerRepositor
 	return s.workerRepositoryClient.Do(req)
 }
 
-func (s *Server) resolveRepositoryCommit(ctx context.Context, provider WorkerRepositoryProvider, source WorkerRepositorySource) (string, error) {
+func (s *Server) resolveRepositoryCommit(ctx context.Context, provider WorkerRepositoryProvider, source WorkerRepositorySource, token string) (string, error) {
 	var target string
 	if provider.Type == "github" {
 		target = repositoryAPIOrigin(provider) + "/repos/" + source.Repository + "/commits/" + url.PathEscape(source.Ref)
 	} else {
 		target = provider.BaseURL + "/api/v4/projects/" + url.PathEscape(source.Repository) + "/repository/commits/" + url.PathEscape(source.Ref)
 	}
-	resp, err := s.repositoryRequest(ctx, provider, target)
+	resp, err := s.repositoryRequestWithToken(ctx, provider, target, token)
 	if err != nil {
 		return "", fmt.Errorf("Repository connection unavailable")
 	}
@@ -89,7 +100,7 @@ func (s *Server) resolveRepositoryCommit(ctx context.Context, provider WorkerRep
 	return commit, nil
 }
 
-func (s *Server) fetchRepositorySource(ctx context.Context, provider WorkerRepositoryProvider, source WorkerBuildRepository) (map[string]string, error) {
+func (s *Server) fetchRepositorySource(ctx context.Context, provider WorkerRepositoryProvider, source WorkerBuildRepository, token string) (map[string]string, error) {
 	var target string
 	if provider.Type == "github" {
 		target = repositoryAPIOrigin(provider) + "/repos/" + source.Repository + "/tarball/" + source.Commit
@@ -98,7 +109,7 @@ func (s *Server) fetchRepositorySource(ctx context.Context, provider WorkerRepos
 	}
 	origin, _ := url.Parse(repositoryAPIOrigin(provider))
 	for redirects := 0; redirects < 4; redirects++ {
-		resp, err := s.repositoryRequest(ctx, provider, target)
+		resp, err := s.repositoryRequestWithToken(ctx, provider, target, token)
 		if err != nil {
 			return nil, fmt.Errorf("Repository archive connection unavailable")
 		}

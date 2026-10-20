@@ -517,5 +517,11 @@
   "全平台 API 密钥": "Platform-wide API keys",
   "平台上的全部组织。点按进入该组织的控制台。": "All organizations on the platform. Click to open its console.",
   "暂无组织": "No organizations yet",
-  "还没有任何组织。": "No organizations exist yet."
+  "还没有任何组织。": "No organizations exist yet.",
+  "已连接你的账号，私有仓库按你的权限可见。": "Your account is connected; private repositories follow your access.",
+  "连接你的账号后可构建你有权限的私有仓库。": "Connect your account to build private repositories you can access.",
+  "公开仓库匿名拉取；私有仓库需管理员配置共享凭据。": "Public repositories are fetched anonymously; private ones need shared credentials from the administrator.",
+  "断开": "Disconnect",
+  "连接账号": "Connect account",
+  "已断开仓库账号连接。": "Repository account disconnected."
 }

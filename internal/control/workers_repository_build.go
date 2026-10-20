@@ -20,8 +20,16 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 	}); err != nil {
 		return build, private, err
 	}
+	// Resolve the fetch credential once: the connecting user's OAuth grant,
+	// falling back to the provider's shared PAT.
+	var fetchToken string
+	_ = w.server.Store.Update(ctx, func(st *State) error {
+		actor := st.Workers.OperationPrivate[build.ID].Actor.User
+		fetchToken = w.server.repositoryCredential(st, provider, actor)
+		return nil
+	})
 	if source.Commit == "" {
-		commit, err := w.server.resolveRepositoryCommit(ctx, provider, source.WorkerRepositorySource)
+		commit, err := w.server.resolveRepositoryCommit(ctx, provider, source.WorkerRepositorySource, fetchToken)
 		if err != nil {
 			return build, private, err
 		}
@@ -37,7 +45,7 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 			return build, private, err
 		}
 	}
-	files, err := w.server.fetchRepositorySource(ctx, provider, source)
+	files, err := w.server.fetchRepositorySource(ctx, provider, source, fetchToken)
 	if err != nil {
 		return build, private, err
 	}

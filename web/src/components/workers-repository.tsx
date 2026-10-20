@@ -97,6 +97,42 @@ export function RepositoryBuild({
   function update(key: keyof RepositorySource, value: string) {
     setSource((previous) => ({ ...previous, [key]: value }));
   }
+  async function toggleConnection() {
+    if (!provider) return;
+    setBusy(true);
+    try {
+      if (provider.connected) {
+        await api(
+          organizationBase +
+            "/workers/repository/" +
+            encodeURIComponent(provider.id) +
+            "/disconnect",
+          "DELETE",
+        );
+        setProviders((previous) =>
+          previous
+            ? previous.map((p) =>
+                p.id === provider.id ? { ...p, connected: false } : p,
+              )
+            : previous,
+        );
+        notify(t("已断开仓库账号连接。"));
+      } else {
+        const { authorization_url } = await api<{ authorization_url: string }>(
+          organizationBase +
+            "/workers/repository/" +
+            encodeURIComponent(provider.id) +
+            "/connect",
+          "POST",
+        );
+        window.location.assign(authorization_url);
+      }
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
   async function saveRepository() {
     if (JSON.stringify(binding.source) === JSON.stringify(source))
       return binding;
@@ -211,17 +247,33 @@ export function RepositoryBuild({
               </SelectField>
             </div>
             {provider ? (
+              <div className="-mt-1 flex items-center justify-between gap-3 rounded-md border bg-background/50 px-3 py-2.5">
+                <p className="text-xs text-muted-foreground">
+                  {provider.connected
+                    ? t("已连接你的账号，私有仓库按你的权限可见。")
+                    : provider.oauth
+                      ? t("连接你的账号后可构建你有权限的私有仓库。")
+                      : t("公开仓库匿名拉取；私有仓库需管理员配置共享凭据。")}
+                </p>
+                {provider.oauth ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => void toggleConnection()}
+                  >
+                    {provider.connected ? t("断开") : t("连接账号")}
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+            {provider ? (
               <p className="-mt-3 break-all text-xs text-muted-foreground">
                 {provider.base_url}
               </p>
             ) : null}
-            {provider && !provider.credential_configured ? (
-              <p className="text-xs text-muted-foreground">
-                {t(
-                  "该来源尚未配置凭证，可读取公开仓库。私有仓库请联系管理员。",
-                )}
-              </p>
-            ) : null}
+
             <Field
               label={t("仓库地址")}
               hint={t(

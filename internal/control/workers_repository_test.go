@@ -29,7 +29,7 @@ func TestRepositoryProviderConfigurationAndDisplay(t *testing.T) {
 	}
 	r := request(s, "GET", "/api/v1/orgs/org-a/workers/repository-providers", "krun_cli_admin", "")
 	var out struct {
-		Items []WorkerRepositoryProviderInfo `json:"items"`
+		Items []repositoryConnectionInfo `json:"items"`
 	}
 	if err := json.Unmarshal(r.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
@@ -166,11 +166,11 @@ func TestGitLabRepositoryCommitAndArchive(t *testing.T) {
 	s.workerRepositoryClient.Transport = gitlab.Client().Transport
 	provider := WorkerRepositoryProvider{Type: "gitlab", BaseURL: gitlab.URL, Token: "private-test-token"}
 	source := WorkerRepositorySource{Repository: "team/nested/worker", Ref: "release/v1", RootDirectory: "worker", Entrypoint: "index.ts"}
-	resolved, err := s.resolveRepositoryCommit(context.Background(), provider, source)
+	resolved, err := s.resolveRepositoryCommit(context.Background(), provider, source, provider.Token)
 	if err != nil || resolved != commit {
 		t.Fatal(resolved, err)
 	}
-	files, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{source, resolved})
+	files, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{source, resolved}, provider.Token)
 	if err != nil || len(files) != 1 || !strings.Contains(files["index.ts"], "gitlab") || len(requests) != 2 {
 		t.Fatal(files, err, requests)
 	}
@@ -202,18 +202,18 @@ func TestGitHubRepositoryRedirectCredentialIsolation(t *testing.T) {
 	})
 	provider := WorkerRepositoryProvider{Type: "github", BaseURL: "https://github.com", Token: "github-test-token"}
 	source := WorkerRepositorySource{Repository: "team/worker", Ref: "main", RootDirectory: ".", Entrypoint: "index.js"}
-	resolved, err := s.resolveRepositoryCommit(context.Background(), provider, source)
+	resolved, err := s.resolveRepositoryCommit(context.Background(), provider, source, provider.Token)
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{source, resolved})
+	files, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{source, resolved}, provider.Token)
 	if err != nil || len(files) != 1 || downloads != 1 {
 		t.Fatal(files, err, downloads)
 	}
 	s.workerRepositoryClient.Transport = invokeRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 302, Header: http.Header{"Location": []string{"https://attacker.test/archive"}}, Body: io.NopCloser(strings.NewReader(""))}, nil
 	})
-	if _, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{source, resolved}); err == nil {
+	if _, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{source, resolved}, provider.Token); err == nil {
 		t.Fatal("external archive redirect accepted")
 	}
 }
@@ -336,5 +336,36 @@ func TestRepositoryArchiveGitHubGlobalPAXHeader(t *testing.T) {
 	files, err := extractRepositorySource(buf.Bytes(), WorkerBuildRepository{WorkerRepositorySource: WorkerRepositorySource{RootDirectory: "src", Entrypoint: "index.ts"}})
 	if err != nil || files["index.ts"] != code {
 		t.Fatal(files, err)
+	}
+}
+
+func TestRepositoryConnectionLifecycle(t *testing.T) {
+	s, store, _ := workerTestServer(t)
+	s.Config.Workers.RepositoryProviders = []WorkerRepositoryProvider{
+		{ID: "github", Type: "github", Name: "GitHub", Enabled: true, Priority: 10, ClientID: "cid", ClientSecret: "csecret"},
+	}
+	s.routes()
+	if r := request(s, "POST", "/api/v1/orgs/org-a/workers/repository/github/disconnect", "krun_cli_admin", ""); r.Code != 204 {
+		t.Fatal(r.Code, r.Body.String())
+	}
+	// 手工放置连接后 providers 列表应标记 connected
+	if e := store.Update(context.Background(), func(st *State) error {
+		st.RepositoryConnections["admin\x00github"] = WorkerRepositoryConnection{User: "admin", Provider: "github", AccessToken: "tok"}
+		return nil
+	}); e != nil {
+		t.Fatal(e)
+	}
+	r := request(s, "GET", "/api/v1/orgs/org-a/workers/repository-providers", "krun_cli_admin", "")
+	var out struct {
+		Items []repositoryConnectionInfo `json:"items"`
+	}
+	if err := json.Unmarshal(r.Body.Bytes(), &out); err != nil || r.Code != 200 || len(out.Items) != 1 {
+		t.Fatal(r.Code, r.Body.String())
+	}
+	if !out.Items[0].Connected || !out.Items[0].OAuth {
+		t.Fatal("connection state not surfaced", out.Items)
+	}
+	if strings.Contains(r.Body.String(), "tok") {
+		t.Fatal("access token leaked in provider listing")
 	}
 }

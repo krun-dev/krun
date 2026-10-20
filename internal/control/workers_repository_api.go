@@ -85,7 +85,7 @@ func (s *Server) workerRepositoryProviders(st *State, p Principal, r *http.Reque
 	if err := s.require(st, p, r, "service.list", target); err != nil {
 		return nil, 0, err
 	}
-	return items(s.visibleRepositoryProviders(target.ID))
+	return items(s.visibleRepositoryProviders(st, target.ID, p.User.ID))
 }
 
 func (s *Server) workerRepositoryGet(st *State, p Principal, r *http.Request) (any, int, error) {

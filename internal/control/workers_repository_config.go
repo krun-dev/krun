@@ -2,10 +2,10 @@ package control
 
 import (
 	"fmt"
+	"time"
 	"net/url"
 	"path"
 	"regexp"
-	"sort"
 	"strings"
 )
 
@@ -20,6 +20,26 @@ type WorkerRepositoryProvider struct {
 	Token               string   `json:"token"`
 	AllowedRepositories []string `json:"allowed_repositories"`
 	OrganizationIDs     []string `json:"organization_ids"`
+	// OAuth app credentials; when set users connect their own accounts and
+	// builds fetch with the connecting user's token instead of a shared PAT.
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+}
+
+// WorkerRepositoryConnection is a user's OAuth grant to a repository provider.
+type WorkerRepositoryConnection struct {
+	User        string    `json:"user"`
+	Provider    string    `json:"provider"`
+	AccessToken string    `json:"access_token"`
+	ConnectedAt time.Time `json:"connected_at"`
+}
+
+// WorkerRepositoryConnectState is a pending OAuth connect handshake.
+type WorkerRepositoryConnectState struct {
+	User     string    `json:"user"`
+	Provider string    `json:"provider"`
+	Browser  string    `json:"browser"`
+	Expires  time.Time `json:"expires"`
 }
 
 type WorkerRepositorySource struct {
@@ -33,15 +53,6 @@ type WorkerRepositorySource struct {
 type WorkerBuildRepository struct {
 	WorkerRepositorySource
 	Commit string `json:"commit,omitempty"`
-}
-
-type WorkerRepositoryProviderInfo struct {
-	ID                   string `json:"id"`
-	Type                 string `json:"type"`
-	Name                 string `json:"name"`
-	Priority             int    `json:"priority"`
-	BaseURL              string `json:"base_url"`
-	CredentialConfigured bool   `json:"credential_configured"`
 }
 
 var repositorySegment = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$`)
@@ -162,20 +173,3 @@ func safeWorkerRepositoryPath(name string, allowRoot bool) bool {
 	return true
 }
 
-func (s *Server) visibleRepositoryProviders(organization string) []WorkerRepositoryProviderInfo {
-	out := make([]WorkerRepositoryProviderInfo, 0)
-	for _, p := range s.Config.Workers.RepositoryProviders {
-		if !p.Enabled || (len(p.OrganizationIDs) > 0 && !contains(p.OrganizationIDs, organization)) {
-			continue
-		}
-		// Return display metadata only; tokens and repository access policy stay private.
-		out = append(out, WorkerRepositoryProviderInfo{ID: p.ID, Type: p.Type, Name: p.Name, Priority: p.Priority, BaseURL: p.BaseURL, CredentialConfigured: p.Token != ""})
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Priority == out[j].Priority {
-			return out[i].ID < out[j].ID
-		}
-		return out[i].Priority < out[j].Priority
-	})
-	return out
-}

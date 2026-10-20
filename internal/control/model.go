@@ -147,10 +147,14 @@ type State struct {
 	Devices       map[string]Device
 	Invitations   map[string]time.Time
 	Audits        []Audit
+	// Per-user OAuth connections for repository access, keyed by user ID + provider ID.
+	RepositoryConnections map[string]WorkerRepositoryConnection
+	// In-flight repository OAuth connect requests, keyed by CSRF state.
+	RepositoryConnectStates map[string]WorkerRepositoryConnectState
 }
 
 func newState() *State {
-	return &State{Workers: newWorkerState(), Sources: map[string]string{}, Users: map[string]User{}, Organizations: map[string]Organization{}, Members: map[string]Member{}, Groups: map[string]Group{}, Assignments: map[string]Assignment{}, Resources: map[string]Resource{}, Keys: map[string]APIKey{}, KeyHashes: map[string]string{}, Sessions: map[string]Session{}, Browsers: map[string]Browser{}, Logins: map[string]Login{}, EmailLogins: map[string]EmailLogin{}, Devices: map[string]Device{}, Invitations: map[string]time.Time{}, Audits: []Audit{}}
+	return &State{Workers: newWorkerState(), Sources: map[string]string{}, Users: map[string]User{}, Organizations: map[string]Organization{}, Members: map[string]Member{}, Groups: map[string]Group{}, Assignments: map[string]Assignment{}, Resources: map[string]Resource{}, Keys: map[string]APIKey{}, KeyHashes: map[string]string{}, Sessions: map[string]Session{}, Browsers: map[string]Browser{}, Logins: map[string]Login{}, EmailLogins: map[string]EmailLogin{}, Devices: map[string]Device{}, Invitations: map[string]time.Time{}, Audits: []Audit{}, RepositoryConnections: map[string]WorkerRepositoryConnection{}, RepositoryConnectStates: map[string]WorkerRepositoryConnectState{}}
 }
 func contains(xs []string, x string) bool {
 	for _, v := range xs {

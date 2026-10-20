@@ -14,6 +14,9 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	base := "/api/v1/orgs/{org}/services/{resource}/workers"
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/services", s.protected(false, s.workerServiceList))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/repository-providers", s.protected(false, s.workerRepositoryProviders))
+	m.HandleFunc("POST /api/v1/orgs/{org}/workers/repository/{provider}/connect", s.protected(true, s.workerRepositoryConnect))
+	m.HandleFunc("POST /api/v1/orgs/{org}/workers/repository/{provider}/disconnect", s.protected(true, s.workerRepositoryDisconnect))
+	m.HandleFunc("POST /api/v1/workers/repository/{provider}/callback", s.workerRepositoryCallback)
 	m.HandleFunc("GET "+base+"/repository", s.protected(false, s.workerRepositoryGet))
 	m.HandleFunc("PUT "+base+"/repository", s.protected(false, s.workerRepositoryUpdate))
 	m.HandleFunc("POST "+base+"/builds", s.protected(false, s.workerBuildCreate))
