@@ -104,20 +104,24 @@ func (s *Server) workerRepositoryUpdate(st *State, p Principal, r *http.Request)
 		return nil, 0, err
 	}
 	var in struct {
-		Source   WorkerRepositorySource `json:"source"`
-		Revision int                    `json:"expected_revision"`
+		Source   *WorkerRepositorySource `json:"source"`
+		Revision int                     `json:"expected_revision"`
 	}
 	if err := body(r, &in); err != nil {
-		return nil, 0, err
-	}
-	if _, err := s.validateRepositorySource(&in.Source, target.Organization); err != nil {
 		return nil, 0, err
 	}
 	service := s.workerService(st, target)
 	if service.RepositoryRevision != in.Revision {
 		return nil, 0, problem(409, "REVISION_CONFLICT", "Repository configuration changed")
 	}
-	service.Repository = &in.Source
+	if in.Source == nil {
+		service.Repository = nil
+	} else {
+		if _, err := s.validateRepositorySource(in.Source, target.Organization); err != nil {
+			return nil, 0, err
+		}
+		service.Repository = in.Source
+	}
 	service.RepositoryRevision++
 	st.Workers.Services[target.ID] = service
 	return map[string]any{"source": service.Repository, "revision": service.RepositoryRevision}, 200, nil

@@ -24,6 +24,7 @@ import {
   type Environment,
   type Operation,
   type WorkerData,
+  type RepositoryBinding,
 } from "@/lib/workers";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -54,7 +55,7 @@ import {
   SelectField,
 } from "@/components/common";
 import { cn } from "@/lib/utils";
-import { RepositoryBuild } from "@/components/workers-repository";
+import { RepositoryBuild, RepositorySettings } from "@/components/workers-repository";
 
 const states: Record<string, string> = {
   queued: "排队中",
@@ -369,7 +370,15 @@ function WorkerDetail({
   notify: (s: string) => void;
 }) {
   const [revision, setRevision] = useState(0);
+  const [binding, setBinding] = useState<RepositoryBinding | null>(null);
   const reload = useCallback(() => setRevision((v) => v + 1), []);
+  useEffect(() => {
+    const controller = new AbortController();
+    void api<RepositoryBinding>(base + "/repository", "GET", undefined, controller.signal)
+      .then(setBinding)
+      .catch(() => {});
+    return () => controller.abort();
+  }, [base, revision]);
   const { data, error } = useWorkerData(base, revision);
   const [environment, setEnvironment] = useState(
     new URLSearchParams(location.search).get("environment") || "production",
@@ -747,7 +756,20 @@ function WorkerDetail({
               </CardContent>
             </Card>
           </TabsContent>
-          <TabsContent value="settings" className="mt-5">
+          <TabsContent value="settings" className="mt-5 grid gap-6">
+            <section className="grid gap-3">
+              <h3 className="flex items-center gap-2 text-sm font-medium">
+                {t("代码仓库")}
+              </h3>
+              <RepositorySettings
+                base={base}
+                organizationBase={organizationBase}
+                bound={binding?.source ?? null}
+                revision={binding?.revision ?? 0}
+                onSaved={setBinding}
+                notify={notify}
+              />
+            </section>
             <EnvironmentSettings
               key={env.name}
               base={base}
@@ -817,7 +839,8 @@ function WorkerDetail({
         open={editor}
         close={() => setEditor(false)}
         base={base}
-        organizationBase={organizationBase}
+        bound={binding?.source ?? null}
+        repositoryRevision={binding?.revision ?? 0}
         environments={data.environments}
         selectedEnvironment={env?.name || "production"}
         done={() => {

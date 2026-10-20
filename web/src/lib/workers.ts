@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { api, type List, type Resource } from "./api";
 import { errorMessage } from "./i18n";
 
+export type RepositoryBinding = {
+  source: RepositorySource | null;
+  revision: number;
+};
 export type RepositorySource = {
   provider_id: string;
   repository: string;

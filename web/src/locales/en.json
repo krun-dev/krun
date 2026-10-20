@@ -472,7 +472,7 @@
   "创建一个服务，关联代码仓库后开始构建。": "Create a service and connect a repository to build.",
   "返回服务列表": "Back to services",
   "服务名称": "Service name",
-  "代码仓库": "Repository",
+  "代码仓库": "Code repository",
   "环境状态": "Environment status",
   "未关联仓库": "No repository connected",
   "尚未构建": "No builds yet",
@@ -523,5 +523,11 @@
   "公开仓库匿名拉取；私有仓库需管理员配置共享凭据。": "Public repositories are fetched anonymously; private ones need shared credentials from the administrator.",
   "断开": "Disconnect",
   "连接账号": "Connect account",
-  "已断开仓库账号连接。": "Repository account disconnected."
+  "已断开仓库账号连接。": "Repository account disconnected.",
+  "选择仓库平台": "Select repository provider",
+  "解除绑定": "Unbind",
+  "已解除仓库绑定。": "Repository binding removed.",
+  "填写 namespace/repository 或完整 HTTPS 仓库地址。": "Use namespace/repository or a full HTTPS repository URL.",
+  "先在设置中绑定仓库。": "Bind a repository in settings first.",
+  "此服务尚未绑定代码仓库，请先在“环境配置”中完成绑定。": "No repository is bound yet; bind one under Environment settings first."
 }

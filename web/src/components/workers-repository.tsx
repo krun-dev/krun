@@ -1,25 +1,25 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { GitBranch, LoaderCircle } from "lucide-react";
-import { api, type List } from "@/lib/api";
-import { errorMessage, t } from "@/lib/i18n";
-import type {
-  Build,
-  Environment,
-  RepositoryProvider,
-  RepositorySource,
-} from "@/lib/workers";
+import { useTranslation } from "react-i18next";
+import { api, APIError } from "@/lib/api";
+import { Field, SelectField } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
 } from "@/components/ui/dialog";
-import { Field, Loading, SelectField } from "@/components/common";
+import type {
+  Build,
+  Environment,
+  RepositoryBinding,
+  RepositoryProvider,
+  RepositorySource,
+} from "@/lib/workers";
 
-type RepositoryBinding = { source: RepositorySource | null; revision: number };
 const emptySource: RepositorySource = {
   provider_id: "",
   repository: "",
@@ -28,72 +28,68 @@ const emptySource: RepositorySource = {
   entrypoint: "src/index.ts",
 };
 
-export function RepositoryBuild({
-  open,
-  close,
-  base,
-  organizationBase,
-  environments,
-  selectedEnvironment,
-  done,
-  notify,
-}: {
-  open: boolean;
-  close: () => void;
-  base: string;
-  organizationBase: string;
-  environments: Environment[];
-  selectedEnvironment: string;
-  done: () => void;
-  notify: (message: string) => void;
-}) {
+export function errorMessage(e: unknown): string {
+  if (e instanceof APIError) return e.message;
+  return String(e);
+}
+
+function useProviders(organizationBase: string, open: boolean) {
   const [providers, setProviders] = useState<RepositoryProvider[] | null>(null);
-  const [binding, setBinding] = useState<RepositoryBinding>({
-    source: null,
-    revision: 0,
-  });
-  const [source, setSource] = useState<RepositorySource>(emptySource);
-  const [environment, setEnvironment] = useState(selectedEnvironment);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const attempt = useRef({ fingerprint: "", key: "" });
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
     setProviders(null);
     setError("");
-    setEnvironment(selectedEnvironment);
-    void Promise.all([
-      api<List<RepositoryProvider>>(
-        organizationBase + "/workers/repository-providers",
-        "GET",
-        undefined,
-        controller.signal,
-      ),
-      api<RepositoryBinding>(
-        base + "/repository",
-        "GET",
-        undefined,
-        controller.signal,
-      ),
-    ])
-      .then(([p, b]) => {
-        if (controller.signal.aborted) return;
-        setProviders(p.items);
-        setBinding(b);
-        setSource(
-          b.source || { ...emptySource, provider_id: p.items[0]?.id || "" },
-        );
+    void api<{ items: RepositoryProvider[] }>(
+      organizationBase + "/workers/repository-providers",
+      "GET",
+      undefined,
+      controller.signal,
+    )
+      .then((p) => {
+        if (!controller.signal.aborted) setProviders(p.items);
       })
       .catch((e) => {
         if (!controller.signal.aborted) setError(errorMessage(e));
       });
     return () => controller.abort();
-  }, [open, base, organizationBase, selectedEnvironment]);
-  const provider = providers?.find((p) => p.id === source.provider_id);
-  const enabledEnvironment = environments.some(
-    (e) => e.name === environment && e.enabled,
+  }, [open, organizationBase]);
+  return { providers, setProviders, error, setError };
+}
+
+// ---------------------------------------------------------------------------
+// Settings panel: bind the repository once (provider, repo, directory,
+// entrypoint) and manage the per-user connection. Lives in the settings tab.
+// ---------------------------------------------------------------------------
+export function RepositorySettings({
+  base,
+  organizationBase,
+  bound,
+  revision,
+  onSaved,
+  notify,
+}: {
+  base: string;
+  organizationBase: string;
+  bound: RepositorySource | null;
+  revision: number;
+  onSaved: (binding: RepositoryBinding) => void;
+  notify: (message: string) => void;
+}) {
+  const { t } = useTranslation();
+  const { providers, setProviders, error, setError } = useProviders(
+    organizationBase,
+    true,
   );
+  const [source, setSource] = useState<RepositorySource>(
+    bound || emptySource,
+  );
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setSource(bound || emptySource);
+  }, [bound]);
+  const provider = providers?.find((p) => p.id === source.provider_id);
   function update(key: keyof RepositorySource, value: string) {
     setSource((previous) => ({ ...previous, [key]: value }));
   }
@@ -133,32 +129,227 @@ export function RepositoryBuild({
       setBusy(false);
     }
   }
-  async function saveRepository() {
-    if (JSON.stringify(binding.source) === JSON.stringify(source))
-      return binding;
-    const result = await api<RepositoryBinding>(base + "/repository", "PUT", {
-      source,
-      expected_revision: binding.revision,
-    });
-    setBinding(result);
-    if (result.source) setSource(result.source);
-    return result;
-  }
-  async function submit(build: boolean) {
+  async function save() {
     setBusy(true);
     setError("");
     try {
-      const saved = await saveRepository();
-      if (!build) {
-        notify(t("仓库配置已保存。"));
-        return;
-      }
+      const result = await api<RepositoryBinding>(base + "/repository", "PUT", {
+        source,
+        expected_revision: revision,
+      });
+      onSaved(result);
+      notify(t("仓库配置已保存。"));
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function unbind() {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api<RepositoryBinding>(base + "/repository", "PUT", {
+        source: null,
+        expected_revision: revision,
+      });
+      onSaved(result);
+      setSource(emptySource);
+      notify(t("已解除仓库绑定。"));
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (providers !== null && providers.length === 0)
+    return (
+      <p className="text-sm text-muted-foreground">
+        {t("管理员尚未启用代码仓库来源。")}
+      </p>
+    );
+  return (
+    <div className="grid gap-4">
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+      {providers === null && !error ? <p className="text-sm">{t("加载中…")}</p> : null}
+      {providers && providers.length > 0 ? (
+        <>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <SelectField
+              label={t("仓库平台")}
+              disabled={busy}
+              value={source.provider_id}
+              onChange={(value) => update("provider_id", value)}
+            >
+              {!source.provider_id ? (
+                <option value="" disabled>
+                  {t("选择仓库平台")}
+                </option>
+              ) : null}
+              {!provider && source.provider_id ? (
+                <option value={source.provider_id} disabled>
+                  {t("当前仓库来源已停用")}
+                </option>
+              ) : null}
+              {providers.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </SelectField>
+            <Field
+              label={t("仓库地址")}
+              hint={t("填写 namespace/repository 或完整 HTTPS 仓库地址。")}
+            >
+              <Input
+                aria-label={t("仓库地址")}
+                value={source.repository}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  update("repository", e.target.value)
+                }
+                placeholder="team/worker-service"
+                maxLength={500}
+                disabled={busy}
+              />
+            </Field>
+          </div>
+          {provider ? (
+            <div className="flex items-center justify-between gap-3 rounded-md border bg-background/50 px-3 py-2.5">
+              <p className="text-xs text-muted-foreground">
+                {provider.connected
+                  ? t("已连接你的账号，私有仓库按你的权限可见。")
+                  : provider.oauth
+                    ? t("连接你的账号后可构建你有权限的私有仓库。")
+                    : t("公开仓库匿名拉取；私有仓库需管理员配置共享凭据。")}
+              </p>
+              {provider.oauth ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void toggleConnection()}
+                >
+                  {provider.connected ? t("断开") : t("连接账号")}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field
+              label={t("项目目录")}
+              hint={t("相对仓库根目录，使用 . 表示根目录。")}
+            >
+              <Input
+                aria-label={t("项目目录")}
+                value={source.root_directory}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  update("root_directory", e.target.value)
+                }
+                placeholder="."
+                maxLength={160}
+                disabled={busy}
+              />
+            </Field>
+            <Field
+              label={t("入口文件")}
+              hint={t("相对项目目录，例如 src/index.ts。")}
+            >
+              <Input
+                aria-label={t("入口文件")}
+                value={source.entrypoint}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  update("entrypoint", e.target.value)
+                }
+                maxLength={160}
+                disabled={busy}
+              />
+            </Field>
+          </div>
+          <div className="flex justify-end gap-3">
+            {bound ? (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={() => void unbind()}
+              >
+                {t("解除绑定")}
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              disabled={
+                busy || !provider || !source.repository || !source.entrypoint
+              }
+              onClick={() => void save()}
+            >
+              {busy ? <LoaderCircle size={16} className="animate-spin" /> : null}
+              {t("保存仓库配置")}
+            </Button>
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Build dialog: with a bound repository only the ref and target environment
+// remain per-build inputs.
+// ---------------------------------------------------------------------------
+export function RepositoryBuild({
+  open,
+  close,
+  base,
+  bound,
+  repositoryRevision,
+  environments,
+  selectedEnvironment,
+  done,
+  notify,
+}: {
+  open: boolean;
+  close: () => void;
+  base: string;
+  bound: RepositorySource | null;
+  repositoryRevision: number;
+  environments: Environment[];
+  selectedEnvironment: string;
+  done: () => void;
+  notify: (message: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [ref, setRef] = useState(bound?.ref || "HEAD");
+  const [environment, setEnvironment] = useState(selectedEnvironment);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const attempt = useRef({ fingerprint: "", key: "" });
+  useEffect(() => {
+    if (open) {
+      setRef(bound?.ref || "HEAD");
+      setEnvironment(selectedEnvironment);
+      setError("");
+    }
+  }, [open, bound, selectedEnvironment]);
+  const enabledEnvironment = environments.some(
+    (e) => e.name === environment && e.enabled,
+  );
+  async function submit() {
+    setBusy(true);
+    setError("");
+    try {
       const payload = {
         source_type: "repository",
-        repository_revision: saved.revision,
+        repository_revision: repositoryRevision,
         environment,
+        ref,
       };
-      const fingerprint = JSON.stringify({ ...payload, source: saved.source });
+      const fingerprint = JSON.stringify({ ...payload, bound });
       if (attempt.current.fingerprint !== fingerprint) {
         attempt.current = { fingerprint, key: crypto.randomUUID() };
       }
@@ -178,18 +369,20 @@ export function RepositoryBuild({
   return (
     <Dialog
       open={open}
-      onOpenChange={(value) => {
+      onOpenChange={(value: boolean) => {
         if (!value && !busy) close();
       }}
     >
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <GitBranch size={18} />
             {t("从仓库构建")}
           </DialogTitle>
           <DialogDescription>
-            {t("指定仓库和分支，平台拉取固定 Commit 的代码并生成版本制品。")}
+            {bound
+              ? `${bound.provider_id} · ${bound.repository}`
+              : t("先在设置中绑定仓库。")}
           </DialogDescription>
         </DialogHeader>
         {error ? (
@@ -197,40 +390,30 @@ export function RepositoryBuild({
             {error}
           </p>
         ) : null}
-        {providers === null ? (
-          !error ? (
-            <Loading />
-          ) : null
-        ) : providers.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            {t("管理员尚未启用代码仓库来源。")}
-          </p>
-        ) : (
+        {bound ? (
           <form
             className="grid gap-5"
             onSubmit={(event) => {
               event.preventDefault();
-              void submit(true);
+              void submit();
             }}
           >
             <div className="grid gap-4 sm:grid-cols-2">
-              <SelectField
-                label={t("仓库平台")}
-                disabled={busy}
-                value={source.provider_id}
-                onChange={(value) => update("provider_id", value)}
+              <Field
+                label={t("分支 / Tag / Commit")}
+                hint={t("HEAD 表示默认分支；构建记录会保存实际 Commit。")}
               >
-                {!provider ? (
-                  <option value={source.provider_id} disabled>
-                    {t("当前仓库来源已停用")}
-                  </option>
-                ) : null}
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </SelectField>
+                <Input
+                  aria-label={t("分支 / Tag / Commit")}
+                  value={ref}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setRef(e.target.value)
+                  }
+                  placeholder="HEAD"
+                  maxLength={200}
+                  disabled={busy}
+                />
+              </Field>
               <SelectField
                 label={t("构建环境")}
                 disabled={busy}
@@ -246,112 +429,8 @@ export function RepositoryBuild({
                   ))}
               </SelectField>
             </div>
-            {provider ? (
-              <div className="-mt-1 flex items-center justify-between gap-3 rounded-md border bg-background/50 px-3 py-2.5">
-                <p className="text-xs text-muted-foreground">
-                  {provider.connected
-                    ? t("已连接你的账号，私有仓库按你的权限可见。")
-                    : provider.oauth
-                      ? t("连接你的账号后可构建你有权限的私有仓库。")
-                      : t("公开仓库匿名拉取；私有仓库需管理员配置共享凭据。")}
-                </p>
-                {provider.oauth ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => void toggleConnection()}
-                  >
-                    {provider.connected ? t("断开") : t("连接账号")}
-                  </Button>
-                ) : null}
-              </div>
-            ) : null}
-            {provider ? (
-              <p className="-mt-3 break-all text-xs text-muted-foreground">
-                {provider.base_url}
-              </p>
-            ) : null}
-
-            <Field
-              label={t("仓库地址")}
-              hint={t(
-                "填写 namespace/repository 或所选平台的完整 HTTPS 仓库地址。",
-              )}
-            >
-              <Input
-                aria-label={t("仓库地址")}
-                value={source.repository}
-                onChange={(e) => update("repository", e.target.value)}
-                placeholder="team/worker-service"
-                required
-                maxLength={500}
-                disabled={busy}
-              />
-            </Field>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field
-                label={t("分支 / Tag / Commit")}
-                hint={t("HEAD 表示默认分支；构建记录会保存实际 Commit。")}
-              >
-                <Input
-                  aria-label={t("分支 / Tag / Commit")}
-                  value={source.ref}
-                  onChange={(e) => update("ref", e.target.value)}
-                  placeholder="HEAD"
-                  maxLength={200}
-                  disabled={busy}
-                />
-              </Field>
-              <Field
-                label={t("项目目录")}
-                hint={t("相对仓库根目录，使用 . 表示根目录。")}
-              >
-                <Input
-                  aria-label={t("项目目录")}
-                  value={source.root_directory}
-                  onChange={(e) => update("root_directory", e.target.value)}
-                  placeholder="."
-                  required
-                  maxLength={160}
-                  disabled={busy}
-                />
-              </Field>
-            </div>
-            <Field
-              label={t("入口文件")}
-              hint={t("相对项目目录，例如 src/index.ts。")}
-            >
-              <Input
-                aria-label={t("入口文件")}
-                value={source.entrypoint}
-                onChange={(e) => update("entrypoint", e.target.value)}
-                required
-                maxLength={160}
-                disabled={busy}
-              />
-            </Field>
-            <p className="rounded-md bg-secondary p-3 text-xs text-muted-foreground">
-              {t(
-                "本版本构建 JS / TS 和相对文件导入；暂不执行 npm 安装或仓库中的构建脚本。项目源码最多 32 个文件、256 KiB。",
-              )}
-            </p>
-            <div className="flex justify-end gap-3">
-              <Button
-                type="button"
-                variant="outline"
-                disabled={
-                  busy || !provider || !source.repository || !source.entrypoint
-                }
-                onClick={() => void submit(false)}
-              >
-                {t("保存仓库配置")}
-              </Button>
-              <Button
-                type="submit"
-                disabled={busy || !provider || !enabledEnvironment}
-              >
+            <div className="flex justify-end">
+              <Button type="submit" disabled={busy || !enabledEnvironment}>
                 {busy ? (
                   <LoaderCircle size={16} className="animate-spin" />
                 ) : (
@@ -361,6 +440,10 @@ export function RepositoryBuild({
               </Button>
             </div>
           </form>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            {t("此服务尚未绑定代码仓库，请先在“环境配置”中完成绑定。")}
+          </p>
         )}
       </DialogContent>
     </Dialog>
