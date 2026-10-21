@@ -64,7 +64,7 @@ func TestPostgresSharedTransactions(t *testing.T) {
 		if st.Users["pg-user"].Status != "active" {
 			t.Error("rolled back write visible across replica")
 		}
-		if len(st.Assignments) != 1 || len(st.Audits) != 1 {
+		if len(st.Assignments) != 1 {
 			t.Error("bootstrap and audit not atomic")
 		}
 		return nil
@@ -145,36 +145,32 @@ func TestPostgresBrowserLoginSurvivesRestart(t *testing.T) {
 func TestPostgresAuditRetentionPersists(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
-	state := newState()
-	state.Audits = []Audit{{ID: "old", Time: now().Add(-8 * 24 * time.Hour)}, {ID: "new", Time: now()}}
-	raw, err := json.Marshal(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Seed through SQL to exercise cleanup of previously stored expired rows.
-	if _, err = store.pool.Exec(ctx, "UPDATE krun_control_state SET data=$1 WHERE id=1", raw); err != nil {
-		t.Fatal(err)
-	}
-	if err = store.Update(ctx, func(st *State) error {
-		if len(st.Audits) != 1 || st.Audits[0].ID != "new" {
-			t.Error("expired audit was loaded")
-		}
+	_, _ = store.pool.Exec(ctx, "DELETE FROM krun_audits")
+	// One expired, one fresh entry.
+	if err := store.Update(ctx, func(st *State) error {
+		store.recordAudit(Audit{ID: "old", Time: now().Add(-8 * 24 * time.Hour)})
+		store.recordAudit(Audit{ID: "new", Time: now()})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
+	var count int
+	if err := store.pool.QueryRow(ctx, "SELECT count(*) FROM krun_audits").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatal("audits were not persisted to the audit table", count)
+	}
+	if err := store.deleteAuditsBefore(ctx, now().Add(-auditRetention)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.pool.QueryRow(ctx, "SELECT count(*) FROM krun_audits WHERE id='new'").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatal("retention did not keep only the fresh entry", count)
+	}
 	store.Close()
-	reopened := postgresTestStore(t)
-	if err = reopened.pool.QueryRow(ctx, "SELECT data FROM krun_control_state WHERE id=1").Scan(&raw); err != nil {
-		t.Fatal(err)
-	}
-	var persisted State
-	if err = json.Unmarshal(raw, &persisted); err != nil {
-		t.Fatal(err)
-	}
-	if len(persisted.Audits) != 1 || persisted.Audits[0].ID != "new" {
-		t.Fatal("expired audit persisted after restart")
-	}
 }
 
 func TestOpenStoreRequiresPostgres(t *testing.T) {

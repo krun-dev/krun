@@ -43,11 +43,11 @@ export function Field({
 }) {
   useTranslation();
   return (
-    <Label className="grid gap-2 text-sm font-medium">
-      {label}
+    <Label className="grid items-start gap-2 text-sm font-medium">
+      <span className="leading-5">{label}</span>
       {children}
       {hint && (
-        <span className="text-xs font-normal text-muted-foreground">
+        <span className="text-xs font-normal leading-4 text-muted-foreground">
           {hint}
         </span>
       )}
@@ -68,7 +68,7 @@ export function SelectField({
   disabled?: boolean;
 }) {
   useTranslation();
-  return (
+  const select = (
     <select
       aria-label={label}
       className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20"
@@ -78,6 +78,15 @@ export function SelectField({
     >
       {children}
     </select>
+  );
+  // A bare select misaligns next to Field inputs inside grids; wrap with the
+  // same label structure when a label is provided.
+  if (!label) return select;
+  return (
+    <span className="flex flex-col items-start gap-2 self-start text-sm font-medium">
+      <span className="leading-5">{label}</span>
+      {select}
+    </span>
   );
 }
 export function Empty({

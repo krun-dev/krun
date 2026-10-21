@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import {
   ArrowLeft,
   ArrowRight,
+  ArrowUpRight,
   GitBranch,
   Check,
   Circle,
@@ -75,13 +76,20 @@ const artifactIcons: Record<string, typeof Check> = {
   生效中: Clock,
   不可用: Minus,
 };
-const artifactColors: Record<string, string> = {
-  当前: "text-emerald-700 dark:text-emerald-400",
-  历史: "text-sky-700 dark:text-sky-400",
-  未发布: "text-muted-foreground",
-  生效中: "text-amber-700 dark:text-amber-400",
-  不可用: "text-muted-foreground",
+// Deployment state color system (single source of truth):
+//   当前   → primary (brand): the good, expected state
+//   生效中 → amber: transient, worth the eye
+//   历史   → muted: superseded, no attention needed
+//   未发布/不可用 → no color at all
+//   失败   → destructive (shared with buttons/errors)
+const deployColors: Record<string, string> = {
+  当前: "text-primary",
+  历史: "text-muted-foreground",
+  未发布: "text-muted-foreground/60",
+  生效中: "text-amber-600 dark:text-amber-500",
+  不可用: "text-muted-foreground/60",
 };
+const artifactColors = deployColors;
 const stepStates: Record<string, string> = {
   pending: "等待执行",
   running: "处理中",
@@ -115,6 +123,12 @@ function Status({ state }: { state: string }) {
   );
 }
 const idempotency = () => crypto.randomUUID();
+
+// Always the production form: the plain domain over HTTPS. Local tunnels
+// (ports, Host headers) are a developer concern and stay out of the URL.
+function workerURL(host: string): string {
+  return "https://" + host + "/";
+}
 
 export function WorkersPage({
   base,
@@ -558,7 +572,18 @@ function WorkerDetail({
           >
             <div className="flex items-center justify-between">
               <strong>{e.name}</strong>
-              <Badge variant="outline">
+              <Badge
+                variant="outline"
+                className={cn(
+                  e.enabled &&
+                    e.deployment_id === e.confirmed_deployment_id &&
+                    e.deployment_id
+                    ? "border-primary/40 text-primary"
+                    : e.enabled && e.deployment_id !== e.confirmed_deployment_id
+                      ? "border-amber-500/40 text-amber-600 dark:text-amber-500"
+                      : "",
+                )}
+              >
                 {!e.enabled
                   ? t("未启用")
                   : e.deployment_id !== e.confirmed_deployment_id
@@ -575,9 +600,22 @@ function WorkerDetail({
               </span>
             </div>
             <div className="flex items-center justify-between gap-2">
-              <code className="break-all text-[11px] text-muted-foreground">
-                {e.host}
-              </code>
+              {e.deployment_id && env?.enabled ? (
+                <a
+                  href={workerURL(e.host)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 break-all text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  {e.host}
+                  <ArrowUpRight size={11} className="shrink-0" />
+                </a>
+              ) : (
+                <code className="break-all text-[11px] text-muted-foreground">
+                  {e.host}
+                </code>
+              )}
               {e.name !== "production" ? (
                 <Button
                   variant="outline"
@@ -599,10 +637,21 @@ function WorkerDetail({
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
             <TabsTrigger value="delivery">{t("构建与发布")}</TabsTrigger>
+            <TabsTrigger value="source">{t("代码源")}</TabsTrigger>
             <TabsTrigger value="settings">{t("环境配置")}</TabsTrigger>
             <TabsTrigger value="invoke">{t("调用测试")}</TabsTrigger>
           </TabsList>
           <TabsContent value="delivery" className="mt-5 grid gap-5">
+            {!binding?.source ? (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-primary/25 bg-primary/5 px-4 py-3 text-sm">
+                <p className="text-muted-foreground">
+                  {t("此服务尚未绑定代码仓库；绑定后可直接从分支或 Tag 构建版本。")}
+                </p>
+                <Button variant="outline" size="sm" onClick={() => setTab("source")}>
+                  {t("绑定代码仓库")}
+                </Button>
+              </div>
+            ) : null}
             <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
               {Object.entries(artifactIcons).map(([label, Icon]) => (
                 <span
@@ -623,11 +672,7 @@ function WorkerDetail({
                   <TableRow>
                     <TableHead>{t("构建记录")}</TableHead>
                     <TableHead>{t("状态")}</TableHead>
-                    {data.environments
-                      .filter((e) => e.enabled)
-                      .map((e) => (
-                        <TableHead key={e.name}>{e.name}</TableHead>
-                      ))}
+                    <TableHead className="min-w-48">{t("已部署到")}</TableHead>
                     <TableHead>{t("操作")}</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -657,13 +702,13 @@ function WorkerDetail({
                           </p>
                         ) : null}
                       </TableCell>
-                      {data.environments
-                        .filter((e) => e.enabled)
-                        .map((e) => (
-                          <TableCell key={e.name}>
-                            <ArtifactState build={b} env={e} data={data} />
-                          </TableCell>
-                        ))}
+                      <TableCell>
+                        <DeploymentSummary
+                          build={b}
+                          data={data}
+                          onSelect={(name) => setEnvironment(name)}
+                        />
+                      </TableCell>
                       <TableCell>
                         <div className="flex gap-1">
                           <Button
@@ -690,7 +735,7 @@ function WorkerDetail({
                   {data.builds.length === 0 ? (
                     <TableRow>
                       <TableCell
-                        colSpan={5}
+                        colSpan={4}
                         className="py-10 text-center text-muted-foreground"
                       >
                         {t("还没有构建，点击构建新版本。")}
@@ -756,20 +801,20 @@ function WorkerDetail({
               </CardContent>
             </Card>
           </TabsContent>
+          <TabsContent value="source" className="mt-5 grid gap-3">
+            <h3 className="flex items-center gap-2 text-sm font-medium">
+              {t("代码仓库")}
+            </h3>
+            <RepositorySettings
+              base={base}
+              organizationBase={organizationBase}
+              bound={binding?.source ?? null}
+              revision={binding?.revision ?? 0}
+              onSaved={setBinding}
+              notify={notify}
+            />
+          </TabsContent>
           <TabsContent value="settings" className="mt-5 grid gap-6">
-            <section className="grid gap-3">
-              <h3 className="flex items-center gap-2 text-sm font-medium">
-                {t("代码仓库")}
-              </h3>
-              <RepositorySettings
-                base={base}
-                organizationBase={organizationBase}
-                bound={binding?.source ?? null}
-                revision={binding?.revision ?? 0}
-                onSaved={setBinding}
-                notify={notify}
-              />
-            </section>
             <EnvironmentSettings
               key={env.name}
               base={base}
@@ -841,8 +886,6 @@ function WorkerDetail({
         base={base}
         bound={binding?.source ?? null}
         repositoryRevision={binding?.revision ?? 0}
-        environments={data.environments}
-        selectedEnvironment={env?.name || "production"}
         done={() => {
           reload();
           setEditor(false);
@@ -966,45 +1009,64 @@ function WorkerDetail({
   );
 }
 
-function ArtifactState({
+// Per-build deployment chips: only environments this build reached appear,
+// colored by the shared deployment state system.
+function DeploymentSummary({
   build,
-  env,
   data,
+  onSelect,
 }: {
   build: Build;
-  env: Environment;
   data: WorkerData;
+  onSelect: (name: string) => void;
 }) {
-  const current = env.deployment_id
-    ? data.deployments[env.deployment_id]
-    : undefined;
-  const historical = (data.histories[env.name] || []).some(
-    (h) => data.deployments[h.deployment_id]?.artifact_id === build.artifact_id,
-  );
-  const unavailable = build.state !== "succeeded";
-  const state = unavailable
-    ? "不可用"
-    : current?.artifact_id === build.artifact_id
-      ? env.deployment_id !== env.confirmed_deployment_id
-        ? "生效中"
-        : "当前"
-      : historical
-        ? "历史"
-        : "未发布";
-  const Icon = artifactIcons[state];
+  const stateOf = (env: Environment): string => {
+    if (build.state !== "succeeded") return "不可用";
+    const current = env.deployment_id
+      ? data.deployments[env.deployment_id]
+      : undefined;
+    const historical = (data.histories[env.name] || []).some(
+      (h) => data.deployments[h.deployment_id]?.artifact_id === build.artifact_id,
+    );
+    if (current?.artifact_id === build.artifact_id)
+      return env.deployment_id !== env.confirmed_deployment_id ? "生效中" : "当前";
+    return historical ? "历史" : "未发布";
+  };
+  const deployed = data.environments
+    .filter((e) => e.enabled)
+    .filter((e) => ["当前", "生效中", "历史"].includes(stateOf(e)));
   return (
-    <span
-      title={t(state)}
-      className={cn(
-        "inline-flex items-center gap-1.5 text-xs",
-        artifactColors[state],
+    <div className="flex flex-wrap gap-1.5">
+      {deployed.length === 0 ? (
+        <span className="text-xs italic text-muted-foreground">
+          {t("未部署到任何环境")}
+        </span>
+      ) : (
+        deployed.map((e) => {
+          const s = stateOf(e);
+          return (
+            <button
+              key={e.name}
+              onClick={() => onSelect(e.name)}
+              title={e.name + " · " + t(s)}
+              className={cn(
+                "rounded-full border px-2.5 py-0.5 text-[11px] transition hover:outline hover:outline-1 hover:outline-primary",
+                s === "当前"
+                  ? "border-primary/40 bg-primary/5 text-primary"
+                  : s === "生效中"
+                    ? "border-amber-500/40 bg-amber-500/5 text-amber-600 dark:text-amber-500"
+                    : "border-border text-muted-foreground",
+              )}
+            >
+              {e.name}
+            </button>
+          );
+        })
       )}
-    >
-      <Icon size={14} />
-      {t(state)}
-    </span>
+    </div>
   );
 }
+
 
 function OperationPanel({
   operation: op,
@@ -1121,20 +1183,6 @@ function EnvironmentSettings({
           <h3 className="font-medium">
             {env.name} · {t("环境配置")}
           </h3>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={env.enabled}
-              disabled={busy || active}
-              onChange={(e) =>
-                void save({
-                  expected_revision: env.configuration_revision,
-                  enabled: e.target.checked,
-                })
-              }
-            />
-            {t("启用环境")}
-          </label>
         </div>
         <Field
           label={t("下一次发布使用的变量")}
@@ -1224,7 +1272,14 @@ function Invocation({ base, env }: { base: string; env: Environment }) {
             {env.name} · {t("调用已发布 Worker")}
           </h3>
           <p className="mt-1 break-all text-xs text-muted-foreground">
-            {env.host}
+            <a
+              href={workerURL(env.host)}
+              target="_blank"
+              rel="noreferrer"
+              className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+            >
+              {env.host}
+            </a>
           </p>
         </div>
         <form

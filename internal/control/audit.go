@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"sort"
 	"strconv"
 	"time"
 
@@ -17,19 +16,8 @@ import (
 
 const auditRetention = 7 * 24 * time.Hour
 
-func pruneAudits(st *State, at time.Time) {
-	cutoff := at.Add(-auditRetention)
-	kept := st.Audits[:0]
-	for _, entry := range st.Audits {
-		if !entry.Time.Before(cutoff) {
-			kept = append(kept, entry)
-		}
-	}
-	clear(st.Audits[len(kept):])
-	st.Audits = kept
-}
-
-// Update also prunes on every committed transaction. This loop covers idle time.
+// Retention runs against the dedicated audit table; the state blob no longer
+// carries audit history.
 func (s *Store) retainAudits(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -38,7 +26,7 @@ func (s *Store) retainAudits(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := s.Update(ctx, func(*State) error { return nil }); err != nil && ctx.Err() == nil {
+			if err := s.deleteAuditsBefore(ctx, now().Add(-auditRetention)); err != nil && ctx.Err() == nil {
 				fmt.Fprintln(os.Stderr, localize.Text(localize.Language(ctx), "krun audit retention cleanup failed:"), localize.Error(localize.Language(ctx), err))
 			}
 		}
@@ -114,27 +102,29 @@ func (s *Server) auditList(st *State, p Principal, r *http.Request) (any, int, e
 	} else {
 		current = s.encodeAuditCursor(cursor)
 	}
-	matching := []Audit{}
+	scope := ""
+	if t.Kind != "system" {
+		scope = t.ID
+	}
 	cutoff := at.Add(-auditRetention)
-	for _, entry := range st.Audits {
-		if entry.Time.Before(cutoff) || entry.Time.After(cursor.AsOf) {
+	entries, err := s.Store.readAudits(r.Context(), cutoff, scope, 5000)
+	if err != nil {
+		return nil, 0, problem(503, "AUTHORIZATION_UNAVAILABLE", "Control service unavailable")
+	}
+	matching := []Audit{}
+	for _, entry := range entries {
+		if entry.Time.After(cursor.AsOf) {
 			continue
 		}
-		belongs := t.Kind == "system" || entry.Organization == t.ID
-		if !belongs {
-			resource, ok := st.Resources[entry.Resource]
-			belongs = ok && resource.Organization == t.ID
+		if t.Kind == "system" || entry.Organization == t.ID {
+			matching = append(matching, entry)
+			continue
 		}
-		if belongs {
+		resource, ok := st.Resources[entry.Resource]
+		if ok && resource.Organization == t.ID {
 			matching = append(matching, entry)
 		}
 	}
-	sort.Slice(matching, func(i, j int) bool {
-		if matching[i].Time.Equal(matching[j].Time) {
-			return matching[i].ID > matching[j].ID
-		}
-		return matching[i].Time.After(matching[j].Time)
-	})
 	page := auditPage{Items: []Audit{}, Total: len(matching), Limit: limit, Cursor: current, AsOf: cursor.AsOf, RetentionDays: 7}
 	for _, entry := range matching {
 		if cursor.Before != nil && (entry.Time.After(*cursor.Before) || (entry.Time.Equal(*cursor.Before) && entry.ID >= cursor.ID)) {

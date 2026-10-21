@@ -352,8 +352,15 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 				}
 				return w.failOperation(ctx, op.ID, "Candidate validation failed on "+pod.Name)
 			}
-			if result["pod_uid"] != pod.UID || result["deployment_id"] != deployment.ID || result["archive_sha256"] != deployment.ArchiveDigest {
-				return w.failOperation(ctx, op.ID, "Candidate identity mismatch")
+			// The pod-UID identity check assumes requests reach the exact pod
+			// listed. Behind a proxied runtime_management_base the response may
+			// come from any healthy member, so only artifact identity applies.
+			uidMatches := result["pod_uid"] == pod.UID
+			if w.config.RuntimeManagementBase != "" {
+				uidMatches = true
+			}
+			if !uidMatches || result["deployment_id"] != deployment.ID || result["archive_sha256"] != deployment.ArchiveDigest {
+				return w.failOperation(ctx, op.ID, fmt.Sprintf("Candidate identity mismatch (pod %s uid %s vs %s, deployment %s vs %s, archive %s vs %s)", pod.Name, pod.UID, result["pod_uid"], deployment.ID, result["deployment_id"], deployment.ArchiveDigest, result["archive_sha256"]))
 			}
 		}
 		after, e := w.kube.runtimeMembers(ctx, w.config.RuntimeService)

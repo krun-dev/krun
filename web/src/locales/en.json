@@ -529,5 +529,10 @@
   "已解除仓库绑定。": "Repository binding removed.",
   "填写 namespace/repository 或完整 HTTPS 仓库地址。": "Use namespace/repository or a full HTTPS repository URL.",
   "先在设置中绑定仓库。": "Bind a repository in settings first.",
-  "此服务尚未绑定代码仓库，请先在“环境配置”中完成绑定。": "No repository is bound yet; bind one under Environment settings first."
+  "此服务尚未绑定代码仓库，请先在“环境配置”中完成绑定。": "No repository is bound yet; bind one under Environment settings first.",
+  "代码源": "Source",
+  "此服务尚未绑定代码仓库；绑定后可直接从分支或 Tag 构建版本。": "No repository is bound yet; bind one to build versions straight from a branch or tag.",
+  "绑定代码仓库": "Bind repository",
+  "已部署到": "Deployed to",
+  "未部署到任何环境": "Not deployed to any environment"
 }

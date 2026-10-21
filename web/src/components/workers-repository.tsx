@@ -14,7 +14,6 @@ import {
 } from "@/components/ui/dialog";
 import type {
   Build,
-  Environment,
   RepositoryBinding,
   RepositoryProvider,
   RepositorySource,
@@ -308,8 +307,6 @@ export function RepositoryBuild({
   base,
   bound,
   repositoryRevision,
-  environments,
-  selectedEnvironment,
   done,
   notify,
 }: {
@@ -318,35 +315,31 @@ export function RepositoryBuild({
   base: string;
   bound: RepositorySource | null;
   repositoryRevision: number;
-  environments: Environment[];
-  selectedEnvironment: string;
   done: () => void;
   notify: (message: string) => void;
 }) {
   const { t } = useTranslation();
   const [ref, setRef] = useState(bound?.ref || "HEAD");
-  const [environment, setEnvironment] = useState(selectedEnvironment);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const attempt = useRef({ fingerprint: "", key: "" });
   useEffect(() => {
     if (open) {
       setRef(bound?.ref || "HEAD");
-      setEnvironment(selectedEnvironment);
       setError("");
     }
-  }, [open, bound, selectedEnvironment]);
-  const enabledEnvironment = environments.some(
-    (e) => e.name === environment && e.enabled,
-  );
+  }, [open, bound]);
   async function submit() {
     setBusy(true);
     setError("");
     try {
+      // Builds are service-level: the artifact is environment-independent and
+      // the target environment is chosen at publish time. The backend still
+      // anchors build permission to a baseline environment.
       const payload = {
         source_type: "repository",
         repository_revision: repositoryRevision,
-        environment,
+        environment: "production",
         ref,
       };
       const fingerprint = JSON.stringify({ ...payload, bound });
@@ -398,39 +391,23 @@ export function RepositoryBuild({
               void submit();
             }}
           >
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field
-                label={t("分支 / Tag / Commit")}
-                hint={t("HEAD 表示默认分支；构建记录会保存实际 Commit。")}
-              >
-                <Input
-                  aria-label={t("分支 / Tag / Commit")}
-                  value={ref}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    setRef(e.target.value)
-                  }
-                  placeholder="HEAD"
-                  maxLength={200}
-                  disabled={busy}
-                />
-              </Field>
-              <SelectField
-                label={t("构建环境")}
+            <Field
+              label={t("分支 / Tag / Commit")}
+              hint={t("HEAD 表示默认分支；构建记录会保存实际 Commit。")}
+            >
+              <Input
+                aria-label={t("分支 / Tag / Commit")}
+                value={ref}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setRef(e.target.value)
+                }
+                placeholder="HEAD"
+                maxLength={200}
                 disabled={busy}
-                value={environment}
-                onChange={setEnvironment}
-              >
-                {environments
-                  .filter((e) => e.enabled)
-                  .map((e) => (
-                    <option key={e.name} value={e.name}>
-                      {e.name}
-                    </option>
-                  ))}
-              </SelectField>
-            </div>
+              />
+            </Field>
             <div className="flex justify-end">
-              <Button type="submit" disabled={busy || !enabledEnvironment}>
+              <Button type="submit" disabled={busy}>
                 {busy ? (
                   <LoaderCircle size={16} className="animate-spin" />
                 ) : (

@@ -83,7 +83,14 @@ func (s *Server) workerService(st *State, t Target) WorkerService {
 	if !ok {
 		ws = WorkerService{Service: t.ID, Organization: t.Organization, Environments: map[string]WorkerEnvironment{}}
 	}
-	if _, ok := ws.Environments[workerBaseline]; !ok {
+	if baseline, ok := ws.Environments[workerBaseline]; ok {
+		// The baseline serves production traffic; legacy data may have it
+		// disabled through the removed UI toggle. Self-heal on read.
+		if !baseline.Enabled {
+			baseline.Enabled = true
+			ws.Environments[workerBaseline] = baseline
+		}
+	} else {
 		ws.Environments[workerBaseline] = WorkerEnvironment{Name: workerBaseline, Enabled: true, Host: "w-" + digest(t.Organization + "/" + t.ID)[:16] + "-" + workerBaseline + "." + s.Config.Workers.Domain, Visibility: "private", ConfigRevision: 1, Variables: map[string]string{}}
 	}
 	st.Workers.Services[t.ID] = ws
@@ -377,6 +384,9 @@ func (s *Server) workerEnvironmentUpdate(st *State, p Principal, r *http.Request
 		return nil, 0, problem(422, "WORKER_VARIABLES_INVALID", "Use up to 32 non-reserved uppercase variables, at most 16 KiB")
 	}
 	if in.Enabled != nil {
+		if env == workerBaseline && !*in.Enabled {
+			return nil, 0, problem(422, "ENVIRONMENT_INVALID", "The baseline environment cannot be disabled")
+		}
 		current.Enabled = *in.Enabled
 	}
 	if in.Variables != nil {

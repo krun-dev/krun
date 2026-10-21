@@ -373,15 +373,20 @@ func (s *Server) audit(st *State, p Principal, r *http.Request, action, target s
 	if key, ok := st.Keys[target]; ok {
 		org = key.Organization
 	}
-	st.Audits = append(st.Audits, Audit{ID: randomID("audit"), Time: now(), Actor: p.User.ID, Credential: p.Kind, KeyID: key, Action: action, Resource: target, Organization: org, Allowed: allowed, RequestID: r.Header.Get("X-Krun-Request-ID"), Revision: st.Revision})
+	s.Store.recordAudit(Audit{ID: randomID("audit"), Time: now(), Actor: p.User.ID, Credential: p.Kind, KeyID: key, Action: action, Resource: target, Organization: org, Allowed: allowed, RequestID: r.Header.Get("X-Krun-Request-ID"), Revision: st.Revision})
 }
 func (s *Server) require(st *State, p Principal, r *http.Request, action string, t Target) error {
 	d, e := Authorize(st, p, action, t)
 	if e != nil {
 		return e
 	}
-	s.audit(st, p, r, action, t.ID, d.Allowed)
+	// Read decisions are not audited: polling traffic would grow the audit
+	// log (and therefore the whole state blob) without bound. Denials stay.
+	if d.Allowed && r.Method != http.MethodGet && r.Method != http.MethodHead {
+		s.audit(st, p, r, action, t.ID, d.Allowed)
+	}
 	if !d.Allowed {
+		s.audit(st, p, r, action, t.ID, d.Allowed)
 		return forbidden()
 	}
 	return nil

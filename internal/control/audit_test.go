@@ -12,13 +12,14 @@ import (
 func seedAuditPages(t *testing.T, store *Store) {
 	t.Helper()
 	at := now().Add(-time.Hour)
+	store.memoryAudits = nil
 	err := store.Update(context.Background(), func(st *State) error {
-		st.Audits = nil
 		for i := 0; i < 237; i++ {
 			// Equal times deliberately exercise the ID tie breaker.
-			st.Audits = append(st.Audits, Audit{ID: fmt.Sprintf("entry-%04d", i), Time: at.Add(time.Duration(i/3) * time.Second), Organization: "org-a", Actor: "admin", Action: "service.read", Resource: "svc-a", Allowed: true})
+			store.recordAudit(Audit{ID: fmt.Sprintf("entry-%04d", i), Time: at.Add(time.Duration(i/3) * time.Second), Organization: "org-a", Actor: "admin", Action: "service.read", Resource: "svc-a", Allowed: true})
 		}
-		st.Audits = append(st.Audits, Audit{ID: "other-org", Time: at, Organization: "org-b", Resource: "svc-b"}, Audit{ID: "old", Time: now().Add(-8 * 24 * time.Hour), Organization: "org-a"})
+		store.recordAudit(Audit{ID: "other-org", Time: at, Organization: "org-b", Resource: "svc-b"})
+		store.recordAudit(Audit{ID: "old", Time: now().Add(-8 * 24 * time.Hour), Organization: "org-a"})
 		return nil
 	})
 	if err != nil {
@@ -49,7 +50,7 @@ func TestAuditPaginationSnapshotAndScope(t *testing.T) {
 	}
 	// Live traffic and pagination requests cannot shift the snapshot.
 	_ = store.Update(context.Background(), func(st *State) error {
-		st.Audits = append(st.Audits, Audit{ID: "new", Time: now(), Organization: "org-a"})
+		store.recordAudit(Audit{ID: "new", Time: now(), Organization: "org-a"})
 		return nil
 	})
 	seen := map[string]bool{}
@@ -137,18 +138,15 @@ func TestAuditPaginationValidation(t *testing.T) {
 func TestAuditRetentionBoundary(t *testing.T) {
 	at := now()
 	cutoff := at.Add(-auditRetention)
-	st := newState()
-	st.Audits = []Audit{{ID: "expired", Time: cutoff.Add(-time.Nanosecond)}, {ID: "boundary", Time: cutoff}, {ID: "recent", Time: at}}
-	pruneAudits(st, at)
-	if len(st.Audits) != 2 || st.Audits[0].ID != "boundary" || st.Audits[1].ID != "recent" {
+	kept := pruneMemoryAudits([]Audit{{ID: "expired", Time: cutoff.Add(-time.Nanosecond)}, {ID: "boundary", Time: cutoff}, {ID: "recent", Time: at}}, at)
+	if len(kept) != 2 || kept[0].ID != "boundary" || kept[1].ID != "recent" {
 		t.Fatal("wrong retention boundary")
 	}
-
 }
 
 func TestAuditRetentionDuringIdleTime(t *testing.T) {
 	store := memoryStore()
-	store.memory.Audits = []Audit{{ID: "expired", Time: now().Add(-8 * 24 * time.Hour)}}
+	store.memoryAudits = []Audit{{ID: "expired", Time: now().Add(-8 * 24 * time.Hour)}}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); store.retainAudits(ctx, time.Millisecond) }()
@@ -163,7 +161,7 @@ func TestAuditRetentionDuringIdleTime(t *testing.T) {
 			t.Fatal("idle retention did not delete expired data")
 		case <-ticker.C:
 			store.mu.Lock()
-			count := len(store.memory.Audits)
+			count := len(store.memoryAudits)
 			store.mu.Unlock()
 			if count == 0 {
 				return
