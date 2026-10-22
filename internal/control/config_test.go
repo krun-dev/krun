@@ -103,7 +103,7 @@ func TestYAMLServerExamples(t *testing.T) {
 		t.Setenv(name, "test-only")
 	}
 	t.Setenv("KRUN_SMTP_PASSWORD", "test-only")
-	for _, name := range []string{"development.yaml", "example.yaml"} {
+	for _, name := range []string{"development.example.yaml", "example.yaml"} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := LoadConfig(filepath.Join("..", "..", "config", name)); err != nil {
 				t.Fatal(err)

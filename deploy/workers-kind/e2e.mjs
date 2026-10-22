@@ -71,7 +71,7 @@ function sourceBundle(code,assets){
  const parts=[];for(const [name,text] of Object.entries(code))parts.push(tarFile('src/'+name,Buffer.from(text)));for(const [name,text] of Object.entries(assets||{}))parts.push(tarFile('assets/'+name,Buffer.from(text)));parts.push(Buffer.alloc(1024));
  return gzipSync(Buffer.concat(parts),{level:6});
 }
-const source=version=>({entrypoint:'src/index.ts',files:{'src/lib.ts':`export const version = ${JSON.stringify(version)};`,'src/index.ts':`import {version} from './lib'; import {connect} from 'cloudflare:sockets'; export default {async fetch(request: Request, env: Record<string,string>) {if(new URL(request.url).pathname==='/probe'){let blocked=false;try{await fetch('http://backend:9001/api/internal/workers/snapshot')}catch{blocked=true};let tcpBlocked=false;try{const socket=connect({hostname:'postgres',port:5432});await socket.opened;await socket.close()}catch{tcpBlocked=true};return Response.json({blocked,tcpBlocked,bindings:Object.keys(env)})};return Response.json({version,environment:env.KRUN_ENVIRONMENT,greeting:env.GREETING||'default',url:request.url})}}`}});
+const source=version=>({entrypoint:'src/index.ts',files:{'src/lib.ts':`export const version = ${JSON.stringify(version)};`,'src/index.ts':`import {version} from './lib'; import {connect} from 'cloudflare:sockets'; export default {async fetch(request: Request, env: Record<string,string>) {if(new URL(request.url).pathname==='/probe'){let blocked=false;try{await fetch('http://backend:9001/api/internal/workers/config/snapshot')}catch{blocked=true};let tcpBlocked=false;try{const socket=connect({hostname:'postgres',port:5432});await socket.opened;await socket.close()}catch{tcpBlocked=true};return Response.json({blocked,tcpBlocked,bindings:Object.keys(env)})};return Response.json({version,environment:env.KRUN_ENVIRONMENT,greeting:env.GREETING||'default',url:request.url})}}`}});
 async function build(input,expected='succeeded',options={}){const b=await api(base+'/builds','POST',{environment:'production',...input,idempotency_key:randomUUID()},202,options);return poll(base+'/builds/'+b.id,[expected],150000);}
 async function publish(buildId,environment,revision){const op=await api(base+'/environments/'+environment+'/releases','POST',{build_id:buildId,expected_revision:revision,idempotency_key:randomUUID()},202);return poll(base+'/operations/'+op.id,['available'],150000);}
 let b1,b2,prodFirst,hostTest,hostProd;
@@ -115,12 +115,17 @@ await check('rollback recovers a committed release with stalled runtime adoption
  const container=pod.status.containerStatuses.find(c=>c.name==='backend').containerID.replace('containerd://','');
  const pid=JSON.parse(docker('exec',node,'crictl','inspect',container)).info.pid;
  assert(Number.isInteger(pid)&&pid>1);
- const rule=verb=>docker('exec',node,'nsenter','-t',String(pid),'-n','iptables',verb,'OUTPUT','-p','tcp','--dport','8083','-j','REJECT');
- const prodEnv=()=>api(base+'/environments').then(e=>e.items.find(x=>x.name==='production'));const beforeRelease=await prodEnv();const queued=await api(base+'/environments/production/releases','POST',{build_id:b2.id,expected_revision:beforeRelease.release_revision,idempotency_key:randomUUID()},202);
- let committed;for(let i=0;i<1500;i++){committed=await api(base+'/operations/'+queued.id);if(['committed','available','failed'].includes(committed.state))break;await sleep(100);}
- assert.equal(committed.state,'committed');
- let rollback;rule('-I');
+ const rule=verb=>docker('exec',node,'nsenter','-t',String(pid),'-n','iptables',verb,'INPUT','-p','tcp','--dport','9001','-j','REJECT');
+ const prodEnv=()=>api(base+'/environments').then(e=>e.items.find(x=>x.name==='production'));
+ const beforeRelease=await prodEnv();
+ let queued,rollback;
+ // Block the runtime's config feed and ack path before publishing, so the
+ // Operation commits but cannot converge while the rule is active.
+ rule('-I');
  try {
+  queued=await api(base+'/environments/production/releases','POST',{build_id:b2.id,expected_revision:beforeRelease.release_revision,idempotency_key:randomUUID()},202);
+  let committed;for(let i=0;i<1500;i++){committed=await api(base+'/operations/'+queued.id);if(['committed','available','failed'].includes(committed.state))break;await sleep(100);}
+  assert.equal(committed.state,'committed');
   await sleep(1500);assert.equal((await api(base+'/operations/'+queued.id)).state,'committed');
   rollback=await api(base+'/environments/production/rollbacks','POST',{release_id:prodFirst.release_id,expected_revision:beforeRelease.release_revision+1,idempotency_key:randomUUID()},202);
   assert.equal((await api(base+'/operations/'+queued.id)).state,'committed');

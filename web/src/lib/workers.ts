@@ -44,6 +44,7 @@ export type Environment = {
   name: string;
   enabled: boolean;
   host: string;
+  external_host?: string;
   configuration_revision: number;
   variables: Record<string, string>;
   release_revision: number;

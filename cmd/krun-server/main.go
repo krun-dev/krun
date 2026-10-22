@@ -30,7 +30,7 @@ func run() (result error) {
 	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(localize.Writer(lang, os.Stderr))
-	config := flags.String("config", "config/development.yaml", localize.Text(lang, "Server configuration"))
+	config := flags.String("config", ".data/dev.yaml", localize.Text(lang, "Server configuration"))
 	user := flags.String("user", "", localize.Text(lang, "Existing local user_id"))
 	source := flags.String("source", "", localize.Text(lang, "Identity source"))
 	subject := flags.String("subject", "", localize.Text(lang, "Stable external subject"))

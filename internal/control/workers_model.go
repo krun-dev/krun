@@ -15,24 +15,37 @@ type WorkersConfig struct {
 	Namespace           string                     `json:"namespace"`
 	BuilderImage        string                     `json:"builder_image"`
 	BuilderPullPolicy   string                     `json:"builder_pull_policy"`
-	RuntimeService      string                     `json:"runtime_service"`
-	GatewayName         string                     `json:"gateway_name"`
-	GatewayNamespace    string                     `json:"gateway_namespace"`
-	Domain              string                     `json:"domain"`
-	RuntimeToken        string                     `json:"runtime_token"`
-	ManagementToken     string                     `json:"management_token"`
-	RuntimeManagementBase string                    `json:"runtime_management_base"`
-	S3Endpoint          string                     `json:"s3_endpoint"`
-	S3BuilderEndpoint   string                     `json:"s3_builder_endpoint"`
-	S3Bucket            string                     `json:"s3_bucket"`
-	S3LocationID        string                     `json:"s3_location_id"`
-	S3AccessKey         string                     `json:"s3_access_key"`
-	S3SecretKey         string                     `json:"s3_secret_key"`
-	PreviewLimit        int                        `json:"preview_limit"`
-	StaticDomain        string                     `json:"static_domain"`
-	StaticInternalDomain string                    `json:"static_internal_domain"`
-	StaticService       string                     `json:"static_service"`
-	StaticServicePort   int                        `json:"static_service_port"`
+	// BuilderMode selects the build executor: "kubernetes" creates a Job;
+	// "local" runs workers/builder/build-worker.mjs on the control-plane host.
+	BuilderMode      string `json:"builder_mode"`
+	BuilderScript    string `json:"builder_script"`
+	RuntimeService   string `json:"runtime_service"`
+	GatewayName      string `json:"gateway_name"`
+	GatewayNamespace string `json:"gateway_namespace"`
+	// GatewayBase overrides the in-cluster Gateway address for console invoke,
+	// e.g. http://127.0.0.1:38080 through an SSH tunnel.
+	GatewayBase string `json:"gateway_base"`
+	Domain      string `json:"domain"`
+	// ExternalDomain is the browser-facing suffix used only for display. The
+	// gateway/HTTPRoute hosts remain in Domain.
+	ExternalDomain        string `json:"external_domain"`
+	RuntimeToken          string `json:"runtime_token"`
+	ManagementToken       string `json:"management_token"`
+	RuntimeManagementBase string `json:"runtime_management_base"`
+	S3Endpoint            string `json:"s3_endpoint"`
+	S3BuilderEndpoint     string `json:"s3_builder_endpoint"`
+	S3Bucket              string `json:"s3_bucket"`
+	S3LocationID          string `json:"s3_location_id"`
+	S3AccessKey           string `json:"s3_access_key"`
+	S3SecretKey           string `json:"s3_secret_key"`
+	PreviewLimit          int    `json:"preview_limit"`
+	StaticDomain          string `json:"static_domain"`
+	StaticInternalDomain  string `json:"static_internal_domain"`
+	StaticService         string `json:"static_service"`
+	StaticServicePort     int    `json:"static_service_port"`
+	// ConfigBaseURL is the runtime-readable origin of config/latest.json and
+	// config/snapshots/*. It must be a private or cluster-internal endpoint.
+	ConfigBaseURL string `json:"config_base_url"`
 }
 
 type WorkerAssetsConfig struct {
@@ -55,6 +68,15 @@ func (c *WorkersConfig) validate() error {
 	if !contains([]string{"Always", "IfNotPresent", "Never"}, c.BuilderPullPolicy) {
 		return fmt.Errorf("invalid Workers builder pull policy")
 	}
+	if c.BuilderMode == "" {
+		c.BuilderMode = "kubernetes"
+	}
+	if c.BuilderMode != "kubernetes" && c.BuilderMode != "local" {
+		return fmt.Errorf("invalid Workers builder mode")
+	}
+	if c.BuilderMode == "local" && c.BuilderScript == "" {
+		c.BuilderScript = "workers/builder/build-worker.mjs"
+	}
 	if c.S3LocationID == "" {
 		c.S3LocationID = "primary"
 	}
@@ -76,6 +98,16 @@ func (c *WorkersConfig) validate() error {
 			return fmt.Errorf("invalid Workers namespace, route or bucket")
 		}
 	}
+	if c.ExternalDomain != "" && !dns.MatchString(c.ExternalDomain) {
+		return fmt.Errorf("invalid Workers external domain")
+	}
+	if c.GatewayBase != "" {
+		u, e := url.Parse(c.GatewayBase)
+		if e != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("invalid Workers gateway base")
+		}
+		c.GatewayBase = strings.TrimSuffix(c.GatewayBase, "/")
+	}
 	u, e := url.Parse(c.S3Endpoint)
 	if e != nil || u.Host == "" || u.Path != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return fmt.Errorf("invalid Workers S3 endpoint")
@@ -88,7 +120,7 @@ func (c *WorkersConfig) validate() error {
 	} else {
 		c.S3BuilderEndpoint = c.S3Endpoint
 	}
-	if c.BuilderImage == "" || len(c.RuntimeToken) < 24 || len(c.ManagementToken) < 24 || c.S3AccessKey == "" || c.S3SecretKey == "" {
+	if (c.BuilderMode != "local" && c.BuilderImage == "") || len(c.RuntimeToken) < 24 || len(c.ManagementToken) < 24 || c.S3AccessKey == "" || c.S3SecretKey == "" {
 		return fmt.Errorf("Workers image and credentials required")
 	}
 	if c.RuntimeManagementBase != "" {
@@ -118,7 +150,25 @@ func (c *WorkersConfig) validate() error {
 			return fmt.Errorf("invalid Workers static domain or service")
 		}
 	}
+	if c.ConfigBaseURL == "" {
+		c.ConfigBaseURL = strings.TrimSuffix(c.S3Endpoint, "/") + "/" + c.S3Bucket + "/config"
+	}
+	u, e = url.Parse(c.ConfigBaseURL)
+	if e != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return fmt.Errorf("invalid Workers config base URL")
+	}
+	c.ConfigBaseURL = strings.TrimSuffix(c.ConfigBaseURL, "/")
 	return nil
+}
+
+func (c *WorkersConfig) ExternalHost(host string) string {
+	if c == nil || c.ExternalDomain == "" || host == "" {
+		return ""
+	}
+	if strings.HasSuffix(host, "."+c.Domain) {
+		return strings.TrimSuffix(host, "."+c.Domain) + "." + c.ExternalDomain
+	}
+	return ""
 }
 
 type WorkerActor struct {
@@ -165,9 +215,11 @@ type WorkerArtifact struct {
 	Created         time.Time `json:"created_at"`
 }
 type WorkerEnvironment struct {
-	Name           string            `json:"name"`
-	Enabled        bool              `json:"enabled"`
-	Host           string            `json:"host"`
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+	Host    string `json:"host"`
+	// ExternalHost is derived for display from WorkersConfig.ExternalDomain.
+	ExternalHost   string            `json:"external_host,omitempty"`
 	Visibility     string            `json:"visibility"`
 	ConfigRevision int               `json:"configuration_revision"`
 	Variables      map[string]string `json:"variables"`
@@ -211,7 +263,7 @@ type WorkerOperation struct {
 	Release          string       `json:"release_id"`
 	ExpectedRevision int          `json:"expected_revision"`
 	ConfigRevision   int          `json:"configuration_revision"`
-	SnapshotRevision int          `json:"snapshot_revision,omitempty"`
+	EdgeRevision     int          `json:"edge_revision,omitempty"`
 	ReleaseRevision  int          `json:"release_revision,omitempty"`
 	Error            string       `json:"error,omitempty"`
 	Steps            []WorkerStep `json:"steps"`
@@ -220,11 +272,11 @@ type WorkerOperation struct {
 }
 type WorkerOperationPrivate struct{ Actor WorkerActor }
 type WorkerHistory struct {
-	Revision   int       `json:"revision"`
-	Release    string    `json:"release_id"`
-	Operation  string    `json:"operation_id"`
-	Kind       string    `json:"kind"`
-	Time       time.Time `json:"time"`
+	Revision  int       `json:"revision"`
+	Release   string    `json:"release_id"`
+	Operation string    `json:"operation_id"`
+	Kind      string    `json:"kind"`
+	Time      time.Time `json:"time"`
 }
 type WorkerIdempotency struct {
 	Digest string
@@ -248,12 +300,12 @@ type WorkerState struct {
 	OperationPrivate map[string]WorkerOperationPrivate
 	Histories        map[string][]WorkerHistory
 	Idempotency      map[string]WorkerIdempotency
-	Acks             map[string]WorkerAck
 }
 
 func newWorkerState() *WorkerState {
-	return &WorkerState{Revision: 1, Services: map[string]WorkerService{}, Builds: map[string]WorkerBuild{}, BuildPrivate: map[string]WorkerBuildPrivate{}, Artifacts: map[string]WorkerArtifact{}, Releases: map[string]WorkerRelease{}, Operations: map[string]WorkerOperation{}, OperationPrivate: map[string]WorkerOperationPrivate{}, Histories: map[string][]WorkerHistory{}, Idempotency: map[string]WorkerIdempotency{}, Acks: map[string]WorkerAck{}}
+	return &WorkerState{Revision: 1, Services: map[string]WorkerService{}, Builds: map[string]WorkerBuild{}, BuildPrivate: map[string]WorkerBuildPrivate{}, Artifacts: map[string]WorkerArtifact{}, Releases: map[string]WorkerRelease{}, Operations: map[string]WorkerOperation{}, OperationPrivate: map[string]WorkerOperationPrivate{}, Histories: map[string][]WorkerHistory{}, Idempotency: map[string]WorkerIdempotency{}}
 }
+
 // A service has one durable baseline ("production") plus any number of
 // short-lived preview environments identified by a slug.
 const workerBaseline = "production"

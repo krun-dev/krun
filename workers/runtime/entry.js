@@ -1,6 +1,10 @@
 import {WorkerEntrypoint} from 'cloudflare:workers';
-let cached=null,refresh=null,nextRefresh=0;
+// Edge configuration is an immutable in-memory view. There is no local DB:
+// bootstrap reads one snapshot, then a long-poll applies incremental ops.
+let view={revision:0,routes:new Map(),releases:new Map()};
+let viewLoaded=false,booting=null,started=false,lastSync=0,lastLoop=0;
 const encoder=new TextEncoder();const decoder=new TextDecoder();const json=(value,status=200)=>Response.json(value,{status});
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const sha256=async raw=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',typeof raw==='string'?encoder.encode(raw):raw))].map(x=>x.toString(16).padStart(2,'0')).join('');
 // The bundle profile is manifest.json + modules/index.js (+ assets/ in schema 2).
 function untar(raw){
@@ -15,14 +19,116 @@ function untar(raw){
  }
  return files;
 }
-async function platform(env,path,init={}) {
- const controller=new AbortController();let timer;
+async function platformResponse(env,path,init={},timeout=2000){
+ const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),timeout);
  const headers=new Headers(init.headers);headers.set('authorization',`Bearer ${env.RUNTIME_TOKEN}`);headers.set('x-runtime-pool','default');if(init.body)headers.set('content-type','application/json');
- try{return await Promise.race([(async()=>{const response=await env.PLATFORM.fetch(new Request('http://platform/api/internal/workers'+path,{...init,headers,signal:controller.signal}));if(!response.ok)throw new Error('platform '+response.status);return response.json();})(),new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new Error('platform deadline'));},2000);})]);}finally{clearTimeout(timer);}
+ try{return await env.PLATFORM.fetch(new Request('http://platform/api/internal/workers'+path,{...init,headers,signal:controller.signal}));}
+ finally{clearTimeout(timer);}
 }
-async function snapshot(env,force=false) {
- if(!force&&cached&&Date.now()<nextRefresh&&Date.now()<cached.validUntil)return cached;
- if(!refresh)refresh=(async()=>{try{const data=await platform(env,'/snapshot');if(data.pool!=='default'||data.validUntil<=Date.now())throw new Error('platform invalid snapshot');cached=data;nextRefresh=Date.now()+500;await platform(env,'/ack',{method:'POST',body:JSON.stringify({pod:env.POD_NAME,pod_uid:env.POD_UID,pool:'default',revision:data.revision})});return data;}catch(e){if(cached&&Date.now()<cached.validUntil)return cached;throw e;}})().finally(()=>{refresh=null;});return refresh;
+async function platform(env,path,init={}){
+ const response=await platformResponse(env,path,init);
+ if(!response.ok)throw new Error('platform '+response.status);
+ return response.json();
+}
+async function requestJSON(url,timeout){
+ const response=await fetch(url,{signal:AbortSignal.timeout(timeout)});
+ if(!response.ok)throw new Error('config '+response.status);
+ return response.json();
+}
+async function requestBytes(url,timeout){
+ const response=await fetch(url,{signal:AbortSignal.timeout(timeout)});
+ if(!response.ok)throw new Error('config '+response.status);
+ return new Uint8Array(await response.arrayBuffer());
+}
+async function gunzip(raw){
+ return new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+}
+function applySnapshot(snapshot){
+ const routes=new Map();
+ for(const route of snapshot.routes||[])if(route.host)routes.set(String(route.host).toLowerCase(),route);
+ const releases=new Map();
+ for(const [id,release] of Object.entries(snapshot.releases||{}))releases.set(id,release);
+ view={revision:Number(snapshot.config_revision||0),routes,releases};
+ viewLoaded=true;lastSync=Date.now();
+}
+// Bootstrap prefers object storage so a new Pod starts even while the control
+// plane is unavailable; the control plane is the fallback.
+async function bootstrap(env){
+ if(env.CONFIG_BASE)try{
+  const latest=await requestJSON(env.CONFIG_BASE+'/latest.json',5000);
+  if(latest&&latest.snapshot){
+   const raw=await requestBytes(env.CONFIG_BASE+'/'+latest.snapshot,15000);
+   if(latest.sha256&&await sha256(raw)!==latest.sha256)throw new Error('snapshot digest mismatch');
+   const snapshot=JSON.parse(decoder.decode(await gunzip(raw)));
+   if(Number(snapshot.config_revision)!==Number(latest.config_revision))throw new Error('snapshot revision mismatch');
+   applySnapshot(snapshot);
+   return view;
+  }
+ }catch(e){console.error('config bootstrap from storage failed',e.message);}
+ applySnapshot(await platform(env,'/config/snapshot'));
+ return view;
+}
+async function bootstrapFromControl(env){
+ applySnapshot(await platform(env,'/config/snapshot'));
+ return view;
+}
+function ensureBootstrap(env){
+ if(viewLoaded)return Promise.resolve(view);
+ if(!booting)booting=bootstrap(env).finally(()=>{booting=null;});
+ return booting;
+}
+function applyBatch(batch){
+ if(!viewLoaded||Number(batch.from)!==view.revision)return false;
+ const routes=new Map(view.routes),releases=new Map(view.releases);
+ for(const op of batch.ops||[]){
+  if(op.type==='release_put'&&op.release?.id)releases.set(op.release.id,op.release);
+  else if(op.type==='route_upsert'&&op.host)routes.set(String(op.host).toLowerCase(),op.route);
+  else if(op.type==='route_delete'&&op.host)routes.delete(String(op.host).toLowerCase());
+  else throw new Error('unknown config op '+op.type);
+ }
+ // Prune descriptors no route references; a later rollback re-sends
+ // release_put with its route_upsert.
+ const referenced=new Set();
+ for(const route of routes.values())if(route.release)referenced.add(route.release);
+ for(const id of releases.keys())if(!referenced.has(id))releases.delete(id);
+ // Copy-on-write: in-flight requests keep the previous view.
+ view={revision:Number(batch.to),routes,releases};
+ lastSync=Date.now();
+ return true;
+}
+async function sendAck(env){
+ try{await platform(env,'/ack',{method:'POST',body:JSON.stringify({pod:env.POD_NAME,pod_uid:env.POD_UID,pool:'default',revision:view.revision})});}catch{}
+}
+// One long-poll per Pod. 5s waits keep ack heartbeats fresh without the old
+// 500ms full-snapshot polling loop.
+async function follow(env){
+ let backoff=1000,lastAck=0;
+ while(true){
+  lastLoop=Date.now();
+  try{
+   await ensureBootstrap(env);
+   if(Date.now()-lastAck>5000){await sendAck(env);lastAck=Date.now();}
+   const response=await platformResponse(env,`/config/changes?since=${view.revision}&wait=5s`,{},30000);
+   if(response.status===204){await sleep(250);backoff=1000;continue;}
+   if(response.status===409){viewLoaded=false;await bootstrapFromControl(env);lastAck=0;backoff=1000;continue;}
+   if(!response.ok)throw new Error('config changes '+response.status);
+   const batch=await response.json();
+   let applied=false;
+   try{applied=applyBatch(batch);}catch(e){viewLoaded=false;throw e;}
+   if(!applied){viewLoaded=false;await bootstrapFromControl(env);}
+   lastAck=0;backoff=1000;
+  }catch(e){
+   await sleep(backoff);backoff=Math.min(backoff*2,15000);
+  }
+ }
+}
+function ensureStarted(env,ctx){
+ // A cancelled waitUntil callback may never run follow()'s finally; restart a
+ // loop that has made no progress for two minutes.
+ if(started&&Date.now()-lastLoop<120000)return;
+ started=true;
+ const loop=follow(env).finally(()=>{started=false;});
+ if(ctx&&typeof ctx.waitUntil==='function')ctx.waitUntil(loop);
 }
 
 // Asset manifests are immutable per release; skip re-fetching them per request.
@@ -90,11 +196,12 @@ function serveAsset(request,path,value){
  if(request.headers.get('if-none-match')===etag)return new Response(null,{status:304,headers:{etag}});
  return new Response(value.bytes,{status:200,headers:{'content-type':value.content_type,etag,'cache-control':hashedAsset.test(path)?'public, max-age=31536000, immutable':'public, max-age=300'}});
 }
-async function worker(env,d) {
+async function worker(env,d,artifact) {
  return env.LOADER.get(`${d.organization_id}/${d.service_id}/${d.environment}/${d.id}/workerd-20260928/profile-v1`,async()=>{
   // The platform hands out a short-lived URL; artifact bytes go straight from
-  // object storage to this Pod, never through the control plane.
-  const a=await platform(env,'/artifacts/'+encodeURIComponent(d.artifact_id));
+  // object storage to this Pod, never through the control plane. Candidate
+  // validation may supply the URL with the management request instead.
+  const a=artifact||await platform(env,'/artifacts/'+encodeURIComponent(d.artifact_id));
   const response=await fetch(a.download_url,{signal:AbortSignal.timeout(15000)});
   if(!response.ok)throw new Error('artifact download failed ('+response.status+')');
   const archive=new Uint8Array(await response.arrayBuffer());
@@ -110,14 +217,16 @@ async function worker(env,d) {
   return {compatibilityDate:'2026-09-28',mainModule:'index.js',modules:{'index.js':{js:code}},env:{...d.variables,KRUN_ENVIRONMENT:d.environment,KRUN_SERVICE_ID:d.service_id,KRUN_RELEASE_ID:d.id},globalOutbound:null};
  });
 }
-async function validate(env,d) {const stub=await worker(env,d);await stub.getEntrypoint('KrunValidation').ping();}
+async function validate(env,d,artifact) {const stub=await worker(env,d,artifact);await stub.getEntrypoint('KrunValidation').ping();}
 export class Private extends WorkerEntrypoint {
  async fetch(request){
   try{
-   const s=await snapshot(this.env);const url=new URL(request.url);
-   const route=s.routes.find(r=>r.host===url.hostname.toLowerCase());if(!route)return json({error:'unknown route'},404);
+   ensureStarted(this.env,this.ctx);
+   await ensureBootstrap(this.env);
+   const url=new URL(request.url);
+   const route=view.routes.get(url.hostname.toLowerCase());if(!route)return json({error:'unknown route'},404);
    if(!route.enabled)return json({error:'environment disabled'},410);
-   const d=s.releases[route.release];if(!d)return json({error:'environment not published'},503);
+   const d=view.releases.get(route.release);if(!d)return json({error:'environment not published'},503);
    const headers=new Headers(request.headers);for(const name of ['x-krun-release','x-krun-scope','x-forwarded-host','x-internal'])headers.delete(name);
    const forward=async()=>{const stub=await worker(this.env,d);return await stub.getEntrypoint().fetch(new Request(request,{headers}));};
    let response;
@@ -147,21 +256,25 @@ export class Private extends WorkerEntrypoint {
 }
 export class Management extends WorkerEntrypoint {
  async fetch(request){
+  // The readiness probe starts the follow loop, so an idle Pod still converges
+  // and acks new config revisions even when it receives no business traffic.
+  ensureStarted(this.env,this.ctx);
   const path=new URL(request.url).pathname;
   if(path!=='/ready'&&request.headers.get('authorization')!==`Bearer ${this.env.MANAGEMENT_TOKEN}`)return json({error:'denied'},403);
   try {
-   if(path==='/validate'||path==='/adopt'){
-    const input=await request.json();const d=await platform(this.env,'/releases/'+encodeURIComponent(input.release_id));
-    // /validate cold-loads and runs the KrunValidation RPC on this member;
-    // /adopt only confirms the snapshot now — remaining members lazy-load the
-    // code on their first request, so adoption must not load it here.
-    if(path==='/validate')await validate(this.env,d);
-    let revision=0;if(path==='/adopt'){const s=await snapshot(this.env,true);if(s.revision<input.minimum_revision)throw new Error('platform snapshot not current');const published=s.routes.some(r=>r.enabled&&r.release===d.id);if(!published)throw new Error('platform release not published');revision=s.revision;}
-    return json({pod_uid:this.env.POD_UID,release_id:d.id,archive_sha256:d.archive_sha256,revision});
+   if(path==='/validate'){
+    const input=await request.json();
+    if(!input.release||!input.artifact)return json({error:'release and artifact required'},400);
+    // The controller supplies the immutable descriptor and a short-lived
+    // artifact URL; cold-load and run the KrunValidation RPC on this member.
+    await validate(this.env,input.release,input.artifact);
+    return json({pod_uid:this.env.POD_UID,release_id:input.release.id,archive_sha256:input.release.archive_sha256});
    }
    if(path!=='/ready')return json({error:'not found'},404);
-   const s=await snapshot(this.env);for(const r of s.routes){if(r.enabled&&r.release){const d=s.releases[r.release];if(!d)throw new Error('platform descriptor missing');await validate(this.env,d);}}
-   return json({status:'ready',pod_uid:this.env.POD_UID,revision:s.revision});
+   // Readiness means the config view is loaded; releases are lazy-loaded on
+   // first request so Pod start does not scale with the number of services.
+   await ensureBootstrap(this.env);
+   return json({status:'ready',pod_uid:this.env.POD_UID,revision:view.revision,stale_ms:Date.now()-lastSync});
   }catch(e){const dependency=String(e.message).startsWith('platform');console.error('runtime management failed',e.message);return json({code:dependency?'DEPENDENCY_UNAVAILABLE':'CANDIDATE_INVALID',error:'runtime validation failed'},503);}
  }
 }

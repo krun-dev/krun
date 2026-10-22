@@ -719,14 +719,23 @@ export default function App() {
             reload={reload}
           />
         ) : section === "workers" ? (
-          <Suspense fallback={<Loading />}>
-            <WorkersPage
-              key={`${scope}:${workersNavigation}`}
-              base={base}
-              system={system}
-              notify={notify}
+          me.workers_configured === false ? (
+            <Empty
+              title={t("Workers 未配置")}
+              description={t(
+                "请在控制面配置 workers: 段并重启服务，然后刷新此页面。",
+              )}
             />
-          </Suspense>
+          ) : (
+            <Suspense fallback={<Loading />}>
+              <WorkersPage
+                key={`${scope}:${workersNavigation}`}
+                base={base}
+                system={system}
+                notify={notify}
+              />
+            </Suspense>
+          )
         ) : section === "resources" ? (
           <ResourcesPage
             key={scope}

@@ -1,0 +1,35 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: runtime
+  namespace: workers-mvp
+spec:
+  podSelector:
+    matchLabels:
+      role: krun-runtime
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kgateway-system
+          podSelector:
+            matchLabels:
+              gateway.networking.k8s.io/gateway-name: workers-mvp
+      ports:
+        - protocol: TCP
+          port: 8081
+    - ports:
+        - protocol: TCP
+          port: 8083
+  egress:
+    - to:
+        - ipBlock:
+            cidr: __MINIO_HOST__/32
+        - ipBlock:
+            cidr: __CONTROL_HOST__/32
+      ports:
+        - protocol: TCP
+          port: 9000
+        - protocol: TCP
+          port: 9001

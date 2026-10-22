@@ -25,14 +25,7 @@ krun 登录不需要申请仓库读写权限。两种提供商都使用授权码
 
 ## 2. 配置 GitHub / GitLab
 
-在仓库根目录执行：
-
-```sh
-mkdir -p .data
-cp config/example.yaml .data/sso-local.yaml
-```
-
-配置仅支持 YAML。修改复制后的 listen 为 `127.0.0.1:8080`、public_url 为 `http://127.0.0.1:5173`、development 为 true，并将 db 改为实际本机 PG 连接串。总示例中的来源默认关闭；按需将 GitHub / GitLab / 阿里来源设为 `enabled: true`，填写 Client ID 和 Secret。需要保留开发一键登录时启用 local；生产必须关闭它。不测试的来源可以保留禁用或删除。
+本地开发只有一份配置：`.data/dev.yaml`（已被 `.gitignore` 忽略，不会进仓库）。GitHub / GitLab / 阿里来源已经在这份文件里，按需把对应 provider 的 `enabled` 设为 `true`，填写 Client ID 和 Secret。需要保留开发一键登录时启用 `local`；生产必须关闭它。不测试的来源可以保留禁用或删除。
 
 示例省略默认 scopes，GitHub 默认申请 read:user，GitLab 默认 read_user。应用只允许 api 或另需项目 / 仓库 API 时，在 GitLab 来源中显式填写 scopes: [api]。
 
@@ -41,7 +34,7 @@ Secret 可直接写入 YAML，也可通过 `${KRUN_GITHUB_SECRET}` / `${KRUN_GIT
 停止当前占用 8080 的 krun 后端（在它的运行终端按 Ctrl+C），再在上述终端启动：
 
 ```sh
-./scripts/dev-server.sh .data/sso-local.yaml
+./scripts/dev-server.sh
 ```
 
 已运行的 Vite 无需重启。尚未启动前端时，另开终端执行：
@@ -50,7 +43,7 @@ Secret 可直接写入 YAML，也可通过 `${KRUN_GITHUB_SECRET}` / `${KRUN_GIT
 npm run dev -- --port 5173 --strictPort
 ```
 
-打开 `http://127.0.0.1:5173/console/`，退出当前 krun 登录后，登录页会显示已配置的 GitHub / GitLab。可用 `curl http://127.0.0.1:5173/auth/providers` 检查公开来源列表；该接口不会返回 Secret。
+打开 `http://127.0.0.1:5173/`，退出当前 krun 登录后，登录页会显示已配置的 GitHub / GitLab。可用 `curl http://127.0.0.1:5173/api/auth/providers` 检查公开来源列表；该接口不会返回 Secret。
 
 此配置的 `db` 直接指向 PostgreSQL。测试时沿用现有开发数据库以保留组织和开发管理员，不需要加密密钥。省略 `registration` 时默认允许首次成功认证创建本地用户；**不会自动加入组织或授予管理员权限**。需要邀请注册时可显式配置 `registration: invite_only`，并按准确 `source_id + subject` 邀请。
 
@@ -102,4 +95,4 @@ OAuth2（Web 应用）使用授权码模式 authorization_code。在 [统一配�
 | `existing identity source namespace cannot be replaced` | 已登记来源的 Client ID / Issuer / 实例不可替换；测试另一应用或实例时用新的 `id` 和 `source_id`，同步更新回调 |
 | 浏览器可访问第三方，后端兑换 Token 失败 | 后端直接连接提供商，不读取 `HTTP_PROXY` / `HTTPS_PROXY`；检查本机 DNS、网络或内网 VPN |
 
-回退本地开发配置时，保持 Vite 公共 origin：停止测试后端，使用原先的 `.data/development-vite.yaml` 重启。只回退配置，无需删除数据或重新 bootstrap。
+回退本地开发配置时，保持 Vite 公共 origin：停止测试后端，直接运行 `./scripts/dev-server.sh` 重新读取 `.data/dev.yaml`。只回退配置，无需删除数据或重新 bootstrap。

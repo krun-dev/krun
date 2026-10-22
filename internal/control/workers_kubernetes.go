@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -36,13 +37,13 @@ func newWorkerKubernetes(ns string) (*workerKubernetes, error) {
 	if dir == "" {
 		dir = "/var/run/secrets/kubernetes.io/serviceaccount/"
 	}
-	token, e := os.ReadFile(dir + "token")
+	token, e := os.ReadFile(filepath.Join(dir, "token"))
 	if e != nil {
 		return nil, e
 	}
 	caPath := os.Getenv("KRUN_KUBE_CA")
 	if caPath == "" {
-		caPath = dir + "ca.crt"
+		caPath = filepath.Join(dir, "ca.crt")
 	}
 	ca, e := os.ReadFile(caPath)
 	if e != nil {

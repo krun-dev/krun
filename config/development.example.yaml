@@ -1,7 +1,7 @@
-# 本地开发配置模板。复制为 config/development.yaml 并填入真实值：
-#   cp config/development.example.yaml config/development.yaml
-# development.yaml 已被 .gitignore 排除，凭据不会进入版本库。
-# 本地 Postgres 准备：bash scripts/dev-postgres.sh（首次会 initdb 并要求设定密码）。
+# 本地开发配置模板。实际开发配置只有一份：.data/dev.yaml（gitignored）。
+# 从本模板复制后填写真实值：cp config/development.example.yaml .data/dev.yaml
+# 本地开发拓扑：控制面/Postgres/MinIO/builder 跑在开发机；集群只跑 runtime(workerd) + kgateway。
+# 完整的 workers: 配置见 config/example.yaml。
 listen: 127.0.0.1:8080
 public_url: http://127.0.0.1:8080
 development: true
@@ -15,4 +15,5 @@ providers:
     source_id: local-development
     type: dev
     name: 本地开发登录
-  # 接入真实 SSO 时参考 config/example.yaml；kind/Workers 开发参考 config/workers.example.yaml。
+  # 接入真实 SSO 时参考 config/example.yaml；Workers 与认证配置同文件，完整 workers: 段见 config/example.yaml。
+  # 省略 workers: 段时服务仍可启动，Workers 接口返回 WORKERS_NOT_CONFIGURED，控制台显示“Workers 未配置”。

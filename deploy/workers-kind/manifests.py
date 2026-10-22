@@ -48,6 +48,7 @@ workers:
   management_token: ${KRUN_MANAGEMENT_TOKEN}
   s3_endpoint: http://minio:9000
   s3_bucket: krun-artifacts
+  config_base_url: http://minio:9000/krun-artifacts/config
   s3_access_key: ${KRUN_S3_ACCESS}
   s3_secret_key: ${KRUN_S3_SECRET}
   repository_providers:
@@ -93,6 +94,7 @@ const config :W.Config = (
    (name="POD_UID",text=embed "/pod/uid"),
    (name="RUNTIME_TOKEN",text=embed "/secrets/KRUN_RUNTIME_TOKEN"),
    (name="MANAGEMENT_TOKEN",text=embed "/secrets/KRUN_MANAGEMENT_TOKEN"),
+   (name="CONFIG_BASE",text="http://minio:9000/krun-artifacts/config"),
    (name="ASSETS_CACHE_MAX",text="67108864")
   ],globalOutbound="storage")),
   (name="platform",external=(address="backend:9001",http=())),

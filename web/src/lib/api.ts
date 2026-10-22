@@ -77,6 +77,7 @@ export type Me = {
   system_admin: boolean;
   credential_kind: string;
   revision: number;
+  workers_configured: boolean;
 };
 export type Organization = {
   id: string;

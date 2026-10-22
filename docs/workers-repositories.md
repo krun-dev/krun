@@ -6,7 +6,7 @@ Workers 导航先展示当前组织中有权查看的服务列表。服务名称
 
 ## 管理员配置
 
-完整示例见 [workers.example.yaml](../config/workers.example.yaml)。仓库来源配置在 `workers.repository_providers`，与认证登录使用的顶层 `providers` 独立。
+完整示例见 [config/example.yaml](../config/example.yaml) 的 `workers:` 段。仓库来源配置在 `workers.repository_providers`，与认证登录使用的顶层 `providers` 独立。
 
 ```yaml
 workers:

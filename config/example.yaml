@@ -126,3 +126,41 @@ providers:
       success:
         path: code
         equals: 0
+
+# Workers 控制面。与认证配置放在同一个文件。
+# 省略 workers: 段时服务仍可启动，但 Workers 接口返回 WORKERS_NOT_CONFIGURED，
+# 控制台显示“Workers 未配置”。删除此段即可关闭 Workers。
+workers:
+  namespace: workers-mvp
+  builder_image: krun-worker-builder:20261013
+  builder_pull_policy: IfNotPresent
+  runtime_service: runtime-default
+  gateway_name: workers-mvp
+  gateway_namespace: kgateway-system
+  domain: workers.test
+  preview_limit: 32
+  runtime_token: ${KRUN_RUNTIME_TOKEN:-replace-with-a-24-plus-character-token}
+  management_token: ${KRUN_MANAGEMENT_TOKEN:-replace-with-a-24-plus-character-token}
+  s3_endpoint: https://s3.example.com
+  s3_bucket: krun-artifacts
+  s3_location_id: primary
+  s3_access_key: ${KRUN_S3_ACCESS:-replace-me}
+  s3_secret_key: ${KRUN_S3_SECRET:-replace-me}
+  config_base_url: https://s3.internal.example.com/krun-artifacts/config
+  repository_providers:
+    - id: github
+      type: github
+      name: GitHub
+      enabled: false
+      priority: 10
+      base_url: https://github.com
+      client_id: ${KRUN_REPO_GITHUB_CLIENT_ID:-}
+      client_secret: ${KRUN_REPO_GITHUB_CLIENT_SECRET:-}
+    - id: gitlab
+      type: gitlab
+      name: GitLab.com
+      enabled: false
+      priority: 20
+      base_url: https://gitlab.com
+      client_id: ${KRUN_REPO_GITLAB_CLIENT_ID:-}
+      client_secret: ${KRUN_REPO_GITLAB_CLIENT_SECRET:-}

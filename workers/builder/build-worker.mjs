@@ -1,4 +1,5 @@
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
+import {mkdirSync,realpathSync} from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {gzipSync,gunzipSync} from 'node:zlib';
@@ -43,7 +44,15 @@ function untarSource(raw){
  return {files,assets};
 }
 try {
- const input=JSON.parse(await readFile('/input/input.json','utf8'));
+ const inputPath=process.env.KRUN_BUILD_INPUT||'/input/input.json';
+ const rawWorkDir=process.env.KRUN_BUILD_WORK||'/work';
+ mkdirSync(rawWorkDir,{recursive:true});
+ // macOS /var is a symlink to /private/var; esbuild resolves real paths, so the
+ // boundary check must compare against the real work dir.
+ const workDir=realpathSync(rawWorkDir);
+ const sourceRoot=path.join(workDir,'src');
+ const entryStub=path.join(sourceRoot,'__krun_entry__.mjs');
+ const input=JSON.parse(await readFile(inputPath,'utf8'));
  if(!input.source_url)throw new Error('Source bundle URL missing');
  const response=await fetch(input.source_url,{signal:AbortSignal.timeout(15000)});
  if(!response.ok)throw new Error('Source bundle download failed ('+response.status+')');
@@ -51,7 +60,7 @@ try {
  const entries=Object.entries(source.files);
  if(entries.length===0||entries.length>32)throw new Error('Invalid source file count');
  if(!Object.hasOwn(source.files,input.entrypoint))throw new Error('Entrypoint missing');
- const root='/work/src';await mkdir(root,{recursive:true});
+ const root=sourceRoot;await mkdir(root,{recursive:true});
  let total=0;
  for(const [name,data] of entries){
   if(path.basename(name).startsWith('__krun_')||!safeName(name)||!['.js','.mjs','.ts','.json'].includes(path.extname(name)))throw new Error('Invalid source path: '+name);
@@ -71,7 +80,7 @@ try {
   }
  }
  const wrapper=`import worker from ${JSON.stringify('./'+input.entrypoint)};\nimport {WorkerEntrypoint} from 'cloudflare:workers';\nexport default worker;\nexport class KrunValidation extends WorkerEntrypoint {ping(){if(!worker || typeof worker.fetch!=='function')throw new Error('Default export must provide fetch');return {environment:this.env.KRUN_ENVIRONMENT,release_id:this.env.KRUN_RELEASE_ID};}}\n`;
- await writeFile('/work/src/__krun_entry__.mjs',wrapper);
+ await writeFile(entryStub,wrapper);
  console.log('Profile: esbuild-esm-v1');console.log('Compiling',input.entrypoint);
  const result=await build({absWorkingDir:root,entryPoints:['__krun_entry__.mjs'],bundle:true,write:false,format:'esm',platform:'neutral',target:'es2022',external:['cloudflare:workers','cloudflare:sockets'],logLevel:'warning',plugins:[{name:'source-boundary',setup(build){build.onResolve({filter:/.*/},args=>{if(['cloudflare:workers','cloudflare:sockets'].includes(args.path))return {path:args.path,external:true};if(args.kind==='entry-point')return;if(!args.path.startsWith('./')&&!args.path.startsWith('../'))return {errors:[{text:'Only relative source imports and approved cloudflare builtins are supported'}]};const resolved=path.resolve(args.resolveDir,args.path);if(!resolved.startsWith(root+'/'))return {errors:[{text:'Import escapes source directory'}]};});build.onLoad({filter:/.*/},args=>{if(!args.path.startsWith(root+'/'))return {errors:[{text:'Source access outside project is forbidden'}]};});}}]});
  const module=Buffer.from(result.outputFiles[0].contents);if(module.length>2*1024*1024)throw new Error('Compiled module too large');

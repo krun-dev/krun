@@ -9,6 +9,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -22,19 +25,33 @@ import (
 type workerPutObject func(ctx context.Context, bucket, object string, reader io.Reader, size int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
 
 type workersController struct {
-	server *Server
-	config *WorkersConfig
-	s3     *minio.Client
+	server    *Server
+	config    *WorkersConfig
+	s3        *minio.Client
 	putObject workerPutObject
 	// s3Builder signs builder upload URLs against the in-cluster endpoint; signing is offline, no connectivity needed.
 	s3Builder *minio.Client
-	kube   *workerKubernetes
-	http   *http.Client
+	kube      *workerKubernetes
+	http      *http.Client
 	// Parsed asset manifests are immutable per artifact; cache them so presigning
 	// a single file does not re-download the archive.
 	assetMu    sync.RWMutex
 	assetCache map[string]workerCachedAssets
+	// Edge config publication is single-writer: only the elected controller
+	// assigns revisions and writes snapshots.
+	configMu       sync.Mutex
+	configLoaded   bool
+	configDirty    bool
+	configBucket   bool
+	configLast     *workerConfigProjection
+	configRevision int64
+	configFloor    int64
+	// Local build executor state for builder_mode: local.
+	localMu     sync.Mutex
+	localBuilds map[string]*workerLocalBuild
 }
+
+type workerLocalBuild struct{ Running bool }
 
 type workerCachedAssets struct {
 	Config *WorkerAssetsConfig
@@ -57,8 +74,9 @@ func newWorkersController(s *Server) (*workersController, error) {
 	if e != nil {
 		return nil, e
 	}
-	return &workersController{server: s, config: s.Config.Workers, s3: s3, putObject: s3.PutObject, s3Builder: s3Builder, kube: k, http: &http.Client{Timeout: 8 * time.Second}, assetCache: map[string]workerCachedAssets{}}, nil
+	return &workersController{server: s, config: s.Config.Workers, s3: s3, putObject: s3.PutObject, s3Builder: s3Builder, kube: k, http: &http.Client{Timeout: 8 * time.Second}, assetCache: map[string]workerCachedAssets{}, localBuilds: map[string]*workerLocalBuild{}}, nil
 }
+
 // putBytes writes a whole object through the injected storage hook.
 func (w *workersController) putBytes(ctx context.Context, key string, data []byte, opts minio.PutObjectOptions) error {
 	if w.putObject == nil {
@@ -103,7 +121,7 @@ func (w *workersController) run(ctx context.Context) {
 }
 func (w *workersController) read(ctx context.Context) (*WorkerState, error) {
 	var out *WorkerState
-	e := w.server.Store.Update(ctx, func(st *State) error {
+	e := w.server.Store.View(ctx, func(st *State) error {
 		if st.Workers == nil {
 			st.Workers = newWorkerState()
 		}
@@ -121,6 +139,12 @@ func (w *workersController) reconcile(ctx context.Context) error {
 	if e != nil {
 		return e
 	}
+	var failures []error
+	// Materialise an edge-config revision whenever routes or releases changed.
+	// A digest match is a no-op, so this is safe to run every cycle.
+	if _, e = w.publishConfig(ctx); e != nil {
+		failures = append(failures, e)
+	}
 	builds := []WorkerBuild{}
 	for _, b := range state.Builds {
 		if !workerTerminal(b.State) {
@@ -128,7 +152,6 @@ func (w *workersController) reconcile(ctx context.Context) error {
 		}
 	}
 	sort.Slice(builds, func(i, j int) bool { return builds[i].Created.Before(builds[j].Created) })
-	var failures []error
 	for _, b := range builds {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -206,7 +229,11 @@ func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, pri
 		return w.failBuild(ctx, b.ID, "Build permission revoked", "")
 	}
 	if now().Sub(b.Created) > 180*time.Second {
-		return w.failBuild(ctx, b.ID, "Build deadline exceeded", w.kube.buildLog(ctx, b.Job))
+		log := ""
+		if w.config.BuilderMode != "local" {
+			log = w.kube.buildLog(ctx, b.Job)
+		}
+		return w.failBuild(ctx, b.ID, "Build deadline exceeded", log)
 	}
 	if b.Repository != nil && private.SourceKey == "" {
 		var err error
@@ -240,6 +267,9 @@ func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, pri
 		}); e != nil {
 			return e
 		}
+	}
+	if w.config.BuilderMode == "local" {
+		return w.processLocalBuild(ctx, b, private)
 	}
 	var job workerJob
 	e := w.kube.call(ctx, "GET", w.kube.jobs()+"/"+b.Job, nil, &job)
@@ -405,10 +435,17 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 	}
 	if op.State != "committed" {
 		// Candidate validation loads the code once on a single serving member;
-		// the remaining members lazy-load on their first request. All members
-		// still confirm adoption and the snapshot revision below.
+		// the other members lazy-load on first request. The edge config revision
+		// and acks below report convergence.
 		candidate := pods[0]
-		result, status, e := w.management(ctx, candidate, "/validate", map[string]any{"release_id": release.ID})
+		// Pass the immutable descriptor and a short-lived artifact URL with the
+		// validation request. A cold candidate therefore does not need another
+		// control-plane round trip just to validate code.
+		signed, e := w.downloadURL(ctx, artifact)
+		if e != nil {
+			return w.noteOperation(ctx, op.ID, "Artifact URL unavailable")
+		}
+		result, status, e := w.management(ctx, candidate, "/validate", map[string]any{"release": release, "artifact": map[string]any{"download_url": signed, "size": artifact.Size, "archive_sha256": artifact.ArchiveDigest}})
 		if e != nil {
 			return w.noteOperation(ctx, op.ID, "Runtime validation temporarily unavailable")
 		}
@@ -435,7 +472,7 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 		if workerMemberIDs(after) != workerMemberIDs(pods) {
 			return w.noteOperation(ctx, op.ID, "Runtime membership changed; validating again")
 		}
-		return w.server.Store.Update(ctx, func(st *State) error {
+		if e := w.server.Store.Update(ctx, func(st *State) error {
 			current := st.Workers.Operations[op.ID]
 			if workerTerminal(current.State) || current.State == "committed" {
 				return nil
@@ -454,7 +491,7 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 				workerFailOperation(st, op.ID, "Release or configuration revision conflict")
 				return nil
 			}
-			// A validated rollback may replace a release whose adoption is stalled.
+			// A validated rollback may replace a release whose convergence is stalled.
 			for id, previous := range st.Workers.Operations {
 				if id != op.ID && previous.Service == op.Service && previous.Environment == op.Environment && previous.State == "committed" {
 					previous.State = "superseded"
@@ -471,23 +508,44 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 			current.State = "committed"
 			current.Error = ""
 			current.ReleaseRevision = env.Revision
-			current.SnapshotRevision = st.Workers.Revision
+			// The config revision is assigned by the publisher after commit.
+			current.EdgeRevision = 0
 			current.Steps[1].State = "done"
 			current.Steps[2].State = "done"
 			current.Steps[3].State = "running"
 			st.Workers.Operations[op.ID] = current
 			return nil
-		})
+		}); e != nil {
+			return e
+		}
 	}
-	for _, pod := range pods {
-		result, status, e := w.management(ctx, pod, "/adopt", map[string]any{"release_id": release.ID, "minimum_revision": op.SnapshotRevision})
-		if e != nil || status != 200 || result["pod_uid"] != pod.UID || result["release_id"] != release.ID || result["archive_sha256"] != release.ArchiveDigest {
-			return w.noteOperation(ctx, op.ID, "Committed; waiting for runtime adoption")
+	// Publish the configuration revision that contains this commit. Runtimes
+	// learn about it through the incremental feed; the controller does not run a
+	// per-Pod management RPC, so a slow member cannot block the release pipeline.
+	revision, e := w.publishConfig(ctx)
+	if e != nil {
+		return w.noteOperation(ctx, op.ID, "Committed; waiting for configuration publication")
+	}
+	if e := w.server.Store.Update(ctx, func(st *State) error {
+		current := st.Workers.Operations[op.ID]
+		if current.State == "committed" && current.EdgeRevision != int(revision) {
+			current.EdgeRevision = int(revision)
+			st.Workers.Operations[op.ID] = current
 		}
-		rev, ok := result["revision"].(float64)
-		if !ok || int(rev) < op.SnapshotRevision {
-			return w.noteOperation(ctx, op.ID, "Committed; waiting for snapshot revision")
-		}
+		return nil
+	}); e != nil {
+		return e
+	}
+	pods, e = w.kube.runtimeMembers(ctx, w.config.RuntimeService)
+	if e != nil {
+		return e
+	}
+	if len(pods) == 0 {
+		return w.noteOperation(ctx, op.ID, "Committed; waiting for serving runtime members")
+	}
+	acks, e := w.server.Store.ReadAcks(ctx)
+	if e != nil {
+		return e
 	}
 	after, e := w.kube.runtimeMembers(ctx, w.config.RuntimeService)
 	if e != nil {
@@ -503,24 +561,29 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 		}
 		ws := st.Workers.Services[op.Service]
 		env := ws.Environments[op.Environment]
-		if env.Release != op.Release || env.Revision != op.ReleaseRevision {
+		if env.Release != current.Release || env.Revision != current.ReleaseRevision {
 			current.State = "superseded"
 			current.Error = "Release superseded"
 		} else {
+			// Convergence is observed through per-Pod acks. It is not a release
+			// gate: the commit above is already durable and visible.
+			if current.EdgeRevision == 0 {
+				return nil
+			}
 			for _, pod := range pods {
-				ack, ok := st.Workers.Acks[pod.UID]
-				if !ok || ack.Pool != "default" || ack.Revision < op.SnapshotRevision || now().Sub(ack.Time) > 10*time.Second {
+				ack, ok := acks[pod.UID]
+				if !ok || ack.Pool != "default" || ack.Revision < current.EdgeRevision || now().Sub(ack.Time) > 10*time.Second {
 					return nil
 				}
 			}
-			env.Confirmed = op.Release
+			env.Confirmed = current.Release
 			ws.Environments[op.Environment] = env
 			st.Workers.Services[op.Service] = ws
 			current.State = "available"
 			current.Error = ""
 			current.Steps[3].State = "done"
 			key := op.Service + "/" + op.Environment
-			st.Workers.Histories[key] = append([]WorkerHistory{{op.ReleaseRevision, op.Release, op.ID, op.Kind, now()}}, st.Workers.Histories[key]...)
+			st.Workers.Histories[key] = append([]WorkerHistory{{current.ReleaseRevision, current.Release, op.ID, op.Kind, now()}}, st.Workers.Histories[key]...)
 		}
 		current.Finished = workerCloneTime(now())
 		st.Workers.Operations[op.ID] = current
@@ -529,3 +592,130 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 }
 
 // An infrastructure error after commit leaves a durable committed operation to retry; it does not silently undo the Release.
+
+// processLocalBuild runs workers/builder/build-worker.mjs on the control-plane
+// host. It is the dev-mode executor: no image build and no Kubernetes Job.
+func (w *workersController) processLocalBuild(ctx context.Context, b WorkerBuild, private WorkerBuildPrivate) error {
+	w.localMu.Lock()
+	if state := w.localBuilds[b.ID]; state != nil && state.Running {
+		w.localMu.Unlock()
+		return nil
+	}
+	w.localBuilds[b.ID] = &workerLocalBuild{Running: true}
+	w.localMu.Unlock()
+	if e := w.server.Store.Update(ctx, func(st *State) error {
+		current := st.Workers.Builds[b.ID]
+		if current.State == "queued" || current.State == "fetching" {
+			current.State = "building"
+			st.Workers.Builds[b.ID] = current
+		}
+		return nil
+	}); e != nil {
+		w.localMu.Lock()
+		delete(w.localBuilds, b.ID)
+		w.localMu.Unlock()
+		return e
+	}
+	go w.runLocalBuild(b, private)
+	return nil
+}
+
+func (w *workersController) runLocalBuild(b WorkerBuild, private WorkerBuildPrivate) {
+	defer func() {
+		w.localMu.Lock()
+		delete(w.localBuilds, b.ID)
+		w.localMu.Unlock()
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+	log, e := w.executeLocalBuilder(ctx, b, private)
+	if e != nil {
+		_ = w.failBuild(ctx, b.ID, "Builder failed", log)
+		return
+	}
+	artifact, e := w.finalizeBuild(ctx, b)
+	if e != nil {
+		_ = w.failBuild(ctx, b.ID, "Artifact validation failed: "+e.Error(), log)
+		return
+	}
+	e = w.server.Store.Update(ctx, func(st *State) error {
+		current := st.Workers.Builds[b.ID]
+		if workerTerminal(current.State) {
+			return nil
+		}
+		if auth := w.server.workerAuthorizeActor(st, private.Actor, b.Service, b.Environment, "build.start"); auth != nil {
+			current.State = "failed"
+			current.Error = "Build permission revoked"
+		} else {
+			if old, ok := st.Workers.Artifacts[artifact.ID]; ok {
+				artifact = old
+			}
+			st.Workers.Artifacts[artifact.ID] = artifact
+			current.State = "succeeded"
+			current.Artifact = artifact.ID
+		}
+		current.Finished = workerCloneTime(now())
+		st.Workers.Builds[b.ID] = current
+		p := st.Workers.BuildPrivate[b.ID]
+		p.Log = safeWorkerLog(private.Log + log)
+		st.Workers.BuildPrivate[b.ID] = p
+		return nil
+	})
+	if e == nil {
+		_ = w.s3.RemoveObject(ctx, w.config.S3Bucket, workerUploadKey(b), minio.RemoveObjectOptions{})
+	}
+}
+
+func (w *workersController) executeLocalBuilder(ctx context.Context, b WorkerBuild, private WorkerBuildPrivate) (string, error) {
+	if e := w.ensureBucket(ctx); e != nil {
+		return "", e
+	}
+	upload, e := w.uploadURL(ctx, b)
+	if e != nil {
+		return "", e
+	}
+	source, e := w.sourceBundleURL(ctx, private.SourceKey)
+	if e != nil {
+		return "", e
+	}
+	dir, e := os.MkdirTemp("", "krun-local-build-")
+	if e != nil {
+		return "", e
+	}
+	defer os.RemoveAll(dir)
+	input, e := json.Marshal(map[string]any{"entrypoint": b.Entrypoint, "source_url": source, "assets": b.Assets, "upload_url": upload})
+	if e != nil {
+		return "", e
+	}
+	inputPath := filepath.Join(dir, "input.json")
+	if e := os.WriteFile(inputPath, input, 0600); e != nil {
+		return "", e
+	}
+	workDir := filepath.Join(dir, "work")
+	if e := os.MkdirAll(workDir, 0700); e != nil {
+		return "", e
+	}
+	script := w.config.BuilderScript
+	if script == "" {
+		script = "workers/builder/build-worker.mjs"
+	}
+	script, e = filepath.Abs(script)
+	if e != nil {
+		return "", e
+	}
+	cmd := exec.CommandContext(ctx, "node", filepath.Base(script))
+	cmd.Dir = filepath.Dir(script)
+	cmd.Env = append(os.Environ(), "KRUN_BUILD_INPUT="+inputPath, "KRUN_BUILD_WORK="+workDir)
+	out, runErr := cmd.CombinedOutput()
+	log := string(out)
+	if len(log) > 32768 {
+		log = log[:32768]
+	}
+	if runErr != nil {
+		if ctx.Err() != nil {
+			return log, errors.New("local builder timed out")
+		}
+		return safeWorkerLog(log + "\n" + runErr.Error()), runErr
+	}
+	return log, nil
+}

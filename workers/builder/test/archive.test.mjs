@@ -60,7 +60,6 @@ const port = server.address().port;
 const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'krun-builder-')));
 const inputPath = join(scratch, 'input', 'input.json');
 const workDir = join(scratch, 'work');
-const entryStub = join(scratch, 'work', '__krun_entry__.mjs');
 mkdirSync(join(scratch, 'input'), {recursive: true});
 mkdirSync(workDir, {recursive: true});
 const input = {
@@ -69,23 +68,17 @@ const input = {
   assets: {directory: 'public', run_worker_first: ['/api/*'], not_found_handling: 'single-page-application', html_handling: 'auto-trailing-slash'},
   upload_url: `http://127.0.0.1:${port}/upload`,
 };
-
-// The builder hardcodes /input, /work, /tmp paths (in-container layout).
-// Rewrite those prefixes to the local scratch dirs for this run only.
-const here = dirname(fileURLToPath(import.meta.url));
-const builderSource = readFileSync(join(here, '..', 'build-worker.mjs'), 'utf8')
-  .replaceAll("'/input/input.json'", JSON.stringify(inputPath))
-  .replaceAll("'/work/src/__krun_entry__.mjs'", JSON.stringify(entryStub))
-  .replaceAll("'/work/src'", JSON.stringify(workDir));
 writeFileSync(inputPath, JSON.stringify(input));
-// Run the copy from inside the builder package so `import 'esbuild'` resolves.
-const runner = join(here, '..', '.build-worker.test.mjs');
-writeFileSync(runner, builderSource);
 
 // Spawn (not execFileSync): the stub server lives in this process and must keep
 // serving the source bundle while the builder runs.
+const here = dirname(fileURLToPath(import.meta.url));
 const exitCode = await new Promise((resolve) => {
-  const child = spawn('node', [runner], {cwd: scratch, stdio: ['ignore', 'pipe', 'pipe']});
+  const child = spawn('node', [join(here, '..', 'build-worker.mjs')], {
+    cwd: join(here, '..'),
+    env: {...process.env, KRUN_BUILD_INPUT: inputPath, KRUN_BUILD_WORK: workDir},
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
   let stdout = '', stderr = '';
   child.stdout.on('data', d => { stdout += d; process.stdout.write('  ' + d); });
   child.stderr.on('data', d => { stderr += d; });

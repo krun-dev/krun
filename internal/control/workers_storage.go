@@ -284,10 +284,10 @@ func (w *workersController) ensureBucket(ctx context.Context) error {
 	return w.ensureAssetPolicy(ctx)
 }
 
-// Only pub/ and int/ are anonymous; the v1/ artifact segment (which contains code)
-// always requires credentials.
+// Only pub/ and int/ are anonymous, plus the runtime-readable config prefix.
+// The v1/ artifact segment (which contains code) always requires credentials.
 func (w *workersController) ensureAssetPolicy(ctx context.Context) error {
-	policy := fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::%s/pub/*","arn:aws:s3:::%s/int/*"]}]}`, w.config.S3Bucket, w.config.S3Bucket)
+	policy := fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::%s/pub/*","arn:aws:s3:::%s/int/*","arn:aws:s3:::%s/config/*"]}]}`, w.config.S3Bucket, w.config.S3Bucket, w.config.S3Bucket)
 	return w.s3.SetBucketPolicy(ctx, w.config.S3Bucket, policy)
 }
 
@@ -333,9 +333,16 @@ func (w *workersController) putImmutable(ctx context.Context, key string, raw []
 	}
 	return e
 }
+func (w *workersController) builderS3() *minio.Client {
+	if w.config.BuilderMode == "local" {
+		return w.s3
+	}
+	return w.s3Builder
+}
+
 func (w *workersController) uploadURL(ctx context.Context, b WorkerBuild) (string, error) {
 	// Sign with the builder-visible endpoint so in-cluster Pods can reach (and verify) the URL.
-	u, e := w.s3Builder.PresignedPutObject(ctx, w.config.S3Bucket, workerUploadKey(b), 15*time.Minute)
+	u, e := w.builderS3().PresignedPutObject(ctx, w.config.S3Bucket, workerUploadKey(b), 15*time.Minute)
 	if e != nil {
 		return "", e
 	}
@@ -345,7 +352,7 @@ func (w *workersController) uploadURL(ctx context.Context, b WorkerBuild) (strin
 // Runtimes live in the same network position as builders, so artifact GET URLs
 // are signed against the same in-cluster endpoint. Signing is offline.
 func (w *workersController) downloadURL(ctx context.Context, a WorkerArtifact) (string, error) {
-	if (a.StorageLocation != "" && a.StorageLocation != w.config.S3LocationID) || (a.Bucket != "" && a.Bucket != w.config.S3Bucket) {
+	if a.StorageLocation != w.config.S3LocationID || a.Bucket != w.config.S3Bucket {
 		return "", errors.New("artifact storage location mismatch")
 	}
 	u, e := w.s3Builder.PresignedGetObject(ctx, w.config.S3Bucket, a.ObjectKey, 15*time.Minute, nil)
@@ -381,7 +388,7 @@ func (w *workersController) sourceUploadURL(ctx context.Context, organization st
 // Builder and runtime live inside the cluster, so read URLs are signed against
 // the in-cluster endpoint. Signing is offline.
 func (w *workersController) sourceBundleURL(ctx context.Context, key string) (string, error) {
-	u, e := w.s3Builder.PresignedGetObject(ctx, w.config.S3Bucket, key, 15*time.Minute, nil)
+	u, e := w.builderS3().PresignedGetObject(ctx, w.config.S3Bucket, key, 15*time.Minute, nil)
 	if e != nil {
 		return "", e
 	}
@@ -485,11 +492,12 @@ func (w *workersController) finalizeBuild(ctx context.Context, b WorkerBuild) (W
 	}
 	return a, nil
 }
+
 // artifactCode stays as the control plane's own integrity check when promoting
 // a build and validating a release candidate; runtime cold loads verify the
 // same digests locally after downloading via the presigned URL.
 func (w *workersController) artifactCode(ctx context.Context, a WorkerArtifact) (workerCode, error) {
-	if (a.StorageLocation != "" && a.StorageLocation != w.config.S3LocationID) || (a.Bucket != "" && a.Bucket != w.config.S3Bucket) {
+	if a.StorageLocation != w.config.S3LocationID || a.Bucket != w.config.S3Bucket {
 		return workerCode{}, errors.New("artifact storage location mismatch")
 	}
 	raw, e := w.getObject(ctx, a.ObjectKey)

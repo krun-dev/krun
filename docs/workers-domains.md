@@ -231,21 +231,22 @@ workers:
 
 - LB / DNS 直接指向 `workers-router` Service，不经 Gateway；集群内零 Gateway / HTTPRoute 对象（workers 相关）。
 - workers-router 是无状态薄转发层，建议以 runtime 二进制 `--mode=router` 实现，复用快照拉取、健康检查、鉴权代码：
-  - 定期从控制面拉 `host → pool` 表（复用快照轮询 + `validUntil` + stale-ok 模式），拉取失败继续用旧表；
+  - 定期从控制面拉 `host → pool` 表（复用 `/config/changes` + revision + stale-ok 模式），拉取失败继续用旧表；
   - 请求查表：miss 一律 404；命中则 `ReverseProxy` 到 `http://runtime-<pool>.<ns>.svc:8081`，`req.Host` 原样透传，runtime 继续按快照做 host → release 解析；
   - 公网 / 内网两个入口各自面前放一组 router（或同一组、入口层分开），内网 host 表按入口过滤下发；TLS 在 LB 终止或 router 挂通配符证书，按生产入口形态定。
 - dataplane 驱动的 `ensure()` 不编排路由对象：router deployment/service 由部署侧管理，controller 只读 endpoints 健康；readiness = router endpoints ready。
 
 模式价值：后续限流、灰度、多区域调度、自定义域名（CNAME 直指 router，无需 HTTPRoute）都收敛在 router 一个组件演进，不与 Gateway API 的表达能力搏斗。
 
-## 6. Runtime 快照与多池
+## 6. Runtime 配置与多池
 
-`workerRuntimeSnapshot`（`workers_runtime.go`）调整：
+`workerRuntimeConfigSnapshot` / `workerRuntimeConfigChanges`（`workers_runtime.go`、`workers_config.go`）调整：
 
 - route 条目：`host`、`path`、`enabled`、`release` 之外增加 `pool`。原 `scopes` 数组移除（随 visibility 一并取消）：内外网区分由 listener / 入口层承担，runtime 只按 host 匹配。
 - host 列表来源：该服务所有 `approved`（或免审批）域名 × 各启用环境。
-- 未获批域名的 host 本就不在快照中（第 3.3 节），无泄漏面。
-- 快照按 pool 过滤下发：各 pool 的 runtime 只拉自己的 hosts + releases（现为全局下发、releases 仅滤 `default`）。router（dataplane 模式）拉独立的 `host → pool` 汇总表。
+- 未获批域名的 host 本就不在配置投影中（第 3.3 节），无泄漏面。
+- 配置按 pool 过滤下发：各 pool 的 runtime 只拉自己的 hosts + releases（现为全局下发、releases 仅滤 `default`；`/config/changes` 和 `/config/snapshot` 增加 pool 参数）。router（dataplane 模式）拉独立的 `host → pool` 汇总表。
+- runtime 侧只有内存视图：bootstrap 从对象存储拉不可变快照，之后用 `/config/changes` 增量 apply；不落盘、不落本地 DB。控制面不可用时保留最后一份视图继续服务。
 - Pod 内入口 Worker 的 host → 环境 Release 查找逻辑不变。
 
 多池前置改造：`runtimeMembers(ctx, pool)` selector 参数化；`WorkerRelease.Pool` 在服务 / 发布 API 层可选。
@@ -270,7 +271,7 @@ workers:
 
 - 配置仅有单一 `Domain`（`workers_model.go:21`，默认 `workers.test`）；host 生成写死 `w-{digest[:16]}-{env}.{domain}`（`workers_api.go:87` 服务创建、`:319` preview 创建），两处硬编码。
 - Gateway 单 `private` listener、HTTP（`deploy/workers-kind/manifests.py:121`）；HTTPRoute per service、写死 `sectionName: "private"`、无 prune、无分片（`workers_kubernetes.go:224`）。
-- 快照 route 条目 `scopes` 恒 `["private"]`；deployments 仅滤 `default` pool。
+- 配置投影 route 条目 `scopes` 恒 `["private"]`；deployments 仅滤 `default` pool。
 - `Visibility` 字段存在但恒 `private`，未参与路由。
 - 文档现状描述见 `workers-backend.md`「路由与代码加载」。
 

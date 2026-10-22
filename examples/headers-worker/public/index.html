@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Request Headers · krun Worker</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <p class="eyebrow">krun · Workers example</p>
+        <h1>Request Headers</h1>
+        <p class="lede">
+          这个页面由静态资产层直接返回；点击刷新时，<code>/headers</code>
+          会进入 Worker，回显这次请求收到的全部 HTTP header。
+        </p>
+        <div class="hero-actions">
+          <button id="refresh" class="primary" type="button">刷新请求</button>
+          <button id="copy" class="ghost" type="button">复制 JSON</button>
+          <label class="reveal">
+            <input id="reveal" type="checkbox" />
+            显示敏感 header
+          </label>
+        </div>
+        <p id="status" class="status" role="status">加载中…</p>
+      </header>
+
+      <section class="grid">
+        <article class="card">
+          <h2>请求</h2>
+          <dl id="request-meta" class="meta"></dl>
+        </article>
+        <article class="card">
+          <h2>Worker 环境</h2>
+          <dl id="env-meta" class="meta"></dl>
+        </article>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Headers</h2>
+          <span id="header-count" class="pill"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Value</th>
+              </tr>
+            </thead>
+            <tbody id="headers"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>发送自定义 header</h2>
+        <p class="hint">
+          页面会用 <code>fetch('/headers')</code> 重新请求一次，并把这个 header
+          带进 Worker。可以用它验证网关、入口 Worker 和业务 Worker 之间的透传。
+        </p>
+        <form id="probe" class="probe">
+          <label>
+            <span>Name</span>
+            <input id="probe-name" name="name" value="X-Demo" autocomplete="off" />
+          </label>
+          <label>
+            <span>Value</span>
+            <input id="probe-value" name="value" value="hello-from-browser" autocomplete="off" />
+          </label>
+          <button class="primary" type="submit">发送</button>
+        </form>
+      </section>
+
+      <footer class="foot">
+        <span>静态页面：<code>/index.html</code> · API：<code>/headers</code></span>
+        <span id="release" class="pill"></span>
+      </footer>
+    </main>
+  </body>
+</html>

@@ -166,9 +166,6 @@ func TestWorkerRollbackCanRecoverACommittedRelease(t *testing.T) {
 		st.Workers.Operations[op.ID] = op
 		return nil
 	})
-	if r := request(s, "POST", base+"/environments/production/releases", "krun_cli_admin", `{"build_id":"`+b.ID+`","expected_revision":2,"idempotency_key":"busy"}`); r.Code != 409 {
-		t.Fatal(r.Code, r.Body.String())
-	}
 	if r := request(s, "POST", base+"/environments/production/rollbacks", "krun_cli_admin", `{"release_id":"missing","expected_revision":2,"idempotency_key":"bad"}`); r.Code != 404 {
 		t.Fatal(r.Code, r.Body.String())
 	}
@@ -181,6 +178,33 @@ func TestWorkerRollbackCanRecoverACommittedRelease(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// A committed operation is durable even before every runtime Pod has acked.
+// It must not block the next publish; the newer commit supersedes convergence.
+func TestCommittedReleaseDoesNotBlockNewPublish(t *testing.T) {
+	s, store, base := workerTestServer(t)
+	b := seedWorkerBuild(t, s, store, base)
+	first := request(s, "POST", base+"/environments/production/releases", "krun_cli_admin", `{"build_id":"`+b.ID+`","expected_revision":0,"idempotency_key":"first-committed"}`)
+	if first.Code != 202 {
+		t.Fatal(first.Code, first.Body.String())
+	}
+	var op WorkerOperation
+	_ = json.Unmarshal(first.Body.Bytes(), &op)
+	_ = store.Update(context.Background(), func(st *State) error {
+		ws := st.Workers.Services["svc-a"]
+		env := ws.Environments["production"]
+		env.Revision, env.Release = 2, op.Release
+		ws.Environments["production"] = env
+		st.Workers.Services["svc-a"] = ws
+		op.State = "committed"
+		st.Workers.Operations[op.ID] = op
+		return nil
+	})
+	next := request(s, "POST", base+"/environments/production/releases", "krun_cli_admin", `{"build_id":"`+b.ID+`","expected_revision":2,"idempotency_key":"after-committed"}`)
+	if next.Code != 202 {
+		t.Fatal(next.Code, next.Body.String())
+	}
 }
 
 func TestWorkerEnvironmentScopedKeyCanReadCollections(t *testing.T) {
@@ -248,10 +272,22 @@ func TestWorkerArchiveIntegrityAndTraversal(t *testing.T) {
 		}
 	}
 }
+func TestWorkerRoutesReportUnconfiguredInsteadOfMissing(t *testing.T) {
+	s, _ := testServer(t)
+	r := request(s, http.MethodGet, "/api/v1/orgs/org-a/workers/services", "krun_cli_admin", "")
+	if r.Code != 503 || !strings.Contains(r.Body.String(), "WORKERS_NOT_CONFIGURED") {
+		t.Fatalf("unconfigured workers route: %d %s", r.Code, r.Body.String())
+	}
+	me := request(s, http.MethodGet, "/api/auth/me", "krun_cli_admin", "")
+	if me.Code != 200 || !strings.Contains(me.Body.String(), `"workers_configured":false`) {
+		t.Fatalf("me should advertise disabled workers: %d %s", me.Code, me.Body.String())
+	}
+}
+
 func TestWorkerRuntimeChannelRequiresCredentialAndPool(t *testing.T) {
 	s, _, _ := workerTestServer(t)
 	s.Config.Workers.RuntimeToken = strings.Repeat("a", 32)
-	r := httptest.NewRequest("GET", "/api/internal/workers/snapshot", nil)
+	r := httptest.NewRequest("GET", "/api/internal/workers/config/snapshot", nil)
 	r.Header.Set("Authorization", "Bearer "+s.Config.Workers.RuntimeToken)
 	if s.workerRuntimeAllowed(r) {
 		t.Fatal("missing pool accepted")
@@ -264,10 +300,10 @@ func TestWorkerRuntimeChannelRequiresCredentialAndPool(t *testing.T) {
 	if s.workerRuntimeAllowed(r) {
 		t.Fatal("foreign pool accepted")
 	}
-	if r := request(s, http.MethodGet, "/api/internal/workers/snapshot", "", ""); r.Code != 404 {
+	if r := request(s, http.MethodGet, "/api/internal/workers/config/snapshot", "", ""); r.Code != 404 {
 		t.Fatal("internal endpoint must not be reachable on the public mux:", r.Code)
 	}
-	if r := request(s, http.MethodGet, "/internal/workers/snapshot", "", ""); r.Code != 404 {
+	if r := request(s, http.MethodGet, "/internal/workers/config/snapshot", "", ""); r.Code != 404 {
 		t.Fatal("root-level internal path must stay unreachable:", r.Code)
 	}
 }

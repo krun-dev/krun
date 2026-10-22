@@ -43,6 +43,9 @@ func (s *Server) workerRepositoryConnect(st *State, p Principal, r *http.Request
 
 // workerRepositoryCallback exchanges the OAuth code and stores the user connection.
 func (s *Server) workerRepositoryCallback(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWorkers(w, r) {
+		return
+	}
 	var in struct {
 		State string `json:"state"`
 		Code  string `json:"code"`

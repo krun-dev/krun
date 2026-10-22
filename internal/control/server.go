@@ -115,7 +115,7 @@ func (s *Server) routes() {
 	m := http.NewServeMux()
 	s.mux = m
 	m.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, r *http.Request) {
-		if e := s.Store.Update(r.Context(), func(*State) error { return nil }); e != nil {
+		if e := s.Store.View(r.Context(), func(*State) error { return nil }); e != nil {
 			s.writeError(w, r, e)
 			return
 		}
@@ -137,8 +137,8 @@ func (s *Server) routes() {
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { s.writeError(w, r, notFound()) })
 	s.internalMux = http.NewServeMux()
 	if s.Config.Workers != nil {
-		s.internalMux.HandleFunc("GET /api/internal/workers/snapshot", s.workerRuntimeSnapshot)
-		s.internalMux.HandleFunc("GET /api/internal/workers/releases/{release}", s.workerRuntimeRelease)
+		s.internalMux.HandleFunc("GET /api/internal/workers/config/snapshot", s.workerRuntimeConfigSnapshot)
+		s.internalMux.HandleFunc("GET /api/internal/workers/config/changes", s.workerRuntimeConfigChanges)
 		s.internalMux.HandleFunc("GET /api/internal/workers/releases/{release}/assets", s.workerRuntimeReleaseAssets)
 		s.internalMux.HandleFunc("GET /api/internal/workers/releases/{release}/assets/{path...}", s.workerRuntimeReleaseAssetURL)
 		s.internalMux.HandleFunc("GET /api/internal/workers/artifacts/{artifact}", s.workerRuntimeArtifact)
@@ -443,7 +443,7 @@ func (s *Server) cleanup(st *State) {
 	}
 }
 func (s *Server) me(st *State, p Principal, r *http.Request) (any, int, error) {
-	return map[string]any{"user": p.User, "credential_kind": p.Kind, "system_admin": isAdmin(st, p.User, ""), "revision": st.Revision}, 200, nil
+	return map[string]any{"user": p.User, "credential_kind": p.Kind, "system_admin": isAdmin(st, p.User, ""), "revision": st.Revision, "workers_configured": s.Config.Workers != nil}, 200, nil
 }
 func (s *Server) logout(st *State, p Principal, r *http.Request) (any, int, error) {
 	delete(st.Sessions, p.SessionHash)
@@ -525,7 +525,7 @@ func Serve(ctx context.Context, c Config) error {
 			_ = srv.Shutdown(shutdown)
 		}
 	}()
-	fmt.Print(localize.Format(localize.Language(ctx), "krun control server: %s/console/\n", c.PublicURL))
+	fmt.Print(localize.Format(localize.Language(ctx), "krun control server: %s/\n", c.PublicURL))
 	for _, srv := range servers[1:] {
 		go func(srv *http.Server) {
 			e := srv.ListenAndServe()

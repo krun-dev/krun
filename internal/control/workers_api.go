@@ -7,36 +7,49 @@ import (
 	"time"
 )
 
-func (s *Server) workersRoutes(m *http.ServeMux) {
-	if s.Config.Workers == nil {
-		return
+func (s *Server) requireWorkers(w http.ResponseWriter, r *http.Request) bool {
+	if s.Config.Workers != nil {
+		return true
 	}
+	s.writeError(w, r, problem(503, "WORKERS_NOT_CONFIGURED", "Workers is not configured"))
+	return false
+}
+
+func (s *Server) workersRoutes(m *http.ServeMux) {
 	base := "/api/v1/orgs/{org}/services/{resource}/workers"
-	m.HandleFunc("GET /api/v1/orgs/{org}/workers/services", s.protected(false, s.workerServiceList))
-	m.HandleFunc("GET /api/v1/orgs/{org}/workers/repository-providers", s.protected(false, s.workerRepositoryProviders))
-	m.HandleFunc("POST /api/v1/orgs/{org}/workers/repository/{provider}/connect", s.protected(true, s.workerRepositoryConnect))
-	m.HandleFunc("POST /api/v1/orgs/{org}/workers/repository/{provider}/disconnect", s.protected(true, s.workerRepositoryDisconnect))
+	protect := func(sessionOnly bool, fn endpoint) http.HandlerFunc {
+		return s.protected(sessionOnly, func(st *State, p Principal, r *http.Request) (any, int, error) {
+			if s.Config.Workers == nil {
+				return nil, 0, problem(503, "WORKERS_NOT_CONFIGURED", "Workers is not configured")
+			}
+			return fn(st, p, r)
+		})
+	}
+	m.HandleFunc("GET /api/v1/orgs/{org}/workers/services", protect(false, s.workerServiceList))
+	m.HandleFunc("GET /api/v1/orgs/{org}/workers/repository-providers", protect(false, s.workerRepositoryProviders))
+	m.HandleFunc("POST /api/v1/orgs/{org}/workers/repository/{provider}/connect", protect(true, s.workerRepositoryConnect))
+	m.HandleFunc("POST /api/v1/orgs/{org}/workers/repository/{provider}/disconnect", protect(true, s.workerRepositoryDisconnect))
 	m.HandleFunc("POST /api/v1/workers/repository/{provider}/callback", s.workerRepositoryCallback)
-	m.HandleFunc("GET "+base+"/repository", s.protected(false, s.workerRepositoryGet))
-	m.HandleFunc("PUT "+base+"/repository", s.protected(false, s.workerRepositoryUpdate))
-	m.HandleFunc("POST "+base+"/builds", s.protected(false, s.workerBuildCreate))
-	m.HandleFunc("POST "+base+"/source-uploads", s.protected(false, s.workerSourceUploadCreate))
-	m.HandleFunc("GET "+base+"/builds", s.protected(false, s.workerBuildList))
-	m.HandleFunc("GET "+base+"/builds/{build}", s.protected(false, s.workerBuildGet))
-	m.HandleFunc("GET "+base+"/builds/{build}/logs", s.protected(false, s.workerBuildLogs))
-	m.HandleFunc("GET "+base+"/builds/{build}/source", s.protected(false, s.workerBuildSource))
-	m.HandleFunc("GET "+base+"/environments", s.protected(false, s.workerEnvironments))
-	m.HandleFunc("POST "+base+"/environments", s.protected(false, s.workerEnvironmentCreate))
-	m.HandleFunc("DELETE "+base+"/environments/{environment}", s.protected(false, s.workerEnvironmentDelete))
-	m.HandleFunc("PATCH "+base+"/environments/{environment}", s.protected(false, s.workerEnvironmentUpdate))
-	m.HandleFunc("POST "+base+"/environments/{environment}/releases", s.protected(false, s.workerPublish))
-	m.HandleFunc("POST "+base+"/environments/{environment}/rollbacks", s.protected(false, s.workerRollback))
-	m.HandleFunc("GET "+base+"/environments/{environment}/history", s.protected(false, s.workerReleaseHistory))
-	m.HandleFunc("GET "+base+"/operations", s.protected(false, s.workerOperationList))
-	m.HandleFunc("GET "+base+"/releases/{release}", s.protected(false, s.workerReleaseGet))
+	m.HandleFunc("GET "+base+"/repository", protect(false, s.workerRepositoryGet))
+	m.HandleFunc("PUT "+base+"/repository", protect(false, s.workerRepositoryUpdate))
+	m.HandleFunc("POST "+base+"/builds", protect(false, s.workerBuildCreate))
+	m.HandleFunc("POST "+base+"/source-uploads", protect(false, s.workerSourceUploadCreate))
+	m.HandleFunc("GET "+base+"/builds", protect(false, s.workerBuildList))
+	m.HandleFunc("GET "+base+"/builds/{build}", protect(false, s.workerBuildGet))
+	m.HandleFunc("GET "+base+"/builds/{build}/logs", protect(false, s.workerBuildLogs))
+	m.HandleFunc("GET "+base+"/builds/{build}/source", protect(false, s.workerBuildSource))
+	m.HandleFunc("GET "+base+"/environments", protect(false, s.workerEnvironments))
+	m.HandleFunc("POST "+base+"/environments", protect(false, s.workerEnvironmentCreate))
+	m.HandleFunc("DELETE "+base+"/environments/{environment}", protect(false, s.workerEnvironmentDelete))
+	m.HandleFunc("PATCH "+base+"/environments/{environment}", protect(false, s.workerEnvironmentUpdate))
+	m.HandleFunc("POST "+base+"/environments/{environment}/releases", protect(false, s.workerPublish))
+	m.HandleFunc("POST "+base+"/environments/{environment}/rollbacks", protect(false, s.workerRollback))
+	m.HandleFunc("GET "+base+"/environments/{environment}/history", protect(false, s.workerReleaseHistory))
+	m.HandleFunc("GET "+base+"/operations", protect(false, s.workerOperationList))
+	m.HandleFunc("GET "+base+"/releases/{release}", protect(false, s.workerReleaseGet))
 	m.HandleFunc("POST "+base+"/environments/{environment}/invoke", s.workerInvoke)
-	m.HandleFunc("GET "+base+"/operations/{operation}", s.protected(false, s.workerOperationGet))
-	m.HandleFunc("GET "+base+"/artifacts/{artifact}", s.protected(false, s.workerArtifactGet))
+	m.HandleFunc("GET "+base+"/operations/{operation}", protect(false, s.workerOperationGet))
+	m.HandleFunc("GET "+base+"/artifacts/{artifact}", protect(false, s.workerArtifactGet))
 }
 func (s *Server) workerTarget(st *State, r *http.Request, env, action string, p Principal) (Target, error) {
 	t, e := resolve(st, "service", r.PathValue("resource"), env)
@@ -215,7 +228,11 @@ func (s *Server) workerBuildCreate(st *State, p Principal, r *http.Request) (any
 	}
 	raw, _ := json.Marshal(in.Files)
 	id = randomID("bld")
-	b := WorkerBuild{ID: id, Organization: t.Organization, Service: t.ID, Environment: in.Environment, State: "queued", Entrypoint: in.Entrypoint, SourceDigest: bytesDigest(raw), Profile: workerProfile, Job: "krun-build-" + digest(id)[:24], Assets: in.Assets, Created: now()}
+	job := "krun-build-" + digest(id)[:24]
+	if s.Config.Workers.BuilderMode == "local" {
+		job = "local-" + digest(id)[:16]
+	}
+	b := WorkerBuild{ID: id, Organization: t.Organization, Service: t.ID, Environment: in.Environment, State: "queued", Entrypoint: in.Entrypoint, SourceDigest: bytesDigest(raw), Profile: workerProfile, Job: job, Assets: in.Assets, Created: now()}
 	if in.SourceUpload != "" {
 		b.SourceDigest = ""
 	}
@@ -324,19 +341,24 @@ func (s *Server) workerEnvironments(st *State, p Principal, r *http.Request) (an
 			return nil, 0, e
 		}
 		if d.Allowed {
-			out = append(out, ws.Environments[name])
+			env := ws.Environments[name]
+			env.ExternalHost = s.Config.Workers.ExternalHost(env.Host)
+			out = append(out, env)
 		}
 	}
 	return items(out)
 }
 func workerBusy(st *State, service, env string) bool {
 	for _, op := range st.Workers.Operations {
-		if op.Service == service && op.Environment == env && !workerTerminal(op.State) {
+		// A committed operation is already durable and converging; a new
+		// publish or config change supersedes it instead of blocking.
+		if op.Service == service && op.Environment == env && !workerTerminal(op.State) && op.State != "committed" {
 			return true
 		}
 	}
 	return false
 }
+
 // Previews are created explicitly; the durable baseline always exists and cannot be created or deleted.
 func (s *Server) workerEnvironmentCreate(st *State, p Principal, r *http.Request) (any, int, error) {
 	var in struct {
@@ -369,7 +391,7 @@ func (s *Server) workerEnvironmentCreate(st *State, p Principal, r *http.Request
 	if previews >= limit {
 		return nil, 0, problem(409, "ENVIRONMENT_LIMIT", "Too many preview environments")
 	}
-	env := WorkerEnvironment{Name: in.Name, Enabled: true, Host: "w-" + digest(t.Organization+"/"+t.ID)[:16] + "-" + in.Name + "." + s.Config.Workers.Domain, Visibility: "private", ConfigRevision: 1, Variables: map[string]string{}}
+	env := WorkerEnvironment{Name: in.Name, Enabled: true, Host: "w-" + digest(t.Organization + "/" + t.ID)[:16] + "-" + in.Name + "." + s.Config.Workers.Domain, Visibility: "private", ConfigRevision: 1, Variables: map[string]string{}}
 	ws.Environments[in.Name] = env
 	st.Workers.Services[t.ID] = ws
 	st.Workers.Revision++
@@ -460,10 +482,10 @@ func (s *Server) workerReleaseCreate(st *State, p Principal, r *http.Request, ki
 		return nil, 0, e
 	}
 	var in struct {
-		Build      string `json:"build_id,omitempty"`
-		Release   string `json:"release_id,omitempty"`
-		Revision   int    `json:"expected_revision"`
-		Key        string `json:"idempotency_key"`
+		Build    string `json:"build_id,omitempty"`
+		Release  string `json:"release_id,omitempty"`
+		Revision int    `json:"expected_revision"`
+		Key      string `json:"idempotency_key"`
 	}
 	if e = body(r, &in); e != nil {
 		return nil, 0, e
@@ -492,7 +514,9 @@ func (s *Server) workerReleaseCreate(st *State, p Principal, r *http.Request, ki
 		return nil, 0, problem(409, "REVISION_CONFLICT", "Environment release changed")
 	}
 	for _, active := range st.Workers.Operations {
-		if active.Service == t.ID && active.Environment == env && !workerTerminal(active.State) && !(kind == "rollback" && active.State == "committed") {
+		// Cancellation is only possible before commit; a committed release is
+		// durable and may be replaced by a newer publish.
+		if active.Service == t.ID && active.Environment == env && !workerTerminal(active.State) && active.State != "committed" {
 			return nil, 0, problem(409, "RELEASE_BUSY", "Wait for the active release operation")
 		}
 	}

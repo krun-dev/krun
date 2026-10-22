@@ -2,9 +2,9 @@ package control
 
 import (
 	"context"
-	"sort"
 	"encoding/json"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -22,6 +22,16 @@ type Store struct {
 	pendingAudits []Audit
 	// memoryAudits backs the in-memory store used by tests.
 	memoryAudits []Audit
+
+	// Config distribution state. Revision/ops live outside the IAM snapshot so
+	// runtime reads never touch the single krun_control_state row.
+	configMu   sync.Mutex
+	configCh   chan struct{}
+	configRevs []workerConfigRevision
+	configSeq  int64
+
+	ackMu sync.Mutex
+	acks  map[string]WorkerAck
 }
 
 func OpenStore(ctx context.Context, dsn string) (*Store, error) {
@@ -47,6 +57,19 @@ func OpenStore(ctx context.Context, dsn string) (*Store, error) {
 	// Audits are an append-only event stream in their own table; the state
 	// blob stays small and hot.
 	if _, err = pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS krun_audits (id text PRIMARY KEY, time timestamptz NOT NULL, actor text NOT NULL DEFAULT '', credential text NOT NULL DEFAULT '', key_id text NOT NULL DEFAULT '', action text NOT NULL DEFAULT '', resource text NOT NULL DEFAULT '', organization_id text NOT NULL DEFAULT '', allowed boolean NOT NULL DEFAULT false, request_id text NOT NULL DEFAULT '', revision integer NOT NULL DEFAULT 0); CREATE INDEX IF NOT EXISTS krun_audits_time ON krun_audits (time DESC)`); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	// Runtime-facing edge configuration is a small append-only revision log.
+	// Full snapshots are materialised to object storage; these rows are the
+	// incremental feed and the bootstrap fallback.
+	if _, err = pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS worker_config_revisions (config_revision bigserial PRIMARY KEY, digest text NOT NULL, payload jsonb NOT NULL, ops jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now())`); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	// Acks are per runtime Pod, not part of the IAM snapshot: they change on a
+	// timer and must not rewrite the global row.
+	if _, err = pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS worker_runtime_acks (pod_uid text PRIMARY KEY, pool text NOT NULL, revision bigint NOT NULL, updated_at timestamptz NOT NULL)`); err != nil {
 		pool.Close()
 		return nil, err
 	}
@@ -116,6 +139,37 @@ func (s *Store) Update(ctx context.Context, fn func(*State) error) error {
 	return nil
 }
 
+// View reads the durable state without taking the global write lock and without
+// writing it back. Read-only endpoints (runtime config, health checks, cold
+// loads) must use View; Update is reserved for mutations and their audit rows.
+func (s *Store) View(ctx context.Context, fn func(*State) error) error {
+	if s.pool != nil {
+		var raw []byte
+		if err := s.pool.QueryRow(ctx, `SELECT data FROM krun_control_state WHERE id=1`).Scan(&raw); err != nil {
+			return err
+		}
+		state := newState()
+		if err := json.Unmarshal(raw, state); err != nil {
+			return err
+		}
+		return fn(state)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.memory == nil {
+		return errors.New("store is not initialized")
+	}
+	raw, err := json.Marshal(s.memory)
+	if err != nil {
+		return err
+	}
+	state := newState()
+	if err := json.Unmarshal(raw, state); err != nil {
+		return err
+	}
+	return fn(state)
+}
+
 // recordAudit queues an entry for the current Update transaction.
 func (s *Store) recordAudit(a Audit) {
 	s.pendingAudits = append(s.pendingAudits, a)
@@ -131,6 +185,7 @@ func pruneMemoryAudits(entries []Audit, at time.Time) []Audit {
 	clear(entries[len(kept):])
 	return kept
 }
+
 // readAudits returns entries newer than cutoff, newest first, optionally
 // scoped to an organization.
 func (s *Store) readAudits(ctx context.Context, cutoff time.Time, organization string, limit int) ([]Audit, error) {
@@ -172,6 +227,7 @@ func (s *Store) readAudits(ctx context.Context, cutoff time.Time, organization s
 	}
 	return out, nil
 }
+
 // deleteAuditsBefore drops entries older than the retention window.
 func (s *Store) deleteAuditsBefore(ctx context.Context, cutoff time.Time) error {
 	if s.pool != nil {

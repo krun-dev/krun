@@ -42,6 +42,9 @@ func newWorkerInvokeClient() *http.Client {
 // Console invocation returns business responses as JSON data. It never serves
 // business HTML, cookies, or redirects on the console origin.
 func (s *Server) workerInvoke(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWorkers(w, r) {
+		return
+	}
 	var in workerInvokeRequest
 	if err := body(r, &in); err != nil {
 		s.writeError(w, r, err)
@@ -131,8 +134,17 @@ func (s *Server) workerInvokeHost(r *http.Request) (string, error) {
 func (s *Server) invokeWorker(ctx context.Context, host string, in workerInvokeRequest, path *url.URL) (workerInvokeResponse, error) {
 	var out workerInvokeResponse
 	target := *path
-	target.Scheme = "http"
-	target.Host = s.Config.Workers.GatewayName + "." + s.Config.Workers.GatewayNamespace + ".svc:8080"
+	if s.Config.Workers.GatewayBase != "" {
+		base, e := url.Parse(s.Config.Workers.GatewayBase)
+		if e != nil {
+			return out, problem(503, "WORKER_INVOKE_UNAVAILABLE", "Worker gateway not configured")
+		}
+		target.Scheme = base.Scheme
+		target.Host = base.Host
+	} else {
+		target.Scheme = "http"
+		target.Host = s.Config.Workers.GatewayName + "." + s.Config.Workers.GatewayNamespace + ".svc:8080"
+	}
 	req, err := http.NewRequestWithContext(ctx, in.Method, target.String(), strings.NewReader(in.Body))
 	if err != nil {
 		return out, err

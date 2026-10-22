@@ -6,7 +6,7 @@
 
 目标：
 
-1. 资产与 Worker 代码打进**同一个制品归档**、同属一个版本记录（Release）：`/adopt` 一次动态加载同时生效新代码与新资产；回滚即重新加载历史 Release 引用的旧归档，代码与资产一并回到旧版本。不存在「代码已新、资产还旧」的中间状态。
+1. 资产与 Worker 代码打进**同一个制品归档**、同属一个版本记录（Release）：提交后通过一次 config revision 切换同时生效新代码与新资产；回滚即把 route 指回历史 Release，代码与资产一并回到旧版本。不存在「代码已新、资产还旧」的中间状态。
 2. 主域 `{slug}[-{env}].{suffix}` 同源交付：页面与 API 同 host，零 CORS。静态文件走独立静态域名，流量不经 runtime。
 3. 路径分流收敛在 Pod 内入口 Worker；网关（HTTPRoute / workers-router）只按 host 转发，不配 path 规则。
 4. 未配置资产的服务行为不变。
@@ -15,7 +15,7 @@
 
 - `run_worker_first: true` 布尔全量模式（只做路由数组）。
 - `html_handling` 的 `force-trailing-slash` / `drop-trailing-slash`（只做 `auto-trailing-slash` 与 `none`）。
-- adopt 期 presigned 直拉 S3（5.2 方式 B）——性能优化，规模上来再开。
+- 配置生效期 presigned 直拉 S3（5.2 方式 B）——性能优化，规模上来再开。
 - Range 请求、预压缩、按文件名 hash 自动 immutable（开放问题）。
 - 大媒体（视频等）：运行期数据，不是部署资产，见第 10 节。
 
@@ -23,7 +23,7 @@
 
 ### 2.1 为什么
 
-1. **发布的单步切换**。Cloudflare 的核心是「assets + 代码是一个部署单元」；krun 的对应物是「一个归档 + `/adopt` 一次动态加载」。若在 HTTPRoute 把 `/api/*` 指向 runtime、其余指向资产 backend，一次发布就变成「网关规则更新」和「Release 生效」两步，两步之间没有事务，期间会出现「路由已切、Release 未生效」（或相反）的混合窗口。
+1. **发布的单步切换**。Cloudflare 的核心是「assets + 代码是一个部署单元」；krun 的对应物是「一个归档 + 一次 config revision 切换」。若在 HTTPRoute 把 `/api/*` 指向 runtime、其余指向资产 backend，一次发布就变成「网关规则更新」和「Release 生效」两步，两步之间没有事务，期间会出现「路由已切、Release 未生效」（或相反）的混合窗口。
 2. **表达能力**。Gateway API 写不出 try-files（「资产未命中 → 返回 index.html + 200」），也写不出 `/about` → `about.html` 这种 307——能不能这样映射取决于本次制品里实际有哪些文件，静态路由配置预知不了。
 3. **一套代码两种模式**。gateway 和 dataplane 两种 routing 模式的唯一公共 serving 层就是入口 Worker；路径逻辑放网关要写两遍。
 4. **信任边界**。runtime 不持任何 S3 凭证（现状），对象存储不进数据面。
@@ -67,7 +67,7 @@
 
 - **源码包是唯一入口**：`POST /source-uploads` 返回 presigned PUT（15 分钟），客户端上传 `source.tar.gz`（顶层两段：`src/` 代码、`assets/` 资产），build 请求引用 `source_upload`。API 请求体上限 1 MiB、builder 输入 ConfigMap 上限 1 MiB，20 MiB 资产只能走对象存储。
 - 仓库构建由服务端自动完成：fetch 仓库 → 提取代码与 `assets.directory` 子树 → 打包上传 source bundle，客户端无需改动。
-- 兼容：旧的 inline `files` 仍可用（≤32 文件 / 256 KiB，仅代码），服务端会代为打包；带 `assets` 时必须用 `source_upload`。
+- 轻量模式：内联 `files` 仍可用于 ≤32 文件 / 256 KiB 的纯代码 Worker；带 `assets` 时必须用 `source_upload`。
 - `directory` 是源码树内的相对目录，builder 原样复制，不执行 npm install、不跑自定义构建命令（对应 Cloudflare「预构建 dist」模型）。
 - 配置固化进制品 manifest（第 4 节），不可变；Release 引用制品即间接持有，Release 的版本 ID 已含归档 digest。
 - pattern 校验在提交时做（语法错返回 400）：仅前缀匹配、`*` 只能是尾段、可选 `!` 前缀、≤16 条 × ≤128 字符。`directory` 缺失时其余字段必须为空。
@@ -94,15 +94,15 @@ bundle.tar.gz
 ### 5.1 存储关系
 
 - S3 制品归档是唯一事实源。runtime 用控制面换取的短时效 presigned GET **直接从 S3 下载归档**（控制面只签名、不经手字节），下载后核验 archive / module sha256。
-- **发布不重启 runtime pod，也不新建任何 Kubernetes 对象**。krun 的 Deployment 是控制面里的版本记录（制品 + 环境 + 配置；本文统一称「版本记录」，避免与 Kubernetes Deployment 混淆）。发布链路是现有 management RPC：`/validate` 在单个候选成员上冷加载并核验 → commit → `/adopt` 只确认快照，其余成员在首次请求时懒加载。资产挂在与模块完全相同的这条加载链路上。
-- 重启后的 readiness 会逐路由加载并核验全部活动版本，本地缓存由此自动重建。
+- **发布不重启 runtime pod，也不新建任何 Kubernetes 对象**。krun 的 Deployment 是控制面里的版本记录（制品 + 环境 + 配置；本文统一称「版本记录」，避免与 Kubernetes Deployment 混淆）。发布链路是：`/validate` 在单个候选成员上冷加载并核验 → commit → 生成 config revision（`routes + releases`）→ 写入对象存储快照与 `latest` 指针 → 各成员通过 `/config/changes` 增量应用并 ack。controller 不对每个 Pod 做管理 RPC，坏成员不会阻塞发布流水线。资产挂在与模块完全相同的这条加载链路上。
+- 重启后的 readiness 只要求配置视图已加载；活动 Release 在首次请求时懒加载，本地缓存随之重建，启动成本不随服务数量线性增长。
 
 ### 5.2 资产加载：按文件懒加载 + 内存 LRU
 
 - runtime 容器只有 workerd 进程，**没有文件系统**，所以资产不落盘，也不随归档整包展开。入口 Worker 命中资产时按文件从桶的 `pub/` 前缀取：控制面签发 15 分钟 presigned GET → runtime 直连对象存储 → 核验 manifest 里的 sha256 → 放进进程内 LRU。
 - 每 pod 上限 `ASSETS_CACHE_MAX`（kind 默认 64 MiB），LRU 淘汰；未命中才回源，首访多一次控制面 RPC + 一次桶 GET（同 region 几十 ms），命中后内存直出。
 - 资产 manifest（≤500 条）走内部 API `GET /releases/{id}/assets`，按 Release 缓存在内存，不进快照。
-- 归档下载仍发生在 `/validate`（单台候选成员）、成员首次请求（懒加载）与重启后的 readiness——但那只是模块代码；资产的磁盘约束因此消失。
+- 归档下载仍发生在 `/validate`（单台候选成员）和成员首次请求（懒加载）——但那只是模块代码；readiness 不再遍历全部 Release，资产的磁盘约束因此消失。
 - 业务 Worker 的 `env.ASSETS` binding 本期未实现；入口决策流已覆盖页面与静态文件的全部访问路径，binding 作为后续能力补充。
 
 ### 5.3 快照
@@ -156,11 +156,11 @@ static.{internal}/{org}/{service}/{sha}/…        ──► 内网 LB ──►
 1. finalize 写逐文件对象：解出 `assets/`，同时写 `pub/` 与 `int/` 的 `{org}/{service}/{archive_sha}/` 前缀（kind 里都在 MinIO）；`v1/` 归档段保持匿名不可读。
 2. 业务构建时把资源 URL 指到静态域（Vite / webpack 的 `base`，一次性配置，全平台恒定值）。平台不注入、不改写 HTML；`index.html` 与 SPA 回落留在主域由 runtime 服务（量小）。
 3. **没有「刷新 CDN」动作**：URL 按内容寻址，新版 HTML 引用新 URL，旧对象永久有效；未指纹化文件的短 TTL 就是生效延迟上界。回滚同理。
-4. 主域不变量不动：零 CORS、内部头清洗、快照寻址；发布仍是归档 + adopt 的单步切换。
+4. 主域不变量不动：零 CORS、内部头清洗、revision 寻址；发布仍是归档 + config revision 的单步切换。
 
 ## 7. 请求期行为细则
 
-- `html_handling: auto-trailing-slash`（默认）：`/about` → 200 服务 `about.html`；`/about.html` → 307 `/about`；`/folder/index.html` → 307 `/folder/`。307 表 adopt 时按实际文件集合预计算。`none`：仅精确路径。
+- `html_handling: auto-trailing-slash`（默认）：`/about` → 200 服务 `about.html`；`/about.html` → 307 `/about`；`/folder/index.html` → 307 `/folder/`。入口 Worker 按 release 的实际文件集合做动态判定。`none`：仅精确路径。
 - 缓存：强 ETag（文件 sha256）+ `If-None-Match` → 304；`Cache-Control: public, max-age=300`。
 - 出站响应补 `x-krun-release` / `x-krun-pod` 便于排障；入站继续剥除 `x-krun-*`（domains 第 7 节）。
 - 控制台 invoke 路径不变：经入口 Worker，配置了资产的服务 invoke `/` 返回 index.html。

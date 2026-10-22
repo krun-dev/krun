@@ -14,11 +14,14 @@ fi
 if [[ -z "${KRUN_SMTP_PASSWORD:-}" && -f .data/smtp-local.secret ]]; then
   export KRUN_SMTP_PASSWORD="$(cat .data/smtp-local.secret)"
 fi
-task_config="${1:-}"
-if [[ -z "$task_config" ]]; then
-  task_config="config/development.yaml"
-  if [[ -f .data/sso-local.yaml ]]; then
-    task_config=".data/sso-local.yaml"
-  fi
+# config/development.yaml includes a workers: block, so the controller needs a
+# Kubernetes service account. Point it at the kind credentials when present.
+if [[ -z "${KRUN_KUBE_SA_DIR:-}" && -d .data/kind-creds ]]; then
+  export KRUN_KUBE_SA_DIR="$PWD/.data/kind-creds"
+  export KRUN_KUBE_CA="$PWD/.data/kind-creds/ca.crt"
+  export KRUN_KUBE_API="${KRUN_KUBE_API:-https://127.0.0.1:38443}"
 fi
+# Single gitignored local dev config: control plane + Postgres + MinIO + builder
+# run here; only the runtime (workerd) and kgateway stay in the cluster.
+task_config="${1:-.data/dev.yaml}"
 exec ./bin/krun-server serve --config "$task_config"

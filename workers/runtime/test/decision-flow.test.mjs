@@ -5,6 +5,7 @@ import {readFileSync, writeFileSync, mkdtempSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {gzipSync} from 'node:zlib';
 import assert from 'node:assert/strict';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -41,23 +42,40 @@ for (const [name, text] of Object.entries(files)) {
 const config = {directory: 'public', run_worker_first: ['/api/*', '!/api/docs/*'], not_found_handling: 'single-page-application', html_handling: 'auto-trailing-slash'};
 
 const downloads = [];
+const configObjects = new Map();
 globalThis.fetch = async (url) => {
-  const key = String(url).replace('http://assets.test/', '');
+  const raw = String(url);
+  if (raw.startsWith('http://config.test/')) {
+    const key = raw.replace('http://config.test/', '');
+    downloads.push('config:' + key);
+    if (!configObjects.has(key)) return new Response('missing', {status: 404});
+    return new Response(configObjects.get(key), {status: 200});
+  }
+  const key = raw.replace('http://assets.test/', '');
   downloads.push(key);
   if (!(key in files)) return new Response('missing', {status: 404});
   return new Response(files[key], {status: 200});
 };
 
-function platformFor(manifestConfig, fileList, rel) {
+function platformFor(manifestConfig, fileList, rel, options = {}) {
+  const changes = options.changes || [];
   return {
     async fetch(request) {
       const url = new URL(request.url);
       const path = url.pathname.replace('/api/internal/workers', '');
-      if (path === '/snapshot') {
-        return Response.json({pool: 'default', revision: 1, validUntil: Date.now() + 60000, routes: [{host: 'w-test.workers.test', path: '/', enabled: true, release: rel.id}], releases: {[rel.id]: rel}});
+      if (path === '/config/snapshot') {
+        return Response.json({pool: 'default', config_revision: options.revision || 1, routes: [{host: 'w-test.workers.test', path: '/', enabled: true, release: rel.id}], releases: {[rel.id]: rel}});
+      }
+      if (path.startsWith('/config/changes')) {
+        if (changes.length) return Response.json(changes.shift());
+        return new Response(null, {status: 204});
       }
       if (path === '/ack') return Response.json({ok: true});
-      if (path === `/releases/${rel.id}/assets`) return Response.json({release_id: rel.id, config: manifestConfig, files: fileList});
+      const assetMatch = path.match(/^\/releases\/([^/]+)\/assets$/);
+      if (assetMatch) {
+        const id = decodeURIComponent(assetMatch[1]);
+        return Response.json({release_id: id, config: id === rel.id ? manifestConfig : null, files: id === rel.id ? fileList : []});
+      }
       const m = path.match(new RegExp(`^/releases/${rel.id}/assets/(.+)$`));
       if (m) {
         const name = m[1].split('/').map(decodeURIComponent).join('/');
@@ -70,12 +88,12 @@ function platformFor(manifestConfig, fileList, rel) {
   };
 }
 
-function makeEnv(manifestConfig, fileList, relId = release.id) {
+function makeEnv(manifestConfig, fileList, relId = release.id, options = {}) {
   const rel = {...release, id: relId};
   const workerResponses = [];
   const env = {
     POD_NAME: 'pod', POD_UID: 'uid', RUNTIME_TOKEN: 't', MANAGEMENT_TOKEN: 'm', ASSETS_CACHE_MAX: '1048576',
-    PLATFORM: platformFor(manifestConfig, fileList, rel),
+    PLATFORM: platformFor(manifestConfig, fileList, rel, options),
     LOADER: {
       get(key, factory) {
         return {
@@ -182,6 +200,67 @@ await check('non-navigation miss without SPA config goes to the worker', async (
   const r = await call(noSpa, '/nowhere', {'sec-fetch-mode': 'navigate'});
   assert.equal(r.status, 200);
   assert.equal((await r.json()).worker, true);
+});
+await check('incremental op switches the route without a snapshot refetch', async () => {
+  const plain = {...release, id: 'rel_plain'};
+  const changes = [{from: 1, to: 2, ops: [
+    {type: 'release_put', release: plain},
+    {type: 'route_upsert', host: 'w-test.workers.test', route: {host: 'w-test.workers.test', path: '/', enabled: true, release: 'rel_plain'}},
+  ]}];
+  const incEnv = makeEnv(null, [], release.id, {changes});
+  const incEntry = await freshEntry();
+  const inc = new incEntry.Private(incEnv, {});
+  let switched = false;
+  for (let i = 0; i < 60; i++) {
+    const r = await call(inc, '/');
+    if (r.headers.get('x-krun-release') === 'rel_plain') {
+      assert.equal((await r.json()).worker, true);
+      switched = true;
+      break;
+    }
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.ok(switched, 'route never switched to rel_plain');
+});
+await check('bootstrap reads latest and gzip snapshot from object storage', async () => {
+  const relId = 'rel_oss';
+  const snapshot = {config_revision: 7, pool: 'default', routes: [{host: 'w-test.workers.test', path: '/', enabled: true, release: relId}], releases: {[relId]: {...release, id: relId}}};
+  const compressed = gzipSync(Buffer.from(JSON.stringify(snapshot)));
+  configObjects.set('latest.json', encoder.encode(JSON.stringify({config_revision: 7, snapshot: 'snapshots/7.json.gz', sha256: await digest(new Uint8Array(compressed)), ops_floor: 1})));
+  configObjects.set('snapshots/7.json.gz', new Uint8Array(compressed));
+  const ossEnv = makeEnv(null, [], relId);
+  ossEnv.CONFIG_BASE = 'http://config.test';
+  const ossEntry = await freshEntry();
+  const oss = new ossEntry.Private(ossEnv, {});
+  const r = await call(oss, '/');
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).worker, true);
+  assert.equal(r.headers.get('x-krun-release'), relId);
+  assert(downloads.includes('config:latest.json'), 'latest.json was not fetched');
+  assert(downloads.includes('config:snapshots/7.json.gz'), 'snapshot was not fetched');
+});
+await check('readiness starts the follow loop for an idle Pod', async () => {
+  const plain = {...release, id: 'rel_idle'};
+  const changes = [{from: 1, to: 2, ops: [
+    {type: 'release_put', release: plain},
+    {type: 'route_upsert', host: 'w-test.workers.test', route: {host: 'w-test.workers.test', path: '/', enabled: true, release: 'rel_idle'}},
+  ]}];
+  const idleEnv = makeEnv(null, [], release.id, {changes});
+  const idleEntry = await freshEntry();
+  const management = new idleEntry.Management(idleEnv, {});
+  const ready = await management.fetch(new Request('http://pod/ready'));
+  assert.equal(ready.status, 200);
+  const priv = new idleEntry.Private(idleEnv, {});
+  let switched = false;
+  for (let i = 0; i < 60; i++) {
+    const r = await call(priv, '/');
+    if (r.headers.get('x-krun-release') === 'rel_idle') {
+      switched = true;
+      break;
+    }
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.ok(switched, 'idle Pod never applied the incremental revision');
 });
 
 console.log(failures === 0 ? 'ALL RUNTIME CHECKS PASSED' : failures + ' CHECK(S) FAILED');

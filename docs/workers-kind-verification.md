@@ -42,10 +42,10 @@
 | 16 | 完成后的控制服务重启 | 发布历史保留，业务可恢复调用 |
 | 17 | 构建执行时重启 | 同一个持久化 Build / Job 被继续处理 |
 | 18 | 发布执行时重启 | 原 Operation 完成 available；后续历史回滚成功 |
-| 19 | 已提交但管理同步受阻 | 保持 committed；接受历史回滚；恢复连接后回滚 available |
-| 20 | 替换 runtime Pod | 新 Pod 从对象制品加载当前 Release，readiness 后经 Gateway 正常响应 |
+| 19 | 已提交但配置同步受阻 | 保持 committed；接受历史回滚；恢复连接后回滚 available |
+| 20 | 替换 runtime Pod | 新 Pod 从对象存储 bootstrap 配置视图与对象制品，readiness 后经 Gateway 正常响应 |
 
-第 19 项在 backend Pod 的独立 network namespace 内临时拒绝 TCP 8083 出口，覆盖已建立连接，随后删除规则。原操作在阻断期间没有被错误标记 available；解除阻断后，原操作先完成同步，所以最终状态是 `available`，之后历史版本回滚也完成。这是允许的时序：只有在新回滚提交时仍未完成确认的原操作才会成为 `superseded`。
+第 19 项在 backend Pod 的独立 network namespace 内临时拒绝到达 internal listener 9001 的入站请求（覆盖配置增量流与 ack），随后删除规则。原操作在阻断期间没有被错误标记 available；解除阻断后，runtime 追上配置 revision，所以最终状态是 `available`，之后历史版本回滚也完成。这是允许的时序：只有在新回滚提交时仍未完成确认的原操作才会成为 `superseded`。
 
 ## 一份实际制品
 

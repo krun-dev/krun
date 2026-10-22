@@ -3,8 +3,10 @@ package control
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"net/http"
 	"sort"
+	"strconv"
 	"time"
 )
 
@@ -14,70 +16,120 @@ func (s *Server) workerRuntimeAllowed(r *http.Request) bool {
 func (s *Server) workerRuntimeError(w http.ResponseWriter, r *http.Request, e error) {
 	s.writeError(w, r, e)
 }
-func (s *Server) workerRuntimeSnapshot(w http.ResponseWriter, r *http.Request) {
+
+// workerRuntimeConfigSnapshot is the bootstrap fallback. Runtimes normally read
+// the immutable snapshot from object storage; this endpoint keeps a new Pod
+// bootstrappable when object storage is unreachable but the control plane is up.
+func (s *Server) workerRuntimeConfigSnapshot(w http.ResponseWriter, r *http.Request) {
 	if !s.workerRuntimeAllowed(r) {
 		s.writeError(w, r, forbidden())
 		return
 	}
-	var out any
-	e := s.Store.Update(r.Context(), func(st *State) error {
-		routes := []map[string]any{}
-		releases := map[string]WorkerRelease{}
-		for id, ws := range st.Workers.Services {
-			resource, ok := st.Resources[id]
-			if !ok || resource.Kind != "service" || resource.Organization != ws.Organization {
-				continue
-			}
-			if _, ok := st.Organizations[ws.Organization]; !ok {
-				continue
-			}
-			for _, env := range ws.Environments {
-				routes = append(routes, map[string]any{"host": env.Host, "path": "/", "scopes": []string{"private"}, "enabled": env.Enabled, "release": env.Release})
-			}
-		}
-		for id, d := range st.Workers.Releases {
-			if _, ok := st.Resources[d.Service]; ok && d.Pool == "default" {
-				releases[id] = d
-			}
-		}
-		out = map[string]any{"pool": "default", "revision": st.Workers.Revision, "validUntil": now().Add(5 * time.Second).UnixMilli(), "routes": routes, "releases": releases}
-		return nil
-	})
+	latest, ok, e := s.Store.LatestConfigRevision(r.Context())
 	if e != nil {
 		s.writeError(w, r, e)
 		return
 	}
-	s.json(w, 200, out)
+	if !ok {
+		s.json(w, 200, map[string]any{"pool": "default", "config_revision": 0, "routes": []workerConfigRoute{}, "releases": map[string]WorkerRelease{}})
+		return
+	}
+	var projection workerConfigProjection
+	if e := json.Unmarshal(latest.Payload, &projection); e != nil {
+		s.writeError(w, r, e)
+		return
+	}
+	s.json(w, 200, map[string]any{"pool": "default", "config_revision": latest.Revision, "routes": projection.Routes, "releases": projection.Releases})
 }
-func (s *Server) workerRuntimeRelease(w http.ResponseWriter, r *http.Request) {
+
+// workerRuntimeConfigChanges is the incremental feed. since=0 means bootstrap
+// from the snapshot. Responses: 200 batch, 204 timeout, 409 resync.
+func (s *Server) workerRuntimeConfigChanges(w http.ResponseWriter, r *http.Request) {
 	if !s.workerRuntimeAllowed(r) {
 		s.writeError(w, r, forbidden())
 		return
 	}
-	var out WorkerRelease
-	e := s.Store.Update(r.Context(), func(st *State) error {
-		d, ok := st.Workers.Releases[r.PathValue("release")]
-		if !ok || d.Pool != "default" {
-			return notFound()
+	since, e := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+	if e != nil || since < 0 {
+		s.writeError(w, r, problem(422, "CONFIG_SINCE_INVALID", "since must be a non-negative revision"))
+		return
+	}
+	wait := 5 * time.Second
+	if raw := r.URL.Query().Get("wait"); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 && parsed <= 25*time.Second {
+			wait = parsed
 		}
-		if _, ok := st.Resources[d.Service]; !ok {
-			return notFound()
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		revisions, floor, err := s.Store.ConfigRevisionsSince(r.Context(), since, 100)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
 		}
-		out = d
-		return nil
-	})
+		if since > 0 && since < floor {
+			s.workerConfigResync(w, r)
+			return
+		}
+		if len(revisions) > 0 {
+			if since == 0 || revisions[0].Revision != since+1 {
+				s.workerConfigResync(w, r)
+				return
+			}
+			ops := []json.RawMessage{}
+			for _, revision := range revisions {
+				batch := []json.RawMessage{}
+				if err := json.Unmarshal(revision.Ops, &batch); err != nil {
+					s.writeError(w, r, err)
+					return
+				}
+				ops = append(ops, batch...)
+			}
+			if len(ops) > 2000 {
+				s.workerConfigResync(w, r)
+				return
+			}
+			s.json(w, 200, map[string]any{"from": since, "to": revisions[len(revisions)-1].Revision, "ops": ops})
+			return
+		}
+		if time.Now().After(deadline) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		notify := s.Store.ConfigNotify()
+		tick := time.Second
+		if remaining := time.Until(deadline); remaining < tick {
+			tick = remaining
+		}
+		if tick <= 0 {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		select {
+		case <-notify:
+		case <-time.After(tick):
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+func (s *Server) workerConfigResync(w http.ResponseWriter, r *http.Request) {
+	latest, _, e := s.Store.ConfigState(r.Context())
 	if e != nil {
 		s.writeError(w, r, e)
 		return
 	}
-	s.json(w, 200, out)
+	s.json(w, 409, map[string]any{"code": "RESYNC", "config_revision": latest})
 }
-func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {	if !s.workerRuntimeAllowed(r) {
+
+func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {
+	if !s.workerRuntimeAllowed(r) {
 		s.writeError(w, r, forbidden())
 		return
 	}
 	var out WorkerArtifact
-	e := s.Store.Update(r.Context(), func(st *State) error {
+	e := s.Store.View(r.Context(), func(st *State) error {
 		a, ok := st.Workers.Artifacts[r.PathValue("artifact")]
 		if !ok || a.State != "finalized" {
 			return notFound()
@@ -130,20 +182,8 @@ func (s *Server) workerRuntimeAck(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, problem(422, "ACK_INVALID", "Pod UID and pool required"))
 		return
 	}
-	e := s.Store.Update(r.Context(), func(st *State) error {
-		if in.Revision != st.Workers.Revision {
-			return problem(409, "REVISION_CONFLICT", "Snapshot revision changed")
-		}
-		in.Time = now()
-		st.Workers.Acks[in.UID] = in
-		for id, ack := range st.Workers.Acks {
-			if now().Sub(ack.Time) > time.Minute {
-				delete(st.Workers.Acks, id)
-			}
-		}
-		return nil
-	})
-	if e != nil {
+	in.Time = now()
+	if e := s.Store.RecordAck(r.Context(), in); e != nil {
 		s.writeError(w, r, e)
 		return
 	}
@@ -159,7 +199,7 @@ type workerReleaseAssets struct {
 
 func (w *workersController) releaseAssets(ctx context.Context, releaseID string) (workerReleaseAssets, error) {
 	var out workerReleaseAssets
-	e := w.server.Store.Update(ctx, func(st *State) error {
+	e := w.server.Store.View(ctx, func(st *State) error {
 		rel, ok := st.Workers.Releases[releaseID]
 		if !ok || rel.Pool != "default" || st.Resources[rel.Service].ID == "" {
 			return notFound()

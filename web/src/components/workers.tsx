@@ -602,18 +602,18 @@ function WorkerDetail({
             <div className="flex items-center justify-between gap-2">
               {e.release_id && env?.enabled ? (
                 <a
-                  href={workerURL(e.host)}
+                  href={workerURL(e.external_host || e.host)}
                   target="_blank"
                   rel="noreferrer"
                   className="inline-flex items-center gap-1 break-all text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
                   onClick={(event) => event.stopPropagation()}
                 >
-                  {e.host}
+                  {e.external_host || e.host}
                   <ArrowUpRight size={11} className="shrink-0" />
                 </a>
               ) : (
                 <code className="break-all text-[11px] text-muted-foreground">
-                  {e.host}
+                  {e.external_host || e.host}
                 </code>
               )}
               {e.name !== "production" ? (
@@ -1273,12 +1273,12 @@ function Invocation({ base, env }: { base: string; env: Environment }) {
           </h3>
           <p className="mt-1 break-all text-xs text-muted-foreground">
             <a
-              href={workerURL(env.host)}
+              href={workerURL(env.external_host || env.host)}
               target="_blank"
               rel="noreferrer"
               className="underline decoration-dotted underline-offset-2 hover:text-foreground"
             >
-              {env.host}
+              {env.external_host || env.host}
             </a>
           </p>
         </div>

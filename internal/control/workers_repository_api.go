@@ -12,10 +12,12 @@ type workerServiceSummary struct {
 }
 
 type WorkerEnvironmentSummary struct {
-	Name       string `json:"name"`
-	Enabled    bool   `json:"enabled"`
-	Release    string `json:"release_id,omitempty"`
-	Confirmed  string `json:"confirmed_release_id,omitempty"`
+	Name         string `json:"name"`
+	Host         string `json:"host,omitempty"`
+	ExternalHost string `json:"external_host,omitempty"`
+	Enabled      bool   `json:"enabled"`
+	Release      string `json:"release_id,omitempty"`
+	Confirmed    string `json:"confirmed_release_id,omitempty"`
 }
 
 func (s *Server) workerServiceList(st *State, p Principal, r *http.Request) (any, int, error) {
@@ -60,7 +62,7 @@ func (s *Server) workerServiceList(st *State, p Principal, r *http.Request) (any
 			}
 			visible = true
 			if current, exists := service.Environments[env]; exists {
-				summary.Environments = append(summary.Environments, WorkerEnvironmentSummary{env, current.Enabled, current.Release, current.Confirmed})
+				summary.Environments = append(summary.Environments, WorkerEnvironmentSummary{Name: env, Host: current.Host, ExternalHost: s.Config.Workers.ExternalHost(current.Host), Enabled: current.Enabled, Release: current.Release, Confirmed: current.Confirmed})
 			}
 		}
 		if visible {
