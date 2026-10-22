@@ -1,1 +1,1 @@
-{"name":"krun-worker-runtime","version":"1.0.0","private":true,"type":"module","dependencies":{"workerd":"1.20260928.1"}}
+{"name":"krun-worker-runtime","version":"1.0.0","private":true,"type":"module","dependencies":{"workerd":"1.20260928.1"},"scripts":{"test":"node test/decision-flow.test.mjs"}}

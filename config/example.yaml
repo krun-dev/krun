@@ -5,6 +5,8 @@
 listen: 0.0.0.0:8080
 public_url: https://console.example.com
 development: false
+# 允许任何已登录用户创建组织（默认 false：仅系统管理员）
+organization_self_service: false
 db: ${KRUN_DATABASE_URL}
 static_dir: dist
 

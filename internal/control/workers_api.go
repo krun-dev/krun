@@ -20,6 +20,7 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET "+base+"/repository", s.protected(false, s.workerRepositoryGet))
 	m.HandleFunc("PUT "+base+"/repository", s.protected(false, s.workerRepositoryUpdate))
 	m.HandleFunc("POST "+base+"/builds", s.protected(false, s.workerBuildCreate))
+	m.HandleFunc("POST "+base+"/source-uploads", s.protected(false, s.workerSourceUploadCreate))
 	m.HandleFunc("GET "+base+"/builds", s.protected(false, s.workerBuildList))
 	m.HandleFunc("GET "+base+"/builds/{build}", s.protected(false, s.workerBuildGet))
 	m.HandleFunc("GET "+base+"/builds/{build}/logs", s.protected(false, s.workerBuildLogs))
@@ -120,13 +121,15 @@ func workerRemember(st *State, key string, in any, id string) {
 }
 func (s *Server) workerBuildCreate(st *State, p Principal, r *http.Request) (any, int, error) {
 	var in struct {
-		SourceType         string            `json:"source_type"`
-		RepositoryRevision *int              `json:"repository_revision"`
-		Ref                string            `json:"ref"`
-		Environment        string            `json:"environment"`
-		Entrypoint         string            `json:"entrypoint"`
-		Files              map[string]string `json:"files"`
-		Key                string            `json:"idempotency_key"`
+		SourceType         string              `json:"source_type"`
+		RepositoryRevision *int                `json:"repository_revision"`
+		Ref                string              `json:"ref"`
+		Environment        string              `json:"environment"`
+		Entrypoint         string              `json:"entrypoint"`
+		Files              map[string]string   `json:"files"`
+		SourceUpload       string              `json:"source_upload"`
+		Assets             *WorkerAssetsConfig `json:"assets,omitempty"`
+		Key                string              `json:"idempotency_key"`
 	}
 	if e := body(r, &in); e != nil {
 		return nil, 0, e
@@ -136,6 +139,9 @@ func (s *Server) workerBuildCreate(st *State, p Principal, r *http.Request) (any
 	}
 	if !workerEnvValid(in.Environment) || in.Key == "" || len(in.Key) > 128 {
 		return nil, 0, problem(422, "WORKER_BUILD_INVALID", "Valid environment and idempotency_key required")
+	}
+	if e := validateWorkerAssets(in.Assets); e != nil {
+		return nil, 0, e
 	}
 	t, e := s.workerTarget(st, r, in.Environment, "build.start", p)
 	if e != nil {
@@ -163,7 +169,7 @@ func (s *Server) workerBuildCreate(st *State, p Principal, r *http.Request) (any
 		if in.RepositoryRevision == nil || *in.RepositoryRevision != ws.RepositoryRevision {
 			return nil, 0, problem(409, "REVISION_CONFLICT", "Repository configuration changed")
 		}
-		if ws.Repository == nil || len(in.Files) != 0 || in.Entrypoint != "" {
+		if ws.Repository == nil || len(in.Files) != 0 || in.Entrypoint != "" || in.SourceUpload != "" {
 			return nil, 0, problem(422, "WORKER_REPOSITORY_INVALID", "Connect a repository before starting a repository build")
 		}
 		source := *ws.Repository
@@ -178,8 +184,22 @@ func (s *Server) workerBuildCreate(st *State, p Principal, r *http.Request) (any
 		if in.Ref != "" {
 			return nil, 0, problem(422, "WORKER_BUILD_INVALID", "A ref is only supported for repository builds")
 		}
-		if err := sourceValid(in.Entrypoint, in.Files); err != nil {
-			return nil, 0, err
+		if in.SourceUpload != "" {
+			// Assets (up to 20 MiB) cannot travel through the JSON request body,
+			// so clients upload one source bundle and reference it here.
+			if !validWorkerSourceUpload(t.Organization, in.SourceUpload) {
+				return nil, 0, problem(422, "WORKER_BUILD_INVALID", "source_upload must reference an uploaded source bundle")
+			}
+			if len(in.Files) != 0 || in.Entrypoint == "" {
+				return nil, 0, problem(422, "WORKER_BUILD_INVALID", "source_upload requires entrypoint and no inline files")
+			}
+		} else {
+			if in.Assets != nil {
+				return nil, 0, problem(422, "WORKER_BUILD_INVALID", "assets require a source bundle; upload it first and pass source_upload")
+			}
+			if err := sourceValid(in.Entrypoint, in.Files); err != nil {
+				return nil, 0, err
+			}
 		}
 	default:
 		return nil, 0, problem(422, "WORKER_BUILD_INVALID", "Use repository or upload as source_type")
@@ -195,16 +215,34 @@ func (s *Server) workerBuildCreate(st *State, p Principal, r *http.Request) (any
 	}
 	raw, _ := json.Marshal(in.Files)
 	id = randomID("bld")
-	b := WorkerBuild{ID: id, Organization: t.Organization, Service: t.ID, Environment: in.Environment, State: "queued", Entrypoint: in.Entrypoint, SourceDigest: bytesDigest(raw), Profile: workerProfile, Job: "krun-build-" + digest(id)[:24], Created: now()}
+	b := WorkerBuild{ID: id, Organization: t.Organization, Service: t.ID, Environment: in.Environment, State: "queued", Entrypoint: in.Entrypoint, SourceDigest: bytesDigest(raw), Profile: workerProfile, Job: "krun-build-" + digest(id)[:24], Assets: in.Assets, Created: now()}
+	if in.SourceUpload != "" {
+		b.SourceDigest = ""
+	}
 	if repository != nil {
 		b.Repository = repository
 		b.Entrypoint = repository.Entrypoint
 		b.SourceDigest = ""
 	}
 	st.Workers.Builds[id] = b
-	st.Workers.BuildPrivate[id] = WorkerBuildPrivate{Actor: workerActor(p), Files: in.Files}
+	st.Workers.BuildPrivate[id] = WorkerBuildPrivate{Actor: workerActor(p), Files: in.Files, SourceKey: in.SourceUpload}
 	workerRemember(st, key, in, id)
 	return b, 202, nil
+}
+
+// Clients upload a source bundle (src/ + assets/) with the returned URL, then
+// reference the key in POST /builds. Signing is offline; the upload goes
+// directly to object storage.
+func (s *Server) workerSourceUploadCreate(st *State, p Principal, r *http.Request) (any, int, error) {
+	t, e := s.workerCollectionTarget(st, r, "build.start", p)
+	if e != nil {
+		return nil, 0, e
+	}
+	key, url, e := s.workers.sourceUploadURL(r.Context(), t.Organization)
+	if e != nil {
+		return nil, 0, problem(503, "SOURCE_UPLOAD_UNAVAILABLE", "Source storage unavailable")
+	}
+	return map[string]any{"source_upload": key, "upload_url": url, "expires_in": 900}, 201, nil
 }
 func (s *Server) workerBuildList(st *State, p Principal, r *http.Request) (any, int, error) {
 	t, e := s.workerCollectionTarget(st, r, "service.version.read", p)
@@ -250,7 +288,15 @@ func (s *Server) workerBuildSource(st *State, p Principal, r *http.Request) (any
 	if e != nil {
 		return nil, 0, e
 	}
-	return map[string]any{"entrypoint": b.Entrypoint, "files": st.Workers.BuildPrivate[b.ID].Files}, 200, nil
+	private := st.Workers.BuildPrivate[b.ID]
+	if private.SourceKey != "" {
+		url, e := s.workers.sourceBundleURL(r.Context(), private.SourceKey)
+		if e != nil {
+			return nil, 0, problem(503, "SOURCE_UNAVAILABLE", "Source storage unavailable")
+		}
+		return map[string]any{"entrypoint": b.Entrypoint, "download_url": url}, 200, nil
+	}
+	return map[string]any{"entrypoint": b.Entrypoint, "files": private.Files}, 200, nil
 }
 func (s *Server) workerEnvironments(st *State, p Principal, r *http.Request) (any, int, error) {
 	t, e := s.workerCollectionTarget(st, r, "service.read", p)

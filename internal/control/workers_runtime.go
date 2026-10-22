@@ -1,8 +1,10 @@
 package control
 
 import (
+	"context"
 	"crypto/subtle"
 	"net/http"
+	"sort"
 	"time"
 )
 
@@ -70,8 +72,7 @@ func (s *Server) workerRuntimeRelease(w http.ResponseWriter, r *http.Request) {
 	}
 	s.json(w, 200, out)
 }
-func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {
-	if !s.workerRuntimeAllowed(r) {
+func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {	if !s.workerRuntimeAllowed(r) {
 		s.writeError(w, r, forbidden())
 		return
 	}
@@ -147,4 +148,104 @@ func (s *Server) workerRuntimeAck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.json(w, 200, map[string]bool{"ok": true})
+}
+
+type workerReleaseAssets struct {
+	Release  WorkerRelease
+	Artifact WorkerArtifact
+	Config   *WorkerAssetsConfig
+	Files    []workerManifestFile
+}
+
+func (w *workersController) releaseAssets(ctx context.Context, releaseID string) (workerReleaseAssets, error) {
+	var out workerReleaseAssets
+	e := w.server.Store.Update(ctx, func(st *State) error {
+		rel, ok := st.Workers.Releases[releaseID]
+		if !ok || rel.Pool != "default" || st.Resources[rel.Service].ID == "" {
+			return notFound()
+		}
+		art, ok := st.Workers.Artifacts[rel.Artifact]
+		if !ok || art.State != "finalized" {
+			return notFound()
+		}
+		out.Release, out.Artifact = rel, art
+		return nil
+	})
+	if e != nil {
+		return out, e
+	}
+	w.assetMu.RLock()
+	cached, ok := w.assetCache[out.Artifact.ID]
+	w.assetMu.RUnlock()
+	if ok {
+		out.Config, out.Files = cached.Config, cached.Files
+		return out, nil
+	}
+	code, e := w.artifactCode(ctx, out.Artifact)
+	if e != nil {
+		return out, e
+	}
+	manifest := workerCachedAssets{Config: code.Assets}
+	for name, meta := range code.AssetFiles {
+		manifest.Files = append(manifest.Files, workerManifestFile{Path: name, Digest: meta.Digest, Size: meta.Size, ContentType: meta.ContentType})
+	}
+	sort.Slice(manifest.Files, func(i, j int) bool { return manifest.Files[i].Path < manifest.Files[j].Path })
+	w.assetMu.Lock()
+	if len(w.assetCache) >= 256 {
+		w.assetCache = map[string]workerCachedAssets{}
+	}
+	w.assetCache[out.Artifact.ID] = manifest
+	w.assetMu.Unlock()
+	out.Config, out.Files = manifest.Config, manifest.Files
+	return out, nil
+}
+
+func (s *Server) workerRuntimeReleaseAssets(w http.ResponseWriter, r *http.Request) {
+	if !s.workerRuntimeAllowed(r) {
+		s.writeError(w, r, forbidden())
+		return
+	}
+	assets, e := s.workers.releaseAssets(r.Context(), r.PathValue("release"))
+	if e != nil {
+		s.writeError(w, r, e)
+		return
+	}
+	s.json(w, 200, map[string]any{"release_id": assets.Release.ID, "config": assets.Config, "files": assets.Files})
+}
+
+func (s *Server) workerRuntimeReleaseAssetURL(w http.ResponseWriter, r *http.Request) {
+	if !s.workerRuntimeAllowed(r) {
+		s.writeError(w, r, forbidden())
+		return
+	}
+	assets, e := s.workers.releaseAssets(r.Context(), r.PathValue("release"))
+	if e != nil {
+		s.writeError(w, r, e)
+		return
+	}
+	name := r.PathValue("path")
+	var file *workerManifestFile
+	for i := range assets.Files {
+		if assets.Files[i].Path == name {
+			file = &assets.Files[i]
+			break
+		}
+	}
+	if file == nil {
+		s.writeError(w, r, notFound())
+		return
+	}
+	key := workerAssetObjectKey("pub", assets.Release.Organization, assets.Release.Service, assets.Artifact.ArchiveDigest, name)
+	signed, e := s.workers.s3Builder.PresignedGetObject(r.Context(), s.workers.config.S3Bucket, key, 15*time.Minute, nil)
+	if e != nil {
+		s.writeError(w, r, problem(503, "ASSET_UNAVAILABLE", "Asset storage unavailable"))
+		return
+	}
+	s.json(w, 200, map[string]any{
+		"path":         file.Path,
+		"sha256":       file.Digest,
+		"size_bytes":   file.Size,
+		"content_type": file.ContentType,
+		"download_url": signed.String(),
+	})
 }

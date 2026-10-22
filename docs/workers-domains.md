@@ -41,7 +41,7 @@
 - **host 命名模型**（第 3 节）：URL 空间完全一致，切模式对用户零感知，两套可并行灰度切流。
 - **runtime 快照分发**（第 6 节）：host → release 的最终寻址始终在 runtime，边缘只负责把正确 host 的流量送到正确 pool。
 - **安全不变量**（第 7 节）：未知 host 404；客户端伪造的内部头在边缘剥除；内网 host 不出现在公网入口的路由上；未获批域名不生成任何 host。
-- **边缘不带内容相关的 path 规则**：HTTPRoute 与 workers-router 都只按 host 整域转发；路径级分流（静态资产 vs 业务 Worker）由 Pod 内入口 Worker 承担，见 [workers-assets.md](workers-assets.md)。唯一例外是可选的「指纹前缀静态卸载」（内容无关的精确前缀直转公开 bucket，见 assets 5.4）。
+- **边缘不带内容相关的 path 规则**：主域的 HTTPRoute 与 workers-router 都只按 host 整域转发；路径级分流（静态资产 vs 业务 Worker）由 Pod 内入口 Worker 承担，见 [workers-assets.md](workers-assets.md)。静态字节走独立静态域（每条路由只按 host 匹配，路径仅做前缀改写），见 assets 第 6 节。
 
 ## 3. 域名模型
 

@@ -120,6 +120,7 @@ export default function App() {
   const [me, setMe] = useState<Me | null>(null),
     [providers, setProviders] = useState<Provider[]>([]),
     [development, setDevelopment] = useState(false),
+    [orgSelfService, setOrgSelfService] = useState(false),
     [loading, setLoading] = useState(true),
     [fatal, setFatal] = useState("");
   const [orgs, setOrgs] = useState<Organization[]>([]),
@@ -149,7 +150,11 @@ export default function App() {
   useEffect(() => {
     let active = true;
     Promise.all([
-      api<{ providers: Provider[]; development: boolean }>("/api/auth/providers"),
+      api<{
+        providers: Provider[];
+        development: boolean;
+        organization_self_service?: boolean;
+      }>("/api/auth/providers"),
       api<Me>("/api/auth/me").catch((e) => {
         if (e instanceof APIError && e.status === 401) return null;
         throw e;
@@ -159,6 +164,7 @@ export default function App() {
         if (active) {
           setProviders(p.providers);
           setDevelopment(p.development);
+          setOrgSelfService(Boolean(p.organization_self_service));
           setMe(u);
           setLoading(false);
         }
@@ -207,6 +213,9 @@ export default function App() {
       setSaving(false);
     }
   }
+  // Creation is allowed for system admins always, and for everyone else only
+  // when the server enables self-service organizations.
+  const canCreateOrg = Boolean(me?.system_admin) || orgSelfService;
   const org = orgs.find((o) => o.id === scope),
     system = systemView,
     scopeName = systemView ? t("平台管理") : (org?.name ?? t("选择组织"));
@@ -538,14 +547,20 @@ export default function App() {
             </CardContent>
           </Card>
         )}
-        {section === "overview" ? (
+        {orgs.length === 0 && !system ? (
+          <NoOrganization
+            canCreate={canCreateOrg}
+            onCreate={() => setOrgDialog(true)}
+            userId={me.user.user_id}
+          />
+        ) : section === "overview" ? (
           <>
             <PageHeader
               eyebrow={t("Workspace overview")}
               title={t("组织概览")}
               description={t("从这里管理团队身份、访问权限与自动化凭据。")}
               action={
-                me.system_admin ? (
+                canCreateOrg ? (
                   <Button onClick={() => setOrgDialog(true)}>
                     <Plus size={16} />
                     {t("创建组织")}
@@ -677,9 +692,10 @@ export default function App() {
         ) : section === "users" ? (
           <UsersPage notify={notify} refresh={refresh} reload={reload} />
         ) : !scope ? (
-          <Empty
-            title={t("请先选择一个组织")}
-            description={t("加入组织并获得角色后，即可管理此组织。")}
+          <NoOrganization
+            canCreate={canCreateOrg}
+            onCreate={() => setOrgDialog(true)}
+            userId={me.user.user_id}
           />
         ) : ["members", "groups", "roles"].includes(section) ? (
           <IAMPage
@@ -766,6 +782,57 @@ export default function App() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// Shown when the signed-in user has no organization yet. Every section is empty
+// in that state, so this explains it and offers the one useful action.
+function NoOrganization({
+  canCreate,
+  onCreate,
+  userId,
+}: {
+  canCreate: boolean;
+  onCreate: () => void;
+  userId: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <section className="mx-auto grid max-w-2xl gap-5 py-10">
+      <div className="rounded-lg border border-dashed p-10 text-center">
+        <div className="mx-auto w-fit rounded-lg bg-secondary p-3 text-muted-foreground">
+          <Building2 size={22} />
+        </div>
+        <h2 className="mt-4 text-lg font-semibold">
+          {t("你还没有加入任何组织")}
+        </h2>
+        <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
+          {canCreate
+            ? t("组织是团队协作与权限隔离的边界。创建一个组织开始使用。")
+            : t(
+                "组织是团队协作与权限隔离的边界。请联系管理员邀请你加入现有组织。",
+              )}
+        </p>
+        {canCreate ? (
+          <Button className="mt-5" onClick={onCreate}>
+            <Plus size={16} />
+            {t("创建组织")}
+          </Button>
+        ) : (
+          <div className="mx-auto mt-5 max-w-sm rounded-md border bg-card p-4 text-left">
+            <p className="text-xs font-medium text-muted-foreground">
+              {t("把你的用户 ID 提供给管理员")}
+            </p>
+            <code className="mt-1.5 block break-all text-xs">{userId}</code>
+          </div>
+        )}
+      </div>
+      {canCreate ? (
+        <p className="text-center text-xs text-muted-foreground">
+          {t("创建后你会自动成为该组织的管理员。")}
+        </p>
+      ) : null}
+    </section>
   );
 }
 

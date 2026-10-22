@@ -11,6 +11,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/minio/minio-go/v7"
 )
 
 func repositoryTestProviders() []WorkerRepositoryProvider {
@@ -170,7 +172,7 @@ func TestGitLabRepositoryCommitAndArchive(t *testing.T) {
 	if err != nil || resolved != commit {
 		t.Fatal(resolved, err)
 	}
-	files, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{source, resolved}, provider.Token)
+	files, _, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{source, resolved}, provider.Token, nil)
 	if err != nil || len(files) != 1 || !strings.Contains(files["index.ts"], "gitlab") || len(requests) != 2 {
 		t.Fatal(files, err, requests)
 	}
@@ -206,14 +208,14 @@ func TestGitHubRepositoryRedirectCredentialIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{source, resolved}, provider.Token)
+	files, _, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{source, resolved}, provider.Token, nil)
 	if err != nil || len(files) != 1 || downloads != 1 {
 		t.Fatal(files, err, downloads)
 	}
 	s.workerRepositoryClient.Transport = invokeRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 302, Header: http.Header{"Location": []string{"https://attacker.test/archive"}}, Body: io.NopCloser(strings.NewReader(""))}, nil
 	})
-	if _, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{source, resolved}, provider.Token); err == nil {
+	if _, _, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{source, resolved}, provider.Token, nil); err == nil {
 		t.Fatal("external archive redirect accepted")
 	}
 }
@@ -227,7 +229,7 @@ func TestRepositoryArchiveBoundaries(t *testing.T) {
 		{"repo/worker/not-entry.ts": "missing entry"},
 		{"repo/worker/index.ts": string([]byte{0xff})},
 	} {
-		if _, err := extractRepositorySource(repositoryTestArchive(t, files), source); err == nil {
+		if _, _, err := extractRepositorySource(repositoryTestArchive(t, files), source, nil); err == nil {
 			t.Fatal("invalid archive accepted")
 		}
 	}
@@ -237,7 +239,7 @@ func TestRepositoryArchiveBoundaries(t *testing.T) {
 	_ = archive.WriteHeader(&tar.Header{Name: "repo/worker/index.ts", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd"})
 	_ = archive.Close()
 	_ = zip.Close()
-	if _, err := extractRepositorySource(buf.Bytes(), source); err == nil {
+	if _, _, err := extractRepositorySource(buf.Bytes(), source, nil); err == nil {
 		t.Fatal("symlink accepted")
 	}
 }
@@ -275,7 +277,7 @@ func TestRepositoryCommitRemainsPinnedAfterInterruptedDownload(t *testing.T) {
 	})
 	var private WorkerBuildPrivate
 	_ = store.Update(context.Background(), func(st *State) error { private = st.Workers.BuildPrivate[build.ID]; return nil })
-	controller := &workersController{server: s}
+	controller := &workersController{server: s, config: s.Config.Workers, putObject: func(context.Context, string, string, io.Reader, int64, minio.PutObjectOptions) (minio.UploadInfo, error) { return minio.UploadInfo{}, nil }}
 	if _, _, err := controller.prepareRepositoryBuild(context.Background(), build, private); err == nil {
 		t.Fatal("failed archive download was accepted")
 	}
@@ -284,7 +286,7 @@ func TestRepositoryCommitRemainsPinnedAfterInterruptedDownload(t *testing.T) {
 		t.Fatal("commit was not persisted before archive download")
 	}
 	result, input, err := controller.prepareRepositoryBuild(context.Background(), build, private)
-	if err != nil || resolutions != 1 || downloads != 2 || result.SourceDigest == "" || len(input.Files) != 1 {
+	if err != nil || resolutions != 1 || downloads != 2 || result.SourceDigest == "" || input.SourceKey == "" || input.Files != nil {
 		t.Fatal(result, err, resolutions, downloads)
 	}
 	if strings.Contains(input.Log, "private-test-token") {
@@ -333,7 +335,7 @@ func TestRepositoryArchiveGitHubGlobalPAXHeader(t *testing.T) {
 	if err := zip.Close(); err != nil {
 		t.Fatal(err)
 	}
-	files, err := extractRepositorySource(buf.Bytes(), WorkerBuildRepository{WorkerRepositorySource: WorkerRepositorySource{RootDirectory: "src", Entrypoint: "index.ts"}})
+	files, _, err := extractRepositorySource(buf.Bytes(), WorkerBuildRepository{WorkerRepositorySource: WorkerRepositorySource{RootDirectory: "src", Entrypoint: "index.ts"}}, nil)
 	if err != nil || files["index.ts"] != code {
 		t.Fatal(files, err)
 	}

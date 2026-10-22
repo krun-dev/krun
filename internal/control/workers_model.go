@@ -29,6 +29,17 @@ type WorkersConfig struct {
 	S3AccessKey         string                     `json:"s3_access_key"`
 	S3SecretKey         string                     `json:"s3_secret_key"`
 	PreviewLimit        int                        `json:"preview_limit"`
+	StaticDomain        string                     `json:"static_domain"`
+	StaticInternalDomain string                    `json:"static_internal_domain"`
+	StaticService       string                     `json:"static_service"`
+	StaticServicePort   int                        `json:"static_service_port"`
+}
+
+type WorkerAssetsConfig struct {
+	Directory        string   `json:"directory"`
+	RunWorkerFirst   []string `json:"run_worker_first,omitempty"`
+	NotFoundHandling string   `json:"not_found_handling,omitempty"`
+	HTMLHandling     string   `json:"html_handling,omitempty"`
 }
 
 func (c *WorkersConfig) validate() error {
@@ -93,6 +104,20 @@ func (c *WorkersConfig) validate() error {
 	if c.PreviewLimit < 1 || c.PreviewLimit > 128 {
 		return fmt.Errorf("preview_limit must be between 1 and 128")
 	}
+	if c.StaticDomain == "" {
+		c.StaticDomain = "static." + c.Domain
+	}
+	if c.StaticService == "" {
+		c.StaticService = "static-assets"
+	}
+	if c.StaticServicePort == 0 {
+		c.StaticServicePort = 9000
+	}
+	for _, v := range []string{c.StaticDomain, c.StaticInternalDomain, c.StaticService} {
+		if v != "" && !dns.MatchString(v) {
+			return fmt.Errorf("invalid Workers static domain or service")
+		}
+	}
 	return nil
 }
 
@@ -103,6 +128,7 @@ type WorkerActor struct {
 }
 type WorkerBuild struct {
 	Repository   *WorkerBuildRepository `json:"repository_source,omitempty"`
+	Assets       *WorkerAssetsConfig    `json:"assets,omitempty"`
 	ID           string                 `json:"id"`
 	Organization string                 `json:"organization_id"`
 	Service      string                 `json:"service_id"`
@@ -120,9 +146,10 @@ type WorkerBuild struct {
 
 // Private job inputs and credentials are not returned by Build APIs.
 type WorkerBuildPrivate struct {
-	Actor WorkerActor
-	Files map[string]string
-	Log   string
+	Actor     WorkerActor
+	SourceKey string
+	Files     map[string]string
+	Log       string
 }
 type WorkerArtifact struct {
 	ID              string    `json:"id"`

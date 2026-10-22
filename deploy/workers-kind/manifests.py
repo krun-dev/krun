@@ -14,13 +14,13 @@ items.append({'apiVersion':'v1','kind':'Namespace','metadata':{'name':ns,'labels
 items.append(resource('Secret','workers-credentials',stringData={'KRUN_DATABASE_URL':f'postgres://postgres:{credentials["db_password"]}@postgres:5432/postgres?sslmode=disable','POSTGRES_PASSWORD':credentials['db_password'],'KRUN_S3_ACCESS':credentials['s3_access'],'KRUN_S3_SECRET':credentials['s3_secret'],'KRUN_RUNTIME_TOKEN':credentials['runtime_token'],'KRUN_MANAGEMENT_TOKEN':credentials['management_token'],'MINIO_ROOT_USER':credentials['s3_access'],'MINIO_ROOT_PASSWORD':credentials['s3_secret']}))
 def claim(name,size):items.append(resource('PersistentVolumeClaim',name,spec={'accessModes':['ReadWriteOnce'],'resources':{'requests':{'storage':size}}}))
 claim('postgres-data','1Gi');claim('minio-data','1Gi')
-def service(name,ports):items.append(resource('Service',name,spec={'selector':{'app':name},'ports':[{'name':f'p{p}','port':p,'targetPort':p} for p in ports]}))
+def service(name,ports,selector=None):items.append(resource('Service',name,spec={'selector':selector or {'app':name},'ports':[{'name':f'p{p}','port':p,'targetPort':p} for p in ports]}))
 def deployment(name,containers,replicas=1,labels=None,**spec):items.append(resource('Deployment',name,apiVersion='apps/v1',spec={'replicas':replicas,'selector':{'matchLabels':{'app':name}},'template':{'metadata':{'labels':{'app':name,**(labels or {})}},'spec':{'automountServiceAccountToken':False,'containers':containers,**spec}}}))
 def env(name):return {'name':name,'valueFrom':{'secretKeyRef':{'name':'workers-credentials','key':name}}}
 def limits(memory='256Mi',request='64Mi'):return {'requests':{'cpu':'50m','memory':request},'limits':{'cpu':'1','memory':memory}}
 def secure():return {'allowPrivilegeEscalation':False,'readOnlyRootFilesystem':True,'runAsNonRoot':True,'runAsUser':1000,'capabilities':{'drop':['ALL']},'seccompProfile':{'type':'RuntimeDefault'}}
 deployment('postgres',[{'name':'postgres','image':'postgres:18-alpine','imagePullPolicy':'Never','env':[env('POSTGRES_PASSWORD')],'volumeMounts':[{'name':'data','mountPath':'/var/lib/postgresql'}],'readinessProbe':{'exec':{'command':['pg_isready','-U','postgres']},'periodSeconds':2},'resources':limits('1Gi','256Mi')}],volumes=[{'name':'data','persistentVolumeClaim':{'claimName':'postgres-data'}}]);service('postgres',[5432])
-deployment('minio',[{'name':'minio','image':'quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z','imagePullPolicy':'Never','command':['minio','server','/data','--console-address',':9001'],'env':[env('MINIO_ROOT_USER'),env('MINIO_ROOT_PASSWORD')],'volumeMounts':[{'name':'data','mountPath':'/data'}],'readinessProbe':{'httpGet':{'path':'/minio/health/ready','port':9000},'periodSeconds':2},'resources':limits('512Mi')}],volumes=[{'name':'data','persistentVolumeClaim':{'claimName':'minio-data'}}]);service('minio',[9000])
+deployment('minio',[{'name':'minio','image':'quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z','imagePullPolicy':'Never','command':['minio','server','/data','--console-address',':9001'],'env':[env('MINIO_ROOT_USER'),env('MINIO_ROOT_PASSWORD')],'volumeMounts':[{'name':'data','mountPath':'/data'}],'readinessProbe':{'httpGet':{'path':'/minio/health/ready','port':9000},'periodSeconds':2},'resources':limits('512Mi')}],volumes=[{'name':'data','persistentVolumeClaim':{'claimName':'minio-data'}}]);service('minio',[9000]);service('static-assets',[9000],selector={'app':'minio'})
 config='''listen: 0.0.0.0:9000
 internal_listen: 0.0.0.0:9001
 public_url: http://127.0.0.1:4380
@@ -40,6 +40,10 @@ workers:
   gateway_name: workers-mvp
   gateway_namespace: kgateway-system
   domain: workers.test
+  static_domain: static.workers.test
+  static_internal_domain: static.internal.workers.test
+  static_service: static-assets
+  static_service_port: 9000
   runtime_token: ${KRUN_RUNTIME_TOKEN}
   management_token: ${KRUN_MANAGEMENT_TOKEN}
   s3_endpoint: http://minio:9000
@@ -88,7 +92,8 @@ const config :W.Config = (
    (name="POD_NAME",text=embed "/pod/name"),
    (name="POD_UID",text=embed "/pod/uid"),
    (name="RUNTIME_TOKEN",text=embed "/secrets/KRUN_RUNTIME_TOKEN"),
-   (name="MANAGEMENT_TOKEN",text=embed "/secrets/KRUN_MANAGEMENT_TOKEN")
+   (name="MANAGEMENT_TOKEN",text=embed "/secrets/KRUN_MANAGEMENT_TOKEN"),
+   (name="ASSETS_CACHE_MAX",text="67108864")
   ],globalOutbound="storage")),
   (name="platform",external=(address="backend:9001",http=())),
   (name="storage",network=(allow=["10.96.0.0/12","192.168.0.0/16"])),
@@ -120,10 +125,10 @@ else:
 if repository_ips:
  policy('repository-egress',{'app':'backend'},egress=[{'to':[{'ipBlock':{'cidr':ip+('/32' if ':' not in ip else '/128')}} for ip in sorted(repository_ips)],'ports':[tcp(443)]}])
 policy('postgres',{'app':'postgres'},ingress=[{'from':[selector('backend')],'ports':[tcp(5432)]}])
-policy('minio',{'app':'minio'},ingress=[{'from':[selector('backend'),selector('krun-builder'),selector('runtime-default')],'ports':[tcp(9000)]}])
+policy('minio',{'app':'minio'},ingress=[{'from':[selector('backend'),selector('krun-builder'),selector('runtime-default'),selector('tester')],'ports':[tcp(9000)]},{'from':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}},'podSelector':{'matchLabels':{'gateway.networking.k8s.io/gateway-name':'workers-mvp'}}}],'ports':[tcp(9000)]}])
 policy('builder',{'app':'krun-builder'},egress=[{'to':[selector('minio')],'ports':[tcp(9000)]}])
 policy('runtime',{'role':'krun-runtime'},ingress=[{'from':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}},'podSelector':{'matchLabels':{'gateway.networking.k8s.io/gateway-name':'workers-mvp'}}}],'ports':[tcp(8081)]},{'from':[selector('backend')],'ports':[tcp(8083)]}],egress=[{'to':[selector('backend')],'ports':[tcp(9001)]},{'to':[selector('minio')],'ports':[tcp(9000)]}])
-policy('tester',{'app':'tester'},egress=[{'to':[selector('backend')],'ports':[tcp(9000)]},{'to':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}}}],'ports':[tcp(8080)]}])
+policy('tester',{'app':'tester'},egress=[{'to':[selector('backend')],'ports':[tcp(9000)]},{'to':[selector('minio')],'ports':[tcp(9000)]},{'to':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}}}],'ports':[tcp(8080)]}])
 items.append({'apiVersion':'gateway.networking.k8s.io/v1','kind':'Gateway','metadata':{'name':'workers-mvp','namespace':'kgateway-system'},'spec':{'gatewayClassName':'kgateway','listeners':[{'name':'private','port':8080,'protocol':'HTTP','allowedRoutes':{'namespaces':{'from':'Selector','selector':{'matchLabels':{'lab':'krun-workers-mvp'}}}}}]}})
 (out/'manifests.json').write_text(json.dumps({'apiVersion':'v1','kind':'List','items':items},indent=2))
 (out/'manifests.json').chmod(0o600)

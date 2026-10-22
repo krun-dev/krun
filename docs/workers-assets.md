@@ -49,13 +49,13 @@
 
 ## 3. 配置面
 
-构建请求（`POST /builds`，仓库构建同字段）增加 `assets` 块：
+资产配置（`POST /builds` 的 `assets` 块）与源码一起提交：
 
 ```json
 {
   "environment": "production",
   "entrypoint": "src/index.ts",
-  "files": {"src/index.ts": "..."},
+  "source_upload": "uploads/{org}/src/src_xxx/source.tar.gz",
   "assets": {
     "directory": "public",
     "run_worker_first": ["/api/*"],
@@ -65,46 +65,49 @@
 }
 ```
 
+- **源码包是唯一入口**：`POST /source-uploads` 返回 presigned PUT（15 分钟），客户端上传 `source.tar.gz`（顶层两段：`src/` 代码、`assets/` 资产），build 请求引用 `source_upload`。API 请求体上限 1 MiB、builder 输入 ConfigMap 上限 1 MiB，20 MiB 资产只能走对象存储。
+- 仓库构建由服务端自动完成：fetch 仓库 → 提取代码与 `assets.directory` 子树 → 打包上传 source bundle，客户端无需改动。
+- 兼容：旧的 inline `files` 仍可用（≤32 文件 / 256 KiB，仅代码），服务端会代为打包；带 `assets` 时必须用 `source_upload`。
 - `directory` 是源码树内的相对目录，builder 原样复制，不执行 npm install、不跑自定义构建命令（对应 Cloudflare「预构建 dist」模型）。
 - 配置固化进制品 manifest（第 4 节），不可变；Release 引用制品即间接持有，Release 的版本 ID 已含归档 digest。
 - pattern 校验在提交时做（语法错返回 400）：仅前缀匹配、`*` 只能是尾段、可选 `!` 前缀、≤16 条 × ≤128 字符。`directory` 缺失时其余字段必须为空。
 
 ## 4. 制品
 
-归档在 schema 1 之上新增 schema 2：
+归档在 schema 1 之上新增 schema 2（`schema_version: 2`）：
 
 ```text
 bundle.tar.gz
-├── manifest.json          # + assets 段：相对路径 → sha256、大小、content-type；
-│                          #   固化第 3 节的路由配置
+├── manifest.json          # assets 段：配置 + files[{path,sha256,size_bytes,content_type}]
 ├── modules/index.js
 └── assets/
     ├── index.html
-    └── app-a1b2c3.js
+    └── assets/app-a1b2c3.js
 ```
 
-- 校验复用现有清单逻辑：拒绝目录越界、符号链接、重复条目、非预期文件、超限大小、hash 不符；content-type 按扩展名白名单。
+- 校验：拒绝目录越界、符号链接、重复条目、未声明条目；资产 ≤500 文件 / 合计 20 MiB / 单文件 5 MiB；Content-Type 按扩展名白名单，扩展名与声明必须一致；`single-page-application` 必须有 `index.html`。schema 1（无资产）继续接受。
 - 存储键不变（`v1/{org}/sha256/{archive_sha256}/`）：资产变了就是新 hash、新 Artifact，CAS 去重自动成立。
+- finalize 同时把逐文件对象写到 `pub/`、`int/`：`{prefix}/{org}/{service}/{archive_sha}/{path}`，并设置 Content-Type 与 Cache-Control。
 
 ## 5. Runtime：本地缓存与 ASSETS binding
 
 ### 5.1 存储关系
 
-- S3 制品归档是唯一事实源；runtime 落盘的是发布期间一次性填充的缓存：填充时逐文件核验 sha256，之后请求期零网络 IO；pod 重启后重新填充、重新核验。
-- **发布不重启 runtime pod，也不新建任何 Kubernetes 对象**。krun 的 Deployment 是控制面里的版本记录（制品 + 环境 + 配置；本文统一称「版本记录」，避免与 Kubernetes Deployment 混淆），发布链路是现有的 management RPC：`/validate` 下载归档核验（含资产）→ commit → `/adopt` 经 Loader 动态加载模块（含资产落盘、构建 307 表）。资产全部挂在这两个现有 RPC 上，与模块代码同一条动态加载链路。
-- adopt 期取归档两条路：A（本期）控制面代理，与模块代码现状加载方式一致；B（后续）控制面发短时效 presigned GET，runtime 直拉 S3，省控制面带宽。区别只在谁去下载，都保留「填充后全量核验、请求期读本地」。
+- S3 制品归档是唯一事实源。runtime 用控制面换取的短时效 presigned GET **直接从 S3 下载归档**（控制面只签名、不经手字节），下载后核验 archive / module sha256。
+- **发布不重启 runtime pod，也不新建任何 Kubernetes 对象**。krun 的 Deployment 是控制面里的版本记录（制品 + 环境 + 配置；本文统一称「版本记录」，避免与 Kubernetes Deployment 混淆）。发布链路是现有 management RPC：`/validate` 在单个候选成员上冷加载并核验 → commit → `/adopt` 只确认快照，其余成员在首次请求时懒加载。资产挂在与模块完全相同的这条加载链路上。
+- 重启后的 readiness 会逐路由加载并核验全部活动版本，本地缓存由此自动重建。
 
-### 5.2 磁盘：有上界的缓存
+### 5.2 资产加载：按文件懒加载 + 内存 LRU
 
-- 常驻只含当前 serving 的版本（每版本 ≤ 约 22 MiB 解压后）；被替换的版本 5 分钟 TTL 后清除，回滚重新下载一次（秒级）。
-- readiness / adopt 验证本来就要全量下载归档，顺手落盘即完成预热。
-- 每 pod 硬上限 `assets_cache_max`（默认 1 GiB）+ LRU；活动文件不淘汰；emptyDir `sizeLimit` 同值兜底。
-- 容量 ≈ Σ(该 pool 当前版本数) × 22 MiB；超了就调大上限或拆 pool（多池后磁盘随 pool 分片）。
+- runtime 容器只有 workerd 进程，**没有文件系统**，所以资产不落盘，也不随归档整包展开。入口 Worker 命中资产时按文件从桶的 `pub/` 前缀取：控制面签发 15 分钟 presigned GET → runtime 直连对象存储 → 核验 manifest 里的 sha256 → 放进进程内 LRU。
+- 每 pod 上限 `ASSETS_CACHE_MAX`（kind 默认 64 MiB），LRU 淘汰；未命中才回源，首访多一次控制面 RPC + 一次桶 GET（同 region 几十 ms），命中后内存直出。
+- 资产 manifest（≤500 条）走内部 API `GET /releases/{id}/assets`，按 Release 缓存在内存，不进快照。
+- 归档下载仍发生在 `/validate`（单台候选成员）、成员首次请求（懒加载）与重启后的 readiness——但那只是模块代码；资产的磁盘约束因此消失。
+- 业务 Worker 的 `env.ASSETS` binding 本期未实现；入口决策流已覆盖页面与静态文件的全部访问路径，binding 作为后续能力补充。
 
-### 5.3 快照与 binding
+### 5.3 快照
 
-- 快照的版本描述符只增加几十字节的路由配置摘要；文件表（manifest，几 KB～几十 KB）常驻内存不落快照。
-- 新增 `ASSETS` service binding（与 `PLATFORM` 同机制），业务 Worker 可 `env.ASSETS.fetch()` 取资产，语义同 Cloudflare。
+- 快照的版本描述符不含文件表；route 条目仍是整 host 一条，资产配置与文件表按 Release 单独拉取并在 runtime 内缓存。
 
 ## 6. 静态域名与桶布局：静态文件的对外服务
 
@@ -115,20 +118,21 @@ bundle.tar.gz
 ```text
 bucket: krun-workers
 ├── v1/{org}/sha256/{archive_sha}/bundle.tar.gz   # 制品归档 · 禁止匿名 · 控制面/runtime 凭证读
-├── pub/{org}/{service}/{env}/{archive_sha}/…     # 公网资产 · 匿名读（公网可达）
-└── int/{org}/{service}/{env}/{archive_sha}/…     # 内网资产 · 匿名读（仅内网 endpoint 可达）
+├── pub/{org}/{service}/{archive_sha}/…     # 公网资产 · 匿名读（公网可达）
+└── int/{org}/{service}/{archive_sha}/…     # 内网资产 · 匿名读（仅内网 endpoint 可达）
 ```
 
 2. **workers 归档（含代码）走正常认证下载**：`v1/` 前缀不给匿名读，runtime 加载链路维持现状（控制面代理 / presigned），源代码不经静态域泄漏。
-3. **公网资产 `pub/` 公开、内网资产 `int/` 仅内网公开**：finalize 从同一归档解出逐文件对象，按服务所属网络面写入 `pub/` 或 `int/`（两段都写也可以，供 access 变更时无缝切换）。同一路径内容同一 `archive_sha`，无不同步问题。
-4. **全平台一个静态域名**（不含 slug）：公网 `static.{suffix}` CNAME 到 CDN，CDN 源站指桶的 `pub/` 前缀；内网 `static.{internal_suffix}` 经一条 kgateway 共享路由读桶的 `int/` 前缀（或内网 DNS 直解内网 endpoint）。内网不走 CDN。
+3. **公网资产 `pub/` 公开、内网资产 `int/` 仅内网公开**：finalize 从同一归档解出逐文件对象，`pub/` 与 `int/` 两段都写（当前还没有服务级网络面模型，双写最省事且供将来切换）。同一路径内容同一 `archive_sha`，无不同步问题。
+4. **全平台一个静态域名**（不含 slug）：`static.{suffix}` 与 `static.{internal_suffix}` 各一条 kgateway 共享路由，分别把路径改写到桶的 `pub/`、`int/` 前缀；**本期不接 CDN**（用户决策），路由直接反代桶。生产公网 listener 落地时，再把公网静态域切到 CDN 源站。
 
 ```text
 主域 {slug}.{suffix} ──── DNS 直指 LB ──► 网关 ──► runtime
-（API、index.html、SPA 回落——不经 CDN；归档加载走认证，与静态域无关）
+（API、index.html、SPA 回落；归档加载走认证，与静态域无关）
 
-公网 static.{suffix}/{org}/{service}/{env}/{sha}/… ── CNAME ──► CDN ──► 桶 pub/ 前缀
-内网 static.{internal}/{org}/{service}/{env}/{sha}/… ──► 内网 LB ──► kgateway ──► 桶 int/ 前缀
+static.{suffix}/{org}/{service}/{sha}/…          ──► LB ──► kgateway ──► 桶 pub/ 前缀
+static.{internal}/{org}/{service}/{sha}/…        ──► 内网 LB ──► kgateway ──► 桶 int/ 前缀
+（本期无 CDN；两条路由只做 host 匹配 + 前缀改写）
 ```
 
 **为什么一个桶按目录拆而不是两个桶**：OSS/S3 桶策略原生支持按前缀配匿名读，隔离用一条 policy 表达即可；桶数量减半（endpoint、凭证、生命周期、监控都少一套）；finalize 在一个桶内写对象，失败语义单一。内外网可达性差异由「桶的公网 / 内网 endpoint + 前缀 policy」承担——`int/` 前缀的匿名读 policy 只在内网 endpoint 上生效（或干脆 `int/` 不配公网匿名，仅内网 endpoint 网络层可达）。
@@ -142,14 +146,14 @@ bucket: krun-workers
 
 ### 6.3 网关 / CDN 侧要做的事
 
-- **一条共享路由，不随业务增长**：网关上静态域一条 HTTPRoute（host = `static.{internal_suffix}`），`URLRewrite` 改写 Host 到桶的内网 endpoint、Path 加 `int/` 前缀（`/{org}/...` → `/int/{org}/...` 即对象 key）；`Backend`（`type: Static`）+ `BackendTLSPolicy` 做 TLS（kgateway 能力已核实）。500 服务也是这一条。kind 用 MinIO endpoint 当源站，同一条路由（MinIO 无前缀 policy，匿名读通过只读 service account 的桶策略或直接公开桶近似）。
-- **CORS 接入层统一加**：静态域只读、无 Cookie，`Access-Control-Allow-Origin: *` 一条响应头全覆盖（module 脚本 / 字体 / GET fetch 都不产生预检）。加在一层（CDN 响应头配置或网关 ResponseHeaderModifier），用 `*` 不带 `Vary: Origin`，缓存键不分片。
-- **缓存策略**：指纹路径（URL 含 archive_sha）长 TTL（30d 级）；未指纹化文件短 TTL + 回源 ETag 协商。
+- **两条共享路由，不随业务增长**：每个静态域一条 HTTPRoute（host 精确匹配），`URLRewrite` 把 Path 前缀 `/` 替换为 `/{bucket}/{pub|int}/`（`/{org}/...` → `/{bucket}/pub/{org}/...`，即对象 key），backendRef 指向 `static-assets` Service（kind 指向 MinIO；生产可换 kgateway `Backend`/外部 origin）。路由由 controller 幂等创建，500 服务也是这两条。
+- **CORS 接入层统一加**：路由的 `ResponseHeaderModifier` 统一加 `Access-Control-Allow-Origin: *`（只读、无 Cookie，module 脚本 / 字体 / GET fetch 都不产生预检；`*` 不带 `Vary: Origin`）。
+- **缓存策略**：桶对象在写入时设置 Content-Type 与 Cache-Control——文件名带 hash 的资源 `immutable` 长缓存，其余 `max-age=300`。
 - **证书**：静态域是普通域名（非通配），单张证书；主域通配证书不变。
 
 ### 6.4 平台侧配套
 
-1. finalize 写逐文件对象：解出 `assets/`，按服务的网络面写 `pub/` 或 `int/` 的 `{org}/{service}/{env}/{archive_sha}/` 前缀（kind 里都在 MinIO）。
+1. finalize 写逐文件对象：解出 `assets/`，同时写 `pub/` 与 `int/` 的 `{org}/{service}/{archive_sha}/` 前缀（kind 里都在 MinIO）；`v1/` 归档段保持匿名不可读。
 2. 业务构建时把资源 URL 指到静态域（Vite / webpack 的 `base`，一次性配置，全平台恒定值）。平台不注入、不改写 HTML；`index.html` 与 SPA 回落留在主域由 runtime 服务（量小）。
 3. **没有「刷新 CDN」动作**：URL 按内容寻址，新版 HTML 引用新 URL，旧对象永久有效；未指纹化文件的短 TTL 就是生效延迟上界。回滚同理。
 4. 主域不变量不动：零 CORS、内部头清洗、快照寻址；发布仍是归档 + adopt 的单步切换。
@@ -186,10 +190,10 @@ bucket: krun-workers
 
 | 阶段 | 内容 | 验收 |
 | --- | --- | --- |
-| A1 | builder 复制资产目录 + manifest schema 2 + finalize 校验 | 单元：归档结构、越界 / 符号链接拒绝 |
-| A2 | runtime：落盘核验、ASSETS binding、决策流、307 表、ETag | kind e2e：资产 200/304、SPA 回落、run_worker_first 命中与 `!` 反向、307、导航到 Worker 路径返回 HTML、未配置资产服务回归 |
+| A1 ✅ | 源码包通道（presigned PUT）+ builder 打包 assets + manifest schema 2 + finalize 校验并写 pub/int | 单元：schema 1/2、类型白名单、上限、SPA 要求、hash 不符 |
+| A2 ✅ | runtime：manifest/presign 内部 API + 入口决策流（run_worker_first、SPA 回落、307、ETag/304）+ 按文件懒加载 + 内存 LRU | kind e2e：资产 200/304、SPA 回落、`!` 反向、307、导航到 Worker 路径返回 HTML、未配置资产回归 |
 | A3 | 控制台展示资产配置与大小；workers-backend.md 补路由说明 | 控制台验收 |
-| A4 | 静态域（单域）+ finalize 写 pub//int/ 前缀 + 桶前缀匿名读策略 + 网关共享路由（kind 用 MinIO） | kind e2e：静态域 200、CORS 头、指纹 TTL、`v1/` 前缀匿名读被拒 |
+| A4 ✅（无 CDN） | 静态域 ×2 + 网关闭环路由 + MinIO Service + 桶策略（pub/int 匿名、v1 拒绝） | kind e2e：静态域 200、CORS 头、匿名 pub 200、匿名 v1 403 |
 
 ## 12. 开放问题
 

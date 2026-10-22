@@ -187,7 +187,7 @@ func (k *workerKubernetes) runtimeMembers(ctx context.Context, service string) (
 	sort.Slice(out, func(i, j int) bool { return out[i].UID < out[j].UID })
 	return out, nil
 }
-func (k *workerKubernetes) ensureBuildJob(ctx context.Context, b WorkerBuild, private WorkerBuildPrivate, uploadURL, image, pullPolicy string) error {
+func (k *workerKubernetes) ensureBuildJob(ctx context.Context, b WorkerBuild, private WorkerBuildPrivate, sourceURL, uploadURL, image, pullPolicy string) error {
 	var job workerJob
 	e := k.call(ctx, "GET", k.jobs()+"/"+b.Job, nil, &job)
 	if e == nil {
@@ -196,7 +196,7 @@ func (k *workerKubernetes) ensureBuildJob(ctx context.Context, b WorkerBuild, pr
 	if !kubeMissing(e) {
 		return e
 	}
-	input, _ := json.Marshal(map[string]any{"entrypoint": b.Entrypoint, "files": private.Files, "upload_url": uploadURL})
+	input, _ := json.Marshal(map[string]any{"entrypoint": b.Entrypoint, "source_url": sourceURL, "assets": b.Assets, "upload_url": uploadURL})
 	cm := map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": b.Job, "namespace": k.namespace, "labels": map[string]string{"app": "krun-builder"}}, "data": map[string]string{"input.json": string(input)}}
 	if e = k.call(ctx, "POST", k.core("configmaps"), cm, nil); e != nil && !kubeConflict(e) {
 		return e
@@ -304,4 +304,49 @@ func (k *workerKubernetes) ensureRoutes(ctx context.Context, c *WorkersConfig, n
 		}
 	}
 	return accepted && resolved && programmed, nil
+}
+
+// One shared static route per network scope serves every service. Requests are
+// rewritten to path-style object keys (/<bucket>/<pub|int>/...) so the bucket
+// stays the origin and Gateway API needs no per-service rules.
+func (k *workerKubernetes) ensureStaticRoute(ctx context.Context, c *WorkersConfig, host, prefix string) error {
+	if host == "" {
+		return nil
+	}
+	name := "workers-static-" + prefix
+	base := "/apis/gateway.networking.k8s.io/v1/namespaces/" + k.namespace + "/httproutes"
+	spec := map[string]any{
+		"parentRefs": []any{map[string]string{"name": c.GatewayName, "namespace": c.GatewayNamespace, "sectionName": "private"}},
+		"hostnames":  []string{host},
+		"rules": []any{map[string]any{
+			"matches": []any{map[string]any{"path": map[string]string{"type": "PathPrefix", "value": "/"}}},
+			"filters": []any{
+				map[string]any{"type": "URLRewrite", "urlRewrite": map[string]any{"path": map[string]string{"type": "ReplacePrefixMatch", "replacePrefixMatch": "/" + c.S3Bucket + "/" + prefix + "/"}}},
+				map[string]any{"type": "ResponseHeaderModifier", "responseHeaderModifier": map[string]any{"set": []map[string]string{{"name": "Access-Control-Allow-Origin", "value": "*"}}}},
+			},
+			"backendRefs": []any{map[string]any{"name": c.StaticService, "port": c.StaticServicePort}},
+		}},
+	}
+	var current struct {
+		Spec json.RawMessage `json:"spec"`
+	}
+	e := k.call(ctx, "GET", base+"/"+name, nil, &current)
+	if kubeMissing(e) {
+		e = k.call(ctx, "POST", base, map[string]any{"apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute", "metadata": map[string]string{"name": name, "namespace": k.namespace}, "spec": spec}, nil)
+		if kubeConflict(e) {
+			return nil
+		}
+		return e
+	}
+	if e != nil {
+		return e
+	}
+	var old struct {
+		Hosts []string `json:"hostnames"`
+	}
+	_ = json.Unmarshal(current.Spec, &old)
+	if len(old.Hosts) != 1 || old.Hosts[0] != host {
+		return k.call(ctx, "PATCH", base+"/"+name, map[string]any{"spec": spec}, nil)
+	}
+	return nil
 }

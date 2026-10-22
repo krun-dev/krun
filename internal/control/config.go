@@ -74,6 +74,9 @@ type Config struct {
 	Development    bool             `json:"development"`
 	StaticDir      string           `json:"static_dir"`
 	Providers      []ProviderConfig `json:"providers"`
+	// OrganizationSelfService lets any signed-in user create an organization.
+	// Off by default: organization.create remains system-admin only.
+	OrganizationSelfService bool `json:"organization_self_service"`
 }
 
 func LoadConfig(path string) (Config, error) {

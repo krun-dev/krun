@@ -3,6 +3,7 @@ import {execFileSync,spawn} from 'node:child_process';
 import {mkdirSync,writeFileSync,openSync,closeSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {gzipSync} from 'node:zlib';
 const kubeconfig=process.env.KUBECONFIG||'/home/<user>/kind/kubeconfig';
 const kubectl=(...args)=>execFileSync('kubectl',['--kubeconfig',kubeconfig,...args],{encoding:'utf8',timeout:180000});
 const expectedContext='kind-'+(process.env.KIND_CLUSTER_NAME||'krun-workers-20261010');assert.equal(kubectl('config','current-context').trim(),expectedContext,'Verification requires the intended kind context');
@@ -53,9 +54,22 @@ const run=randomUUID().slice(0,8);
 const org=await api('/api/v1/orgs','POST',{name:'Workers '+run},201,{session:true});const service=await api('/api/v1/orgs/'+org.id+'/services','POST',{name:'orders-'+run},201);const base='/api/v1/orgs/'+org.id+'/services/'+service.id+'/workers';
 const initialPods=JSON.parse(kubectl('get','pods','-n','workers-mvp','-l','role=krun-runtime','-o','json')).items.filter(p=>!p.metadata.deletionTimestamp).map(p=>({name:p.metadata.name,uid:p.metadata.uid,restarts:p.status.containerStatuses[0].restartCount}));
 const gateway=JSON.parse(kubectl('get','service','workers-mvp','-n','kgateway-system','-o','json')).spec.clusterIP;
-async function invoke(host,pathname='/'){
- const script=`const http=require('http');http.get('http://${gateway}:8080'+process.argv[1],{headers:{host:process.argv[2]}},r=>{let s='';r.on('data',x=>s+=x);r.on('end',()=>{let body;try{body=JSON.parse(s)}catch{body=s};console.log(JSON.stringify({status:r.statusCode,body,headers:r.headers}));});}).on('error',e=>{console.error(e.message);process.exitCode=1;});`;
- return JSON.parse(kubectl('exec','-n','workers-mvp','deploy/tester','--','node','-e',script,pathname,host));
+async function invoke(host,pathname='/',headers={}){
+ const script=`const http=require('http');http.get('http://${gateway}:8080'+process.argv[1],{headers:{...JSON.parse(process.argv[3]||'{}'),host:process.argv[2]}},r=>{let s='';r.on('data',x=>s+=x);r.on('end',()=>{let body;try{body=JSON.parse(s)}catch{body=s};console.log(JSON.stringify({status:r.statusCode,body,headers:r.headers}));});}).on('error',e=>{console.error(e.message);process.exitCode=1;});`;
+ return JSON.parse(kubectl('exec','-n','workers-mvp','deploy/tester','--','node','-e',script,pathname,host,JSON.stringify(headers)));
+}
+function testerPut(url,base64){
+ const script=`const http=require('http');const u=new URL(process.argv[1]);const d=Buffer.from(process.argv[2],'base64');const r=http.request({hostname:u.hostname,port:u.port,path:u.pathname+u.search,method:'PUT',headers:{'content-length':d.length}},res=>{res.resume();res.on('end',()=>console.log(JSON.stringify({status:res.statusCode})));});r.on('error',e=>{console.error(e.message);process.exitCode=1;});r.end(d);`;
+ return JSON.parse(kubectl('exec','-n','workers-mvp','deploy/tester','--','node','-e',script,url,base64));
+}
+function testerGet(url){
+ const script=`const http=require('http');const u=new URL(process.argv[1]);http.get({hostname:u.hostname,port:u.port,path:u.pathname+u.search},res=>{let s='';res.on('data',x=>s+=x);res.on('end',()=>console.log(JSON.stringify({status:res.statusCode,body:s.slice(0,200)})));}).on('error',e=>{console.error(e.message);process.exitCode=1;});`;
+ return JSON.parse(kubectl('exec','-n','workers-mvp','deploy/tester','--','node','-e',script,url));
+}
+function sourceBundle(code,assets){
+ const tarFile=(name,bytes)=>{const h=Buffer.alloc(512);h.write(name,0,100,'utf8');const o=(off,len,n)=>h.write(n.toString(8).padStart(len-1,'0')+'\0',off,len,'ascii');o(100,8,0o644);o(108,8,0);o(116,8,0);o(124,12,bytes.length);o(136,12,0);h.fill(32,148,156);h[156]=48;h.write('ustar\0',257,6,'ascii');h.write('00',263,2,'ascii');const sum=h.reduce((n,b)=>n+b,0);h.write(sum.toString(8).padStart(6,'0')+'\0 ',148,8,'ascii');return Buffer.concat([h,bytes,Buffer.alloc((512-bytes.length%512)%512)]);};
+ const parts=[];for(const [name,text] of Object.entries(code))parts.push(tarFile('src/'+name,Buffer.from(text)));for(const [name,text] of Object.entries(assets||{}))parts.push(tarFile('assets/'+name,Buffer.from(text)));parts.push(Buffer.alloc(1024));
+ return gzipSync(Buffer.concat(parts),{level:6});
 }
 const source=version=>({entrypoint:'src/index.ts',files:{'src/lib.ts':`export const version = ${JSON.stringify(version)};`,'src/index.ts':`import {version} from './lib'; import {connect} from 'cloudflare:sockets'; export default {async fetch(request: Request, env: Record<string,string>) {if(new URL(request.url).pathname==='/probe'){let blocked=false;try{await fetch('http://backend:9001/api/internal/workers/snapshot')}catch{blocked=true};let tcpBlocked=false;try{const socket=connect({hostname:'postgres',port:5432});await socket.opened;await socket.close()}catch{tcpBlocked=true};return Response.json({blocked,tcpBlocked,bindings:Object.keys(env)})};return Response.json({version,environment:env.KRUN_ENVIRONMENT,greeting:env.GREETING||'default',url:request.url})}}`}});
 async function build(input,expected='succeeded',options={}){const b=await api(base+'/builds','POST',{environment:'production',...input,idempotency_key:randomUUID()},202,options);return poll(base+'/builds/'+b.id,[expected],150000);}
@@ -116,4 +130,51 @@ await check('rollback recovers a committed release with stalled runtime adoption
  return {previous:queued.id,previous_state:previous.state,recovery:rollback.id};
 });
 await check('replacement runtime Pod cold-loads the current object-backed Release',async()=>{const old=initialPods[0];kubectl('delete','pod',old.name,'-n','workers-mvp');kubectl('rollout','status','deployment/runtime-default','-n','workers-mvp','--timeout=120s');const pods=JSON.parse(kubectl('get','pods','-n','workers-mvp','-l','role=krun-runtime','-o','json')).items.filter(p=>!p.metadata.deletionTimestamp);const replacement=pods.find(p=>!initialPods.some(x=>x.uid===p.metadata.uid));assert(replacement);let r;for(let i=0;i<16;i++){r=await invoke(hostProd);if(r.headers['x-krun-pod']===replacement.metadata.uid)break;}assert.equal(r.headers['x-krun-pod'],replacement.metadata.uid);assert.equal(r.body.version,'v1-'+run);return {replaced:old.uid,replacement:replacement.metadata.uid,response:r.body};});
+let assetBuild,assetRelease,assetArtifact;
+await check('source bundle upload carries assets into the build',async()=>{
+ const upload=await api(base+'/source-uploads','POST',{},201);
+ assert(upload.upload_url.includes('/uploads/'));
+ const bundle=sourceBundle(
+  {'index.ts':`export default {fetch(request, env){const url=new URL(request.url);if(url.pathname==='/api/hello')return Response.json({asset:true,release:env.KRUN_RELEASE_ID});return Response.json({asset:false,path:url.pathname})}}`},
+  {'index.html':'<!doctype html><title>assets</title>','about.html':'<!doctype html><h1>about page</h1>','assets/app-0123abcd.js':'console.log("hashed")'});
+ const put=testerPut(upload.upload_url,bundle.toString('base64'));
+ assert.equal(put.status,200);
+ assetBuild=await build({source_type:'upload',source_upload:upload.source_upload,entrypoint:'index.ts',assets:{directory:'public',run_worker_first:['/api/*'],not_found_handling:'single-page-application',html_handling:'auto-trailing-slash'}});
+ assert(assetBuild.artifact_id);
+ const artifact=await api(base+'/artifacts/'+assetBuild.artifact_id);assert(artifact.archive_size_bytes>0);
+ const source=await api(base+'/builds/'+assetBuild.id+'/source');assert(source.download_url.includes('source.tar.gz'));
+ return {build:assetBuild.id,artifact:artifact.id,size:artifact.archive_size_bytes};
+});
+await check('assets publish and drive the entry decision flow',async()=>{
+ const envs=(await api(base+'/environments')).items;const prod=envs.find(e=>e.name==='production');
+ assetRelease=await publish(assetBuild.id,'production',prod.release_revision);
+ assetArtifact=await api(base+'/artifacts/'+assetBuild.artifact_id);
+ const root=await invoke(hostProd,'/');
+ assert.equal(root.status,200);assert(String(root.body).includes('<!doctype html>'));assert((root.headers['content-type']||'').startsWith('text/html'));
+ const about=await invoke(hostProd,'/about');
+ assert.equal(about.status,200);assert(String(about.body).includes('about page'));
+ const redirect=await invoke(hostProd,'/about.html');
+ assert.equal(redirect.status,307);assert.equal(redirect.headers.location,'/about');
+ const api200=await invoke(hostProd,'/api/hello');
+ assert.equal(api200.status,200);assert.equal(api200.body.asset,true);
+ const navigate=await invoke(hostProd,'/dashboard',{'sec-fetch-mode':'navigate'});
+ assert.equal(navigate.status,200);assert(String(navigate.body).includes('<!doctype html>'));
+ const fallthrough=await invoke(hostProd,'/dashboard');
+ assert.equal(fallthrough.status,200);assert.equal(fallthrough.body.asset,false);
+ const etag=root.headers.etag;assert(etag);
+ const cached=await invoke(hostProd,'/',{'if-none-match':etag});
+ assert.equal(cached.status,304);
+ return {release:assetRelease.release_id,etag,root:root.status,redirect:redirect.status};
+});
+await check('static domain serves pub/ directly and v1/ stays private',async()=>{
+ const path='/'+org.id+'/'+service.id+'/'+assetArtifact.archive_sha256+'/index.html';
+ let static200;for(let i=0;i<20;i++){static200=await invoke('static.workers.test',path);if(static200.status===200)break;await sleep(500);}
+ assert.equal(static200.status,200);assert(String(static200.body).includes('<!doctype html>'));
+ assert.equal(static200.headers['access-control-allow-origin'],'*');
+ const pub=testerGet('http://minio:9000/krun-artifacts/pub/'+org.id+'/'+service.id+'/'+assetArtifact.archive_sha256+'/index.html');
+ assert.equal(pub.status,200);
+ const privateObject=testerGet('http://minio:9000/krun-artifacts/v1/'+org.id+'/sha256/'+assetArtifact.archive_sha256+'/bundle.tar.gz');
+ assert.equal(privateObject.status,403);
+ return {static:static200.status,pub:pub.status,v1:privateObject.status};
+});
 console.log('PASS '+evidence.length+' kind backend end-to-end checks');

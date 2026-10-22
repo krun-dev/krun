@@ -97,6 +97,8 @@ kgateway 私网 listener :8080
 
 Host 默认形如 `w-{组织与服务 hash 前16位}-{environment}.workers.test`。URI 路径、query、method、body 保留。网关及入口清除客户端伪造的内部 scope / release 等 header；业务代码不能指定活动版本。未知 Host 不匹配路由；未发布环境返回 503。关闭环境后 runtime 快照标记 disabled；服务还有启用环境时，网关也移除关闭环境的 Host。全部关闭时仍可能匹配原 HTTPRoute，但 runtime 拒绝执行。
 
+配置了资产的版本在入口 Worker 内多一层路径决策：`run_worker_first` 命中 → 业务 Worker；否则查资产表（含 `html_handling` 规范化）→ 命中直接返回（ETag/304）；未命中且是导航请求 → 按 `not_found_handling` 返回 `index.html`；其余交给业务 Worker。资产按文件从桶的 `pub/` 前缀懒加载并做进程内 LRU，归档（`v1/` 前缀）始终需要凭证。两个静态域（`static.{domain}` / `static.{internal_domain}`）各有一条共享 HTTPRoute，路径改写为桶对象 key 后直接反代对象存储。
+
 每个 Pod 只有一个 workerd 进程，可动态加载多个业务 Worker。入口通过固定 `PLATFORM` service binding 请求受限内部 API；内部制品接口只签发短时预签名 GET URL，runtime 冷加载时直连对象存储下载并在本地校验归档与模块 hash（控制面不再代理制品字节，Pod 也不持有 S3 凭证）。业务 Worker 不持有数据库或对象存储凭证。入口 Worker 的出网白名单使用 workerd 的 `network=(allow=[...])`，**只接受 CIDR**（`host:port` 会在启动时报 `invalid CIDR`），需覆盖对象存储 Service 的 ClusterIP 网段；Pod 级 NetworkPolicy 仍把实际目标钉在对象存储 Pod 的 :9000。Loader key 包含组织、服务、环境、Release、runtime 版本和构建 profile，使用不可变模块及显式变量，`globalOutbound: null`。
 
 入口快照缓存 500ms、租约 5 秒。新 runtime 在 readiness 中加载并验证所有当前活动 Release，再进入 EndpointSlice。控制服务不可用且租约耗尽后，runtime 停止继续服务；第一版没有独立持久化路由缓存，长时间控制面故障会影响业务可用性。
@@ -109,11 +111,12 @@ Host 默认形如 `w-{组织与服务 hash 前16位}-{environment}.workers.test`
 
 | 方法与路径 | 用途 |
 | --- | --- |
-| `POST /builds` | 提交源码与入口，返回 202 Build |
+| `POST /source-uploads` | 领取源码包 presigned PUT（`src/` + `assets/`），返回 `source_upload` |
+| `POST /builds` | 提交源码包（或兼容的内联 `files`）与入口，返回 202 Build |
 | `GET /builds` | 按可见环境过滤构建历史 |
 | `GET /builds/{id}` | 构建状态和 Artifact 引用 |
 | `GET /builds/{id}/logs` | 构建完成后的日志，需 `log.read` |
-| `GET /builds/{id}/source` | 源码，需 `source.read` |
+| `GET /builds/{id}/source` | 源码包下载 URL（或兼容 inline 的文件表），需 `source.read` |
 | `GET /artifacts/{id}` | 当前服务可见 Build 关联的制品记录 |
 | `GET /environments` | 可见环境和配置 / Release revision |
 | `PATCH /environments/{env}` | 开关及下一次发布变量 |
@@ -125,18 +128,24 @@ Host 默认形如 `w-{组织与服务 hash 前16位}-{environment}.workers.test`
 | `POST /environments/{env}/invoke` | 鉴权后经 Gateway 调用业务 Worker，返回文本响应封装 |
 | `GET /operations/{id}` | 步骤、错误、提交与生效状态 |
 
-构建请求：
+构建请求（静态资产随源码包进入，见 [静态资产设计](workers-assets.md)）：
 
 ```json
 {
   "environment": "test",
   "entrypoint": "src/index.ts",
-  "files": {
-    "src/index.ts": "export default {fetch(req, env) {return new Response(env.GREETING || 'hello')}}"
+  "source_upload": "uploads/{org}/src/src_xxx/source.tar.gz",
+  "assets": {
+    "directory": "public",
+    "run_worker_first": ["/api/*"],
+    "not_found_handling": "single-page-application",
+    "html_handling": "auto-trailing-slash"
   },
   "idempotency_key": "build-001"
 }
 ```
+
+旧的内联 `files` 仍可用（仅代码，≤32 文件 / 256 KiB）；带 `assets` 时必须先 `POST /source-uploads` 并上传 `source.tar.gz`。源码包顶层固定为 `src/`（Worker 代码）与 `assets/`（相对 `assets.directory` 的文件）。
 
 环境配置和发布请求分别使用不同 revision：
 
@@ -158,7 +167,7 @@ Host 默认形如 `w-{组织与服务 hash 前16位}-{environment}.workers.test`
 
 ## 第一版边界
 
-源码最多 32 文件 / 合计 256 KiB，模块最多 2 MiB，归档最多 8 MiB，日志最多 32 KiB，每服务保留至多 100 个 Build。配置最多 32 个普通变量 / 合计 16 KiB，禁止使用平台预留 `KRUN_` 名称。普通变量不是 Secret。
+源码最多 32 文件 / 合计 256 KiB；静态资产最多 500 文件 / 合计 20 MiB / 单文件 5 MiB，含资产时归档上限 32 MiB；模块最多 2 MiB；日志最多 32 KiB；每服务保留至多 100 个 Build。配置最多 32 个普通变量 / 合计 16 KiB，禁止使用平台预留 `KRUN_` 名称。普通变量不是 Secret。
 
 尚无 Git 接入、npm 依赖缓存、自定义构建命令、静态资源 / Wasm 制品、构建取消、运行日志 API、独立表 / 队列、高并发优化和完整 GC。完成 Job 30 分钟后由 TTL 清理；源码 ConfigMap、失败临时对象、历史制品仍需后续 GC。实验部署采用开发登录和单节点 kind，不能直接视作生产部署模板。
 

@@ -2,8 +2,9 @@ package control
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+
+	"github.com/minio/minio-go/v7"
 )
 
 func (w *workersController) prepareRepositoryBuild(ctx context.Context, build WorkerBuild, private WorkerBuildPrivate) (WorkerBuild, WorkerBuildPrivate, error) {
@@ -45,18 +46,25 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 			return build, private, err
 		}
 	}
-	files, err := w.server.fetchRepositorySource(ctx, provider, source, fetchToken)
+	files, assetFiles, err := w.server.fetchRepositorySource(ctx, provider, source, fetchToken, build.Assets)
 	if err != nil {
 		return build, private, err
 	}
-	raw, err := json.Marshal(files)
+	bundle, err := workerSourceBundle(files, assetFiles)
 	if err != nil {
 		return build, private, err
 	}
-	build.SourceDigest = bytesDigest(raw)
+	// The bundle goes to object storage; state and the builder ConfigMap only
+	// carry its key. This keeps large asset trees out of PostgreSQL and ConfigMaps.
+	sourceKey := workerSourceUploadKey(build.Organization, build.ID)
+	if err := w.putBytes(ctx, sourceKey, bundle, minio.PutObjectOptions{ContentType: "application/gzip"}); err != nil {
+		return build, private, err
+	}
+	build.SourceDigest = bytesDigest(bundle)
 	build.State = "fetching"
-	private.Files = files
-	private.Log = fmt.Sprintf("Repository: %s/%s\nRef: %s\nCommit: %s\nProject: %s\nLoaded %d source files\n", source.ProviderID, source.Repository, source.Ref, source.Commit, source.RootDirectory, len(files))
+	private.Files = nil
+	private.SourceKey = sourceKey
+	private.Log = fmt.Sprintf("Repository: %s/%s\nRef: %s\nCommit: %s\nProject: %s\nLoaded %d source files and %d asset files\n", source.ProviderID, source.Repository, source.Ref, source.Commit, source.RootDirectory, len(files), len(assetFiles))
 	err = w.server.Store.Update(ctx, func(st *State) error {
 		if err := w.server.workerAuthorizeActor(st, private.Actor, build.Service, build.Environment, "build.start"); err != nil {
 			return fmt.Errorf("Build permission revoked")

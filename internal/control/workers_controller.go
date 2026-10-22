@@ -11,19 +11,34 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/minio/minio-go/v7"
 )
 
+// workerPutObject is the narrow object-write seam used by source bundles and
+// per-file asset copies. Production wires it to the S3 client; tests inject it.
+type workerPutObject func(ctx context.Context, bucket, object string, reader io.Reader, size int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
+
 type workersController struct {
 	server *Server
 	config *WorkersConfig
 	s3     *minio.Client
+	putObject workerPutObject
 	// s3Builder signs builder upload URLs against the in-cluster endpoint; signing is offline, no connectivity needed.
 	s3Builder *minio.Client
 	kube   *workerKubernetes
 	http   *http.Client
+	// Parsed asset manifests are immutable per artifact; cache them so presigning
+	// a single file does not re-download the archive.
+	assetMu    sync.RWMutex
+	assetCache map[string]workerCachedAssets
+}
+
+type workerCachedAssets struct {
+	Config *WorkerAssetsConfig
+	Files  []workerManifestFile
 }
 
 func newWorkersController(s *Server) (*workersController, error) {
@@ -42,8 +57,17 @@ func newWorkersController(s *Server) (*workersController, error) {
 	if e != nil {
 		return nil, e
 	}
-	return &workersController{server: s, config: s.Config.Workers, s3: s3, s3Builder: s3Builder, kube: k, http: &http.Client{Timeout: 8 * time.Second}}, nil
+	return &workersController{server: s, config: s.Config.Workers, s3: s3, putObject: s3.PutObject, s3Builder: s3Builder, kube: k, http: &http.Client{Timeout: 8 * time.Second}, assetCache: map[string]workerCachedAssets{}}, nil
 }
+// putBytes writes a whole object through the injected storage hook.
+func (w *workersController) putBytes(ctx context.Context, key string, data []byte, opts minio.PutObjectOptions) error {
+	if w.putObject == nil {
+		return errors.New("object storage unavailable")
+	}
+	_, e := w.putObject(ctx, w.config.S3Bucket, key, bytes.NewReader(data), int64(len(data)), opts)
+	return e
+}
+
 func (w *workersController) run(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -113,6 +137,15 @@ func (w *workersController) reconcile(ctx context.Context) error {
 			failures = append(failures, e)
 		}
 	}
+	// One shared static route per network scope; it does not scale with services.
+	for _, scope := range []struct{ host, prefix string }{{w.config.StaticDomain, "pub"}, {w.config.StaticInternalDomain, "int"}} {
+		if scope.host == "" {
+			continue
+		}
+		if e := w.kube.ensureStaticRoute(ctx, w.config, scope.host, scope.prefix); e != nil {
+			failures = append(failures, e)
+		}
+	}
 	// Each service has at most three hosts; Gateway API limits hosts per HTTPRoute.
 	routesReady := map[string]bool{}
 	for _, service := range state.Services {
@@ -175,11 +208,37 @@ func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, pri
 	if now().Sub(b.Created) > 180*time.Second {
 		return w.failBuild(ctx, b.ID, "Build deadline exceeded", w.kube.buildLog(ctx, b.Job))
 	}
-	if b.Repository != nil && len(private.Files) == 0 {
+	if b.Repository != nil && private.SourceKey == "" {
 		var err error
 		b, private, err = w.prepareRepositoryBuild(ctx, b, private)
 		if err != nil {
 			return w.failBuild(ctx, b.ID, err.Error(), private.Log)
+		}
+	}
+	// Legacy inline builds still arrive as a file map; move them onto the same
+	// source-bundle path so the builder never receives files through a ConfigMap.
+	if private.SourceKey == "" && len(private.Files) > 0 {
+		bundle, err := workerSourceBundle(private.Files, nil)
+		if err != nil {
+			return w.failBuild(ctx, b.ID, err.Error(), "")
+		}
+		if e := w.ensureBucket(ctx); e != nil {
+			return e
+		}
+		key := workerSourceUploadKey(b.Organization, b.ID)
+		if e := w.putBytes(ctx, key, bundle, minio.PutObjectOptions{ContentType: "application/gzip"}); e != nil {
+			return e
+		}
+		private.SourceKey = key
+		private.Files = nil
+		if e := w.server.Store.Update(ctx, func(st *State) error {
+			p := st.Workers.BuildPrivate[b.ID]
+			p.SourceKey = key
+			p.Files = nil
+			st.Workers.BuildPrivate[b.ID] = p
+			return nil
+		}); e != nil {
+			return e
 		}
 	}
 	var job workerJob
@@ -192,7 +251,11 @@ func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, pri
 		if e != nil {
 			return e
 		}
-		if e = w.kube.ensureBuildJob(ctx, b, private, signed, w.config.BuilderImage, w.config.BuilderPullPolicy); e != nil {
+		sourceURL, e := w.sourceBundleURL(ctx, private.SourceKey)
+		if e != nil {
+			return e
+		}
+		if e = w.kube.ensureBuildJob(ctx, b, private, sourceURL, signed, w.config.BuilderImage, w.config.BuilderPullPolicy); e != nil {
 			return e
 		}
 		return w.server.Store.Update(ctx, func(st *State) error {

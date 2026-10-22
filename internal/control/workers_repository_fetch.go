@@ -100,7 +100,7 @@ func (s *Server) resolveRepositoryCommit(ctx context.Context, provider WorkerRep
 	return commit, nil
 }
 
-func (s *Server) fetchRepositorySource(ctx context.Context, provider WorkerRepositoryProvider, source WorkerBuildRepository, token string) (map[string]string, error) {
+func (s *Server) fetchRepositorySource(ctx context.Context, provider WorkerRepositoryProvider, source WorkerBuildRepository, token string, assets *WorkerAssetsConfig) (map[string]string, map[string][]byte, error) {
 	var target string
 	if provider.Type == "github" {
 		target = repositoryAPIOrigin(provider) + "/repos/" + source.Repository + "/tarball/" + source.Commit
@@ -111,54 +111,56 @@ func (s *Server) fetchRepositorySource(ctx context.Context, provider WorkerRepos
 	for redirects := 0; redirects < 4; redirects++ {
 		resp, err := s.repositoryRequestWithToken(ctx, provider, target, token)
 		if err != nil {
-			return nil, fmt.Errorf("Repository archive connection unavailable")
+			return nil, nil, fmt.Errorf("Repository archive connection unavailable")
 		}
 		if resp.StatusCode == 301 || resp.StatusCode == 302 || resp.StatusCode == 303 || resp.StatusCode == 307 || resp.StatusCode == 308 {
 			next, err := resp.Location()
 			resp.Body.Close()
 			if err != nil || next.User != nil || next.Fragment != "" {
-				return nil, fmt.Errorf("Repository archive redirect is invalid")
+				return nil, nil, fmt.Errorf("Repository archive redirect is invalid")
 			}
 			sameOrigin := next.Scheme == origin.Scheme && next.Host == origin.Host
 			githubDownload := provider.Type == "github" && next.Scheme == "https" && next.Host == "codeload.github.com"
 			if !sameOrigin && !githubDownload {
-				return nil, fmt.Errorf("Repository archive redirect is outside the configured provider")
+				return nil, nil, fmt.Errorf("Repository archive redirect is outside the configured provider")
 			}
 			target = next.String()
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
-			return nil, fmt.Errorf("Repository archive unavailable (HTTP %d)", resp.StatusCode)
+			return nil, nil, fmt.Errorf("Repository archive unavailable (HTTP %d)", resp.StatusCode)
 		}
 		raw, err := io.ReadAll(io.LimitReader(resp.Body, repositoryArchiveLimit+1))
 		resp.Body.Close()
 		if err != nil || len(raw) > repositoryArchiveLimit {
-			return nil, fmt.Errorf("Repository archive interrupted or exceeds 16 MiB")
+			return nil, nil, fmt.Errorf("Repository archive interrupted or exceeds 16 MiB")
 		}
-		return extractRepositorySource(raw, source)
+		return extractRepositorySource(raw, source, assets)
 	}
-	return nil, fmt.Errorf("Repository archive has too many redirects")
+	return nil, nil, fmt.Errorf("Repository archive has too many redirects")
 }
 
-func extractRepositorySource(raw []byte, source WorkerBuildRepository) (map[string]string, error) {
+func extractRepositorySource(raw []byte, source WorkerBuildRepository, assets *WorkerAssetsConfig) (map[string]string, map[string][]byte, error) {
 	compressed, err := gzip.NewReader(bytes.NewReader(raw))
 	if err != nil {
-		return nil, fmt.Errorf("Repository archive is not a valid tar.gz")
+		return nil, nil, fmt.Errorf("Repository archive is not a valid tar.gz")
 	}
 	defer compressed.Close()
 	limited := &io.LimitedReader{R: compressed, N: repositoryExpandedLimit + 1}
 	archive := tar.NewReader(limited)
 	files := make(map[string]string)
+	assetFiles := make(map[string][]byte)
 	prefix := ""
 	total := 0
+	assetTotal := 0
 	for entries := 0; ; entries++ {
 		header, err := archive.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil || entries >= 10000 || limited.N <= 0 {
-			return nil, fmt.Errorf("Repository archive is invalid or exceeds extraction limits")
+			return nil, nil, fmt.Errorf("Repository archive is invalid or exceeds extraction limits")
 		}
 		// GitHub puts commit metadata in a global PAX header before the repository root.
 		if header.Typeflag == tar.TypeXGlobalHeader || header.Typeflag == tar.TypeXHeader {
@@ -166,14 +168,14 @@ func extractRepositorySource(raw []byte, source WorkerBuildRepository) (map[stri
 		}
 		name := strings.TrimSuffix(header.Name, "/")
 		if name == "" || path.Clean(name) != name || strings.HasPrefix(name, "/") || strings.HasPrefix(name, "../") {
-			return nil, fmt.Errorf("Repository archive contains unsafe paths")
+			return nil, nil, fmt.Errorf("Repository archive contains unsafe paths")
 		}
 		parts := strings.SplitN(name, "/", 2)
 		if prefix == "" {
 			prefix = parts[0]
 		}
 		if parts[0] != prefix {
-			return nil, fmt.Errorf("Repository archive has multiple roots")
+			return nil, nil, fmt.Errorf("Repository archive has multiple roots")
 		}
 		if len(parts) != 2 || header.Typeflag == tar.TypeDir {
 			continue
@@ -186,29 +188,54 @@ func extractRepositorySource(raw []byte, source WorkerBuildRepository) (map[stri
 			name = strings.TrimPrefix(name, source.RootDirectory+"/")
 		}
 		if header.Typeflag == tar.TypeSymlink || header.Typeflag == tar.TypeLink {
-			return nil, fmt.Errorf("Repository project directory cannot contain symbolic links or submodules")
+			return nil, nil, fmt.Errorf("Repository project directory cannot contain symbolic links or submodules")
 		}
-		if header.Typeflag != tar.TypeReg || !contains([]string{".js", ".mjs", ".ts", ".json"}, path.Ext(name)) {
+		if header.Typeflag != tar.TypeReg {
+			continue
+		}
+		if assets != nil && strings.HasPrefix(name, assets.Directory+"/") {
+			asset := strings.TrimPrefix(name, assets.Directory+"/")
+			if _, ok := workerAssetPath(asset); !ok || header.Size < 0 || header.Size > workerAssetMax || len(assetFiles) >= workerAssetsFilesMax {
+				return nil, nil, fmt.Errorf("Repository assets must contain at most %d files of %d MiB", workerAssetsFilesMax, workerAssetMax>>20)
+			}
+			if _, ok := workerAssetType(asset); !ok {
+				return nil, nil, fmt.Errorf("repository asset type is not supported: %s", asset)
+			}
+			data, err := io.ReadAll(archive)
+			if err != nil || len(data) != int(header.Size) {
+				return nil, nil, fmt.Errorf("repository asset is invalid: %s", asset)
+			}
+			assetTotal += len(data)
+			if assetTotal > workerAssetsTotalMax {
+				return nil, nil, fmt.Errorf("Repository assets exceed 20 MiB")
+			}
+			assetFiles[asset] = data
+			continue
+		}
+		if !contains([]string{".js", ".mjs", ".ts", ".json"}, path.Ext(name)) {
 			continue
 		}
 		if !safeWorkerRepositoryPath(name, false) || header.Size < 0 || header.Size > int64((256<<10)-total) || len(files) >= 32 {
-			return nil, fmt.Errorf("Repository source must contain at most 32 safe files and 256 KiB; select a smaller project directory")
+			return nil, nil, fmt.Errorf("Repository source must contain at most 32 safe files and 256 KiB; select a smaller project directory")
 		}
 		if _, duplicate := files[name]; duplicate {
-			return nil, fmt.Errorf("Repository archive contains duplicate source paths")
+			return nil, nil, fmt.Errorf("Repository archive contains duplicate source paths")
 		}
 		data, err := io.ReadAll(archive)
 		if err != nil || !utf8.Valid(data) {
-			return nil, fmt.Errorf("Repository source is not valid UTF-8")
+			return nil, nil, fmt.Errorf("Repository source is not valid UTF-8")
 		}
 		total += len(data)
 		files[name] = string(data)
 	}
 	if _, err := io.Copy(io.Discard, limited); err != nil || limited.N <= 0 {
-		return nil, fmt.Errorf("Repository archive is invalid or exceeds 64 MiB expanded")
+		return nil, nil, fmt.Errorf("Repository archive is invalid or exceeds 64 MiB expanded")
 	}
 	if err := sourceValid(source.Entrypoint, files); err != nil {
-		return nil, fmt.Errorf("Repository project must include the configured JS or TS entrypoint and valid source files")
+		return nil, nil, fmt.Errorf("Repository project must include the configured JS or TS entrypoint and valid source files")
 	}
-	return files, nil
+	if assets != nil && len(assetFiles) == 0 {
+		return nil, nil, fmt.Errorf("Repository assets directory %s is missing or empty", assets.Directory)
+	}
+	return files, assetFiles, nil
 }

@@ -135,8 +135,14 @@ func (s *Server) orgList(st *State, p Principal, r *http.Request) (any, int, err
 	return items(out)
 }
 func (s *Server) orgCreate(st *State, p Principal, r *http.Request) (any, int, error) {
-	if e := s.require(st, p, r, "organization.create", systemTarget()); e != nil {
-		return nil, 0, e
+	// Self-service still requires an authenticated browser or CLI session; API
+	// keys are excluded so a leaked key cannot mint new organizations.
+	if !s.Config.OrganizationSelfService {
+		if e := s.require(st, p, r, "organization.create", systemTarget()); e != nil {
+			return nil, 0, e
+		}
+	} else if p.Kind != "session" && p.Kind != "cli_session" {
+		return nil, 0, forbidden()
 	}
 	var in struct {
 		Name string `json:"name"`

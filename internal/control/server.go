@@ -139,6 +139,8 @@ func (s *Server) routes() {
 	if s.Config.Workers != nil {
 		s.internalMux.HandleFunc("GET /api/internal/workers/snapshot", s.workerRuntimeSnapshot)
 		s.internalMux.HandleFunc("GET /api/internal/workers/releases/{release}", s.workerRuntimeRelease)
+		s.internalMux.HandleFunc("GET /api/internal/workers/releases/{release}/assets", s.workerRuntimeReleaseAssets)
+		s.internalMux.HandleFunc("GET /api/internal/workers/releases/{release}/assets/{path...}", s.workerRuntimeReleaseAssetURL)
 		s.internalMux.HandleFunc("GET /api/internal/workers/artifacts/{artifact}", s.workerRuntimeArtifact)
 		s.internalMux.HandleFunc("POST /api/internal/workers/ack", s.workerRuntimeAck)
 	}
@@ -460,7 +462,7 @@ func (s *Server) providersHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, map[string]string{"id": pc.ID, "type": pc.Type, "name": pc.Name})
 	}
-	s.json(w, 200, map[string]any{"providers": out, "development": s.Config.Development})
+	s.json(w, 200, map[string]any{"providers": out, "development": s.Config.Development, "organization_self_service": s.Config.OrganizationSelfService})
 }
 func (s *Server) csrfHandler(w http.ResponseWriter, r *http.Request) {
 	token := ""

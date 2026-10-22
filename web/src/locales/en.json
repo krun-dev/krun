@@ -534,5 +534,10 @@
   "此服务尚未绑定代码仓库；绑定后可直接从分支或 Tag 构建版本。": "No repository is bound yet; bind one to build versions straight from a branch or tag.",
   "绑定代码仓库": "Bind repository",
   "已部署到": "Deployed to",
-  "未部署到任何环境": "Not deployed to any environment"
+  "未部署到任何环境": "Not deployed to any environment",
+  "你还没有加入任何组织": "You are not in any organization yet",
+  "组织是团队协作与权限隔离的边界。创建一个组织开始使用。": "Organizations are the boundary for team collaboration and permissions. Create one to get started.",
+  "组织是团队协作与权限隔离的边界。请联系管理员邀请你加入现有组织。": "Organizations are the boundary for team collaboration and permissions. Ask an administrator to invite you to an existing one.",
+  "把你的用户 ID 提供给管理员": "Give this user ID to an administrator",
+  "创建后你会自动成为该组织的管理员。": "You become an administrator of the organization you create."
 }
