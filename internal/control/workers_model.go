@@ -145,8 +145,8 @@ type WorkerEnvironment struct {
 	ConfigRevision int               `json:"configuration_revision"`
 	Variables      map[string]string `json:"variables"`
 	Revision       int               `json:"release_revision"`
-	Deployment     string            `json:"deployment_id,omitempty"`
-	Confirmed      string            `json:"confirmed_deployment_id,omitempty"`
+	Release        string            `json:"release_id,omitempty"`
+	Confirmed      string            `json:"confirmed_release_id,omitempty"`
 }
 type WorkerService struct {
 	Repository         *WorkerRepositorySource      `json:"repository_source,omitempty"`
@@ -155,7 +155,7 @@ type WorkerService struct {
 	Organization       string                       `json:"organization_id"`
 	Environments       map[string]WorkerEnvironment `json:"environments"`
 }
-type WorkerDeployment struct {
+type WorkerRelease struct {
 	ID             string            `json:"id"`
 	Service        string            `json:"service_id"`
 	Organization   string            `json:"organization_id"`
@@ -181,7 +181,7 @@ type WorkerOperation struct {
 	Environment      string       `json:"environment"`
 	State            string       `json:"state"`
 	Build            string       `json:"build_id,omitempty"`
-	Deployment       string       `json:"deployment_id"`
+	Release          string       `json:"release_id"`
 	ExpectedRevision int          `json:"expected_revision"`
 	ConfigRevision   int          `json:"configuration_revision"`
 	SnapshotRevision int          `json:"snapshot_revision,omitempty"`
@@ -194,7 +194,7 @@ type WorkerOperation struct {
 type WorkerOperationPrivate struct{ Actor WorkerActor }
 type WorkerHistory struct {
 	Revision   int       `json:"revision"`
-	Deployment string    `json:"deployment_id"`
+	Release    string    `json:"release_id"`
 	Operation  string    `json:"operation_id"`
 	Kind       string    `json:"kind"`
 	Time       time.Time `json:"time"`
@@ -216,7 +216,7 @@ type WorkerState struct {
 	Builds           map[string]WorkerBuild
 	BuildPrivate     map[string]WorkerBuildPrivate
 	Artifacts        map[string]WorkerArtifact
-	Deployments      map[string]WorkerDeployment
+	Releases         map[string]WorkerRelease
 	Operations       map[string]WorkerOperation
 	OperationPrivate map[string]WorkerOperationPrivate
 	Histories        map[string][]WorkerHistory
@@ -225,7 +225,7 @@ type WorkerState struct {
 }
 
 func newWorkerState() *WorkerState {
-	return &WorkerState{Revision: 1, Services: map[string]WorkerService{}, Builds: map[string]WorkerBuild{}, BuildPrivate: map[string]WorkerBuildPrivate{}, Artifacts: map[string]WorkerArtifact{}, Deployments: map[string]WorkerDeployment{}, Operations: map[string]WorkerOperation{}, OperationPrivate: map[string]WorkerOperationPrivate{}, Histories: map[string][]WorkerHistory{}, Idempotency: map[string]WorkerIdempotency{}, Acks: map[string]WorkerAck{}}
+	return &WorkerState{Revision: 1, Services: map[string]WorkerService{}, Builds: map[string]WorkerBuild{}, BuildPrivate: map[string]WorkerBuildPrivate{}, Artifacts: map[string]WorkerArtifact{}, Releases: map[string]WorkerRelease{}, Operations: map[string]WorkerOperation{}, OperationPrivate: map[string]WorkerOperationPrivate{}, Histories: map[string][]WorkerHistory{}, Idempotency: map[string]WorkerIdempotency{}, Acks: map[string]WorkerAck{}}
 }
 // A service has one durable baseline ("production") plus any number of
 // short-lived preview environments identified by a slug.

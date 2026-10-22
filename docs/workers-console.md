@@ -36,11 +36,11 @@ http://127.0.0.1:4380/console/?page=workers&workspace=org_-mEYnYcWmV2YjjSM&worke
 2. 查看后端 Build 状态、实际编译日志，以及 MinIO 归档的 bucket / object key / hash。
 3. 在构建列表选择成功版本，选择目标环境、检查配置，确认发布。
 4. 页面轮询真实 Operation 的制品检查、候选验证、Release 提交、运行副本确认，区分 `committed` 和 `available`。
-5. 修改环境变量或 staging 开关。配置采用 CAS revision，保存变量不改变当前运行版本；原始 Deployment 变量另行展示。
-6. 在环境发布历史中确认回滚，恢复该 Deployment 的代码及变量。
-7. 在“调用测试”中填写相对路径和 HTTP 方法，通过真实 kgateway 调用 workerd，查看 HTTP status、正文、Deployment ID 和 Pod UID。
+5. 修改环境变量或 staging 开关。配置采用 CAS revision，保存变量不改变当前运行版本；原始 Release 变量另行展示。
+6. 在环境发布历史中确认回滚，恢复该 Release 的代码及变量。
+7. 在“调用测试”中填写相对路径和 HTTP 方法，通过真实 kgateway 调用 workerd，查看 HTTP status、正文、Release ID 和 Pod UID。
 
-构建列表的当前 / 历史 / 未发布 / 生效中状态由真实 Deployment、Artifact 和发布历史计算。发布接口返回的 queued Operation 立即显示，后续用服务器状态更新；页面刷新后仍可读取持久化历史与正在进行的操作。
+构建列表的当前 / 历史 / 未发布 / 生效中状态由真实 Release、Artifact 和发布历史计算。发布接口返回的 queued Operation 立即显示，后续用服务器状态更新；页面刷新后仍可读取持久化历史与正在进行的操作。
 
 调用 API 先检查当前用户 / Key 的目标环境 `service.invoke` 和 Session CSRF。Gateway 地址及 Host 来自平台配置与环境记录；用户只能选择相对 URI，不能指定外部 URL。请求不转发平台身份凭证，响应最多 64 KiB，不跟随重定向，不把业务 HTML / Cookie 注入控制台 origin。业务正文以转义文本展示。
 
@@ -66,13 +66,13 @@ kind 的 backend NetworkPolicy 仅新增到自身 Gateway Pod TCP 8080 的出口
 v2 实际响应头：
 
 ```text
-X-Krun-Deployment: dep_edbe9540bdff8c8b998210d41528b2e0e2970d612d99ebdcd1acb74a00d23c63
+X-Krun-Release: rel_edbe9540bdff8c8b998210d41528b2e0e2970d612d99ebdcd1acb74a00d23c63
 X-Krun-Pod: c29a1931-d532-4322-8243-d2db66765f36
 ```
 
 回滚后 production Release 为 r3，HTTP 200 返回 `version: v1` 和同一生产 GREETING。test 保持原 v1，staging 恢复默认关闭。页面中保留两个成功构建及生产发布 / 回滚历史，用户可以继续发布 v2 或上传自己的代码。
 
-前端 TypeScript 检查、生产构建、国际化 4 项、权限 5 项检查通过。后端 `go test -race ./...` 与 `go vet ./...` 通过；新增调用入口及读取接口的权限 / 路径测试通过。此前 20 项后端 kind 验收另见 [后端报告](workers-kind-verification.md)，初始浏览器构建、发布和回滚没有触发 runtime Deployment 更新。验收收尾观察到一个旧 runtime 发生 OOMKilled（原 limit 512 MiB），实验池随后调整至每 Pod 1 GiB 并滚动更新。该容量调整与业务版本发布是独立动作。
+前端 TypeScript 检查、生产构建、国际化 4 项、权限 5 项检查通过。后端 `go test -race ./...` 与 `go vet ./...` 通过；新增调用入口及读取接口的权限 / 路径测试通过。此前 20 项后端 kind 验收另见 [后端报告](workers-kind-verification.md)，初始浏览器构建、发布和回滚没有触发 runtime Release 更新。验收收尾观察到一个旧 runtime 发生 OOMKilled（原 limit 512 MiB），实验池随后调整至每 Pod 1 GiB 并滚动更新。该容量调整与业务版本发布是独立动作。
 
 当前源码构建范围、平台限制及实验环境问题仍见 [后端接口与流程](workers-backend.md)。该启动方式服务于本机体验；不是公网生产部署。
 

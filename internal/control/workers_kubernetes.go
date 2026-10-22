@@ -227,7 +227,7 @@ func (k *workerKubernetes) ensureRoutes(ctx context.Context, c *WorkersConfig, n
 	}
 	sort.Strings(hosts)
 	base := "/apis/gateway.networking.k8s.io/v1/namespaces/" + k.namespace + "/httproutes"
-	spec := map[string]any{"parentRefs": []any{map[string]string{"name": c.GatewayName, "namespace": c.GatewayNamespace, "sectionName": "private"}}, "hostnames": hosts, "rules": []any{map[string]any{"filters": []any{map[string]any{"type": "RequestHeaderModifier", "requestHeaderModifier": map[string]any{"remove": []string{"x-krun-scope", "x-krun-deployment", "x-forwarded-host", "x-internal"}}}}, "backendRefs": []any{map[string]any{"name": c.RuntimeService, "port": 8081}}}}}
+	spec := map[string]any{"parentRefs": []any{map[string]string{"name": c.GatewayName, "namespace": c.GatewayNamespace, "sectionName": "private"}}, "hostnames": hosts, "rules": []any{map[string]any{"filters": []any{map[string]any{"type": "RequestHeaderModifier", "requestHeaderModifier": map[string]any{"remove": []string{"x-krun-scope", "x-krun-release", "x-forwarded-host", "x-internal"}}}}, "backendRefs": []any{map[string]any{"name": c.RuntimeService, "port": 8081}}}}}
 	var current struct {
 		Metadata struct {
 			Generation int `json:"generation"`

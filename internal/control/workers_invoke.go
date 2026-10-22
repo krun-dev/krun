@@ -114,7 +114,7 @@ func (s *Server) workerInvokeHost(r *http.Request) (string, error) {
 		}
 		service := st.Workers.Services[target.ID]
 		current := service.Environments[env]
-		if !current.Enabled || current.Deployment == "" {
+		if !current.Enabled || current.Release == "" {
 			appErr = problem(409, "WORKER_NOT_PUBLISHED", "Publish this enabled environment first")
 			return nil
 		}
@@ -155,7 +155,7 @@ func (s *Server) invokeWorker(ctx context.Context, host string, in workerInvokeR
 	}
 	out.Body = string(raw)
 	out.Headers = make(map[string]string)
-	for _, name := range []string{"Content-Type", "X-Krun-Deployment", "X-Krun-Pod"} {
+	for _, name := range []string{"Content-Type", "X-Krun-Release", "X-Krun-Pod"} {
 		if value := resp.Header.Get(name); value != "" {
 			out.Headers[name] = value
 		}

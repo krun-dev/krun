@@ -76,7 +76,7 @@ const artifactIcons: Record<string, typeof Check> = {
   生效中: Clock,
   不可用: Minus,
 };
-// Deployment state color system (single source of truth):
+// Release state color system (single source of truth):
 //   当前   → primary (brand): the good, expected state
 //   生效中 → amber: transient, worth the eye
 //   历史   → muted: superseded, no attention needed
@@ -292,9 +292,9 @@ export function WorkersPage({
                               {t(
                                 !env.enabled
                                   ? "未启用"
-                                  : env.deployment_id
-                                    ? env.deployment_id ===
-                                      env.confirmed_deployment_id
+                                  : env.release_id
+                                    ? env.release_id ===
+                                      env.confirmed_release_id
                                       ? "已发布"
                                       : "生效中"
                                     : "未发布",
@@ -576,19 +576,19 @@ function WorkerDetail({
                 variant="outline"
                 className={cn(
                   e.enabled &&
-                    e.deployment_id === e.confirmed_deployment_id &&
-                    e.deployment_id
+                    e.release_id === e.confirmed_release_id &&
+                    e.release_id
                     ? "border-primary/40 text-primary"
-                    : e.enabled && e.deployment_id !== e.confirmed_deployment_id
+                    : e.enabled && e.release_id !== e.confirmed_release_id
                       ? "border-amber-500/40 text-amber-600 dark:text-amber-500"
                       : "",
                 )}
               >
                 {!e.enabled
                   ? t("未启用")
-                  : e.deployment_id !== e.confirmed_deployment_id
+                  : e.release_id !== e.confirmed_release_id
                     ? t("生效中")
-                    : e.deployment_id
+                    : e.release_id
                       ? t("已发布")
                       : t("未发布")}
               </Badge>
@@ -596,11 +596,11 @@ function WorkerDetail({
             <div className="my-3 text-sm">
               {t("Release")} r{e.release_revision}{" "}
               <span className="text-muted-foreground">
-                · {shortID(e.deployment_id)}
+                · {shortID(e.release_id)}
               </span>
             </div>
             <div className="flex items-center justify-between gap-2">
-              {e.deployment_id && env?.enabled ? (
+              {e.release_id && env?.enabled ? (
                 <a
                   href={workerURL(e.host)}
                   target="_blank"
@@ -703,7 +703,7 @@ function WorkerDetail({
                         ) : null}
                       </TableCell>
                       <TableCell>
-                        <DeploymentSummary
+                        <ReleaseSummary
                           build={b}
                           data={data}
                           onSelect={(name) => setEnvironment(name)}
@@ -772,7 +772,7 @@ function WorkerDetail({
                       <div>
                         <span className="font-medium">r{h.revision}</span>{" "}
                         <code className="ml-2 text-xs">
-                          {shortID(h.deployment_id)}
+                          {shortID(h.release_id)}
                         </code>
                         <p className="mt-1 text-xs text-muted-foreground">
                           {h.kind} · {new Date(h.time).toLocaleString()}
@@ -784,11 +784,11 @@ function WorkerDetail({
                         disabled={
                           rollbackBusy ||
                           !env.enabled ||
-                          env.deployment_id === h.deployment_id
+                          env.release_id === h.release_id
                         }
                         onClick={() =>
                           setRollback({
-                            id: h.deployment_id,
+                            id: h.release_id,
                             revision: h.revision,
                           })
                         }
@@ -942,7 +942,7 @@ function WorkerDetail({
           <DialogHeader>
             <DialogTitle>{t("回滚历史版本")}</DialogTitle>
             <DialogDescription>
-              {t("恢复该历史 Deployment 的代码和变量，仍需验证并等待生效。")}
+              {t("恢复该历史 Release 的代码和变量，仍需验证并等待生效。")}
             </DialogDescription>
           </DialogHeader>
           <p className="text-sm">
@@ -958,7 +958,7 @@ function WorkerDetail({
                   base + "/environments/" + env.name + "/rollbacks",
                   "POST",
                   {
-                    deployment_id: rollback.id,
+                    release_id: rollback.id,
                     expected_revision: env.release_revision,
                     idempotency_key: idempotency(),
                   },
@@ -1009,9 +1009,9 @@ function WorkerDetail({
   );
 }
 
-// Per-build deployment chips: only environments this build reached appear,
-// colored by the shared deployment state system.
-function DeploymentSummary({
+// Per-build release chips: only environments this build reached appear,
+// colored by the shared release state system.
+function ReleaseSummary({
   build,
   data,
   onSelect,
@@ -1022,14 +1022,14 @@ function DeploymentSummary({
 }) {
   const stateOf = (env: Environment): string => {
     if (build.state !== "succeeded") return "不可用";
-    const current = env.deployment_id
-      ? data.deployments[env.deployment_id]
+    const current = env.release_id
+      ? data.releases[env.release_id]
       : undefined;
     const historical = (data.histories[env.name] || []).some(
-      (h) => data.deployments[h.deployment_id]?.artifact_id === build.artifact_id,
+      (h) => data.releases[h.release_id]?.artifact_id === build.artifact_id,
     );
     if (current?.artifact_id === build.artifact_id)
-      return env.deployment_id !== env.confirmed_deployment_id ? "生效中" : "当前";
+      return env.release_id !== env.confirmed_release_id ? "生效中" : "当前";
     return historical ? "历史" : "未发布";
   };
   const deployed = data.environments
@@ -1154,8 +1154,8 @@ function EnvironmentSettings({
   );
   const [revision, setRevision] = useState(env.configuration_revision);
   const [busy, setBusy] = useState(false);
-  const current = env.deployment_id
-    ? data.deployments[env.deployment_id]
+  const current = env.release_id
+    ? data.releases[env.release_id]
     : undefined;
   const stale = revision !== env.configuration_revision;
   async function save(input: unknown) {
@@ -1346,13 +1346,13 @@ function Invocation({ base, env }: { base: string; env: Environment }) {
           ) : null}
           <Button
             className="w-fit"
-            disabled={busy || !env.enabled || !env.deployment_id}
+            disabled={busy || !env.enabled || !env.release_id}
             type="submit"
           >
             {busy ? t("调用中…") : t("发送请求")}
           </Button>
         </form>
-        {!env.deployment_id ? (
+        {!env.release_id ? (
           <p className="text-sm text-muted-foreground">
             {t("先发布到此环境，再发送请求。")}
           </p>

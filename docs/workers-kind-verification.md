@@ -29,7 +29,7 @@
 | 3 | 相同 Artifact 发布 production | 同一制品使用生产环境自己的变量 |
 | 4 | 构建并发布 v2 | production 更新，test 仍为 v1 |
 | 5 | 旧 Release revision | 返回 409，拒绝覆盖 |
-| 6 | 历史 Deployment 回滚 | 恢复历史代码和变量，成功历史正确 |
+| 6 | 历史 Release 回滚 | 恢复历史代码和变量，成功历史正确 |
 | 7 | 语法错误 | Build failed、无 Artifact；原 production 仍可调用 |
 | 8 | 访问源码目录以外文件 | 编译器拒绝 `/input/input.json` 导入 |
 | 9 | 模块初始化抛异常 | 候选失败；Release revision 与旧版本保持 |

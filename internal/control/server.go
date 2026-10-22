@@ -138,7 +138,7 @@ func (s *Server) routes() {
 	s.internalMux = http.NewServeMux()
 	if s.Config.Workers != nil {
 		s.internalMux.HandleFunc("GET /api/internal/workers/snapshot", s.workerRuntimeSnapshot)
-		s.internalMux.HandleFunc("GET /api/internal/workers/deployments/{deployment}", s.workerRuntimeDeployment)
+		s.internalMux.HandleFunc("GET /api/internal/workers/releases/{release}", s.workerRuntimeRelease)
 		s.internalMux.HandleFunc("GET /api/internal/workers/artifacts/{artifact}", s.workerRuntimeArtifact)
 		s.internalMux.HandleFunc("POST /api/internal/workers/ack", s.workerRuntimeAck)
 	}

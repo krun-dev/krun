@@ -39,7 +39,7 @@
 两种模式共享同一套不变量，切换只改「谁做 host 匹配」：
 
 - **host 命名模型**（第 3 节）：URL 空间完全一致，切模式对用户零感知，两套可并行灰度切流。
-- **runtime 快照分发**（第 6 节）：host → deployment 的最终寻址始终在 runtime，边缘只负责把正确 host 的流量送到正确 pool。
+- **runtime 快照分发**（第 6 节）：host → release 的最终寻址始终在 runtime，边缘只负责把正确 host 的流量送到正确 pool。
 - **安全不变量**（第 7 节）：未知 host 404；客户端伪造的内部头在边缘剥除；内网 host 不出现在公网入口的路由上；未获批域名不生成任何 host。
 - **边缘不带内容相关的 path 规则**：HTTPRoute 与 workers-router 都只按 host 整域转发；路径级分流（静态资产 vs 业务 Worker）由 Pod 内入口 Worker 承担，见 [workers-assets.md](workers-assets.md)。唯一例外是可选的「指纹前缀静态卸载」（内容无关的精确前缀直转公开 bucket，见 assets 5.4）。
 
@@ -133,7 +133,7 @@ validate：Domains 非空、scope ∈ {public, private}、后缀 DNS 合法、de
 
 `WorkerEnvironment.Visibility` 字段不再使用（现状恒 `private`，可顺手移除）。
 
-`WorkerDeployment.Pool` 已存在（现恒 `default`）；`runtimeMembers` 的 `pool=default` selector（`workers_kubernetes.go:145`）参数化，多池为两种模式共同前置。
+`WorkerRelease.Pool` 已存在（现恒 `default`）；`runtimeMembers` 的 `pool=default` selector（`workers_kubernetes.go:145`）参数化，多池为两种模式共同前置。
 
 ## 5. 路由
 
@@ -206,7 +206,7 @@ spec:
     - filters:
         - type: RequestHeaderModifier
           requestHeaderModifier:
-            remove: [x-krun-scope, x-krun-deployment, x-forwarded-host, x-internal]
+            remove: [x-krun-scope, x-krun-release, x-forwarded-host, x-internal]
       backendRefs:
         - { name: runtime-<pool>, port: 8081 }
 ```
@@ -218,7 +218,7 @@ spec:
 - parentRef 按 host 所属域名的 scope 指向对应 Gateway（`workers-public` / `workers-private`），不再写死单 Gateway 单 section；现配置 `gateway_name` 拆为 `public_gateway` / `private_gateway`（或 gateway + class 成对配置）。
 - **hostname 分片**：Gateway API 每条 HTTPRoute 最多 16 个 hostname。baseline + preview × 多域名可能超限（`PreviewLimit` 上限 128）。controller 通用分片：组内首条沿用组名，超出递增 `-1`、`-2`；语义上仍是「一个 worker 一组 route」。
 - **补 prune**：现实现只建和改不删。域名选用变更、preview 增删、服务删除后必须清理多余分片与整个 route，否则 hostnames 只涨不缩、对象残留。
-- backend 按 pool 选择：同一服务的 host 固定指向 `runtime-<pool>`；pool 变更属重新发布（Deployment 引用 pool，已有约束）。
+- backend 按 pool 选择：同一服务的 host 固定指向 `runtime-<pool>`；pool 变更属重新发布（Release 引用 pool，已有约束）。
 - 未获批域名不进 desired，不产生任何路由——审批在数据面生效的落点。
 
 ### 5.3 模式二：dataplane（自有数据面，预留口子）
@@ -232,7 +232,7 @@ workers:
 - LB / DNS 直接指向 `workers-router` Service，不经 Gateway；集群内零 Gateway / HTTPRoute 对象（workers 相关）。
 - workers-router 是无状态薄转发层，建议以 runtime 二进制 `--mode=router` 实现，复用快照拉取、健康检查、鉴权代码：
   - 定期从控制面拉 `host → pool` 表（复用快照轮询 + `validUntil` + stale-ok 模式），拉取失败继续用旧表；
-  - 请求查表：miss 一律 404；命中则 `ReverseProxy` 到 `http://runtime-<pool>.<ns>.svc:8081`，`req.Host` 原样透传，runtime 继续按快照做 host → deployment 解析；
+  - 请求查表：miss 一律 404；命中则 `ReverseProxy` 到 `http://runtime-<pool>.<ns>.svc:8081`，`req.Host` 原样透传，runtime 继续按快照做 host → release 解析；
   - 公网 / 内网两个入口各自面前放一组 router（或同一组、入口层分开），内网 host 表按入口过滤下发；TLS 在 LB 终止或 router 挂通配符证书，按生产入口形态定。
 - dataplane 驱动的 `ensure()` 不编排路由对象：router deployment/service 由部署侧管理，controller 只读 endpoints 健康；readiness = router endpoints ready。
 
@@ -242,20 +242,20 @@ workers:
 
 `workerRuntimeSnapshot`（`workers_runtime.go`）调整：
 
-- route 条目：`host`、`path`、`enabled`、`deployment` 之外增加 `pool`。原 `scopes` 数组移除（随 visibility 一并取消）：内外网区分由 listener / 入口层承担，runtime 只按 host 匹配。
+- route 条目：`host`、`path`、`enabled`、`release` 之外增加 `pool`。原 `scopes` 数组移除（随 visibility 一并取消）：内外网区分由 listener / 入口层承担，runtime 只按 host 匹配。
 - host 列表来源：该服务所有 `approved`（或免审批）域名 × 各启用环境。
 - 未获批域名的 host 本就不在快照中（第 3.3 节），无泄漏面。
-- 快照按 pool 过滤下发：各 pool 的 runtime 只拉自己的 hosts + deployments（现为全局下发、deployments 仅滤 `default`）。router（dataplane 模式）拉独立的 `host → pool` 汇总表。
+- 快照按 pool 过滤下发：各 pool 的 runtime 只拉自己的 hosts + releases（现为全局下发、releases 仅滤 `default`）。router（dataplane 模式）拉独立的 `host → pool` 汇总表。
 - Pod 内入口 Worker 的 host → 环境 Release 查找逻辑不变。
 
-多池前置改造：`runtimeMembers(ctx, pool)` selector 参数化；`WorkerDeployment.Pool` 在服务 / 发布 API 层可选。
+多池前置改造：`runtimeMembers(ctx, pool)` selector 参数化；`WorkerRelease.Pool` 在服务 / 发布 API 层可选。
 
 ## 7. 安全不变量
 
 1. **未知 host 一律 404**：寻址权唯一在快照，`host ∈ snapshot` 才放行。同时是防租户 Host 伪造的边界。
 2. **内网 host 不出现在公网入口的数据路径上**：HTTPRoute 按 scope 拆组（第 5.2 节），且 public / private 各自独立 GatewayClass + Gateway 实例。公网实例的路由表只含公网后缀，公网入口伪造内网 Host（包括 SNI 用公网域名、Host 头用内网域名的组合）匹配不到任何路由，404。实例级拆分使隔离不依赖单实例 listener 隔离与端口配置正确性。dataplane 模式下由 router 的 host 表按入口过滤承担同一职责。
 3. **网关实例与网络面对应**：public 网关实例的 LB / 端口只做公网暴露，private 网关实例只挂内网 LB（内网类型实例）。警惕 k8s 旁路：NodePort、节点 IP 直连、LoadBalancer Service 误用公网实例——一旦 private 实例端口公网可达，攻击者无需伪造即可直接访问内网路由。本条是部署不变量，列入发布检查。
-4. **客户端伪造的内部头在边缘剥除**：`x-krun-scope`、`x-krun-deployment`、`x-forwarded-host`、`x-internal` 在 HTTPRoute filter（或 router）统一 remove（现 filter 已做，保持）。
+4. **客户端伪造的内部头在边缘剥除**：`x-krun-scope`、`x-krun-release`、`x-forwarded-host`、`x-internal` 在 HTTPRoute filter（或 router）统一 remove（现 filter 已做，保持）。
 5. **审批是数据面隔离**：未 `approved` 的域名不生成 host、不进快照、不建路由——不是 UI 提示层。
 6. slug 不可枚举（16 位 hex 随机），host 无法被遍历猜测；未知 host 的 404 不区分「不存在 / 已禁用 / 未发布 / 未获批」。
 7. 未发布环境返回 503、已禁用环境 runtime 拒绝执行——沿用现有语义。

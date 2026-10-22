@@ -72,7 +72,7 @@ kind 只为控制面增加已配置仓库 API / 下载域名解析所得 IP 的 
 - Commit：`97b2fb1632de1f02bb0d12639f8602cefb3de158`。
 - 成功构建：`bld_U6NJm3nXeUXsyKVS`，编译 696 bytes，归档 645 bytes。
 - 归档 SHA-256：`ba1af0c24152f808d4d761a897a528f458adb45e638b173ed6e13a337c1f4d78`，bucket `krun-artifacts`。
-- test Deployment：`dep_a64372b5395c21729e28183a0dba06f9bf5d11e1e94a15647fcd008e2563b941`，发布已生效。
+- test Release：`rel_a64372b5395c21729e28183a0dba06f9bf5d11e1e94a15647fcd008e2563b941`，发布已生效。
 - 调用：HTTP 200，正文 `Hello World!`，响应 Pod UID `3b5cdbbd-c847-4e0b-9bba-7b9a6aacb73e`。
 
 首次真实归档下载发现 GitHub 的全局 PAX metadata 被误认为归档根目录；已修复并增加回归测试，失败记录保留在历史中。九组新增后端回归测试覆盖来源排序与关闭、URL / 目录及仓库访问范围、仓库配置 CAS、幂等重试、commit 固定、GitLab 嵌套 namespace / ref、GitHub 重定向的凭证隔离、归档边界、列表环境权限和全局 PAX header。完整 `go test -race ./...`、`go vet ./...` 通过；前端类型 / 生产构建、4 项国际化与 5 项权限检查通过。

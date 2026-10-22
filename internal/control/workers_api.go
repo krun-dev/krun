@@ -32,7 +32,7 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST "+base+"/environments/{environment}/rollbacks", s.protected(false, s.workerRollback))
 	m.HandleFunc("GET "+base+"/environments/{environment}/history", s.protected(false, s.workerReleaseHistory))
 	m.HandleFunc("GET "+base+"/operations", s.protected(false, s.workerOperationList))
-	m.HandleFunc("GET "+base+"/deployments/{deployment}", s.protected(false, s.workerDeploymentGet))
+	m.HandleFunc("GET "+base+"/releases/{release}", s.protected(false, s.workerReleaseGet))
 	m.HandleFunc("POST "+base+"/environments/{environment}/invoke", s.workerInvoke)
 	m.HandleFunc("GET "+base+"/operations/{operation}", s.protected(false, s.workerOperationGet))
 	m.HandleFunc("GET "+base+"/artifacts/{artifact}", s.protected(false, s.workerArtifactGet))
@@ -415,7 +415,7 @@ func (s *Server) workerReleaseCreate(st *State, p Principal, r *http.Request, ki
 	}
 	var in struct {
 		Build      string `json:"build_id,omitempty"`
-		Deployment string `json:"deployment_id,omitempty"`
+		Release   string `json:"release_id,omitempty"`
 		Revision   int    `json:"expected_revision"`
 		Key        string `json:"idempotency_key"`
 	}
@@ -450,9 +450,9 @@ func (s *Server) workerReleaseCreate(st *State, p Principal, r *http.Request, ki
 			return nil, 0, problem(409, "RELEASE_BUSY", "Wait for the active release operation")
 		}
 	}
-	var deployment WorkerDeployment
+	var release WorkerRelease
 	if kind == "publish" {
-		if in.Build == "" || in.Deployment != "" {
+		if in.Build == "" || in.Release != "" {
 			return nil, 0, problem(422, "WORKER_RELEASE_INVALID", "Publish requires build_id only")
 		}
 		b, ok := st.Workers.Builds[in.Build]
@@ -466,35 +466,35 @@ func (s *Server) workerReleaseCreate(st *State, p Principal, r *http.Request, ki
 		if !ok || a.State != "finalized" {
 			return nil, 0, problem(409, "ARTIFACT_UNAVAILABLE", "Artifact unavailable")
 		}
-		deployment = WorkerDeployment{Service: t.ID, Organization: t.Organization, Environment: env, Artifact: a.ID, ArchiveDigest: a.ArchiveDigest, ModuleDigest: a.ModuleDigest, ConfigRevision: current.ConfigRevision, Variables: current.Variables, Pool: "default"}
-		raw, _ := json.Marshal(deployment)
-		deployment.ID = "dep_" + bytesDigest(raw)
-		deployment.Created = now()
-		if old, ok := st.Workers.Deployments[deployment.ID]; ok {
-			deployment = old
+		release = WorkerRelease{Service: t.ID, Organization: t.Organization, Environment: env, Artifact: a.ID, ArchiveDigest: a.ArchiveDigest, ModuleDigest: a.ModuleDigest, ConfigRevision: current.ConfigRevision, Variables: current.Variables, Pool: "default"}
+		raw, _ := json.Marshal(release)
+		release.ID = "rel_" + bytesDigest(raw)
+		release.Created = now()
+		if old, ok := st.Workers.Releases[release.ID]; ok {
+			release = old
 		}
-		st.Workers.Deployments[deployment.ID] = deployment
+		st.Workers.Releases[release.ID] = release
 	} else {
-		if in.Deployment == "" || in.Build != "" {
-			return nil, 0, problem(422, "WORKER_RELEASE_INVALID", "Rollback requires deployment_id only")
+		if in.Release == "" || in.Build != "" {
+			return nil, 0, problem(422, "WORKER_RELEASE_INVALID", "Rollback requires release_id only")
 		}
-		d, ok := st.Workers.Deployments[in.Deployment]
+		d, ok := st.Workers.Releases[in.Release]
 		if !ok || d.Service != t.ID || d.Organization != t.Organization || d.Environment != env {
 			return nil, 0, notFound()
 		}
 		historical := false
 		for _, h := range st.Workers.Histories[t.ID+"/"+env] {
-			if h.Deployment == d.ID {
+			if h.Release == d.ID {
 				historical = true
 			}
 		}
 		if !historical {
-			return nil, 0, problem(409, "ROLLBACK_NOT_PUBLISHED", "Rollback target must be a successfully published deployment")
+			return nil, 0, problem(409, "ROLLBACK_NOT_PUBLISHED", "Rollback target must be a successfully published release")
 		}
-		deployment = d
+		release = d
 	}
 	id = randomID("op")
-	op := WorkerOperation{ID: id, Kind: kind, Organization: t.Organization, Service: t.ID, Environment: env, State: "queued", Build: in.Build, Deployment: deployment.ID, ExpectedRevision: current.Revision, ConfigRevision: current.ConfigRevision, Steps: []WorkerStep{{"artifact", "pending", ""}, {"candidate", "pending", ""}, {"commit", "pending", ""}, {"synchronize", "pending", ""}}, Created: now()}
+	op := WorkerOperation{ID: id, Kind: kind, Organization: t.Organization, Service: t.ID, Environment: env, State: "queued", Build: in.Build, Release: release.ID, ExpectedRevision: current.Revision, ConfigRevision: current.ConfigRevision, Steps: []WorkerStep{{"artifact", "pending", ""}, {"candidate", "pending", ""}, {"commit", "pending", ""}, {"synchronize", "pending", ""}}, Created: now()}
 	st.Workers.Operations[id] = op
 	st.Workers.OperationPrivate[id] = WorkerOperationPrivate{workerActor(p)}
 	workerRemember(st, key, in, id)
@@ -619,8 +619,8 @@ func (s *Server) workerOperationList(st *State, p Principal, r *http.Request) (a
 	}
 	return items(out)
 }
-func (s *Server) workerDeploymentGet(st *State, p Principal, r *http.Request) (any, int, error) {
-	d, ok := st.Workers.Deployments[r.PathValue("deployment")]
+func (s *Server) workerReleaseGet(st *State, p Principal, r *http.Request) (any, int, error) {
+	d, ok := st.Workers.Releases[r.PathValue("release")]
 	if !ok || d.Service != r.PathValue("resource") || d.Organization != r.PathValue("org") {
 		return nil, 0, notFound()
 	}

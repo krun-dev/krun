@@ -113,15 +113,15 @@ func TestWorkerReleaseQueuesImmutableConfigurationAndRejectsInvalidTarget(t *tes
 	if r := request(s, "PATCH", base+"/environments/production", "krun_cli_admin", `{"expected_revision":1,"variables":{"VALUE":"new"}}`); r.Code != 409 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	if r := request(s, "POST", base+"/environments/missing-preview/rollbacks", "krun_cli_admin", `{"deployment_id":"`+op.Deployment+`","expected_revision":0,"idempotency_key":"rollback-wrong-environment"}`); r.Code != 404 {
+	if r := request(s, "POST", base+"/environments/missing-preview/rollbacks", "krun_cli_admin", `{"release_id":"`+op.Release+`","expected_revision":0,"idempotency_key":"rollback-wrong-environment"}`); r.Code != 404 {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	_ = store.Update(context.Background(), func(st *State) error {
 		env := st.Workers.Services["svc-a"].Environments["production"]
-		if env.Revision != 0 || env.Deployment != "" {
+		if env.Revision != 0 || env.Release != "" {
 			t.Fatal("enqueue committed a release")
 		}
-		d := st.Workers.Deployments[op.Deployment]
+		d := st.Workers.Releases[op.Release]
 		if d.Environment != "production" || d.ConfigRevision != 1 {
 			t.Fatal(d)
 		}
@@ -158,10 +158,10 @@ func TestWorkerRollbackCanRecoverACommittedRelease(t *testing.T) {
 	_ = store.Update(context.Background(), func(st *State) error {
 		ws := st.Workers.Services["svc-a"]
 		env := ws.Environments["production"]
-		env.Revision, env.Deployment, env.Confirmed = 2, op.Deployment, op.Deployment
+		env.Revision, env.Release, env.Confirmed = 2, op.Release, op.Release
 		ws.Environments["production"] = env
 		st.Workers.Services["svc-a"] = ws
-		st.Workers.Histories["svc-a/production"] = []WorkerHistory{{Revision: 1, Deployment: op.Deployment}}
+		st.Workers.Histories["svc-a/production"] = []WorkerHistory{{Revision: 1, Release: op.Release}}
 		op.State = "committed"
 		st.Workers.Operations[op.ID] = op
 		return nil
@@ -169,10 +169,10 @@ func TestWorkerRollbackCanRecoverACommittedRelease(t *testing.T) {
 	if r := request(s, "POST", base+"/environments/production/releases", "krun_cli_admin", `{"build_id":"`+b.ID+`","expected_revision":2,"idempotency_key":"busy"}`); r.Code != 409 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	if r := request(s, "POST", base+"/environments/production/rollbacks", "krun_cli_admin", `{"deployment_id":"missing","expected_revision":2,"idempotency_key":"bad"}`); r.Code != 404 {
+	if r := request(s, "POST", base+"/environments/production/rollbacks", "krun_cli_admin", `{"release_id":"missing","expected_revision":2,"idempotency_key":"bad"}`); r.Code != 404 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	if r := request(s, "POST", base+"/environments/production/rollbacks", "krun_cli_admin", `{"deployment_id":"`+op.Deployment+`","expected_revision":2,"idempotency_key":"recover"}`); r.Code != 202 {
+	if r := request(s, "POST", base+"/environments/production/rollbacks", "krun_cli_admin", `{"release_id":"`+op.Release+`","expected_revision":2,"idempotency_key":"recover"}`); r.Code != 202 {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	_ = store.Update(context.Background(), func(st *State) error {
@@ -281,16 +281,16 @@ func TestWorkerConsoleReadsRespectServiceAndEnvironment(t *testing.T) {
 	if r.Code != 202 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	if r := request(s, "GET", base+"/deployments/"+op.Deployment, "krun_cli_admin", ""); r.Code != 200 {
+	if r := request(s, "GET", base+"/releases/"+op.Release, "krun_cli_admin", ""); r.Code != 200 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	if r := request(s, "GET", "/api/v1/orgs/org-b/services/svc-b/workers/deployments/"+op.Deployment, "krun_cli_admin", ""); r.Code != 404 {
+	if r := request(s, "GET", "/api/v1/orgs/org-b/services/svc-b/workers/releases/"+op.Release, "krun_cli_admin", ""); r.Code != 404 {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	r = request(s, "POST", "/api/v1/orgs/org-a/api-keys", "krun_cli_admin", `{"name":"test read","expires_in":3600,"policy":{"schema_version":1,"statements":[{"effect":"allow","actions":["service.read","service.version.read"],"resource":{"kind":"service","organization_id":"org-a","ids":["svc-a"]},"conditions":{"environments":["fix-demo"]}}]}}`)
 	var key struct{ Key string }
 	_ = json.Unmarshal(r.Body.Bytes(), &key)
-	if r := request(s, "GET", base+"/deployments/"+op.Deployment, key.Key, ""); r.Code != 403 {
+	if r := request(s, "GET", base+"/releases/"+op.Release, key.Key, ""); r.Code != 403 {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	if r := request(s, "GET", base+"/operations", key.Key, ""); r.Code != 200 || strings.Contains(r.Body.String(), op.ID) {

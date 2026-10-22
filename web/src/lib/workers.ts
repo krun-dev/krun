@@ -26,7 +26,7 @@ export type WorkerServiceSummary = Resource & {
   repository_source?: RepositorySource;
   environments: Pick<
     Environment,
-    "name" | "enabled" | "deployment_id" | "confirmed_deployment_id"
+    "name" | "enabled" | "release_id" | "confirmed_release_id"
   >[];
 };
 export type Build = {
@@ -47,10 +47,10 @@ export type Environment = {
   configuration_revision: number;
   variables: Record<string, string>;
   release_revision: number;
-  deployment_id?: string;
-  confirmed_deployment_id?: string;
+  release_id?: string;
+  confirmed_release_id?: string;
 };
-export type Deployment = {
+export type Release = {
   id: string;
   artifact_id: string;
   environment: string;
@@ -63,7 +63,7 @@ export type Operation = {
   kind: string;
   state: string;
   environment: string;
-  deployment_id: string;
+  release_id: string;
   build_id?: string;
   error?: string;
   created_at: string;
@@ -71,7 +71,7 @@ export type Operation = {
 };
 export type History = {
   revision: number;
-  deployment_id: string;
+  release_id: string;
   operation_id: string;
   kind: string;
   time: string;
@@ -81,7 +81,7 @@ export type WorkerData = {
   environments: Environment[];
   operations: Operation[];
   histories: Record<string, History[]>;
-  deployments: Record<string, Deployment>;
+  releases: Record<string, Release>;
 };
 export const pending = (state: string) =>
   ["queued", "fetching", "building", "validating", "committed"].includes(state);
@@ -90,7 +90,7 @@ export const shortID = (id?: string) => (id ? id.slice(0, 16) : "—");
 export function useWorkerData(base: string, revision: number) {
   const [data, setData] = useState<WorkerData | null>(null);
   const [error, setError] = useState("");
-  const cache = useRef<Record<string, Deployment>>({});
+  const cache = useRef<Record<string, Release>>({});
   useEffect(() => {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
@@ -138,9 +138,9 @@ export function useWorkerData(base: string, revision: number) {
         const ids = new Set(
           e.items
             .flatMap((env) => [
-              env.deployment_id,
-              env.confirmed_deployment_id,
-              ...histories[env.name].map((h) => h.deployment_id),
+              env.release_id,
+              env.confirmed_release_id,
+              ...histories[env.name].map((h) => h.release_id),
             ])
             .filter((id): id is string => !!id),
         );
@@ -148,8 +148,8 @@ export function useWorkerData(base: string, revision: number) {
           [...ids]
             .filter((id) => !cache.current[id])
             .map((id) =>
-              api<Deployment>(
-                base + "/deployments/" + id,
+              api<Release>(
+                base + "/releases/" + id,
                 "GET",
                 undefined,
                 controller.signal,
@@ -163,7 +163,7 @@ export function useWorkerData(base: string, revision: number) {
           environments: e.items,
           operations: o.items,
           histories,
-          deployments: { ...cache.current },
+          releases: { ...cache.current },
         });
         setError("");
         if (

@@ -20,7 +20,7 @@ func (s *Server) workerRuntimeSnapshot(w http.ResponseWriter, r *http.Request) {
 	var out any
 	e := s.Store.Update(r.Context(), func(st *State) error {
 		routes := []map[string]any{}
-		deployments := map[string]WorkerDeployment{}
+		releases := map[string]WorkerRelease{}
 		for id, ws := range st.Workers.Services {
 			resource, ok := st.Resources[id]
 			if !ok || resource.Kind != "service" || resource.Organization != ws.Organization {
@@ -30,15 +30,15 @@ func (s *Server) workerRuntimeSnapshot(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			for _, env := range ws.Environments {
-				routes = append(routes, map[string]any{"host": env.Host, "path": "/", "scopes": []string{"private"}, "enabled": env.Enabled, "deployment": env.Deployment})
+				routes = append(routes, map[string]any{"host": env.Host, "path": "/", "scopes": []string{"private"}, "enabled": env.Enabled, "release": env.Release})
 			}
 		}
-		for id, d := range st.Workers.Deployments {
+		for id, d := range st.Workers.Releases {
 			if _, ok := st.Resources[d.Service]; ok && d.Pool == "default" {
-				deployments[id] = d
+				releases[id] = d
 			}
 		}
-		out = map[string]any{"pool": "default", "revision": st.Workers.Revision, "validUntil": now().Add(5 * time.Second).UnixMilli(), "routes": routes, "deployments": deployments}
+		out = map[string]any{"pool": "default", "revision": st.Workers.Revision, "validUntil": now().Add(5 * time.Second).UnixMilli(), "routes": routes, "releases": releases}
 		return nil
 	})
 	if e != nil {
@@ -47,14 +47,14 @@ func (s *Server) workerRuntimeSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	s.json(w, 200, out)
 }
-func (s *Server) workerRuntimeDeployment(w http.ResponseWriter, r *http.Request) {
+func (s *Server) workerRuntimeRelease(w http.ResponseWriter, r *http.Request) {
 	if !s.workerRuntimeAllowed(r) {
 		s.writeError(w, r, forbidden())
 		return
 	}
-	var out WorkerDeployment
+	var out WorkerRelease
 	e := s.Store.Update(r.Context(), func(st *State) error {
-		d, ok := st.Workers.Deployments[r.PathValue("deployment")]
+		d, ok := st.Workers.Releases[r.PathValue("release")]
 		if !ok || d.Pool != "default" {
 			return notFound()
 		}
@@ -82,7 +82,7 @@ func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {
 			return notFound()
 		}
 		allowed := false
-		for _, d := range st.Workers.Deployments {
+		for _, d := range st.Workers.Releases {
 			if d.Artifact == a.ID && d.Pool == "default" {
 				if _, ok := st.Resources[d.Service]; ok {
 					allowed = true
@@ -99,12 +99,21 @@ func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, e)
 		return
 	}
-	code, e := s.workers.artifactCode(r.Context(), out)
+	// Runtimes fetch the object directly from storage; the control plane only
+	// hands out a short-lived URL and never proxies artifact bytes.
+	signed, e := s.workers.downloadURL(r.Context(), out)
 	if e != nil {
-		s.writeError(w, r, problem(503, "ARTIFACT_UNAVAILABLE", "Artifact storage or integrity unavailable"))
+		s.writeError(w, r, problem(503, "ARTIFACT_UNAVAILABLE", "Artifact storage unavailable"))
 		return
 	}
-	s.json(w, 200, code)
+	s.json(w, 200, map[string]any{
+		"artifact_id":    out.ID,
+		"object_key":     out.ObjectKey,
+		"download_url":   signed,
+		"archive_sha256": out.ArchiveDigest,
+		"module_sha256":  out.ModuleDigest,
+		"size":           out.Size,
+	})
 }
 func (s *Server) workerRuntimeAck(w http.ResponseWriter, r *http.Request) {
 	if !s.workerRuntimeAllowed(r) {

@@ -24,7 +24,7 @@ func publishedWorkerInvokeServer(t *testing.T) (*Server, *Store, string, string)
 	if err := store.Update(context.Background(), func(st *State) error {
 		service := s.workerService(st, Target{ID: "svc-a", Organization: "org-a"})
 		env := service.Environments["production"]
-		env.Deployment = "dep-test"
+		env.Release = "rel-test"
 		service.Environments["production"] = env
 		st.Workers.Services[service.Service] = service
 		host = env.Host
@@ -69,7 +69,7 @@ func TestWorkerInvokeGatewayRoutingAndResponseIsolation(t *testing.T) {
 			t.Error("Worker invocation held the state transaction lock")
 		}
 		w.Header().Set("Content-Type", "text/html")
-		w.Header().Set("X-Krun-Deployment", "dep-test")
+		w.Header().Set("X-Krun-Release", "rel-test")
 		w.Header().Set("X-Krun-Pod", "pod-test")
 		w.Header().Set("Set-Cookie", "business-session=secret")
 		w.Header().Set("Location", "/redirect-target")
@@ -112,7 +112,7 @@ func TestWorkerInvokeGatewayRoutingAndResponseIsolation(t *testing.T) {
 			if out.Status != tc.status || out.Body != `<script>alert("business")</script>` || out.Truncated {
 				t.Fatalf("wrong business response: %+v", out)
 			}
-			if len(out.Headers) != 3 || out.Headers["X-Krun-Deployment"] != "dep-test" || out.Headers["X-Krun-Pod"] != "pod-test" || out.Headers["Content-Type"] != "text/html" {
+			if len(out.Headers) != 3 || out.Headers["X-Krun-Release"] != "rel-test" || out.Headers["X-Krun-Pod"] != "pod-test" || out.Headers["Content-Type"] != "text/html" {
 				t.Fatalf("wrong response headers: %+v", out.Headers)
 			}
 		})

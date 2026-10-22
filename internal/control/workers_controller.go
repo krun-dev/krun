@@ -293,11 +293,11 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 	if op.State != "committed" && now().Sub(op.Created) > 180*time.Second {
 		return w.failOperation(ctx, op.ID, "Candidate preparation deadline exceeded")
 	}
-	deployment, ok := state.Deployments[op.Deployment]
+	release, ok := state.Releases[op.Release]
 	if !ok {
-		return w.failOperation(ctx, op.ID, "Deployment unavailable")
+		return w.failOperation(ctx, op.ID, "Release unavailable")
 	}
-	artifact, ok := state.Artifacts[deployment.Artifact]
+	artifact, ok := state.Artifacts[release.Artifact]
 	if !ok {
 		return w.failOperation(ctx, op.ID, "Artifact unavailable")
 	}
@@ -341,27 +341,29 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 		return w.noteOperation(ctx, op.ID, "Waiting for Gateway and HTTPRoute confirmation")
 	}
 	if op.State != "committed" {
-		for _, pod := range pods {
-			result, status, e := w.management(ctx, pod, "/validate", map[string]any{"deployment_id": deployment.ID})
-			if e != nil {
-				return w.noteOperation(ctx, op.ID, "Runtime validation temporarily unavailable")
+		// Candidate validation loads the code once on a single serving member;
+		// the remaining members lazy-load on their first request. All members
+		// still confirm adoption and the snapshot revision below.
+		candidate := pods[0]
+		result, status, e := w.management(ctx, candidate, "/validate", map[string]any{"release_id": release.ID})
+		if e != nil {
+			return w.noteOperation(ctx, op.ID, "Runtime validation temporarily unavailable")
+		}
+		if status != 200 {
+			if result["code"] == "DEPENDENCY_UNAVAILABLE" {
+				return w.noteOperation(ctx, op.ID, "Candidate dependency unavailable")
 			}
-			if status != 200 {
-				if result["code"] == "DEPENDENCY_UNAVAILABLE" {
-					return w.noteOperation(ctx, op.ID, "Candidate dependency unavailable")
-				}
-				return w.failOperation(ctx, op.ID, "Candidate validation failed on "+pod.Name)
-			}
-			// The pod-UID identity check assumes requests reach the exact pod
-			// listed. Behind a proxied runtime_management_base the response may
-			// come from any healthy member, so only artifact identity applies.
-			uidMatches := result["pod_uid"] == pod.UID
-			if w.config.RuntimeManagementBase != "" {
-				uidMatches = true
-			}
-			if !uidMatches || result["deployment_id"] != deployment.ID || result["archive_sha256"] != deployment.ArchiveDigest {
-				return w.failOperation(ctx, op.ID, fmt.Sprintf("Candidate identity mismatch (pod %s uid %s vs %s, deployment %s vs %s, archive %s vs %s)", pod.Name, pod.UID, result["pod_uid"], deployment.ID, result["deployment_id"], deployment.ArchiveDigest, result["archive_sha256"]))
-			}
+			return w.failOperation(ctx, op.ID, "Candidate validation failed on "+candidate.Name)
+		}
+		// The pod-UID identity check assumes requests reach the exact pod
+		// listed. Behind a proxied runtime_management_base the response may
+		// come from any healthy member, so only release identity applies.
+		uidMatches := result["pod_uid"] == candidate.UID
+		if w.config.RuntimeManagementBase != "" {
+			uidMatches = true
+		}
+		if !uidMatches || result["release_id"] != release.ID || result["archive_sha256"] != release.ArchiveDigest {
+			return w.failOperation(ctx, op.ID, fmt.Sprintf("Candidate identity mismatch (pod %s uid %s vs %s, release %s vs %s, archive %s vs %s)", candidate.Name, candidate.UID, result["pod_uid"], release.ID, result["release_id"], release.ArchiveDigest, result["archive_sha256"]))
 		}
 		after, e := w.kube.runtimeMembers(ctx, w.config.RuntimeService)
 		if e != nil {
@@ -399,7 +401,7 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 				}
 			}
 			env.Revision++
-			env.Deployment = op.Deployment
+			env.Release = op.Release
 			ws.Environments[op.Environment] = env
 			st.Workers.Services[op.Service] = ws
 			st.Workers.Revision++
@@ -415,8 +417,8 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 		})
 	}
 	for _, pod := range pods {
-		result, status, e := w.management(ctx, pod, "/adopt", map[string]any{"deployment_id": deployment.ID, "minimum_revision": op.SnapshotRevision})
-		if e != nil || status != 200 || result["pod_uid"] != pod.UID || result["deployment_id"] != deployment.ID || result["archive_sha256"] != deployment.ArchiveDigest {
+		result, status, e := w.management(ctx, pod, "/adopt", map[string]any{"release_id": release.ID, "minimum_revision": op.SnapshotRevision})
+		if e != nil || status != 200 || result["pod_uid"] != pod.UID || result["release_id"] != release.ID || result["archive_sha256"] != release.ArchiveDigest {
 			return w.noteOperation(ctx, op.ID, "Committed; waiting for runtime adoption")
 		}
 		rev, ok := result["revision"].(float64)
@@ -438,7 +440,7 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 		}
 		ws := st.Workers.Services[op.Service]
 		env := ws.Environments[op.Environment]
-		if env.Deployment != op.Deployment || env.Revision != op.ReleaseRevision {
+		if env.Release != op.Release || env.Revision != op.ReleaseRevision {
 			current.State = "superseded"
 			current.Error = "Release superseded"
 		} else {
@@ -448,14 +450,14 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 					return nil
 				}
 			}
-			env.Confirmed = op.Deployment
+			env.Confirmed = op.Release
 			ws.Environments[op.Environment] = env
 			st.Workers.Services[op.Service] = ws
 			current.State = "available"
 			current.Error = ""
 			current.Steps[3].State = "done"
 			key := op.Service + "/" + op.Environment
-			st.Workers.Histories[key] = append([]WorkerHistory{{op.ReleaseRevision, op.Deployment, op.ID, op.Kind, now()}}, st.Workers.Histories[key]...)
+			st.Workers.Histories[key] = append([]WorkerHistory{{op.ReleaseRevision, op.Release, op.ID, op.Kind, now()}}, st.Workers.Histories[key]...)
 		}
 		current.Finished = workerCloneTime(now())
 		st.Workers.Operations[op.ID] = current

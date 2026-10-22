@@ -179,6 +179,19 @@ func (w *workersController) uploadURL(ctx context.Context, b WorkerBuild) (strin
 	}
 	return u.String(), nil
 }
+
+// Runtimes live in the same network position as builders, so artifact GET URLs
+// are signed against the same in-cluster endpoint. Signing is offline.
+func (w *workersController) downloadURL(ctx context.Context, a WorkerArtifact) (string, error) {
+	if (a.StorageLocation != "" && a.StorageLocation != w.config.S3LocationID) || (a.Bucket != "" && a.Bucket != w.config.S3Bucket) {
+		return "", errors.New("artifact storage location mismatch")
+	}
+	u, e := w.s3Builder.PresignedGetObject(ctx, w.config.S3Bucket, a.ObjectKey, 15*time.Minute, nil)
+	if e != nil {
+		return "", e
+	}
+	return u.String(), nil
+}
 func workerUploadKey(b WorkerBuild) string {
 	return "uploads/" + b.Organization + "/" + b.ID + "/bundle.tar.gz"
 }
@@ -194,6 +207,9 @@ func (w *workersController) finalizeBuild(ctx context.Context, b WorkerBuild) (W
 	a := WorkerArtifact{ID: "art_" + digest(b.Organization+"/"+code.ArchiveDigest), Organization: b.Organization, State: "finalized", StorageLocation: w.config.S3LocationID, Bucket: w.config.S3Bucket, ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, Size: len(raw), ObjectKey: "v1/" + b.Organization + "/sha256/" + code.ArchiveDigest + "/bundle.tar.gz", Created: now()}
 	return a, w.putImmutable(ctx, a.ObjectKey, raw)
 }
+// artifactCode stays as the control plane's own integrity check when promoting
+// a build and validating a release candidate; runtime cold loads verify the
+// same digests locally after downloading via the presigned URL.
 func (w *workersController) artifactCode(ctx context.Context, a WorkerArtifact) (workerCode, error) {
 	if (a.StorageLocation != "" && a.StorageLocation != w.config.S3LocationID) || (a.Bucket != "" && a.Bucket != w.config.S3Bucket) {
 		return workerCode{}, errors.New("artifact storage location mismatch")

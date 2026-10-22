@@ -14,8 +14,8 @@ type workerServiceSummary struct {
 type WorkerEnvironmentSummary struct {
 	Name       string `json:"name"`
 	Enabled    bool   `json:"enabled"`
-	Deployment string `json:"deployment_id,omitempty"`
-	Confirmed  string `json:"confirmed_deployment_id,omitempty"`
+	Release    string `json:"release_id,omitempty"`
+	Confirmed  string `json:"confirmed_release_id,omitempty"`
 }
 
 func (s *Server) workerServiceList(st *State, p Principal, r *http.Request) (any, int, error) {
@@ -60,7 +60,7 @@ func (s *Server) workerServiceList(st *State, p Principal, r *http.Request) (any
 			}
 			visible = true
 			if current, exists := service.Environments[env]; exists {
-				summary.Environments = append(summary.Environments, WorkerEnvironmentSummary{env, current.Enabled, current.Deployment, current.Confirmed})
+				summary.Environments = append(summary.Environments, WorkerEnvironmentSummary{env, current.Enabled, current.Release, current.Confirmed})
 			}
 		}
 		if visible {
