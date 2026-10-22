@@ -80,7 +80,7 @@
 
 1. `npm run build`（改前端时可 `npx vite build --watch`）产出 `dist/console/`。
 2. 让 `/api/*` 到 Go，三选一：本地 Nginx、Vite `server.proxy`、或让 Go 直接托管（`static_dir: dist`，访问 `http://127.0.0.1:8080/`）。
-3. 远程 kind：`kubectl ... port-forward deployment/backend 4380:9000`，再按同样契约把浏览器请求分发出去。
+3. Workers 日常开发用 **local-first**：控制面、Postgres、MinIO、builder、Vite 都在开发机；集群只保留 runtime（workerd）+ kgateway。见 [docs/local-dev.md](docs/local-dev.md) 和 `scripts/dev-up.sh`。`deploy/workers-kind` 的完整栈只用于独立 e2e，不要和 local-first 同时运行。
 
 本地这些进程只在开发机上存在，不进生产、不进发布产物。
 
@@ -92,6 +92,8 @@
 - [ ] 没有新增对本地代理的**运行期**依赖。
 - [ ] 发布前确认部署目标支持「OSS 静态 + 同域转发 `/api/*` 到 Go」；不支持就**不要发布**。
 - [ ] 验证功能时打**同源入口**，不要只 curl Vite / 本地代理端口。
+- [ ] `make check-secrets` 通过；没有 token、密码、私钥、真实内网 IP/主机名或 SSO client id 进入 tracked 文件。
+- [ ] 新增配置项进了主 `Config` / `WorkersConfig`，没有新增独立的 dev 配置文件；`.data/` 没有被 `git add -f`。
 
 静态化发布前用发布拦截脚本自查：
 
@@ -120,8 +122,18 @@
 
 ## 7. 当前状态（已核实）
 
-- 后端路由仍在根级：`/auth/*`、`/healthz`、`/internal/workers/*`。第 1 节的迁移**尚未实施**。
-- 前端 `base` 仍是 `/console/`。
-- `scripts/kind-console.mjs` 把 Vite 当浏览器入口、经 `server.proxy` 转发到 SSH 隧道再到后端；**本地调试可接受**，不代表生产形态。
-- 远端 `workers-mvp/control-config` 的 `control.yaml` 没有 `static_dir`，backend 镜像里只有 `krun-server`、没有 `dist/`；`GET <backend>/` 目前 404，kind 里的控制台完全靠 Vite。
-- 生产 OSS + CDN 的路径转发规则尚未落地；`docs/deployment.md` 目前只有 Nginx 示例，待补 OSS / CDN 方案。
+- 后端接口统一在 `/api/` 下，前端 `base` 为 `/`（第 1/3 节的迁移已完成）。
+- 日常开发使用 **local-first** 拓扑，见 [docs/local-dev.md](docs/local-dev.md)：控制面、Postgres、MinIO、builder、Vite 在开发机；集群只保留 runtime（workerd）+ kgateway。
+- `deploy/workers-kind` 是完整独立 e2e 环境（backend/Postgres/MinIO 都在集群里），已标注不要和 local-first 同时运行。
+- 生产 OSS + CDN 的 `/api/*` 同域转发规则仍需部署侧落地（第 2 节）。
+
+## 8. 配置与密钥收口（硬约束）
+
+1. **唯一应用配置**：本地开发只允许 `.data/dev.yaml`（已被 `.gitignore` 忽略）。禁止新增 `config/development.yaml`、`.data/development-*.yaml`、`.data/sso-local.yaml` 或按组件拆分的 YAML。新增配置项必须加到主 `Config` / `WorkersConfig`，并同步更新 `config/example.yaml`、`config/development.example.yaml` 以及加载测试。
+2. **唯一 shell/基础设施变量文件**：`.data/dev.env`（gitignored），只放远端主机、控制面/MinIO IP、kind 集群名等脚本变量。`scripts/dev-*.sh` 自动读取，但命令行已设置的变量优先；tracked 脚本里不得写内网默认值。
+3. **tracked 文件只放占位符或环境变量引用**：token、密码、私钥、数据库/S3 凭据、真实内网 IP/主机名、SSO client id 一律不得出现在 `git ls-files` 能看到的内容里。示例用 `${KRUN_*}` 或 `replace-me`。
+4. **`.data/` 永远不提交**：不要 `git add -f .data/...`；不要为了“方便”把 secret 复制到 `config/` 或文档里。
+5. **提交前必须**：`make check-secrets` 通过。它会用 `.data/dev.yaml` / `.data/dev.env` 里的真实值扫描 tracked 文件，并检查私钥 / AWS key 模式；`make test` 也会执行。
+6. **配置加载只有一处**：所有运行期配置从 `LoadConfig` 进入；不要新增运行期读取非公开环境变量的开关。地址、profile、运行模式都必须显式出现在主 YAML。Workers 配置也在同一份 YAML 的 `workers:` 段，不允许独立文件或目录。
+7. **配置示例必须可加载**：`config/development.example.yaml` 和 `config/example.yaml` 由测试覆盖；示例只能使用占位符，不能写真实凭据。
+8. **dev 拓扑保持一致**：local-first；控制面/Postgres/MinIO/builder/Vite 在开发机，集群只保留 runtime + kgateway。变更拓扑时同步修改 `docs/local-dev.md` 和 `scripts/dev-*.sh`。

@@ -1,11 +1,15 @@
-.PHONY: build test dev dev-down runtime-image runtime-config clean
+.PHONY: build test check-secrets dev dev-down runtime-image runtime-config clean
 build:
 	npm ci
 	npm run build
 	go build -trimpath -o bin/krun ./cmd/krun
 	go build -trimpath -o bin/krun-server ./cmd/krun-server
 
+check-secrets:
+	./scripts/check-secrets.sh
+
 test:
+	./scripts/check-secrets.sh
 	go test -race ./...
 	go vet ./...
 	npm run check
