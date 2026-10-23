@@ -36,6 +36,7 @@ workers:
   builder_image: krun-worker-builder:20261013
   builder_pull_policy: Never
   s3_location_id: primary
+  clone_directory: /workdir
   runtime_service: runtime-default
   gateways:
     - id: internal
@@ -93,7 +94,7 @@ items.append(resource('Role','workers-control',apiVersion='rbac.authorization.k8
 items.append(resource('RoleBinding','workers-control',apiVersion='rbac.authorization.k8s.io/v1',roleRef={'apiGroup':'rbac.authorization.k8s.io','kind':'Role','name':'workers-control'},subjects=[{'kind':'ServiceAccount','name':'workers-control','namespace':ns}]))
 items.append({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'Role','metadata':{'name':'workers-mvp-reader','namespace':'kgateway-system'},'rules':[{'apiGroups':['gateway.networking.k8s.io'],'resources':['gateways'],'resourceNames':['workers-mvp'],'verbs':['get']}]})
 items.append({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'RoleBinding','metadata':{'name':'workers-mvp-reader','namespace':'kgateway-system'},'roleRef':{'apiGroup':'rbac.authorization.k8s.io','kind':'Role','name':'workers-mvp-reader'},'subjects':[{'kind':'ServiceAccount','name':'workers-control','namespace':ns}]})
-deployment('backend',[{'name':'backend','image':f'krun-workers-backend:{tag}','imagePullPolicy':'Never','env':[env(n) for n in ['KRUN_DATABASE_URL','KRUN_S3_ACCESS','KRUN_S3_SECRET','KRUN_RUNTIME_TOKEN','KRUN_MANAGEMENT_TOKEN']],'securityContext':secure(),'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True}],'resources':limits('1Gi','128Mi'),'readinessProbe':{'httpGet':{'path':'/api/healthz','port':9000},'periodSeconds':5}}],serviceAccountName='workers-control',automountServiceAccountToken=True,volumes=[{'name':'config','configMap':{'name':'control-config'}}],terminationGracePeriodSeconds=10);service('backend',[9000,9001])
+deployment('backend',[{'name':'backend','image':f'krun-workers-backend:{tag}','imagePullPolicy':'Never','env':[env(n) for n in ['KRUN_DATABASE_URL','KRUN_S3_ACCESS','KRUN_S3_SECRET','KRUN_RUNTIME_TOKEN','KRUN_MANAGEMENT_TOKEN']],'securityContext':secure(),'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},{'name':'workdir','mountPath':'/workdir'}],'resources':limits('1Gi','128Mi'),'readinessProbe':{'httpGet':{'path':'/api/healthz','port':9000},'periodSeconds':5}}],serviceAccountName='workers-control',automountServiceAccountToken=True,volumes=[{'name':'config','configMap':{'name':'control-config'}},{'name':'workdir','emptyDir':{'sizeLimit':'1Gi'}}],terminationGracePeriodSeconds=10);service('backend',[9000,9001])
 # Runtime has no Kubernetes token, DB identity, S3 credentials or public
 # network; it reaches only the control plane and object storage (via
 # short-lived presigned URLs issued by the control plane). workerd's network

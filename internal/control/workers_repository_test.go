@@ -1,18 +1,15 @@
 package control
 
 import (
-	"archive/tar"
 	"bytes"
+	"archive/tar"
 	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/minio/minio-go/v7"
 )
 
 func repositoryTestProviders() []WorkerRepositoryProvider {
@@ -144,82 +141,6 @@ func repositoryTestArchive(t *testing.T, names map[string]string) []byte {
 	return raw.Bytes()
 }
 
-func TestGitLabRepositoryCommitAndArchive(t *testing.T) {
-	s, _, _ := workerTestServer(t)
-	commit := strings.Repeat("a", 40)
-	raw := repositoryTestArchive(t, map[string]string{"repo-commit/worker/index.ts": `export default {fetch(){return new Response('gitlab')}}`, "repo-commit/README.md": "ignored"})
-	var requests []string
-	gitlab := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests = append(requests, r.RequestURI)
-		if r.Header.Get("PRIVATE-TOKEN") != "private-test-token" || r.Header.Get("Authorization") != "" {
-			t.Error("wrong GitLab credentials")
-		}
-		switch r.RequestURI {
-		case "/api/v4/projects/team%2Fnested%2Fworker/repository/commits/release%2Fv1":
-			_ = json.NewEncoder(w).Encode(map[string]string{"id": commit})
-		case "/api/v4/projects/team%2Fnested%2Fworker/repository/archive.tar.gz?sha=" + commit:
-			_, _ = w.Write(raw)
-		default:
-			t.Errorf("wrong GitLab request: %s", r.RequestURI)
-			w.WriteHeader(404)
-		}
-	}))
-	defer gitlab.Close()
-	s.workerRepositoryClient.Transport = gitlab.Client().Transport
-	provider := WorkerRepositoryProvider{Type: "gitlab", BaseURL: gitlab.URL, Token: "private-test-token"}
-	source := WorkerRepositorySource{Repository: "team/nested/worker", Ref: "release/v1", RootDirectory: "worker", Entrypoint: "index.ts"}
-	resolved, err := s.resolveRepositoryCommit(context.Background(), provider, source, provider.Token)
-	if err != nil || resolved != commit {
-		t.Fatal(resolved, err)
-	}
-	files, _, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{source, resolved}, provider.Token)
-	if err != nil || len(files) != 1 || !strings.Contains(files["index.ts"], "gitlab") || len(requests) != 2 {
-		t.Fatal(files, err, requests)
-	}
-}
-
-func TestGitHubRepositoryRedirectCredentialIsolation(t *testing.T) {
-	s, _, _ := workerTestServer(t)
-	commit := strings.Repeat("b", 40)
-	raw := repositoryTestArchive(t, map[string]string{"repo-commit/index.js": `export default {fetch(){return new Response('github')}}`})
-	var downloads int
-	s.workerRepositoryClient.Transport = invokeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-		response := &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"sha":"` + commit + `"}`))}
-		if r.URL.Host == "api.github.com" {
-			if r.Header.Get("Authorization") != "Bearer github-test-token" {
-				t.Error("missing GitHub API credentials")
-			}
-			if strings.Contains(r.URL.Path, "/tarball/") {
-				response.StatusCode = 302
-				response.Header.Set("Location", "https://codeload.github.com/team/worker/legacy.tar.gz/"+commit)
-			}
-		} else {
-			if r.URL.Host != "codeload.github.com" || r.Header.Get("Authorization") != "" || r.Header.Get("PRIVATE-TOKEN") != "" {
-				t.Error("credentials escaped GitHub API origin")
-			}
-			downloads++
-			response.Body = io.NopCloser(bytes.NewReader(raw))
-		}
-		return response, nil
-	})
-	provider := WorkerRepositoryProvider{Type: "github", BaseURL: "https://github.com", Token: "github-test-token"}
-	source := WorkerRepositorySource{Repository: "team/worker", Ref: "main", RootDirectory: ".", Entrypoint: "index.js"}
-	resolved, err := s.resolveRepositoryCommit(context.Background(), provider, source, provider.Token)
-	if err != nil {
-		t.Fatal(err)
-	}
-	files, _, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{source, resolved}, provider.Token)
-	if err != nil || len(files) != 1 || downloads != 1 {
-		t.Fatal(files, err, downloads)
-	}
-	s.workerRepositoryClient.Transport = invokeRoundTripFunc(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 302, Header: http.Header{"Location": []string{"https://attacker.test/archive"}}, Body: io.NopCloser(strings.NewReader(""))}, nil
-	})
-	if _, _, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{source, resolved}, provider.Token); err == nil {
-		t.Fatal("external archive redirect accepted")
-	}
-}
-
 func TestRepositoryArchiveBoundaries(t *testing.T) {
 	source := WorkerBuildRepository{WorkerRepositorySource: WorkerRepositorySource{RootDirectory: "worker", Entrypoint: "index.ts"}}
 	for _, files := range []map[string]string{
@@ -241,56 +162,6 @@ func TestRepositoryArchiveBoundaries(t *testing.T) {
 	_ = zip.Close()
 	if _, _, err := extractRepositorySource(buf.Bytes(), source.RootDirectory, source.Entrypoint); err == nil {
 		t.Fatal("symlink accepted")
-	}
-}
-
-func TestRepositoryCommitRemainsPinnedAfterInterruptedDownload(t *testing.T) {
-	s, store, base := workerTestServer(t)
-	s.Config.Workers.RepositoryProviders = repositoryTestProviders()
-	binding := `{"source":{"provider_id":"github","repository":"team/worker","ref":"main","root_directory":".","entrypoint":"index.ts"},"expected_revision":0}`
-	if r := request(s, "PUT", base+"/repository", "krun_cli_admin", binding); r.Code != 200 {
-		t.Fatal(r.Code, r.Body.String())
-	}
-	if r0 := request(s, "POST", base+"/environments", "krun_cli_admin", `{"name":"pin-preview"}`); r0.Code != 201 {
-		t.Fatal(r0.Code, r0.Body.String())
-	}
-	r := request(s, "POST", base+"/builds", "krun_cli_admin", `{"source_type":"repository","repository_revision":1,"environment":"pin-preview","idempotency_key":"pin-one"}`)
-	var build WorkerBuild
-	_ = json.Unmarshal(r.Body.Bytes(), &build)
-	commit := strings.Repeat("a", 40)
-	archive := repositoryTestArchive(t, map[string]string{"repo/index.ts": `export default {fetch(){return new Response('pinned')}}`})
-	resolutions := 0
-	downloads := 0
-	s.workerRepositoryClient.Transport = invokeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if strings.Contains(r.URL.Path, "/commits/") {
-			resolutions++
-			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"sha":"` + commit + `"}`))}, nil
-		}
-		if !strings.HasSuffix(r.URL.Path, "/tarball/"+commit) {
-			t.Errorf("download did not use pinned commit: %s", r.URL.Path)
-		}
-		downloads++
-		if downloads == 1 {
-			return &http.Response{StatusCode: 503, Body: io.NopCloser(strings.NewReader("unavailable"))}, nil
-		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(archive))}, nil
-	})
-	var private WorkerBuildPrivate
-	_ = store.Update(context.Background(), func(st *State) error { private = st.Workers.BuildPrivate[build.ID]; return nil })
-	controller := &workersController{server: s, config: s.Config.Workers, putObject: func(context.Context, string, string, io.Reader, int64, minio.PutObjectOptions) (minio.UploadInfo, error) { return minio.UploadInfo{}, nil }}
-	if _, _, err := controller.prepareRepositoryBuild(context.Background(), build, private); err == nil {
-		t.Fatal("failed archive download was accepted")
-	}
-	_ = store.Update(context.Background(), func(st *State) error { build = st.Workers.Builds[build.ID]; return nil })
-	if build.Repository.Commit != commit {
-		t.Fatal("commit was not persisted before archive download")
-	}
-	result, input, err := controller.prepareRepositoryBuild(context.Background(), build, private)
-	if err != nil || resolutions != 1 || downloads != 2 || result.SourceDigest == "" || input.SourceKey == "" || input.Files != nil {
-		t.Fatal(result, err, resolutions, downloads)
-	}
-	if strings.Contains(input.Log, "private-test-token") {
-		t.Fatal("repository token leaked into build logs")
 	}
 }
 

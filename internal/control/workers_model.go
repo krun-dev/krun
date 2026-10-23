@@ -40,6 +40,9 @@ type WorkersConfig struct {
 	// ConfigBaseURL is the runtime-readable origin of config/latest.json and
 	// config/snapshots/*. It must be a private or cluster-internal endpoint.
 	ConfigBaseURL string `json:"config_base_url"`
+	// CloneDirectory is where repository checkouts are written during a build.
+	// Required when the control plane runs with a read-only root filesystem.
+	CloneDirectory string `json:"clone_directory"`
 }
 
 // WorkerGateway is one Gateway instance the control plane writes routes to.
@@ -145,6 +148,9 @@ func (c *WorkersConfig) validate() error {
 	}
 	if !dns.MatchString(c.StaticService) {
 		return fmt.Errorf("invalid Workers static service")
+	}
+	if c.CloneDirectory != "" && !path.IsAbs(c.CloneDirectory) {
+		return fmt.Errorf("clone_directory must be an absolute path")
 	}
 	if c.ConfigBaseURL == "" {
 		c.ConfigBaseURL = strings.TrimSuffix(c.S3Endpoint, "/") + "/" + c.S3Bucket + "/config"

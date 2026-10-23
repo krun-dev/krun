@@ -1,9 +1,7 @@
 package control
 
 import (
-	"context"
 	"crypto/subtle"
-	"io"
 	"net/http"
 	"time"
 
@@ -99,25 +97,6 @@ func (s *Server) workerRepositoryDisconnect(st *State, p Principal, r *http.Requ
 	delete(st.RepositoryConnections, p.User.ID+"\x00"+providerID)
 	st.Revision++
 	return nil, 204, nil
-}
-
-// verifyRepositoryConnection checks the stored token still works; used by the
-// providers listing so the UI can surface revoked grants.
-func (s *Server) verifyRepositoryConnection(ctx context.Context, provider WorkerRepositoryProvider, token string) bool {
-	if token == "" {
-		return false
-	}
-	target := repositoryAPIOrigin(provider) + "/user"
-	if provider.Type == "gitlab" {
-		target = provider.BaseURL + "/api/v4/user"
-	}
-	resp, err := s.repositoryRequestWithToken(ctx, provider, target, token)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
-	return resp.StatusCode == http.StatusOK
 }
 
 type repositoryConnectionInfo struct {
