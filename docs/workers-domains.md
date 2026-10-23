@@ -1,6 +1,15 @@
 # Workers 域名接入设计
 
-状态：设计稿（review 中）。实现位置：`internal/control/workers_*.go`、`deploy/workers-kind/manifests.py`、`workers/runtime`。本文描述目标形态；与现状的差异见文末「现状与迁移」。
+状态：**内外网拆分已实现**（P1 的一部分）。实现位置：`internal/control/workers_model.go`（host 推导与 scope 归类）、`workers_kubernetes.go`（按 scope 编排 HTTPRoute）、`deploy/workers-kind/manifests.py`、`deploy/workers-dev/networkpolicy.yaml.tmpl`、`workers/runtime`。
+
+已落地的是「两个网络面」这件事本身：
+
+- 每个环境同时持有 `host`（私有）与 `public_host`（公网，可选），由 `WorkersConfig` 的 `domain` / `public_domain` 推导。
+- 两个 scope 各有一个 Gateway 实例（`gateway_name` + `public_gateway_name`），各有一组 HTTPRoute（`workers-<digest>` 与 `workers-<digest>-public`）。
+- 静态资产同样按 scope 拆：`static.public.*` 走公网实例，`static.internal.*` 走私有实例。
+- 环境默认 `private`；切到 `public` 是显式动作，且未配置 `public_domain` 时直接拒绝。
+
+尚未实现：域名列表（多后缀叠加）、按域名审批、dataplane/workers-router 模式、自定义域名。本文其余部分描述这些目标形态；与现状的差异见文末「现状与迁移」。
 
 ## 1. 目标与非目标
 
@@ -269,22 +278,23 @@ workers:
 
 现状（已核实）：
 
-- 配置仅有单一 `Domain`（`workers_model.go:21`，默认 `workers.test`）；host 生成写死 `w-{digest[:16]}-{env}.{domain}`（`workers_api.go:87` 服务创建、`:319` preview 创建），两处硬编码。
-- Gateway 单 `private` listener、HTTP（`deploy/workers-kind/manifests.py:121`）；HTTPRoute per service、写死 `sectionName: "private"`、无 prune、无分片（`workers_kubernetes.go:224`）。
-- 配置投影 route 条目 `scopes` 恒 `["private"]`；deployments 仅滤 `default` pool。
-- `Visibility` 字段存在但恒 `private`，未参与路由。
-- 文档现状描述见 `workers-backend.md`「路由与代码加载」。
+- **网络面拆分已实现**。`WorkersConfig` 有 `domain`/`public_domain` 与 `gateway_name`/`public_gateway_name` 两组配置；`hostFor` 统一推导 host（`workers_model.go`），`syncEnvironmentHosts` 在每个写路径重算 `Host` / `PublicHost` / `ExternalHost`。
+- 每个 scope 一条 HTTPRoute：私有 `workers-<digest>`、公网 `workers-<digest>-public`，各自 `parentRef` 到自己的 Gateway 实例与 listener；scope 无 host 时删除该条路由（prune 已补）。
+- 静态资产两条共享路由按 scope 分挂（`workers-static-pub` → 公网实例，`workers-static-int` → 私有实例），默认后缀不会重合。
+- 配置投影与 runtime 快照同时包含两套 host，runtime 仍只按 Host 匹配。
+- `Visibility` 参与路由：`private`（默认）不生成公网 host；`public` 需配置 `public_domain`，否则 PATCH 返回 `PUBLIC_SCOPE_UNAVAILABLE`。
+- 剩余缺口：域名仍是单一 public/private 后缀对（没有多后缀列表）、无审批、无分片、无 dataplane 模式。
 
-迁移阶段（项目未上线，schema 直接改，无存量兼容）：
+迁移阶段：
 
-| 阶段 | 内容 | 说明 |
+| 阶段 | 内容 | 状态 |
 | --- | --- | --- |
-| P1 | 域名列表 + slug + `hostFor` + Hosts | kind 单域名（`workers.test`）验证；审批字段就位但不生效 |
-| P2 | gateway 驱动改造 | scope 拆组、双 Gateway（Class/实例拆分）、分片、prune；public Gateway 与通配符证书入 manifests |
-| P3 | 快照 pool 字段 + 审批生效 | runtime 侧 pool 过滤；审批 API + 审计 |
-| P4（预留口子） | dataplane 模式 + workers-router | 配置切换即可启用；默认仍 gateway |
+| P1 | scope 拆分的 host 模型（`hostFor` + `Host` / `PublicHost`） | ✅ 已完成 |
+| P2 | gateway 驱动改造：scope 拆组、双 Gateway 实例、prune | ✅ 已完成（分片未做） |
+| P3 | 审批 + 多域名列表 | 未开始 |
+| P4（预留口子） | dataplane 模式 + workers-router | 未开始 |
 
-P1–P3 是默认路径；P4 在需要自有数据面能力（限流 / 灰度 / 自定义域名）时启用。两模式可并行服务同一批 host 做灰度切流（Gateway 路由与 router 同时存活，DNS 按比例切）。
+P1–P2 已落地；P3 是下一步；P4 在需要自有数据面能力（限流 / 灰度 / 自定义域名）时启用。
 
 ## 10. 开放问题
 

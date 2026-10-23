@@ -83,10 +83,11 @@ func workerConfigFromState(st *State) workerConfigProjection {
 			continue
 		}
 		for _, env := range ws.Environments {
-			if env.Host == "" {
-				continue
+			// One route per selected domain. The runtime matches purely on Host;
+			// the Gateway instance already decided which entry a request used.
+			for _, host := range env.Hosts {
+				out.Routes = append(out.Routes, workerConfigRoute{Host: host, Path: "/", Enabled: env.Enabled, Release: env.Release})
 			}
-			out.Routes = append(out.Routes, workerConfigRoute{Host: env.Host, Path: "/", Enabled: env.Enabled, Release: env.Release})
 			if env.Release == "" {
 				continue
 			}

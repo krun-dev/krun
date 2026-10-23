@@ -24,7 +24,7 @@ const emptySource: RepositorySource = {
   repository: "",
   ref: "HEAD",
   root_directory: ".",
-  entrypoint: "src/index.ts",
+  entrypoint: "",
 };
 
 export function errorMessage(e: unknown): string {
@@ -256,7 +256,7 @@ export function RepositorySettings({
             </Field>
             <Field
               label={t("入口文件")}
-              hint={t("相对项目目录，例如 src/index.ts。")}
+              hint={t("留空则读取仓库里的 wrangler 配置（main 字段）。")}
             >
               <Input
                 aria-label={t("入口文件")}
@@ -283,7 +283,7 @@ export function RepositorySettings({
             <Button
               type="button"
               disabled={
-                busy || !provider || !source.repository || !source.entrypoint
+                busy || !provider || !source.repository
               }
               onClick={() => void save()}
             >

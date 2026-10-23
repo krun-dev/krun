@@ -37,11 +37,27 @@ workers:
   builder_pull_policy: Never
   s3_location_id: primary
   runtime_service: runtime-default
-  gateway_name: workers-mvp
-  gateway_namespace: kgateway-system
-  domain: workers.test
-  static_domain: static.workers.test
-  static_internal_domain: static.internal.workers.test
+  gateways:
+    - id: internal
+      name: workers-mvp
+      namespace: kgateway-system
+      section: private
+    - id: external
+      name: workers-public
+      namespace: kgateway-system
+      section: public
+  domains:
+    - id: internal
+      domain: workers.test
+      label: 内网
+      gateway: internal
+      default: true
+      static_domain: static.internal.workers.test
+    - id: external
+      domain: public.workers.test
+      label: 公网
+      gateway: external
+      static_domain: static.public.workers.test
   static_service: static-assets
   static_service_port: 9000
   runtime_token: ${KRUN_RUNTIME_TOKEN}
@@ -73,7 +89,7 @@ workers:
 '''
 items.append(resource('ConfigMap','control-config',data={'control.yaml':config}))
 items.append(resource('ServiceAccount','workers-control'))
-items.append(resource('Role','workers-control',apiVersion='rbac.authorization.k8s.io/v1',rules=[{'apiGroups':[''],'resources':['pods','pods/log'],'verbs':['get','list']},{'apiGroups':[''],'resources':['configmaps'],'verbs':['get','create','patch','delete']},{'apiGroups':['batch'],'resources':['jobs'],'verbs':['get','list','create','delete']},{'apiGroups':['discovery.k8s.io'],'resources':['endpointslices'],'verbs':['get','list']},{'apiGroups':['gateway.networking.k8s.io'],'resources':['httproutes'],'verbs':['get','create','patch'] }]))
+items.append(resource('Role','workers-control',apiVersion='rbac.authorization.k8s.io/v1',rules=[{'apiGroups':[''],'resources':['pods','pods/log'],'verbs':['get','list']},{'apiGroups':[''],'resources':['configmaps'],'verbs':['get','create','patch','delete']},{'apiGroups':['batch'],'resources':['jobs'],'verbs':['get','list','create','delete']},{'apiGroups':['discovery.k8s.io'],'resources':['endpointslices'],'verbs':['get','list']},{'apiGroups':['gateway.networking.k8s.io'],'resources':['httproutes'],'verbs':['get','list','create','patch','delete'] }]))
 items.append(resource('RoleBinding','workers-control',apiVersion='rbac.authorization.k8s.io/v1',roleRef={'apiGroup':'rbac.authorization.k8s.io','kind':'Role','name':'workers-control'},subjects=[{'kind':'ServiceAccount','name':'workers-control','namespace':ns}]))
 items.append({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'Role','metadata':{'name':'workers-mvp-reader','namespace':'kgateway-system'},'rules':[{'apiGroups':['gateway.networking.k8s.io'],'resources':['gateways'],'resourceNames':['workers-mvp'],'verbs':['get']}]})
 items.append({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'RoleBinding','metadata':{'name':'workers-mvp-reader','namespace':'kgateway-system'},'roleRef':{'apiGroup':'rbac.authorization.k8s.io','kind':'Role','name':'workers-mvp-reader'},'subjects':[{'kind':'ServiceAccount','name':'workers-control','namespace':ns}]})
@@ -127,11 +143,18 @@ else:
 if repository_ips:
  policy('repository-egress',{'app':'backend'},egress=[{'to':[{'ipBlock':{'cidr':ip+('/32' if ':' not in ip else '/128')}} for ip in sorted(repository_ips)],'ports':[tcp(443)]}])
 policy('postgres',{'app':'postgres'},ingress=[{'from':[selector('backend')],'ports':[tcp(5432)]}])
-policy('minio',{'app':'minio'},ingress=[{'from':[selector('backend'),selector('krun-builder'),selector('runtime-default'),selector('tester')],'ports':[tcp(9000)]},{'from':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}},'podSelector':{'matchLabels':{'gateway.networking.k8s.io/gateway-name':'workers-mvp'}}}],'ports':[tcp(9000)]}])
+# Both network scopes are separate Gateway instances. The gateway-name label
+# selector keeps each instance's traffic distinct at the NetworkPolicy layer.
+gw_selector=[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}},'podSelector':{'matchLabels':{'gateway.networking.k8s.io/gateway-name':g}}} for g in ['workers-mvp','workers-public']]
+policy('minio',{'app':'minio'},ingress=[{'from':[selector('backend'),selector('krun-builder'),selector('runtime-default'),selector('tester')],'ports':[tcp(9000)]},{'from':gw_selector,'ports':[tcp(9000)]}])
 policy('builder',{'app':'krun-builder'},egress=[{'to':[selector('minio')],'ports':[tcp(9000)]}])
-policy('runtime',{'role':'krun-runtime'},ingress=[{'from':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}},'podSelector':{'matchLabels':{'gateway.networking.k8s.io/gateway-name':'workers-mvp'}}}],'ports':[tcp(8081)]},{'from':[selector('backend')],'ports':[tcp(8083)]}],egress=[{'to':[selector('backend')],'ports':[tcp(9001)]},{'to':[selector('minio')],'ports':[tcp(9000)]}])
+policy('runtime',{'role':'krun-runtime'},ingress=[{'from':gw_selector,'ports':[tcp(8081)]},{'from':[selector('backend')],'ports':[tcp(8083)]}],egress=[{'to':[selector('backend')],'ports':[tcp(9001)]},{'to':[selector('minio')],'ports':[tcp(9000)]}])
 policy('tester',{'app':'tester'},egress=[{'to':[selector('backend')],'ports':[tcp(9000)]},{'to':[selector('minio')],'ports':[tcp(9000)]},{'to':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}}}],'ports':[tcp(8080)]}])
+# Private instance: the only Gateway any private host may attach to.
 items.append({'apiVersion':'gateway.networking.k8s.io/v1','kind':'Gateway','metadata':{'name':'workers-mvp','namespace':'kgateway-system'},'spec':{'gatewayClassName':'kgateway','listeners':[{'name':'private','port':8080,'protocol':'HTTP','allowedRoutes':{'namespaces':{'from':'Selector','selector':{'matchLabels':{'lab':'krun-workers-mvp'}}}}}]}})
+# Public instance: a distinct proxy deployment. Isolation lives on this
+# instance boundary, so no private hostname ever exists in its route table.
+items.append({'apiVersion':'gateway.networking.k8s.io/v1','kind':'Gateway','metadata':{'name':'workers-public','namespace':'kgateway-system'},'spec':{'gatewayClassName':'kgateway','listeners':[{'name':'public','port':8080,'protocol':'HTTP','allowedRoutes':{'namespaces':{'from':'Selector','selector':{'matchLabels':{'lab':'krun-workers-mvp'}}}}}]}})
 (out/'manifests.json').write_text(json.dumps({'apiVersion':'v1','kind':'List','items':items},indent=2))
 (out/'manifests.json').chmod(0o600)
 print('Generated isolated workers-mvp manifests; credentials retained locally')

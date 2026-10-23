@@ -55,12 +55,12 @@ func (s *Server) workerInvoke(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	host, err := s.workerInvokeHost(r)
+	host, gatewayID, err := s.workerInvokeTarget(r)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	out, err := s.invokeWorker(r.Context(), host, in, path)
+	out, err := s.invokeWorker(r.Context(), host, gatewayID, in, path)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -94,8 +94,8 @@ func (in *workerInvokeRequest) validate() (*url.URL, error) {
 	return path, nil
 }
 
-func (s *Server) workerInvokeHost(r *http.Request) (string, error) {
-	var host string
+func (s *Server) workerInvokeTarget(r *http.Request) (string, string, error) {
+	var host, gatewayID string
 	var appErr error
 	err := s.Store.Update(r.Context(), func(st *State) error {
 		s.cleanup(st)
@@ -121,29 +121,46 @@ func (s *Server) workerInvokeHost(r *http.Request) (string, error) {
 			appErr = problem(409, "WORKER_NOT_PUBLISHED", "Publish this enabled environment first")
 			return nil
 		}
-		host = current.Host
+		// Invoke through the first selected domain of the service. The domain's
+		// Gateway decides which instance to address.
+		for i, id := range current.Domains {
+			if i >= len(current.Hosts) {
+				break
+			}
+			d, ok := s.Config.Workers.domain(id)
+			if !ok {
+				continue
+			}
+			host, gatewayID = current.Hosts[i], d.Gateway
+			return nil
+		}
+		appErr = problem(409, "WORKER_NOT_PUBLISHED", "Environment has no routable domain")
 		return nil
 	})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return host, appErr
+	return host, gatewayID, appErr
 }
 
 // Keep network I/O outside Store.Update: a slow Worker must not hold the IAM lock.
-func (s *Server) invokeWorker(ctx context.Context, host string, in workerInvokeRequest, path *url.URL) (workerInvokeResponse, error) {
+func (s *Server) invokeWorker(ctx context.Context, host, gatewayID string, in workerInvokeRequest, path *url.URL) (workerInvokeResponse, error) {
 	var out workerInvokeResponse
+	g, ok := s.Config.Workers.gateway(gatewayID)
+	if !ok {
+		return out, problem(503, "WORKER_INVOKE_UNAVAILABLE", "Worker gateway not configured")
+	}
 	target := *path
-	if s.Config.Workers.GatewayBase != "" {
-		base, e := url.Parse(s.Config.Workers.GatewayBase)
+	if base := g.gatewayBase(); base != "" {
+		parsed, e := url.Parse(base)
 		if e != nil {
 			return out, problem(503, "WORKER_INVOKE_UNAVAILABLE", "Worker gateway not configured")
 		}
-		target.Scheme = base.Scheme
-		target.Host = base.Host
+		target.Scheme = parsed.Scheme
+		target.Host = parsed.Host
 	} else {
 		target.Scheme = "http"
-		target.Host = s.Config.Workers.GatewayName + "." + s.Config.Workers.GatewayNamespace + ".svc:8080"
+		target.Host = g.inClusterAddress()
 	}
 	req, err := http.NewRequestWithContext(ctx, in.Method, target.String(), strings.NewReader(in.Body))
 	if err != nil {

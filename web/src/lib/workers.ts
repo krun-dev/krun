@@ -26,7 +26,7 @@ export type WorkerServiceSummary = Resource & {
   repository_source?: RepositorySource;
   environments: Pick<
     Environment,
-    "name" | "enabled" | "release_id" | "confirmed_release_id"
+    "name" | "enabled" | "release_id" | "confirmed_release_id" | "domains" | "hosts"
   >[];
 };
 export type Build = {
@@ -43,13 +43,25 @@ export type Build = {
 export type Environment = {
   name: string;
   enabled: boolean;
-  host: string;
-  external_host?: string;
+  /** Selected domain ids from the platform catalog. */
+  domains: string[];
+  /** One route host per selected domain, in the same order. */
+  hosts: string[];
   configuration_revision: number;
   variables: Record<string, string>;
   release_revision: number;
   release_id?: string;
   confirmed_release_id?: string;
+};
+
+/** Platform-configured domain. label is a free-form note, not a routing concept. */
+export type WorkerDomain = {
+  id: string;
+  domain: string;
+  label: string;
+  gateway: string;
+  static_domain: string;
+  default: boolean;
 };
 export type Release = {
   id: string;

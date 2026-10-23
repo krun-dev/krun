@@ -12,12 +12,44 @@ type workerServiceSummary struct {
 }
 
 type WorkerEnvironmentSummary struct {
-	Name         string `json:"name"`
-	Host         string `json:"host,omitempty"`
-	ExternalHost string `json:"external_host,omitempty"`
-	Enabled      bool   `json:"enabled"`
-	Release      string `json:"release_id,omitempty"`
-	Confirmed    string `json:"confirmed_release_id,omitempty"`
+	Name      string `json:"name"`
+	Domains   []string `json:"domains,omitempty"`
+	Hosts     []string `json:"hosts,omitempty"`
+	Enabled   bool   `json:"enabled"`
+	Release   string `json:"release_id,omitempty"`
+	Confirmed string `json:"confirmed_release_id,omitempty"`
+}
+
+// WorkerDomainView is the client-facing domain catalog entry. Label is a note
+// for humans; it has no effect on routing.
+type WorkerDomainView struct {
+	ID           string `json:"id"`
+	Domain       string `json:"domain"`
+	Label        string `json:"label"`
+	Gateway      string `json:"gateway"`
+	StaticDomain string `json:"static_domain"`
+	Default      bool   `json:"default"`
+}
+
+// domainCatalog renders the platform domain catalog for clients.
+func (s *Server) domainCatalog() []WorkerDomainView {
+	out := make([]WorkerDomainView, 0, len(s.Config.Workers.Domains))
+	for _, d := range s.Config.Workers.Domains {
+		out = append(out, WorkerDomainView{ID: d.ID, Domain: d.Domain, Label: d.Label, Gateway: d.Gateway, StaticDomain: d.StaticDomain, Default: d.Default})
+	}
+	return out
+}
+
+// workerDomains lists the domain catalog so the console can offer choices.
+func (s *Server) workerDomains(st *State, p Principal, r *http.Request) (any, int, error) {
+	target, err := s.orgTarget(st, r)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := s.require(st, p, r, "service.list", target); err != nil {
+		return nil, 0, err
+	}
+	return items(s.domainCatalog())
 }
 
 func (s *Server) workerServiceList(st *State, p Principal, r *http.Request) (any, int, error) {
@@ -62,7 +94,10 @@ func (s *Server) workerServiceList(st *State, p Principal, r *http.Request) (any
 			}
 			visible = true
 			if current, exists := service.Environments[env]; exists {
-				summary.Environments = append(summary.Environments, WorkerEnvironmentSummary{Name: env, Host: current.Host, ExternalHost: s.Config.Workers.ExternalHost(current.Host), Enabled: current.Enabled, Release: current.Release, Confirmed: current.Confirmed})
+				// Enriched for display only; the persisted row is not rewritten
+				// from a read path.
+				s.syncEnvironmentHosts(&current, resource.Organization, resource.ID, service.Domains)
+				summary.Environments = append(summary.Environments, WorkerEnvironmentSummary{Name: env, Domains: current.Domains, Hosts: current.Hosts, Enabled: current.Enabled, Release: current.Release, Confirmed: current.Confirmed})
 			}
 		}
 		if visible {

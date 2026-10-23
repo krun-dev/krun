@@ -17,35 +17,57 @@ type WorkersConfig struct {
 	BuilderPullPolicy   string                     `json:"builder_pull_policy"`
 	// BuilderMode selects the build executor: "kubernetes" creates a Job;
 	// "local" runs workers/builder/build-worker.mjs on the control-plane host.
-	BuilderMode      string `json:"builder_mode"`
-	BuilderScript    string `json:"builder_script"`
-	RuntimeService   string `json:"runtime_service"`
-	GatewayName      string `json:"gateway_name"`
-	GatewayNamespace string `json:"gateway_namespace"`
-	// GatewayBase overrides the in-cluster Gateway address for console invoke,
-	// e.g. http://127.0.0.1:38080 through an SSH tunnel.
-	GatewayBase string `json:"gateway_base"`
-	Domain      string `json:"domain"`
-	// ExternalDomain is the browser-facing suffix used only for display. The
-	// gateway/HTTPRoute hosts remain in Domain.
-	ExternalDomain        string `json:"external_domain"`
-	RuntimeToken          string `json:"runtime_token"`
-	ManagementToken       string `json:"management_token"`
-	RuntimeManagementBase string `json:"runtime_management_base"`
-	S3Endpoint            string `json:"s3_endpoint"`
-	S3BuilderEndpoint     string `json:"s3_builder_endpoint"`
-	S3Bucket              string `json:"s3_bucket"`
-	S3LocationID          string `json:"s3_location_id"`
-	S3AccessKey           string `json:"s3_access_key"`
-	S3SecretKey           string `json:"s3_secret_key"`
-	PreviewLimit          int    `json:"preview_limit"`
-	StaticDomain          string `json:"static_domain"`
-	StaticInternalDomain  string `json:"static_internal_domain"`
-	StaticService         string `json:"static_service"`
-	StaticServicePort     int    `json:"static_service_port"`
+	BuilderMode    string `json:"builder_mode"`
+	BuilderScript  string `json:"builder_script"`
+	RuntimeService string `json:"runtime_service"`
+	// Gateways and Domains are the routing catalog. Neither carries a network
+	// classification: a domain is just a suffix plus which Gateway instance
+	// serves it. Label is display text and never participates in routing.
+	Gateways              []WorkerGateway `json:"gateways"`
+	Domains               []WorkerDomain  `json:"domains"`
+	RuntimeToken          string          `json:"runtime_token"`
+	ManagementToken       string          `json:"management_token"`
+	RuntimeManagementBase string          `json:"runtime_management_base"`
+	S3Endpoint            string          `json:"s3_endpoint"`
+	S3BuilderEndpoint     string          `json:"s3_builder_endpoint"`
+	S3Bucket              string          `json:"s3_bucket"`
+	S3LocationID          string          `json:"s3_location_id"`
+	S3AccessKey           string          `json:"s3_access_key"`
+	S3SecretKey           string          `json:"s3_secret_key"`
+	PreviewLimit          int             `json:"preview_limit"`
+	StaticService         string          `json:"static_service"`
+	StaticServicePort     int             `json:"static_service_port"`
 	// ConfigBaseURL is the runtime-readable origin of config/latest.json and
 	// config/snapshots/*. It must be a private or cluster-internal endpoint.
 	ConfigBaseURL string `json:"config_base_url"`
+}
+
+// WorkerGateway is one Gateway instance the control plane writes routes to.
+// Separate instances are the isolation boundary: a request entering instance A
+// can only match hostnames present in A's route table.
+type WorkerGateway struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Section   string `json:"section"`
+	// Base overrides the address console invoke uses for this instance, e.g. an
+	// SSH tunnel. Empty means <name>.<namespace>.svc:8080.
+	Base string `json:"base"`
+}
+
+// WorkerDomain is one browser-facing suffix users can attach to an environment.
+// Label is purely descriptive ("公网", "内网", "办公网"); routing depends only on
+// Domain and Gateway.
+type WorkerDomain struct {
+	ID      string `json:"id"`
+	Domain  string `json:"domain"`
+	Label   string `json:"label"`
+	Gateway string `json:"gateway"`
+	// Default selects this domain for newly created environments.
+	Default bool `json:"default"`
+	// StaticDomain overrides the static-asset host served through this domain's
+	// Gateway. Empty derives "static." + Domain.
+	StaticDomain string `json:"static_domain"`
 }
 
 type WorkerAssetsConfig struct {
@@ -83,30 +105,9 @@ func (c *WorkersConfig) validate() error {
 	if c.RuntimeService == "" {
 		c.RuntimeService = "runtime-default"
 	}
-	if c.GatewayName == "" {
-		c.GatewayName = "workers-mvp"
-	}
-	if c.GatewayNamespace == "" {
-		c.GatewayNamespace = "kgateway-system"
-	}
-	if c.Domain == "" {
-		c.Domain = "workers.test"
-	}
 	dns := regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,180}$`)
-	for _, v := range []string{c.Namespace, c.RuntimeService, c.GatewayName, c.GatewayNamespace, c.Domain, c.S3Bucket, c.S3LocationID} {
-		if !dns.MatchString(v) {
-			return fmt.Errorf("invalid Workers namespace, route or bucket")
-		}
-	}
-	if c.ExternalDomain != "" && !dns.MatchString(c.ExternalDomain) {
-		return fmt.Errorf("invalid Workers external domain")
-	}
-	if c.GatewayBase != "" {
-		u, e := url.Parse(c.GatewayBase)
-		if e != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
-			return fmt.Errorf("invalid Workers gateway base")
-		}
-		c.GatewayBase = strings.TrimSuffix(c.GatewayBase, "/")
+	if e := c.validateCatalog(dns); e != nil {
+		return e
 	}
 	u, e := url.Parse(c.S3Endpoint)
 	if e != nil || u.Host == "" || u.Path != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
@@ -136,19 +137,14 @@ func (c *WorkersConfig) validate() error {
 	if c.PreviewLimit < 1 || c.PreviewLimit > 128 {
 		return fmt.Errorf("preview_limit must be between 1 and 128")
 	}
-	if c.StaticDomain == "" {
-		c.StaticDomain = "static." + c.Domain
-	}
 	if c.StaticService == "" {
 		c.StaticService = "static-assets"
 	}
 	if c.StaticServicePort == 0 {
 		c.StaticServicePort = 9000
 	}
-	for _, v := range []string{c.StaticDomain, c.StaticInternalDomain, c.StaticService} {
-		if v != "" && !dns.MatchString(v) {
-			return fmt.Errorf("invalid Workers static domain or service")
-		}
+	if !dns.MatchString(c.StaticService) {
+		return fmt.Errorf("invalid Workers static service")
 	}
 	if c.ConfigBaseURL == "" {
 		c.ConfigBaseURL = strings.TrimSuffix(c.S3Endpoint, "/") + "/" + c.S3Bucket + "/config"
@@ -161,14 +157,170 @@ func (c *WorkersConfig) validate() error {
 	return nil
 }
 
-func (c *WorkersConfig) ExternalHost(host string) string {
-	if c == nil || c.ExternalDomain == "" || host == "" {
+// validateCatalog normalises and checks the Gateway and domain lists. Gateways
+// come first so domains can reference them by id.
+func (c *WorkersConfig) validateCatalog(dns *regexp.Regexp) error {
+	if len(c.Gateways) == 0 {
+		return fmt.Errorf("Workers gateways required")
+	}
+	seenGateway := map[string]bool{}
+	for i := range c.Gateways {
+		g := &c.Gateways[i]
+		if g.ID == "" {
+			return fmt.Errorf("Workers gateway id required")
+		}
+		if seenGateway[g.ID] {
+			return fmt.Errorf("duplicate Workers gateway id: %s", g.ID)
+		}
+		seenGateway[g.ID] = true
+		if g.Namespace == "" {
+			g.Namespace = "kgateway-system"
+		}
+		if g.Section == "" {
+			g.Section = g.ID
+		}
+		for _, v := range []string{g.Name, g.Namespace, g.Section} {
+			if !dns.MatchString(v) {
+				return fmt.Errorf("invalid Workers gateway %s", g.ID)
+			}
+		}
+		if g.Base != "" {
+			u, e := url.Parse(g.Base)
+			if e != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
+				return fmt.Errorf("invalid Workers gateway base for %s", g.ID)
+			}
+			g.Base = strings.TrimSuffix(g.Base, "/")
+		}
+	}
+	if len(c.Domains) == 0 {
+		return fmt.Errorf("Workers domains required")
+	}
+	seenDomain, seenID := map[string]bool{}, map[string]bool{}
+	for i := range c.Domains {
+		d := &c.Domains[i]
+		if d.ID == "" {
+			return fmt.Errorf("Workers domain id required")
+		}
+		if seenID[d.ID] {
+			return fmt.Errorf("duplicate Workers domain id: %s", d.ID)
+		}
+		seenID[d.ID] = true
+		if !dns.MatchString(d.Domain) {
+			return fmt.Errorf("invalid Workers domain: %s", d.Domain)
+		}
+		if d.Domain != strings.ToLower(d.Domain) {
+			return fmt.Errorf("invalid Workers domain: %s", d.Domain)
+		}
+		if seenDomain[d.Domain] {
+			return fmt.Errorf("duplicate Workers domain: %s", d.Domain)
+		}
+		seenDomain[d.Domain] = true
+		if !seenGateway[d.Gateway] {
+			return fmt.Errorf("Workers domain %s references unknown gateway %q", d.ID, d.Gateway)
+		}
+		if d.StaticDomain == "" {
+			d.StaticDomain = "static." + d.Domain
+		}
+		if !dns.MatchString(d.StaticDomain) {
+			return fmt.Errorf("invalid Workers static domain for %s", d.ID)
+		}
+	}
+	if len(c.Domains) == 1 && !c.Domains[0].Default {
+		c.Domains[0].Default = true
+	}
+	return nil
+}
+
+// gateway returns the configured Gateway instance by id.
+func (c *WorkersConfig) gateway(id string) (WorkerGateway, bool) {
+	if c == nil {
+		return WorkerGateway{}, false
+	}
+	for _, g := range c.Gateways {
+		if g.ID == id {
+			return g, true
+		}
+	}
+	return WorkerGateway{}, false
+}
+
+// domain returns the configured domain entry by id.
+func (c *WorkersConfig) domain(id string) (WorkerDomain, bool) {
+	if c == nil {
+		return WorkerDomain{}, false
+	}
+	for _, d := range c.Domains {
+		if d.ID == id {
+			return d, true
+		}
+	}
+	return WorkerDomain{}, false
+}
+
+// domainForHost resolves which configured domain a route host belongs to. The
+// longest matching suffix wins so overlapping suffixes stay unambiguous.
+func (c *WorkersConfig) domainForHost(host string) (WorkerDomain, bool) {
+	if c == nil || host == "" {
+		return WorkerDomain{}, false
+	}
+	var best WorkerDomain
+	found := false
+	bestLen := 0
+	for _, d := range c.Domains {
+		if strings.HasSuffix(host, "."+d.Domain) && len(d.Domain) > bestLen {
+			best, bestLen, found = d, len(d.Domain), true
+		}
+	}
+	return best, found
+}
+
+// defaultDomains returns the ids newly created environments start with.
+func (c *WorkersConfig) defaultDomains() []string {
+	out := []string{}
+	if c == nil {
+		return out
+	}
+	for _, d := range c.Domains {
+		if d.Default {
+			out = append(out, d.ID)
+		}
+	}
+	if len(out) == 0 && len(c.Domains) > 0 {
+		out = append(out, c.Domains[0].ID)
+	}
+	return out
+}
+
+// workerSlug is the immutable, non-enumerable service label. It is always
+// "w-" plus 16 hex characters, so a host can be split into slug and
+// environment without ambiguity: the first '-' after position 18 starts the
+// environment name.
+func workerSlug(organization, service string) string {
+	return "w-" + digest(organization + "/" + service)[:16]
+}
+
+// hostFor derives the route host for one environment under one domain suffix.
+// Every domain of an environment shares the same label, so a service keeps one
+// identity; only the DNS suffix differs, and the suffix decides which Gateway
+// instance serves the host.
+func hostFor(slug, env, suffix string) string {
+	if slug == "" || env == "" || suffix == "" {
 		return ""
 	}
-	if strings.HasSuffix(host, "."+c.Domain) {
-		return strings.TrimSuffix(host, "."+c.Domain) + "." + c.ExternalDomain
+	return slug + "-" + env + "." + suffix
+}
+
+// gatewayBase returns the address console invoke uses for a Gateway instance.
+// An explicit base (SSH tunnel) wins; otherwise the in-cluster service is used.
+func (g WorkerGateway) gatewayBase() string {
+	if g.Base != "" {
+		return g.Base
 	}
 	return ""
+}
+
+func (g WorkerGateway) inClusterAddress() string {
+	return g.Name + "." + g.Namespace + ".svc:8080"
 }
 
 type WorkerActor struct {
@@ -217,10 +369,16 @@ type WorkerArtifact struct {
 type WorkerEnvironment struct {
 	Name    string `json:"name"`
 	Enabled bool   `json:"enabled"`
-	Host    string `json:"host"`
-	// ExternalHost is derived for display from WorkersConfig.ExternalDomain.
-	ExternalHost   string            `json:"external_host,omitempty"`
-	Visibility     string            `json:"visibility"`
+	// Domains mirrors the service-level selection, in catalog order. Routing
+	// decisions live on the service; this copy keeps each environment row
+	// self-describing for projections and API responses.
+	Domains []string `json:"domains"`
+	// Hosts holds one route host per selected domain: {slug}-{env}.{domain}.
+	// Disabled environments keep their hosts so the runtime can answer 410.
+	Hosts []string `json:"hosts"`
+	// DisplayHosts maps domain id to the browser-facing form of its host.
+	// Presentation only: routing uses Hosts.
+	DisplayHosts   map[string]string `json:"display_hosts,omitempty"`
 	ConfigRevision int               `json:"configuration_revision"`
 	Variables      map[string]string `json:"variables"`
 	Revision       int               `json:"release_revision"`
@@ -228,12 +386,73 @@ type WorkerEnvironment struct {
 	Confirmed      string            `json:"confirmed_release_id,omitempty"`
 }
 type WorkerService struct {
-	Repository         *WorkerRepositorySource      `json:"repository_source,omitempty"`
-	RepositoryRevision int                          `json:"repository_revision"`
-	Service            string                       `json:"service_id"`
-	Organization       string                       `json:"organization_id"`
-	Environments       map[string]WorkerEnvironment `json:"environments"`
+	Repository         *WorkerRepositorySource `json:"repository_source,omitempty"`
+	RepositoryRevision int                     `json:"repository_revision"`
+	Service            string                  `json:"service_id"`
+	Organization       string                  `json:"organization_id"`
+	// Domains is the service-level domain selection. Every environment of the
+	// service is served on every selected domain, so adding a domain adds one
+	// host per environment without touching per-environment configuration.
+	Domains      []string                     `json:"domains"`
+	Environments map[string]WorkerEnvironment `json:"environments"`
 }
+
+// syncEnvironmentHosts recomputes an environment's Hosts from the service's
+// domain selection. Every write path funnels through it so persisted hosts, the
+// edge projection and the HTTPRoutes cannot drift apart. Domains that no longer
+// exist in the catalog are dropped.
+func (s *Server) syncEnvironmentHosts(env *WorkerEnvironment, organization, service string, serviceDomains []string) {
+	if s.Config.Workers == nil || env == nil {
+		return
+	}
+	c := s.Config.Workers
+	slug := workerSlug(organization, service)
+	selected := map[string]bool{}
+	for _, id := range serviceDomains {
+		selected[id] = true
+	}
+	// Emit in catalog order so Domains[i] and Hosts[i] stay aligned for clients.
+	env.Domains = make([]string, 0, len(selected))
+	env.Hosts = make([]string, 0, len(selected))
+	env.DisplayHosts = map[string]string{}
+	for _, d := range c.Domains {
+		if !selected[d.ID] {
+			continue
+		}
+		host := hostFor(slug, env.Name, d.Domain)
+		if host == "" {
+			continue
+		}
+		env.Domains = append(env.Domains, d.ID)
+		env.Hosts = append(env.Hosts, host)
+		env.DisplayHosts[d.ID] = host
+	}
+}
+
+// syncServiceHosts applies the service's domain selection to every environment
+// and returns the normalised (catalog-ordered) selection.
+func (s *Server) syncServiceHosts(ws *WorkerService) []string {
+	if s.Config.Workers == nil || ws == nil {
+		return nil
+	}
+	selected := map[string]bool{}
+	for _, id := range ws.Domains {
+		selected[id] = true
+	}
+	kept := make([]string, 0, len(selected))
+	for _, d := range s.Config.Workers.Domains {
+		if selected[d.ID] {
+			kept = append(kept, d.ID)
+		}
+	}
+	ws.Domains = kept
+	for name, env := range ws.Environments {
+		s.syncEnvironmentHosts(&env, ws.Organization, ws.Service, ws.Domains)
+		ws.Environments[name] = env
+	}
+	return kept
+}
+
 type WorkerRelease struct {
 	ID             string            `json:"id"`
 	Service        string            `json:"service_id"`
@@ -340,6 +559,13 @@ func sourceValid(entry string, files map[string]string) error {
 	if total > 256<<10 {
 		return problem(413, "WORKER_SOURCE_INVALID", "Source exceeds 256 KiB")
 	}
+	return sourceEntryValid(entry, files)
+}
+
+// sourceEntryValid checks just the entrypoint. Repository builds resolve the
+// entrypoint from wrangler config after the tree is fetched, so the file-level
+// checks and the entrypoint check happen at different times.
+func sourceEntryValid(entry string, files map[string]string) error {
 	if _, ok := files[entry]; !ok || !contains([]string{".js", ".mjs", ".ts"}, path.Ext(entry)) {
 		return problem(422, "WORKER_SOURCE_INVALID", "Entrypoint must be an included JS or TS file")
 	}

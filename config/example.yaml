@@ -135,9 +135,36 @@ workers:
   builder_image: krun-worker-builder:20261013
   builder_pull_policy: IfNotPresent
   runtime_service: runtime-default
-  gateway_name: workers-mvp
-  gateway_namespace: kgateway-system
-  domain: workers.test
+  # 网关实例清单。路由按域名所属的 gateway 分组下发：一个实例的路由表里只会有
+  # 绑定到它的域名，别的域名即使伪造 Host 也匹配不到。base 仅用于本地调试（SSH
+  # 隧道），生产留空即走 <name>.<namespace>.svc:8080。
+  gateways:
+    - id: internal
+      name: workers-mvp
+      namespace: kgateway-system
+      section: private
+      base: ""
+    - id: external
+      name: workers-public
+      namespace: kgateway-system
+      section: public
+      base: ""
+  # 域名清单，数量不限。label 只是给人看的备注（公网/内网/办公网…），
+  # 不参与任何路由判断；真正决定走哪个入口的是 gateway。
+  # default: true 的域名会被新建环境默认选中。
+  domains:
+    - id: internal
+      domain: workers.test
+      label: 内网
+      gateway: internal
+      default: true
+      # 静态资产域名，留空则取 static.<domain>。
+      static_domain: static.workers.test
+    - id: external
+      domain: workers-out.example.com
+      label: 公网
+      gateway: external
+      static_domain: static.workers-out.example.com
   preview_limit: 32
   runtime_token: ${KRUN_RUNTIME_TOKEN:-replace-with-a-24-plus-character-token}
   management_token: ${KRUN_MANAGEMENT_TOKEN:-replace-with-a-24-plus-character-token}

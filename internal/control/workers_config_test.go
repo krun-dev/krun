@@ -17,9 +17,9 @@ func workerConfigFixture() (*State, *Store) {
 	store := memoryStore()
 	st, _, _ := fixture()
 	ws := WorkerService{Service: "svc-a", Organization: "org-a", Environments: map[string]WorkerEnvironment{
-		"production": {Name: "production", Enabled: true, Host: "w-prod.workers.test", Release: "rel-1"},
-		"preview":    {Name: "preview", Enabled: false, Host: "w-prev.workers.test", Release: "rel-1"},
-		"empty":      {Name: "empty", Enabled: true, Host: "w-empty.workers.test"},
+		"production": {Name: "production", Enabled: true, Hosts: []string{"w-prod.workers.test"}, Release: "rel-1"},
+		"preview":    {Name: "preview", Enabled: false, Hosts: []string{"w-prev.workers.test"}, Release: "rel-1"},
+		"empty":      {Name: "empty", Enabled: true, Hosts: []string{"w-empty.workers.test"}},
 	}}
 	st.Workers.Services["svc-a"] = ws
 	st.Workers.Releases["rel-1"] = WorkerRelease{ID: "rel-1", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1", ArchiveDigest: "archive-1", ModuleDigest: "module-1", Pool: "default", Variables: map[string]string{"A": "1"}}
@@ -136,7 +136,7 @@ func TestConfigRevisionStoreAndAcks(t *testing.T) {
 
 func TestPublishConfigCreatesRevisionsAndObjects(t *testing.T) {
 	s, store := testServer(t)
-	s.Config.Workers = &WorkersConfig{Domain: "workers.test", S3Bucket: "bucket"}
+	s.Config.Workers = testWorkersConfig()
 	controller := &workersController{server: s, config: s.Config.Workers, assetCache: map[string]workerCachedAssets{}}
 	objects := map[string][]byte{}
 	controller.putObject = func(ctx context.Context, bucket, key string, reader io.Reader, size int64, opts minio.PutObjectOptions) (minio.UploadInfo, error) {
@@ -148,7 +148,7 @@ func TestPublishConfigCreatesRevisionsAndObjects(t *testing.T) {
 		return minio.UploadInfo{}, nil
 	}
 	st, _, _ := fixture()
-	ws := WorkerService{Service: "svc-a", Organization: "org-a", Environments: map[string]WorkerEnvironment{"production": {Name: "production", Enabled: true, Host: "w-prod.workers.test", Release: "rel-1"}}}
+	ws := WorkerService{Service: "svc-a", Organization: "org-a", Environments: map[string]WorkerEnvironment{"production": {Name: "production", Enabled: true, Hosts: []string{"w-prod.workers.test"}, Release: "rel-1"}}}
 	st.Workers.Services["svc-a"] = ws
 	st.Workers.Releases["rel-1"] = WorkerRelease{ID: "rel-1", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1", Pool: "default"}
 	if err := store.Update(context.Background(), func(state *State) error { *state = *st; return nil }); err != nil {
@@ -215,7 +215,7 @@ func runtimeConfigRequest(s *Server, token, query string) *httptest.ResponseReco
 func TestWorkerRuntimeConfigChanges(t *testing.T) {
 	s, store := testServer(t)
 	token := strings.Repeat("t", 32)
-	s.Config.Workers = &WorkersConfig{Domain: "workers.test", RuntimeToken: token}
+	s.Config.Workers = func() *WorkersConfig { c := testWorkersConfig(); c.RuntimeToken = token; return c }()
 	s.routes()
 	ctx := context.Background()
 	payload, _ := json.Marshal(workerConfigProjection{Routes: []workerConfigRoute{{Host: "w.workers.test", Enabled: true, Release: "rel-1"}}, Releases: map[string]WorkerRelease{}})

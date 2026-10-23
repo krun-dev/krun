@@ -9,6 +9,10 @@ spec:
       role: krun-runtime
   policyTypes: [Ingress, Egress]
   ingress:
+    # Both network scopes terminate on their own Gateway instance, and both
+    # instances forward to the same runtime Pods. The split happens above this
+    # layer (route tables per instance); here both proxies must be admitted or
+    # the public entry gets a connection timeout instead of a 404.
     - from:
         - namespaceSelector:
             matchLabels:
@@ -16,6 +20,12 @@ spec:
           podSelector:
             matchLabels:
               gateway.networking.k8s.io/gateway-name: workers-mvp
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kgateway-system
+          podSelector:
+            matchLabels:
+              gateway.networking.k8s.io/gateway-name: workers-public
       ports:
         - protocol: TCP
           port: 8081

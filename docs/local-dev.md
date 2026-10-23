@@ -104,13 +104,31 @@ https://w-<hash>-<env>.<external-domain>/
 https://w-<hash>-<env>.<internal-domain>/
 ```
 
-nginx 只改 Host：
+nginx 只改 Host，两个入口分别指向各自的上游：
 
 ```text
-w-xxx-production.<external-domain> → w-xxx-production.workers.test
+w-xxx-production.<external-domain> → w-xxx-production.public.workers.test
+w-xxx-production.<internal-domain> → w-xxx-production.workers.test
 ```
 
-控制台的 `external_host` 字段由 `workers.external_domain` 推导，页面展示和打开链接都优先用它；内部 `host` 仍用于 HTTPRoute / gateway 路由。`in` 和 `out` 目前都指向同一个 gateway listener，不是真正的网络隔离；`in` 是内网入口，`out` 是对外入口，控制台只展示 `out`。
+两个入口是**真正分开的两条数据路径**：
+
+| 入口 | 浏览器域名后缀 | nginx upstream | 集群 Gateway 实例 |
+| --- | --- | --- | --- |
+| 公网 `out` | `<external-domain>` | NodePort → `workers-public` | `workers-public`（listener `public`） |
+| 内网 `in` | `<internal-domain>` | NodePort → `workers-mvp` | `workers-mvp`（listener `private`） |
+
+- 路由 host 用集群内部后缀匹配：私有 `workers.test`、公网 `public.workers.test`；浏览器不解析这两个名字。
+- 控制台的 `external_host` 由 `external_domain` / `internal_domain` 推导，只影响展示和链接。
+- 环境默认 `private`。在「环境配置 → 网络访问范围」显式切成 `public` 才会生成公网 host 与公网 HTTPRoute。
+- **隔离边界**：公网实例的路由表里没有任何 `*.workers.test`，内网实例的也没有 `*.public.workers.test`。在公网入口伪造内网 Host 返回 404；静态域同理（`static.public` / `static.internal` 各挂一边）。
+
+在 kind 宿主机上验证（NodePort 32284 = 公网，30739 = 内网）：
+
+```bash
+curl -o /dev/null -w '%{http_code}\n' -H 'Host: w-x-production.workers.test'        http://<node>:32284/  # 404
+curl -o /dev/null -w '%{http_code}\n' -H 'Host: w-x-production.public.workers.test' http://<node>:32284/  # 200
+```
 
 ## 远端 runtime 的前置条件
 

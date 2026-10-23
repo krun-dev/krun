@@ -160,25 +160,43 @@ func (w *workersController) reconcile(ctx context.Context) error {
 			failures = append(failures, e)
 		}
 	}
-	// One shared static route per network scope; it does not scale with services.
-	for _, scope := range []struct{ host, prefix string }{{w.config.StaticDomain, "pub"}, {w.config.StaticInternalDomain, "int"}} {
-		if scope.host == "" {
-			continue
-		}
-		if e := w.kube.ensureStaticRoute(ctx, w.config, scope.host, scope.prefix); e != nil {
+	// One shared static route per domain; it does not scale with services.
+	// Each route lives on the Gateway instance that domain is bound to.
+	desiredStatic := map[string]bool{}
+	for _, d := range w.config.Domains {
+		desiredStatic["workers-static-"+d.ID] = true
+		if e := w.kube.ensureStaticRoute(ctx, w.config, d.ID, "assets"); e != nil {
 			failures = append(failures, e)
 		}
 	}
-	// Each service has at most three hosts; Gateway API limits hosts per HTTPRoute.
+	// Static routes from a previous catalog (renamed or removed domains) would
+	// keep serving objects on hosts nobody configured any more.
+	for _, n := range staleWorkerRoutes(ctx, w.kube, "workers-static-", desiredStatic) {
+		if e := w.kube.deleteRoute(ctx, n); e != nil {
+			failures = append(failures, e)
+		}
+	}
+	// One HTTPRoute per (service, Gateway instance). Hosts are grouped by the
+	// Gateway their domain is bound to, so routes never carry a hostname the
+	// instance is not meant to serve.
 	routesReady := map[string]bool{}
 	for _, service := range state.Services {
-		hosts := []string{}
+		hostsByGateway := map[string][]string{}
 		for _, env := range service.Environments {
-			if env.Enabled {
-				hosts = append(hosts, env.Host)
+			if !env.Enabled {
+				continue
+			}
+			// Hosts already encode the service's domain selection; classify each
+			// by the domain it belongs to so it lands on the right instance.
+			for _, host := range env.Hosts {
+				d, ok := w.config.domainForHost(host)
+				if !ok {
+					continue
+				}
+				hostsByGateway[d.Gateway] = append(hostsByGateway[d.Gateway], host)
 			}
 		}
-		ready, routeError := w.kube.ensureRoutes(ctx, w.config, "workers-"+digest(service.Organization + "/" + service.Service)[:24], hosts)
+		ready, routeError := w.kube.ensureRoutes(ctx, w.config, "workers-"+digest(service.Organization+"/"+service.Service)[:24], hostsByGateway)
 		routesReady[service.Service] = ready && routeError == nil
 		if routeError != nil {
 			failures = append(failures, routeError)

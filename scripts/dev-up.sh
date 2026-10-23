@@ -32,15 +32,18 @@ if [[ "$runtime_code" != "200" && "$runtime_code" != "503" ]] || ! lsof -nP -iTC
   # A runtime rollout replaces the pod behind the port-forward; the listening
   # SSH socket can survive while the remote channel is dead. Probe /ready and
   # restart the tunnel on connection failure (000), not on a 503 readiness.
-  for port in 38083 38080; do
+  for port in 38083 38080 38081; do
     for pid in $(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true); do
       kill "$pid" 2>/dev/null || true
     done
   done
+  # 38080 fronts the private Gateway instance, 38081 the public one. Console
+  # invoke picks the target by the environment's network scope.
   nohup ssh -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
     -L 127.0.0.1:38083:127.0.0.1:38083 \
-    -L 127.0.0.1:38080:127.0.0.1:38080 "$REMOTE" \
-    "kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp port-forward deployment/runtime-default 38083:8083 --address 127.0.0.1 & kubectl --kubeconfig $KUBECONFIG_REMOTE -n kgateway-system port-forward svc/workers-mvp 38080:8080 --address 127.0.0.1 & wait" \
+    -L 127.0.0.1:38080:127.0.0.1:38080 \
+    -L 127.0.0.1:38081:127.0.0.1:38081 "$REMOTE" \
+    "kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp port-forward deployment/runtime-default 38083:8083 --address 127.0.0.1 & kubectl --kubeconfig $KUBECONFIG_REMOTE -n kgateway-system port-forward svc/workers-mvp 38080:8080 --address 127.0.0.1 & kubectl --kubeconfig $KUBECONFIG_REMOTE -n kgateway-system port-forward deploy/workers-public 38081:8080 --address 127.0.0.1 & wait" \
     >.data/tunnel-runtime.log 2>&1 &
   echo $! >.data/tunnel-runtime.pid
 fi

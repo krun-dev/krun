@@ -18,8 +18,8 @@ import (
 func publishedWorkerInvokeServer(t *testing.T) (*Server, *Store, string, string) {
 	t.Helper()
 	s, store, base := workerTestServer(t)
-	s.Config.Workers.GatewayName = "workers-gateway"
-	s.Config.Workers.GatewayNamespace = "gateway-system"
+	s.Config.Workers.Gateways = []WorkerGateway{{ID: "internal", Name: "workers-gateway", Namespace: "gateway-system", Section: "private"}}
+	s.Config.Workers.Domains = []WorkerDomain{{ID: "internal", Domain: "workers.test", Label: "内网", Gateway: "internal", Default: true}}
 	var host string
 	if err := store.Update(context.Background(), func(st *State) error {
 		service := s.workerService(st, Target{ID: "svc-a", Organization: "org-a"})
@@ -27,7 +27,7 @@ func publishedWorkerInvokeServer(t *testing.T) (*Server, *Store, string, string)
 		env.Release = "rel-test"
 		service.Environments["production"] = env
 		st.Workers.Services[service.Service] = service
-		host = env.Host
+		host = env.Hosts[0]
 		return nil
 	}); err != nil {
 		t.Fatal(err)

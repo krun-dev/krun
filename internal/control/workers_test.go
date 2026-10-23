@@ -15,12 +15,12 @@ import (
 func workerTestServer(t *testing.T) (*Server, *Store, string) {
 	t.Helper()
 	s, store := testServer(t)
-	s.Config.Workers = &WorkersConfig{Domain: "workers.test"}
+	s.Config.Workers = testWorkersConfig()
 	s.routes()
 	// A default preview so build/permission tests have a non-baseline target.
 	if e := store.Update(context.Background(), func(st *State) error {
 		ws := s.workerService(st, Target{ID: "svc-a", Organization: "org-a"})
-		ws.Environments["fix-demo"] = WorkerEnvironment{Name: "fix-demo", Enabled: true, Host: "w-demo-fix-demo.workers.test", Visibility: "private", ConfigRevision: 1, Variables: map[string]string{}}
+		ws.Environments["fix-demo"] = WorkerEnvironment{Name: "fix-demo", Enabled: true, Domains: []string{"internal"}, ConfigRevision: 1, Variables: map[string]string{}}
 		st.Workers.Services["svc-a"] = ws
 		return nil
 	}); e != nil {
@@ -347,5 +347,20 @@ func TestWorkerConsoleInvocationRejectsUnauthorizedAndUnpublishedTargets(t *test
 	}
 	if r := request(s, "POST", base+"/environments/fix-demo/invoke", "krun_cli_admin", `{"path":"/"}`); r.Code != 409 {
 		t.Fatal(r.Code, r.Body.String())
+	}
+}
+
+// testWorkersConfig is a minimal catalog: one Gateway, one default domain.
+func testWorkersConfig() *WorkersConfig {
+	return &WorkersConfig{
+		Namespace:   "workers-mvp",
+		BuilderMode: "local",
+
+		Gateways: []WorkerGateway{
+			{ID: "internal", Name: "workers-mvp", Namespace: "kgateway-system", Section: "private"},
+		},
+		Domains: []WorkerDomain{
+			{ID: "internal", Domain: "workers.test", Label: "内网", Gateway: "internal", Default: true},
+		},
 	}
 }

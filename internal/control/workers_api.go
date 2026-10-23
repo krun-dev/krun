@@ -26,10 +26,13 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 		})
 	}
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/services", protect(false, s.workerServiceList))
+	m.HandleFunc("GET /api/v1/orgs/{org}/workers/domains", protect(false, s.workerDomains))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/repository-providers", protect(false, s.workerRepositoryProviders))
 	m.HandleFunc("POST /api/v1/orgs/{org}/workers/repository/{provider}/connect", protect(true, s.workerRepositoryConnect))
 	m.HandleFunc("POST /api/v1/orgs/{org}/workers/repository/{provider}/disconnect", protect(true, s.workerRepositoryDisconnect))
 	m.HandleFunc("POST /api/v1/workers/repository/{provider}/callback", s.workerRepositoryCallback)
+	m.HandleFunc("GET "+base+"/domains", protect(false, s.workerServiceDomains))
+	m.HandleFunc("PUT "+base+"/domains", protect(false, s.workerServiceDomainsUpdate))
 	m.HandleFunc("GET "+base+"/repository", protect(false, s.workerRepositoryGet))
 	m.HandleFunc("PUT "+base+"/repository", protect(false, s.workerRepositoryUpdate))
 	m.HandleFunc("POST "+base+"/builds", protect(false, s.workerBuildCreate))
@@ -95,17 +98,26 @@ func (s *Server) workerService(st *State, t Target) WorkerService {
 	}
 	ws, ok := st.Workers.Services[t.ID]
 	if !ok {
-		ws = WorkerService{Service: t.ID, Organization: t.Organization, Environments: map[string]WorkerEnvironment{}}
+		ws = WorkerService{Service: t.ID, Organization: t.Organization, Domains: s.Config.Workers.defaultDomains(), Environments: map[string]WorkerEnvironment{}}
+	}
+	if len(ws.Domains) == 0 {
+		// Services created before the selection moved to the service level, or
+		// whose catalog entries were all removed, fall back to the defaults so a
+		// half-migrated row never ends up unroutable.
+		ws.Domains = s.Config.Workers.defaultDomains()
 	}
 	if baseline, ok := ws.Environments[workerBaseline]; ok {
 		// The baseline serves production traffic; legacy data may have it
 		// disabled through the removed UI toggle. Self-heal on read.
 		if !baseline.Enabled {
 			baseline.Enabled = true
+			s.syncEnvironmentHosts(&baseline, t.Organization, t.ID, ws.Domains)
 			ws.Environments[workerBaseline] = baseline
 		}
 	} else {
-		ws.Environments[workerBaseline] = WorkerEnvironment{Name: workerBaseline, Enabled: true, Host: "w-" + digest(t.Organization + "/" + t.ID)[:16] + "-" + workerBaseline + "." + s.Config.Workers.Domain, Visibility: "private", ConfigRevision: 1, Variables: map[string]string{}}
+		baseline := WorkerEnvironment{Name: workerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{}}
+		s.syncEnvironmentHosts(&baseline, t.Organization, t.ID, ws.Domains)
+		ws.Environments[workerBaseline] = baseline
 	}
 	st.Workers.Services[t.ID] = ws
 	st.Workers.Revision++
@@ -342,11 +354,62 @@ func (s *Server) workerEnvironments(st *State, p Principal, r *http.Request) (an
 		}
 		if d.Allowed {
 			env := ws.Environments[name]
-			env.ExternalHost = s.Config.Workers.ExternalHost(env.Host)
+			// Recompute rather than trusting persisted hosts: the configured
+			// domain catalog may have changed since the row was written.
+			s.syncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains)
 			out = append(out, env)
 		}
 	}
 	return items(out)
+}
+
+// workerServiceDomains returns the service-level domain selection together with
+// the catalog, so the console can render the routing page in one round trip.
+func (s *Server) workerServiceDomains(st *State, p Principal, r *http.Request) (any, int, error) {
+	t, e := s.workerTarget(st, r, workerBaseline, "service.read", p)
+	if e != nil {
+		return nil, 0, e
+	}
+	ws := s.workerService(st, t)
+	s.syncServiceHosts(&ws)
+	st.Workers.Services[t.ID] = ws
+	return map[string]any{"selected": ws.Domains, "catalog": s.domainCatalog()}, 200, nil
+}
+
+// workerServiceDomainsUpdate replaces the service-level domain selection. Every
+// environment of the service is re-homed onto the new set.
+func (s *Server) workerServiceDomainsUpdate(st *State, p Principal, r *http.Request) (any, int, error) {
+	t, e := s.workerTarget(st, r, workerBaseline, "service.update", p)
+	if e != nil {
+		return nil, 0, e
+	}
+	var in struct {
+		Domains []string `json:"domains"`
+		Key     string   `json:"idempotency_key,omitempty"`
+	}
+	if e = body(r, &in); e != nil {
+		return nil, 0, e
+	}
+	if len(in.Domains) == 0 {
+		return nil, 0, problem(422, "DOMAINS_INVALID", "Select at least one domain")
+	}
+	seen := map[string]bool{}
+	for _, id := range in.Domains {
+		if _, ok := s.Config.Workers.domain(id); !ok {
+			return nil, 0, problem(422, "DOMAINS_INVALID", "Unknown domain: "+id)
+		}
+		if seen[id] {
+			return nil, 0, problem(422, "DOMAINS_INVALID", "Duplicate domain: "+id)
+		}
+		seen[id] = true
+	}
+	ws := s.workerService(st, t)
+	ws.Domains = append([]string(nil), in.Domains...)
+	selected := s.syncServiceHosts(&ws)
+	st.Workers.Services[t.ID] = ws
+	st.Workers.Revision++
+	s.audit(st, p, r, "workers.domains.update", t.ID, true)
+	return map[string]any{"selected": selected, "catalog": s.domainCatalog()}, 200, nil
 }
 func workerBusy(st *State, service, env string) bool {
 	for _, op := range st.Workers.Operations {
@@ -391,7 +454,8 @@ func (s *Server) workerEnvironmentCreate(st *State, p Principal, r *http.Request
 	if previews >= limit {
 		return nil, 0, problem(409, "ENVIRONMENT_LIMIT", "Too many preview environments")
 	}
-	env := WorkerEnvironment{Name: in.Name, Enabled: true, Host: "w-" + digest(t.Organization + "/" + t.ID)[:16] + "-" + in.Name + "." + s.Config.Workers.Domain, Visibility: "private", ConfigRevision: 1, Variables: map[string]string{}}
+	env := WorkerEnvironment{Name: in.Name, Enabled: true, ConfigRevision: 1, Variables: map[string]string{}}
+	s.syncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains)
 	ws.Environments[in.Name] = env
 	st.Workers.Services[t.ID] = ws
 	st.Workers.Revision++
@@ -460,6 +524,7 @@ func (s *Server) workerEnvironmentUpdate(st *State, p Principal, r *http.Request
 	if in.Variables != nil {
 		current.Variables = in.Variables
 	}
+	s.syncEnvironmentHosts(&current, t.Organization, t.ID, ws.Domains)
 	current.ConfigRevision++
 	ws.Environments[env] = current
 	st.Workers.Services[t.ID] = ws

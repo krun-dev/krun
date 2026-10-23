@@ -222,13 +222,95 @@ func (k *workerKubernetes) buildLog(ctx context.Context, job string) string {
 	}
 	return safeWorkerLog(text)
 }
-func (k *workerKubernetes) ensureRoutes(ctx context.Context, c *WorkersConfig, name string, hosts []string) (bool, error) {
+// ensureRoutes reconciles one HTTPRoute per (worker, Gateway instance). Grouping
+// by Gateway rather than by a network concept is what makes the isolation
+// structural: an instance's route table only ever contains the hostnames of the
+// domains bound to it, so a forged Host cannot cross instances.
+// Gateways with no remaining hosts are pruned.
+func (k *workerKubernetes) ensureRoutes(ctx context.Context, c *WorkersConfig, name string, hostsByGateway map[string][]string) (bool, error) {
+	ready := true
+	desired := map[string]bool{}
+	for _, g := range c.Gateways {
+		hosts := hostsByGateway[g.ID]
+		route := name
+		if g.ID != c.Gateways[0].ID {
+			route = name + "-" + g.ID
+		}
+		desired[route] = true
+		ok, e := k.ensureRoute(ctx, c, route, g, hosts)
+		ready = ready && ok
+		if e != nil {
+			// One failing Gateway must not skip repairing the others.
+			return false, e
+		}
+	}
+	// Routes written under an older catalog naming (a Gateway id that no longer
+	// exists) would otherwise keep answering for hosts nobody selected.
+	for _, n := range staleWorkerRoutes(ctx, k, name+"-", desired) {
+		if e := k.deleteRoute(ctx, n); e != nil {
+			return false, e
+		}
+	}
+	return ready, nil
+}
+
+// listRoutes returns the names of HTTPRoutes in the workers namespace.
+func (k *workerKubernetes) listRoutes(ctx context.Context) ([]string, error) {
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+		} `json:"items"`
+	}
+	base := "/apis/gateway.networking.k8s.io/v1/namespaces/" + k.namespace + "/httproutes"
+	if e := k.call(ctx, "GET", base, nil, &list); e != nil {
+		return nil, e
+	}
+	out := make([]string, 0, len(list.Items))
+	for _, item := range list.Items {
+		out = append(out, item.Metadata.Name)
+	}
+	return out, nil
+}
+
+func (k *workerKubernetes) deleteRoute(ctx context.Context, name string) error {
+	base := "/apis/gateway.networking.k8s.io/v1/namespaces/" + k.namespace + "/httproutes"
+	if e := k.call(ctx, "DELETE", base+"/"+name, nil, nil); e != nil && !kubeMissing(e) {
+		return e
+	}
+	return nil
+}
+
+// staleWorkerRoutes lists routes with the given prefix that are not desired.
+func staleWorkerRoutes(ctx context.Context, k *workerKubernetes, prefix string, desired map[string]bool) []string {
+	names, e := k.listRoutes(ctx)
+	if e != nil {
+		return nil
+	}
+	out := []string{}
+	for _, n := range names {
+		if strings.HasPrefix(n, prefix) && !desired[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func (k *workerKubernetes) ensureRoute(ctx context.Context, c *WorkersConfig, name string, g WorkerGateway, hosts []string) (bool, error) {
+	base := "/apis/gateway.networking.k8s.io/v1/namespaces/" + k.namespace + "/httproutes"
 	if len(hosts) == 0 {
-		return true, nil
+		// Prune: a route with no hostnames would be invalid anyway, and leaving
+		// it behind keeps a removed environment reachable.
+		e := k.call(ctx, "DELETE", base+"/"+name, nil, nil)
+		if kubeMissing(e) {
+			return true, nil
+		}
+		return true, e
 	}
 	sort.Strings(hosts)
-	base := "/apis/gateway.networking.k8s.io/v1/namespaces/" + k.namespace + "/httproutes"
-	spec := map[string]any{"parentRefs": []any{map[string]string{"name": c.GatewayName, "namespace": c.GatewayNamespace, "sectionName": "private"}}, "hostnames": hosts, "rules": []any{map[string]any{"filters": []any{map[string]any{"type": "RequestHeaderModifier", "requestHeaderModifier": map[string]any{"remove": []string{"x-krun-scope", "x-krun-release", "x-forwarded-host", "x-internal"}}}}, "backendRefs": []any{map[string]any{"name": c.RuntimeService, "port": 8081}}}}}
+	gatewayName, gatewayNamespace, section := g.Name, g.Namespace, g.Section
+	spec := map[string]any{"parentRefs": []any{map[string]string{"name": gatewayName, "namespace": gatewayNamespace, "sectionName": section}}, "hostnames": hosts, "rules": []any{map[string]any{"filters": []any{map[string]any{"type": "RequestHeaderModifier", "requestHeaderModifier": map[string]any{"remove": []string{"x-krun-scope", "x-krun-release", "x-forwarded-host", "x-internal"}}}}, "backendRefs": []any{map[string]any{"name": c.RuntimeService, "port": 8081}}}}}
 	var current struct {
 		Metadata struct {
 			Generation int `json:"generation"`
@@ -261,15 +343,25 @@ func (k *workerKubernetes) ensureRoutes(ctx context.Context, c *WorkersConfig, n
 		return false, e
 	}
 	var old struct {
-		Hosts []string `json:"hostnames"`
+		Hosts  []string `json:"hostnames"`
+		Parent []struct {
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
+			Section   string `json:"sectionName"`
+		} `json:"parentRefs"`
 	}
 	_ = json.Unmarshal(current.Spec, &old)
-	if strings.Join(old.Hosts, "\n") != strings.Join(hosts, "\n") {
+	// parentRefs is part of the desired state: re-pointing a route at another
+	// Gateway instance is exactly what the network-scope split relies on, so a
+	// host-only comparison would silently leave the old attachment in place.
+	parentDrift := len(old.Parent) != 1 || old.Parent[0].Name != gatewayName ||
+		old.Parent[0].Namespace != gatewayNamespace || old.Parent[0].Section != section
+	if parentDrift || strings.Join(old.Hosts, "\n") != strings.Join(hosts, "\n") {
 		return false, k.call(ctx, "PATCH", base+"/"+name, map[string]any{"spec": spec}, nil)
 	}
 	accepted, resolved := false, false
 	for _, p := range current.Status.Parents {
-		if p.Parent.Name != c.GatewayName || p.Parent.Namespace != c.GatewayNamespace || p.Parent.Section != "private" {
+		if p.Parent.Name != gatewayName || p.Parent.Namespace != gatewayNamespace || p.Parent.Section != section {
 			continue
 		}
 		for _, condition := range p.Conditions {
@@ -295,7 +387,7 @@ func (k *workerKubernetes) ensureRoutes(ctx context.Context, c *WorkersConfig, n
 			} `json:"conditions"`
 		} `json:"status"`
 	}
-	if e = k.call(ctx, "GET", "/apis/gateway.networking.k8s.io/v1/namespaces/"+c.GatewayNamespace+"/gateways/"+c.GatewayName, nil, &gateway); e != nil {
+	if e = k.call(ctx, "GET", "/apis/gateway.networking.k8s.io/v1/namespaces/"+gatewayNamespace+"/gateways/"+gatewayName, nil, &gateway); e != nil {
 		return false, e
 	}
 	programmed := false
@@ -307,17 +399,27 @@ func (k *workerKubernetes) ensureRoutes(ctx context.Context, c *WorkersConfig, n
 	return accepted && resolved && programmed, nil
 }
 
-// One shared static route per network scope serves every service. Requests are
-// rewritten to path-style object keys (/<bucket>/<pub|int>/...) so the bucket
-// stays the origin and Gateway API needs no per-service rules.
-func (k *workerKubernetes) ensureStaticRoute(ctx context.Context, c *WorkersConfig, host, prefix string) error {
-	if host == "" {
+// One shared static route per (domain, Gateway) serves every service. Requests
+// are rewritten to path-style object keys so the bucket stays the origin and
+// Gateway API needs no per-service rules. Assets are copied into one prefix per
+// domain; the route for a domain only exists on that domain's Gateway instance.
+func (k *workerKubernetes) ensureStaticRoute(ctx context.Context, c *WorkersConfig, domainID string, prefix string) error {
+	d, ok := c.domain(domainID)
+	if !ok || d.StaticDomain == "" {
 		return nil
 	}
-	name := "workers-static-" + prefix
+	g, ok := c.gateway(d.Gateway)
+	if !ok {
+		return nil
+	}
+	host := d.StaticDomain
+	// One route per domain: they carry different hostnames and may sit on
+	// different Gateway instances.
+	name := "workers-static-" + domainID
+	gatewayName, gatewayNamespace, section := g.Name, g.Namespace, g.Section
 	base := "/apis/gateway.networking.k8s.io/v1/namespaces/" + k.namespace + "/httproutes"
 	spec := map[string]any{
-		"parentRefs": []any{map[string]string{"name": c.GatewayName, "namespace": c.GatewayNamespace, "sectionName": "private"}},
+		"parentRefs": []any{map[string]string{"name": gatewayName, "namespace": gatewayNamespace, "sectionName": section}},
 		"hostnames":  []string{host},
 		"rules": []any{map[string]any{
 			"matches": []any{map[string]any{"path": map[string]string{"type": "PathPrefix", "value": "/"}}},
@@ -343,10 +445,19 @@ func (k *workerKubernetes) ensureStaticRoute(ctx context.Context, c *WorkersConf
 		return e
 	}
 	var old struct {
-		Hosts []string `json:"hostnames"`
+		Hosts  []string `json:"hostnames"`
+		Parent []struct {
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
+			Section   string `json:"sectionName"`
+		} `json:"parentRefs"`
 	}
 	_ = json.Unmarshal(current.Spec, &old)
-	if len(old.Hosts) != 1 || old.Hosts[0] != host {
+	// Re-pointing the sharing route is part of the desired state: a scope moved
+	// to another Gateway instance must not keep serving from the old one.
+	parentDrift := len(old.Parent) != 1 || old.Parent[0].Name != gatewayName ||
+		old.Parent[0].Namespace != gatewayNamespace || old.Parent[0].Section != section
+	if parentDrift || len(old.Hosts) != 1 || old.Hosts[0] != host {
 		return k.call(ctx, "PATCH", base+"/"+name, map[string]any{"spec": spec}, nil)
 	}
 	return nil

@@ -26,6 +26,7 @@ import {
   type Operation,
   type WorkerData,
   type RepositoryBinding,
+  type WorkerDomain,
 } from "@/lib/workers";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -149,6 +150,17 @@ export function WorkersPage({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [domains, setDomains] = useState<WorkerDomain[]>([]);
+  useEffect(() => {
+    if (system) return;
+    const c = new AbortController();
+    // The catalog is platform configuration; it rarely changes but the labels
+    // and available suffixes drive the environment picker.
+    void api<List<WorkerDomain>>(base + "/workers/domains", "GET", undefined, c.signal)
+      .then((r) => setDomains(r.items))
+      .catch(() => setDomains([]));
+    return () => c.abort();
+  }, [base, system]);
   useEffect(() => {
     if (system) return;
     const c = new AbortController();
@@ -236,6 +248,7 @@ export function WorkersPage({
             base={base + "/services/" + selected.id + "/workers"}
             organizationBase={base}
             service={selected}
+            domains={domains}
             notify={notify}
           />
         </>
@@ -376,11 +389,13 @@ function WorkerDetail({
   base,
   organizationBase,
   service,
+  domains,
   notify,
 }: {
   base: string;
   organizationBase: string;
   service: Resource;
+  domains: WorkerDomain[];
   notify: (s: string) => void;
 }) {
   const [revision, setRevision] = useState(0);
@@ -599,24 +614,39 @@ function WorkerDetail({
                 · {shortID(e.release_id)}
               </span>
             </div>
-            <div className="flex items-center justify-between gap-2">
-              {e.release_id && env?.enabled ? (
-                <a
-                  href={workerURL(e.external_host || e.host)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 break-all text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
-                  onClick={(event) => event.stopPropagation()}
-                >
-                  {e.external_host || e.host}
-                  <ArrowUpRight size={11} className="shrink-0" />
-                </a>
-              ) : (
+            <div className="grid gap-1">
+              {(e.hosts || []).map((host, i) => {
+                const d = domains.find((x) => x.id === (e.domains || [])[i]);
+                const text = d?.label ? `${host}（${d.label}）` : host;
+                return e.release_id && e.enabled ? (
+                  <a
+                    key={host}
+                    href={workerURL(host)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 break-all text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    {text}
+                    <ArrowUpRight size={11} className="shrink-0" />
+                  </a>
+                ) : (
+                  <code
+                    key={host}
+                    className="break-all text-[11px] text-muted-foreground"
+                  >
+                    {text}
+                  </code>
+                );
+              })}
+              {(e.hosts || []).length === 0 ? (
                 <code className="break-all text-[11px] text-muted-foreground">
-                  {e.external_host || e.host}
+                  {t("未绑定域名")}
                 </code>
-              )}
-              {e.name !== "production" ? (
+              ) : null}
+            </div>
+            {e.name !== "production" ? (
+              <div className="mt-2 flex justify-end">
                 <Button
                   variant="outline"
                   size="sm"
@@ -628,8 +658,8 @@ function WorkerDetail({
                 >
                   {t("删除")}
                 </Button>
-              ) : null}
-            </div>
+              </div>
+            ) : null}
           </button>
         ))}
       </div>
@@ -638,6 +668,7 @@ function WorkerDetail({
           <TabsList>
             <TabsTrigger value="delivery">{t("构建与发布")}</TabsTrigger>
             <TabsTrigger value="source">{t("代码源")}</TabsTrigger>
+            <TabsTrigger value="routing">{t("路由与域名")}</TabsTrigger>
             <TabsTrigger value="settings">{t("环境配置")}</TabsTrigger>
             <TabsTrigger value="invoke">{t("调用测试")}</TabsTrigger>
           </TabsList>
@@ -814,6 +845,16 @@ function WorkerDetail({
               notify={notify}
             />
           </TabsContent>
+          <TabsContent value="routing" className="mt-5 grid gap-5">
+            <ServiceDomains
+              base={base}
+              domains={domains}
+              environments={data.environments}
+              active={active}
+              reload={reload}
+              notify={notify}
+            />
+          </TabsContent>
           <TabsContent value="settings" className="mt-5 grid gap-6">
             <EnvironmentSettings
               key={env.name}
@@ -821,6 +862,7 @@ function WorkerDetail({
               env={env}
               active={active}
               data={data}
+              domains={domains}
               reload={reload}
               notify={notify}
             />
@@ -1134,11 +1176,251 @@ function OperationPanel({
   );
 }
 
+// ServiceDomains is the service-level routing configuration: which of the
+// platform's domains this service answers on. Every environment gets one host
+// per selected domain, so this is a property of the service, not of an
+// environment.
+function ServiceDomains({
+  base,
+  domains,
+  environments,
+  active,
+  reload,
+  notify,
+}: {
+  base: string;
+  domains: WorkerDomain[];
+  environments: Environment[];
+  active: boolean;
+  reload: () => void;
+  notify: (s: string) => void;
+}) {
+  // Binding and unbinding apply immediately; there is no draft state to save.
+  const bound = environments[0]?.domains ?? [];
+  const [binding, setBinding] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [remove, setRemove] = useState<WorkerDomain | null>(null);
+  // Catalog entries already bound are not offered again; the rest can be added.
+  const unbound = domains.filter((d) => !bound.includes(d.id));
+  const describe = (d: WorkerDomain) =>
+    d.label ? `${d.domain}（${d.label}）` : d.domain;
+
+  async function persist(next: string[]) {
+    setBusy(true);
+    try {
+      await api<{ selected: string[] }>(base + "/domains", "PUT", {
+        domains: next,
+      });
+      reload();
+      return true;
+    } catch (e) {
+      notify(errorMessage(e));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unbind(d: WorkerDomain) {
+    if (bound.length <= 1) {
+      notify(t("至少保留一个域名。"));
+      return;
+    }
+    setRemove(null);
+    await persist(bound.filter((id) => id !== d.id));
+  }
+
+  return (
+    <>
+      <Card className="py-0 shadow-none">
+        <CardContent className="grid gap-4 p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="font-medium">{t("已绑定域名")}</h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {t(
+                  "每个环境会在每个已绑定域名下各有一个访问地址。括号内是备注，只用于说明。",
+                )}
+              </p>
+            </div>
+          </div>
+          {bound.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {t("还没有绑定域名，绑定后环境才能被访问。")}
+            </p>
+          ) : (
+            <div className="grid gap-2">
+              {bound.map((id) => {
+                const d = domains.find((x) => x.id === id);
+                if (!d) return null;
+                return (
+                  <div
+                    key={id}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-secondary/20 px-3 py-2"
+                  >
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <Badge variant="secondary" className="shrink-0 text-[10px]">
+                        {d.label || t("域名")}
+                      </Badge>
+                      <code className="min-w-0 break-all rounded bg-background px-2 py-1 font-mono text-[11px]">
+                        {d.domain}
+                      </code>
+                      <span className="text-[11px] text-muted-foreground">
+                        → {t("网关")} {d.gateway}
+                      </span>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => setRemove(d)}
+                    >
+                      {t("解绑")}
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {unbound.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => setBinding(true)}
+              >
+                <Plus size={14} />
+                {t("绑定域名")}
+              </Button>
+            </div>
+          ) : null}
+          {active ? (
+            <p className="text-xs text-muted-foreground">
+              {t("有发布正在进行，域名变更会在下次下发时生效。")}
+            </p>
+          ) : null}
+        </CardContent>
+      </Card>
+      <Card className="py-0 shadow-none">
+        <CardContent className="p-5">
+          <h3 className="mb-1 font-medium">{t("各环境的访问地址")}</h3>
+          <p className="mb-4 text-xs text-muted-foreground">
+            {t("每个环境在已绑定的每个域名下各有一条地址。")}
+          </p>
+          <div className="grid gap-3">
+            {environments.map((e) => (
+              <div key={e.name} className="rounded-md border bg-secondary/20 p-3">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium">{e.name}</span>
+                  {e.name === "production" ? (
+                    <Badge variant="outline" className="text-[10px]">
+                      {t("基线")}
+                    </Badge>
+                  ) : null}
+                  {!e.enabled ? (
+                    <Badge variant="outline" className="text-[10px]">
+                      {t("未启用")}
+                    </Badge>
+                  ) : null}
+                </div>
+                {e.hosts.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    {t("未绑定域名")}
+                  </p>
+                ) : (
+                  <div className="grid gap-1.5">
+                    {e.hosts.map((host, i) => {
+                      const d = domains.find(
+                        (x) => x.id === (e.domains || [])[i],
+                      );
+                      return (
+                        <div
+                          key={host}
+                          className="flex flex-wrap items-center gap-2"
+                        >
+                          <Badge
+                            variant="secondary"
+                            className="shrink-0 text-[10px]"
+                          >
+                            {d?.label || t("域名")}
+                          </Badge>
+                          <a
+                            href={workerURL(host)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex min-w-0 items-center gap-1 break-all rounded bg-background px-2 py-1 font-mono text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+                          >
+                            {host}
+                            <ArrowUpRight size={11} className="shrink-0" />
+                          </a>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+      <Dialog open={binding} onOpenChange={(v) => !busy && setBinding(v)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("绑定域名")}</DialogTitle>
+            <DialogDescription>
+              {t("从平台已配置的域名中选择；绑定后每个环境各多一个访问地址。")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-1.5">
+            {unbound.map((d) => (
+              <button
+                key={d.id}
+                type="button"
+                disabled={busy}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-left text-sm hover:bg-secondary disabled:opacity-50"
+                onClick={async () => {
+                  setBinding(false);
+                  await persist([...bound, d.id]);
+                }}
+              >
+                <code className="break-all text-xs">{describe(d)}</code>
+                <Plus size={14} />
+              </button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!remove} onOpenChange={(v) => !v && !busy && setRemove(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("解绑域名")}</DialogTitle>
+            <DialogDescription>
+              {t("解绑后该域名下所有环境的地址立即失效。已发布的版本不受影响。")}
+            </DialogDescription>
+          </DialogHeader>
+          {remove ? (
+            <code className="break-all text-sm">{describe(remove)}</code>
+          ) : null}
+          <Button
+            variant="destructive"
+            disabled={busy}
+            onClick={() => remove && void unbind(remove)}
+          >
+            {busy ? t("解绑中…") : t("确认解绑")}
+          </Button>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 function EnvironmentSettings({
   base,
   env,
   active,
   data,
+  domains,
   reload,
   notify,
 }: {
@@ -1146,6 +1428,7 @@ function EnvironmentSettings({
   env: Environment;
   active: boolean;
   data: WorkerData;
+  domains: WorkerDomain[];
   reload: () => void;
   notify: (s: string) => void;
 }) {
@@ -1154,6 +1437,10 @@ function EnvironmentSettings({
   );
   const [revision, setRevision] = useState(env.configuration_revision);
   const [busy, setBusy] = useState(false);
+  const domainLabel = (id: string) =>
+    domains.find((d) => d.id === id)?.label ||
+    domains.find((d) => d.id === id)?.domain ||
+    id;
   const current = env.release_id
     ? data.releases[env.release_id]
     : undefined;
@@ -1183,6 +1470,28 @@ function EnvironmentSettings({
           <h3 className="font-medium">
             {env.name} · {t("环境配置")}
           </h3>
+        </div>
+        <div className="grid gap-2">
+          <p className="text-sm font-medium">{t("访问地址")}</p>
+          {env.hosts.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              {t("尚未选择域名，请到“路由与域名”配置。")}
+            </p>
+          ) : null}
+          {env.hosts.map((host, i) => (
+            <a
+              key={host}
+              href={workerURL(host)}
+              target="_blank"
+              rel="noreferrer"
+              className="break-all text-xs text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+            >
+              {domainLabel(env.domains[i])} · {host}
+            </a>
+          ))}
+          <p className="text-xs text-muted-foreground">
+            {t("域名由服务的“路由与域名”页统一选择，此处只展示当前环境的地址。")}
+          </p>
         </div>
         <Field
           label={t("下一次发布使用的变量")}
@@ -1271,16 +1580,19 @@ function Invocation({ base, env }: { base: string; env: Environment }) {
           <h3 className="font-medium">
             {env.name} · {t("调用已发布 Worker")}
           </h3>
-          <p className="mt-1 break-all text-xs text-muted-foreground">
-            <a
-              href={workerURL(env.external_host || env.host)}
-              target="_blank"
-              rel="noreferrer"
-              className="underline decoration-dotted underline-offset-2 hover:text-foreground"
-            >
-              {env.external_host || env.host}
-            </a>
-          </p>
+          <div className="mt-1 grid gap-0.5">
+            {(env.hosts || []).map((host) => (
+              <a
+                key={host}
+                href={workerURL(host)}
+                target="_blank"
+                rel="noreferrer"
+                className="break-all text-xs text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+              >
+                {host}
+              </a>
+            ))}
+          </div>
         </div>
         <form
           className="grid gap-4"

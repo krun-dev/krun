@@ -53,11 +53,15 @@ mkdirSync('generated',{recursive:true});writeFileSync('generated/api-key.json',J
 const run=randomUUID().slice(0,8);
 const org=await api('/api/v1/orgs','POST',{name:'Workers '+run},201,{session:true});const service=await api('/api/v1/orgs/'+org.id+'/services','POST',{name:'orders-'+run},201);const base='/api/v1/orgs/'+org.id+'/services/'+service.id+'/workers';
 const initialPods=JSON.parse(kubectl('get','pods','-n','workers-mvp','-l','role=krun-runtime','-o','json')).items.filter(p=>!p.metadata.deletionTimestamp).map(p=>({name:p.metadata.name,uid:p.metadata.uid,restarts:p.status.containerStatuses[0].restartCount}));
+// Private and public scopes are separate Gateway instances. Requests are aimed
+// at a specific instance so cross-scope Host forgery can be asserted.
 const gateway=JSON.parse(kubectl('get','service','workers-mvp','-n','kgateway-system','-o','json')).spec.clusterIP;
-async function invoke(host,pathname='/',headers={}){
- const script=`const http=require('http');http.get('http://${gateway}:8080'+process.argv[1],{headers:{...JSON.parse(process.argv[3]||'{}'),host:process.argv[2]}},r=>{let s='';r.on('data',x=>s+=x);r.on('end',()=>{let body;try{body=JSON.parse(s)}catch{body=s};console.log(JSON.stringify({status:r.statusCode,body,headers:r.headers}));});}).on('error',e=>{console.error(e.message);process.exitCode=1;});`;
+const publicGateway=JSON.parse(kubectl('get','service','workers-public','-n','kgateway-system','-o','json')).spec.clusterIP;
+async function invokeAt(address,host,pathname='/',headers={}){
+ const script=`const http=require('http');http.get('http://${address}:8080'+process.argv[1],{headers:{...JSON.parse(process.argv[3]||'{}'),host:process.argv[2]}},r=>{let s='';r.on('data',x=>s+=x);r.on('end',()=>{let body;try{body=JSON.parse(s)}catch{body=s};console.log(JSON.stringify({status:r.statusCode,body,headers:r.headers}));});}).on('error',e=>{console.error(e.message);process.exitCode=1;});`;
  return JSON.parse(kubectl('exec','-n','workers-mvp','deploy/tester','--','node','-e',script,pathname,host,JSON.stringify(headers)));
 }
+async function invoke(host,pathname='/',headers={}){return invokeAt(gateway,host,pathname,headers)}
 function testerPut(url,base64){
  const script=`const http=require('http');const u=new URL(process.argv[1]);const d=Buffer.from(process.argv[2],'base64');const r=http.request({hostname:u.hostname,port:u.port,path:u.pathname+u.search,method:'PUT',headers:{'content-length':d.length}},res=>{res.resume();res.on('end',()=>console.log(JSON.stringify({status:res.statusCode})));});r.on('error',e=>{console.error(e.message);process.exitCode=1;});r.end(d);`;
  return JSON.parse(kubectl('exec','-n','workers-mvp','deploy/tester','--','node','-e',script,url,base64));
@@ -181,5 +185,24 @@ await check('static domain serves pub/ directly and v1/ stays private',async()=>
  const privateObject=testerGet('http://minio:9000/krun-artifacts/v1/'+org.id+'/sha256/'+assetArtifact.archive_sha256+'/bundle.tar.gz');
  assert.equal(privateObject.status,403);
  return {static:static200.status,pub:pub.status,v1:privateObject.status};
+});
+// The security invariant: each Gateway instance only knows its own scope. A
+// forged Host pointing at the other scope must not resolve to any route.
+await check('network scopes are isolated per Gateway instance',async()=>{
+ const privateHost=hostProd;
+ // Public exposure is opt-in: enable it for production, then wait for the route.
+ const before=(await api(base+'/environments','GET')).items.find(e=>e.name==='production');
+ await api(base+'/environments/production','PATCH',{expected_revision:before.configuration_revision,visibility:'public'},200);
+ let publicHost;for(let i=0;i<20;i++){const envs=(await api(base+'/environments','GET')).items;publicHost=envs.find(e=>e.name==='production').public_host;if(publicHost){const probe=await invokeAt(publicGateway,publicHost);if(probe.status!==404)break;}await sleep(500);}
+ assert(publicHost,'public host missing after enabling public visibility');
+ const viaPublicPrivateHost=await invokeAt(publicGateway,privateHost);
+ assert.equal(viaPublicPrivateHost.status,404);
+ const viaPrivatePublicHost=await invokeAt(gateway,publicHost);
+ assert.equal(viaPrivatePublicHost.status,404);
+ const viaPublicOwn=await invokeAt(publicGateway,publicHost);
+ assert.equal(viaPublicOwn.status,200);
+ const viaPrivateOwn=await invokeAt(gateway,privateHost);
+ assert.equal(viaPrivateOwn.status,200);
+ return {publicHost,privateHost,forgedPublic:viaPublicPrivateHost.status,forgedPrivate:viaPrivatePublicHost.status,public:viaPublicOwn.status,private:viaPrivateOwn.status};
 });
 console.log('PASS '+evidence.length+' kind backend end-to-end checks');
