@@ -100,7 +100,7 @@ func (s *Server) resolveRepositoryCommit(ctx context.Context, provider WorkerRep
 	return commit, nil
 }
 
-func (s *Server) fetchRepositorySource(ctx context.Context, provider WorkerRepositoryProvider, source WorkerBuildRepository, token string, assets *WorkerAssetsConfig) (map[string]string, map[string][]byte, error) {
+func (s *Server) fetchRepositorySource(ctx context.Context, provider WorkerRepositoryProvider, source WorkerBuildRepository, token string) (map[string]string, []byte, error) {
 	var target string
 	if provider.Type == "github" {
 		target = repositoryAPIOrigin(provider) + "/repos/" + source.Repository + "/tarball/" + source.Commit
@@ -136,12 +136,44 @@ func (s *Server) fetchRepositorySource(ctx context.Context, provider WorkerRepos
 		if err != nil || len(raw) > repositoryArchiveLimit {
 			return nil, nil, fmt.Errorf("Repository archive interrupted or exceeds 16 MiB")
 		}
-		return extractRepositorySource(raw, source, assets)
+		// Source first: the wrangler config it contains decides the asset
+		// directory, so assets are extracted by the caller afterwards.
+		files, _, err := extractRepositorySource(raw, source.RootDirectory, source.Entrypoint)
+		if err != nil {
+			return nil, nil, err
+		}
+		return files, raw, nil
 	}
 	return nil, nil, fmt.Errorf("Repository archive has too many redirects")
 }
 
-func extractRepositorySource(raw []byte, source WorkerBuildRepository, assets *WorkerAssetsConfig) (map[string]string, map[string][]byte, error) {
+// extractRepositorySource walks the archive twice: the first pass only collects
+// the files needed to decide the build layout (the entrypoint tree plus any
+// wrangler config), the caller resolves the layout, and the second pass applies
+// it. That ordering is what lets a wrangler config decide its own asset
+// directory without a chicken-and-egg dependency.
+func extractRepositorySource(raw []byte, rootDirectory, entrypoint string) (map[string]string, map[string][]byte, error) {
+	files, assets, err := extractArchive(raw, rootDirectory, nil, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	// When the entrypoint is already known, it must be present in the tree.
+	// Otherwise wrangler config supplies it and the caller validates after.
+	if entrypoint != "" {
+		if err := sourceEntryValid(entrypoint, files); err != nil {
+			return nil, nil, fmt.Errorf("Repository project must include the configured JS or TS entrypoint")
+		}
+	}
+	return files, assets, nil
+}
+
+// extractRepositoryAssets re-reads the archive for the resolved asset directory.
+func extractRepositoryAssets(raw []byte, rootDirectory, directory string) (map[string][]byte, error) {
+	_, assets, err := extractArchive(raw, rootDirectory, &WorkerAssetsConfig{Directory: directory}, false)
+	return assets, err
+}
+
+func extractArchive(raw []byte, rootDirectory string, assets *WorkerAssetsConfig, collectSource bool) (map[string]string, map[string][]byte, error) {
 	compressed, err := gzip.NewReader(bytes.NewReader(raw))
 	if err != nil {
 		return nil, nil, fmt.Errorf("Repository archive is not a valid tar.gz")
@@ -181,11 +213,11 @@ func extractRepositorySource(raw []byte, source WorkerBuildRepository, assets *W
 			continue
 		}
 		name = parts[1]
-		if source.RootDirectory != "." {
-			if !strings.HasPrefix(name, source.RootDirectory+"/") {
+		if rootDirectory != "" && rootDirectory != "." {
+			if !strings.HasPrefix(name, rootDirectory+"/") {
 				continue
 			}
-			name = strings.TrimPrefix(name, source.RootDirectory+"/")
+			name = strings.TrimPrefix(name, rootDirectory+"/")
 		}
 		if header.Typeflag == tar.TypeSymlink || header.Typeflag == tar.TypeLink {
 			return nil, nil, fmt.Errorf("Repository project directory cannot contain symbolic links or submodules")
@@ -212,8 +244,32 @@ func extractRepositorySource(raw []byte, source WorkerBuildRepository, assets *W
 			assetFiles[asset] = data
 			continue
 		}
-		if !contains([]string{".js", ".mjs", ".ts", ".json"}, path.Ext(name)) {
+		// wrangler config declares the entrypoint and asset directory, so it must
+		// be retained even though it is not compilable source.
+		isWranglerConfig := false
+		for _, cfgName := range wranglerFileNames {
+			if name == cfgName {
+				isWranglerConfig = true
+				break
+			}
+		}
+		if !isWranglerConfig && !collectSource {
 			continue
+		}
+		if !isWranglerConfig {
+			// Type declarations are tooling input, not compilable source; standard
+			// workers projects ship one that can be hundreds of KiB.
+			if strings.HasSuffix(name, ".d.ts") {
+				continue
+			}
+			// Unrelated repository files must not fail the build: a project can sit
+			// next to lockfiles, images and fixtures.
+			if !contains([]string{".js", ".mjs", ".ts", ".json"}, path.Ext(name)) {
+				continue
+			}
+			if header.Size > int64(256<<10) {
+				return nil, nil, fmt.Errorf("Repository source file %s exceeds 256 KiB", name)
+			}
 		}
 		if !safeWorkerRepositoryPath(name, false) || header.Size < 0 || header.Size > int64((256<<10)-total) || len(files) >= 32 {
 			return nil, nil, fmt.Errorf("Repository source must contain at most 32 safe files and 256 KiB; select a smaller project directory")
@@ -231,11 +287,8 @@ func extractRepositorySource(raw []byte, source WorkerBuildRepository, assets *W
 	if _, err := io.Copy(io.Discard, limited); err != nil || limited.N <= 0 {
 		return nil, nil, fmt.Errorf("Repository archive is invalid or exceeds 64 MiB expanded")
 	}
-	if err := sourceValid(source.Entrypoint, files); err != nil {
-		return nil, nil, fmt.Errorf("Repository project must include the configured JS or TS entrypoint and valid source files")
-	}
-	if assets != nil && len(assetFiles) == 0 {
-		return nil, nil, fmt.Errorf("Repository assets directory %s is missing or empty", assets.Directory)
-	}
+	// Entrypoint and asset-completeness checks happen after the layout is
+	// resolved: both may come from wrangler config, which is only readable once
+	// the tree is in hand.
 	return files, assetFiles, nil
 }

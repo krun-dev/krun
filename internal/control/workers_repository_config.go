@@ -152,8 +152,15 @@ func (s *Server) validateRepositorySource(source *WorkerRepositorySource, organi
 	if source.RootDirectory == "" {
 		source.RootDirectory = "."
 	}
-	if !safeWorkerRepositoryPath(source.RootDirectory, true) || !safeWorkerRepositoryPath(source.Entrypoint, false) || !contains([]string{".js", ".mjs", ".ts"}, path.Ext(source.Entrypoint)) {
-		return p, problem(422, "WORKER_REPOSITORY_INVALID", "Use a relative project directory and JS or TS entrypoint")
+	if !safeWorkerRepositoryPath(source.RootDirectory, true) {
+		return p, problem(422, "WORKER_REPOSITORY_INVALID", "Use a relative project directory")
+	}
+	// An empty entrypoint means "take `main` from the repository's wrangler
+	// config". Only an explicitly provided path is validated here.
+	if source.Entrypoint != "" {
+		if !safeWorkerRepositoryPath(source.Entrypoint, false) || !contains([]string{".js", ".mjs", ".ts"}, path.Ext(source.Entrypoint)) {
+			return p, problem(422, "WORKER_REPOSITORY_INVALID", "Entrypoint must be a relative JS or TS path")
+		}
 	}
 	return p, nil
 }

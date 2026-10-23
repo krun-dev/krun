@@ -46,10 +46,51 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 			return build, private, err
 		}
 	}
-	files, assetFiles, err := w.server.fetchRepositorySource(ctx, provider, source, fetchToken, build.Assets)
+	files, archiveRaw, err := w.server.fetchRepositorySource(ctx, provider, source, fetchToken)
 	if err != nil {
 		return build, private, err
 	}
+	// A repository carrying wrangler config declares its own entrypoint and asset
+	// directory. Resolve those before bundling so a standard Cloudflare project
+	// builds without editing its layout or restating the config per build.
+	wrangler, wranglerFile, err := parseWranglerConfig(files)
+	if err != nil {
+		return build, private, err
+	}
+	resolvedAssets, entrypoint, err := resolveWranglerBuild(wrangler, build.Assets, source.Entrypoint)
+	if err != nil {
+		return build, private, err
+	}
+	// Assets are read in a second pass: their directory is only known now.
+	var assetFiles map[string][]byte
+	if resolvedAssets.Directory != "" {
+		assetFiles, err = extractRepositoryAssets(archiveRaw, source.RootDirectory, resolvedAssets.Directory)
+		if err != nil {
+			return build, private, err
+		}
+		if len(assetFiles) == 0 {
+			return build, private, fmt.Errorf("Assets directory %s is missing or empty", resolvedAssets.Directory)
+		}
+	}
+	if entrypoint == "" {
+		return build, private, fmt.Errorf("No entrypoint: set one in the build request or declare `main` in wrangler config")
+	}
+	if err := sourceEntryValid(entrypoint, files); err != nil {
+		return build, private, fmt.Errorf("Repository project does not contain the entrypoint %s", entrypoint)
+	}
+	// The config file itself is not source; drop it so the builder never sees it.
+	for _, cfgName := range wranglerFileNames {
+		delete(files, cfgName)
+	}
+	build.Assets = nil
+	if resolvedAssets.Directory != "" || resolvedAssets.RunWorkerFirst != nil || resolvedAssets.NotFoundHandling != "" || resolvedAssets.HTMLHandling != "" {
+		build.Assets = &resolvedAssets
+	}
+	// The builder receives b.Entrypoint, not the repository source, so the
+	// resolved value has to be written back onto the build itself.
+	build.Entrypoint = entrypoint
+	source.Entrypoint = entrypoint
+	build.Repository = &source
 	bundle, err := workerSourceBundle(files, assetFiles)
 	if err != nil {
 		return build, private, err
@@ -65,6 +106,13 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 	private.Files = nil
 	private.SourceKey = sourceKey
 	private.Log = fmt.Sprintf("Repository: %s/%s\nRef: %s\nCommit: %s\nProject: %s\nLoaded %d source files and %d asset files\n", source.ProviderID, source.Repository, source.Ref, source.Commit, source.RootDirectory, len(files), len(assetFiles))
+	if wranglerFile != "" {
+		private.Log += fmt.Sprintf("Config: %s (entrypoint %s", wranglerFile, entrypoint)
+		if resolvedAssets.Directory != "" {
+			private.Log += fmt.Sprintf(", assets %s", resolvedAssets.Directory)
+		}
+		private.Log += ")\n"
+	}
 	err = w.server.Store.Update(ctx, func(st *State) error {
 		if err := w.server.workerAuthorizeActor(st, private.Actor, build.Service, build.Environment, "build.start"); err != nil {
 			return fmt.Errorf("Build permission revoked")
