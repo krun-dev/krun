@@ -13,9 +13,6 @@ import (
 func (s *Server) workerRuntimeAllowed(r *http.Request) bool {
 	return s.Config.Workers != nil && r.Header.Get("X-Runtime-Pool") == "default" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+s.Config.Workers.RuntimeToken)) == 1
 }
-func (s *Server) workerRuntimeError(w http.ResponseWriter, r *http.Request, e error) {
-	s.writeError(w, r, e)
-}
 
 // workerRuntimeConfigSnapshot is the bootstrap fallback. Runtimes normally read
 // the immutable snapshot from object storage; this endpoint keeps a new Pod

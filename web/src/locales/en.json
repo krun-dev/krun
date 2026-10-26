@@ -579,5 +579,6 @@
   "访问域名": "Access domains",
   "路由与域名": "Routing & domains",
   "还没有绑定域名，绑定后环境才能被访问。": "No domain bound yet; bind one so environments can be reached.",
-  "选中一个或多个域名；每个环境会在每个域名下各有一个访问地址。备注只是说明，实际入口由域名绑定的网关决定。": "Select one or more domains. Every environment gets one URL under each selected domain. Labels are descriptive; the gateway bound to each domain decides the actual entry."
+  "选中一个或多个域名；每个环境会在每个域名下各有一个访问地址。备注只是说明，实际入口由域名绑定的网关决定。": "Select one or more domains. Every environment gets one URL under each selected domain. Labels are descriptive; the gateway bound to each domain decides the actual entry.",
+  "留空则读取仓库里的 wrangler 配置（main 字段）。": "Leave empty to use `main` from the repository's wrangler config."
 }

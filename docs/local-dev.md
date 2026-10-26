@@ -30,8 +30,8 @@
 关键字段：
 
 - `builder_mode: local`：builder 在本机以 `node workers/builder/build-worker.mjs` 运行，不创建 Kubernetes Job。
-- `external_domain`：控制台展示用的 HTTPS 后缀；当前是 `<external-domain>`（对外入口）。`<internal-domain>` 是内网地址，不作为控制台展示的浏览器链接。
-- `gateway_base: http://127.0.0.1:38080`：控制台 invoke 经过 SSH 隧道打到集群 gateway。
+- `gateways` / `domains`：网关实例与域名清单。每个域名绑定一个网关，并带一个只用于展示的 `label`；服务从中选择要用哪些域名。
+- 网关的 `base`（如 `http://127.0.0.1:38080`）：控制台 invoke 经 SSH 隧道打到对应的集群网关实例。
 - `runtime_management_base: http://127.0.0.1:38083`：候选验证和运行时管理走隧道。
 - `s3_endpoint` 指向控制面可达的地址（本机经 `<dev-host>:38090` 端口转发）；`s3_builder_endpoint` 用集群内 Service 名，这样 builder/runtime 拿到的 presigned URL 在集群内可直达。
 
@@ -113,15 +113,14 @@ w-xxx-production.<internal-domain> → w-xxx-production.workers.test
 
 两个入口是**真正分开的两条数据路径**：
 
-| 入口 | 浏览器域名后缀 | nginx upstream | 集群 Gateway 实例 |
-| --- | --- | --- | --- |
-| 公网 `out` | `<external-domain>` | NodePort → `workers-public` | `workers-public`（listener `public`） |
-| 内网 `in` | `<internal-domain>` | NodePort → `workers-mvp` | `workers-mvp`（listener `private`） |
+| 域名 | nginx upstream | 集群 Gateway 实例 |
+| --- | --- | --- |
+| `workers-dev-out.work.zou.cool` | NodePort → `workers-public` | `workers-public`（listener `public`） |
+| `workers-dev-in.work.zou.cool` | NodePort → `workers-mvp` | `workers-mvp`（listener `private`） |
 
-- 路由 host 用集群内部后缀匹配：私有 `workers.test`、公网 `public.workers.test`；浏览器不解析这两个名字。
-- 控制台的 `external_host` 由 `external_domain` / `internal_domain` 推导，只影响展示和链接。
-- 环境默认 `private`。在「环境配置 → 网络访问范围」显式切成 `public` 才会生成公网 host 与公网 HTTPRoute。
-- **隔离边界**：公网实例的路由表里没有任何 `*.workers.test`，内网实例的也没有 `*.public.workers.test`。在公网入口伪造内网 Host 返回 404；静态域同理（`static.public` / `static.internal` 各挂一边）。
+- 域名本身就是路由 host，nginx 不再改写 Host，只把它转发到该域名绑定的网关实例。
+- 服务在「路由与域名」里选择用哪些域名；每个环境在选中的每个域名下各有一个地址。
+- **隔离边界**：每个网关实例的路由表里只有绑定到它的域名。在 A 实例上伪造 B 的 Host 匹配不到任何路由，返回 404；静态资产同理。
 
 在 kind 宿主机上验证（NodePort 32284 = 公网，30739 = 内网）：
 

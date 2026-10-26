@@ -186,15 +186,21 @@ await check('static domain serves pub/ directly and v1/ stays private',async()=>
  assert.equal(privateObject.status,403);
  return {static:static200.status,pub:pub.status,v1:privateObject.status};
 });
-// The security invariant: each Gateway instance only knows its own scope. A
-// forged Host pointing at the other scope must not resolve to any route.
-await check('network scopes are isolated per Gateway instance',async()=>{
+// The security invariant: each Gateway instance only knows the hostnames of
+// the domains bound to it. A forged Host aimed at the other instance must not
+// resolve to any route.
+await check('gateway instances are isolated per domain binding',async()=>{
  const privateHost=hostProd;
- // Public exposure is opt-in: enable it for production, then wait for the route.
- const before=(await api(base+'/environments','GET')).items.find(e=>e.name==='production');
- await api(base+'/environments/production','PATCH',{expected_revision:before.configuration_revision,visibility:'public'},200);
- let publicHost;for(let i=0;i<20;i++){const envs=(await api(base+'/environments','GET')).items;publicHost=envs.find(e=>e.name==='production').public_host;if(publicHost){const probe=await invokeAt(publicGateway,publicHost);if(probe.status!==404)break;}await sleep(500);}
- assert(publicHost,'public host missing after enabling public visibility');
+ // Domains are selected per service; enable the public one and wait for its route.
+ let publicHost;
+ for(let i=0;i<20;i++){
+  const envs=(await api(base+'/environments','GET')).items;
+  const prod=envs.find(e=>e.name==='production');
+  publicHost=prod.hosts&&prod.hosts[1];
+  if(publicHost){const probe=await invokeAt(publicGateway,publicHost);if(probe.status!==404)break;}
+  await sleep(500);
+ }
+ assert(publicHost,'second domain host missing after binding');
  const viaPublicPrivateHost=await invokeAt(publicGateway,privateHost);
  assert.equal(viaPublicPrivateHost.status,404);
  const viaPrivatePublicHost=await invokeAt(gateway,publicHost);
