@@ -137,3 +137,28 @@
 6. **配置加载只有一处**：所有运行期配置从 `LoadConfig` 进入；不要新增运行期读取非公开环境变量的开关。地址、profile、运行模式都必须显式出现在主 YAML。Workers 配置也在同一份 YAML 的 `workers:` 段，不允许独立文件或目录。
 7. **配置示例必须可加载**：`config/development.example.yaml` 和 `config/example.yaml` 由测试覆盖；示例只能使用占位符，不能写真实凭据。
 8. **dev 拓扑保持一致**：local-first；控制面/Postgres/MinIO/builder/Vite 在开发机，集群只保留 runtime + kgateway。变更拓扑时同步修改 `docs/local-dev.md` 和 `scripts/dev-*.sh`。
+
+## 9. 持久化设计约束（硬约束）
+
+方案与表结构见 [docs/storage-redesign.md](docs/storage-redesign.md)。
+
+1. **一实体一行，禁止整文档快照**。不要再新增 `jsonb` 大文档承载多个实体。`krun_control_state` 是待退役的首版实现，只允许在迁移过程中被读写，不得在其上扩展。
+2. **不使用外键**。`REFERENCES` / `FOREIGN KEY` / `ON DELETE CASCADE` 一律不写。引用完整性靠三件事：
+   - 写入路径先校验被引用对象存在；
+   - 删除路径在同一事务里显式删关联行；
+   - 定期对账查询发现孤儿行（孤儿行不等于数据损坏，按垃圾清理）。
+   理由：外键会引入跨表锁与删除顺序约束，和「尽力而为」的事务目标冲突，也让拆表 / 归档 / 批量清理变难。
+3. **事务只做尽力而为的保证**。目标不是交易系统，只保证「元数据自身对得上」：
+   - 默认单语句，不加事务块；
+   - 只有「半个写会让元数据自相矛盾」时才用 2–5 条语句的小事务，且不得含网络调用；
+   - 跨实体（尤其 IAM × Workers）不共享事务；
+   - 需要不变量时优先用 `CHECK` / `UNIQUE` / 条件 `UPDATE`（CAS），不要用 `SELECT ... FOR UPDATE` 全局串行化。
+4. **构建 / 发布状态只要求最终一致**。操作行（operation / build）就是持久化工作队列：
+   - 状态迁移用条件更新认领，例如
+     `UPDATE ... SET state='validating', claimed_by=$1 WHERE operation_id=$2 AND state='queued'`，
+     影响行数为 0 即表示别人先认领；
+   - 用 `claimed_at` 租约超时接管崩溃副本，不用 advisory lock 选主；
+   - 允许同一操作被重试多次，所有副作用必须幂等；
+   - 边缘侧靠 config revision + snapshot + ack 收敛，不要求提交即生效。
+5. **不留无界数据**。新增任何「每请求 / 每次构建 / 每次发布产生一行」的表，必须同时给出保留期与清理语句，并在同一提交里接上后台清理。禁止无上限 `append`。
+6. **热路径不写**。认证、列表、健康检查等读路径不得产生写。需要记录 `last_seen` 之类的字段时用节流写（例如 30 秒一次），不要每请求都写。
