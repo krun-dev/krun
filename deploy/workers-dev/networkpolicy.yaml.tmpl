@@ -33,13 +33,18 @@ spec:
         - protocol: TCP
           port: 8083
   egress:
+    # MinIO runs in this namespace, so object storage is reached by pod selector
+    # rather than a host IP; the control plane stays outside the cluster.
     - to:
-        - ipBlock:
-            cidr: __MINIO_HOST__/32
-        - ipBlock:
-            cidr: __CONTROL_HOST__/32
+        - podSelector:
+            matchLabels:
+              app: minio
       ports:
         - protocol: TCP
           port: 9000
+    - to:
+        - ipBlock:
+            cidr: __CONTROL_HOST__/32
+      ports:
         - protocol: TCP
           port: 9001

@@ -451,13 +451,33 @@ func (k *workerKubernetes) ensureStaticRoute(ctx context.Context, c *WorkersConf
 			Namespace string `json:"namespace"`
 			Section   string `json:"sectionName"`
 		} `json:"parentRefs"`
+		Rules []struct {
+			Filters []struct {
+				URLRewrite *struct {
+					Path struct {
+						ReplacePrefixMatch string `json:"replacePrefixMatch"`
+					} `json:"path"`
+				} `json:"urlRewrite"`
+			} `json:"filters"`
+		} `json:"rules"`
 	}
 	_ = json.Unmarshal(current.Spec, &old)
 	// Re-pointing the sharing route is part of the desired state: a scope moved
 	// to another Gateway instance must not keep serving from the old one.
 	parentDrift := len(old.Parent) != 1 || old.Parent[0].Name != gatewayName ||
 		old.Parent[0].Namespace != gatewayNamespace || old.Parent[0].Section != section
-	if parentDrift || len(old.Hosts) != 1 || old.Hosts[0] != host {
+	// The object prefix is part of the desired state too; changing which prefix
+	// a domain serves must rewrite the route, not just the hostname.
+	want := "/" + c.S3Bucket + "/" + prefix + "/"
+	rewriteDrift := true
+	if len(old.Rules) == 1 {
+		for _, f := range old.Rules[0].Filters {
+			if f.URLRewrite != nil && f.URLRewrite.Path.ReplacePrefixMatch == want {
+				rewriteDrift = false
+			}
+		}
+	}
+	if parentDrift || rewriteDrift || len(old.Hosts) != 1 || old.Hosts[0] != host {
 		return k.call(ctx, "PATCH", base+"/"+name, map[string]any{"spec": spec}, nil)
 	}
 	return nil

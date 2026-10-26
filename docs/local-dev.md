@@ -6,7 +6,7 @@
 
 ```text
 开发机（Mac）                         远端主机 <dev-host>
-├─ krun-server (Go)  :8080             ├─ MinIO (Docker) <minio-host>:9000
+├─ krun-server (Go)  :8080             ├─ MinIO (in cluster) minio:9000
 ├─ PostgreSQL        :25432            ├─ nginx 80/443
 ├─ builder (node)    本地子进程         └─ kind: runtime-default + kgateway
 └─ Vite              :5173
@@ -17,7 +17,7 @@
 ```
 
 - 控制面、Postgres、builder、前端都在 Mac；改后端或 builder 不需要构建镜像。
-- MinIO 只有一份，跑在远端主机的 Docker 里，不在 k8s 里。
+- MinIO 跑在集群里（`workers-mvp/minio`），和 runtime、gateway 同一网络面；控制面经 `<dev-host>:38090` 端口转发访问。
 - 集群里只保留 `runtime-default`（workerd）和 kgateway；旧的 backend/postgres/minio/tester deployment 已 scale 到 0。
 - 业务 Worker 的 host 仍然是 `w-xxx-<env>.workers.test`；nginx 把外网域名改写成它。
 
@@ -33,7 +33,7 @@
 - `external_domain`：控制台展示用的 HTTPS 后缀；当前是 `<external-domain>`（对外入口）。`<internal-domain>` 是内网地址，不作为控制台展示的浏览器链接。
 - `gateway_base: http://127.0.0.1:38080`：控制台 invoke 经过 SSH 隧道打到集群 gateway。
 - `runtime_management_base: http://127.0.0.1:38083`：候选验证和运行时管理走隧道。
-- `s3_endpoint` / `s3_builder_endpoint`：都指向远端主机的 MinIO（`http://<minio-host>:9000`）。
+- `s3_endpoint` 指向控制面可达的地址（本机经 `<dev-host>:38090` 端口转发）；`s3_builder_endpoint` 用集群内 Service 名，这样 builder/runtime 拿到的 presigned URL 在集群内可直达。
 
 ## 本地变量（gitignored）
 

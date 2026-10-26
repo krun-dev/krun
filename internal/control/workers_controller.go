@@ -161,11 +161,18 @@ func (w *workersController) reconcile(ctx context.Context) error {
 		}
 	}
 	// One shared static route per domain; it does not scale with services.
-	// Each route lives on the Gateway instance that domain is bound to.
+	// Each route lives on the Gateway instance that domain is bound to. Assets
+	// are written to both the public and internal object prefixes, so the first
+	// domain serves pub/ and later ones serve int/; that keeps the existing
+	// bucket layout working while every domain gets its own origin.
 	desiredStatic := map[string]bool{}
-	for _, d := range w.config.Domains {
+	for i, d := range w.config.Domains {
 		desiredStatic["workers-static-"+d.ID] = true
-		if e := w.kube.ensureStaticRoute(ctx, w.config, d.ID, "assets"); e != nil {
+		prefix := "int"
+		if i == 0 {
+			prefix = "pub"
+		}
+		if e := w.kube.ensureStaticRoute(ctx, w.config, d.ID, prefix); e != nil {
 			failures = append(failures, e)
 		}
 	}
