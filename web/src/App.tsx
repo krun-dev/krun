@@ -127,11 +127,23 @@ export default function App() {
     [scope, setScope] = useState(
       new URLSearchParams(window.location.search).get("workspace") || "",
     ),
-    [section, setSection] = useState<Section>(
-      new URLSearchParams(window.location.search).get("page") === "workers"
-        ? "workers"
-        : "overview",
-    ),
+    [section, setSection] = useState<Section>(() => {
+      const page = new URLSearchParams(window.location.search).get("page");
+      const known: Section[] = [
+        "overview",
+        "orgs",
+        "members",
+        "groups",
+        "roles",
+        "keys",
+        "check",
+        "audit",
+        "users",
+        "resources",
+        "workers",
+      ];
+      return known.includes(page as Section) ? (page as Section) : "overview";
+    }),
     [notice, setNotice] = useState(""),
     [refresh, setRefresh] = useState(0),
     [menu, setMenu] = useState(false);
@@ -147,6 +159,21 @@ export default function App() {
   );
   const notify = useCallback((message: string) => setNotice(message), []);
   const reload = useCallback(() => setRefresh((x) => x + 1), []);
+  // Keep the URL in step with the visible section. Navigating used to leave the
+  // previous page's parameters behind, so refreshing or sharing a link reopened
+  // the wrong page.
+  useEffect(() => {
+    const url = new URL(location.href);
+    if (section === "overview") url.searchParams.delete("page");
+    else url.searchParams.set("page", section);
+    if (section !== "workers") {
+      url.searchParams.delete("worker");
+      url.searchParams.delete("environment");
+    }
+    if (scope) url.searchParams.set("workspace", scope);
+    else url.searchParams.delete("workspace");
+    if (url.toString() !== location.href) history.replaceState(null, "", url);
+  }, [section, scope]);
   useEffect(() => {
     let active = true;
     Promise.all([
