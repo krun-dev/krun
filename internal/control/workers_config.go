@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"sort"
 	"strconv"
@@ -118,13 +119,24 @@ func workerConfigFromState(st *State, domains []WorkerDomain) workerConfigProjec
 // what normalizeService does for the API and the route reconciler.
 func serviceHostPatterns(ws WorkerService, domains []WorkerDomain) []string {
 	selected := map[string]bool{}
-	for _, id := range ws.Domains {
+	selection := ws.Domains
+	if len(selection) == 0 {
+		for _, domain := range domains {
+			if domain.Default {
+				selection = append(selection, domain.ID)
+			}
+		}
+		if len(selection) == 0 && len(domains) > 0 {
+			selection = []string{domains[0].ID}
+		}
+	}
+	for _, id := range selection {
 		selected[id] = true
 	}
 	slug := workerSlug(ws.Organization, ws.Service)
 	out := []string{}
 	for _, d := range domains {
-		if len(selected) == 0 || selected[d.ID] {
+		if selected[d.ID] {
 			out = append(out, slug+"\x00"+d.Domain)
 		}
 	}
@@ -243,22 +255,26 @@ type workerConfigLatest struct {
 }
 
 // publishConfig materialises the current edge projection into an immutable
-// revision. It is only called by the elected controller. A digest match is a
-// no-op; a failed object-store write leaves configDirty set so the next cycle
-// retries the snapshot without creating another revision.
+// revision. Replicas race on the durable head CAS. A digest match is a no-op;
+// a failed object-store write leaves configDirty set so the next cycle retries
+// the snapshot without creating another revision.
 func (w *workersController) publishConfig(ctx context.Context) (int64, error) {
 	w.configMu.Lock()
 	defer w.configMu.Unlock()
 	if err := w.loadConfigLocked(ctx); err != nil {
 		return 0, err
 	}
-	var next workerConfigProjection
-	// The projection filters services down to resources that still exist in a
-	// live organization, so it needs the IAM half as well. This is a read.
-	if err := w.server.Store.View(ctx, PartitionAll, func(st *State) error {
-		next = workerConfigFromState(st, w.config.Domains)
-		return nil
-	}); err != nil {
+	if w.configTopologyLoaded && !w.configDirty {
+		generation, err := w.server.Store.WorkerTopologyGeneration(ctx)
+		if err != nil {
+			return 0, err
+		}
+		if generation >= 0 && generation == w.configTopologyGeneration {
+			return w.configRevision, nil
+		}
+	}
+	next, topologyGeneration, err := w.server.Store.WorkerConfigProjection(ctx, w.config.Domains)
+	if err != nil {
 		return 0, err
 	}
 	digest, payload, err := workerConfigDigest(next)
@@ -272,34 +288,99 @@ func (w *workersController) publishConfig(ctx context.Context) (int64, error) {
 		}
 		if previous == digest {
 			if !w.configDirty {
+				w.configTopologyGeneration = topologyGeneration
+				w.configTopologyLoaded = topologyGeneration >= 0
 				return w.configRevision, nil
 			}
 			if err := w.writeConfigRevision(ctx, w.configRevision, next); err != nil {
 				return w.configRevision, err
 			}
 			w.configDirty = false
+			w.configTopologyGeneration = topologyGeneration
+			w.configTopologyLoaded = topologyGeneration >= 0
 			return w.configRevision, nil
 		}
 	}
-	ops := diffWorkerConfig(w.configLast, next)
-	opsRaw, err := json.Marshal(ops)
-	if err != nil {
-		return 0, err
+	for attempts := 0; attempts < 8; attempts++ {
+		ops := diffWorkerConfig(w.configLast, next)
+		opsRaw, marshalErr := json.Marshal(ops)
+		if marshalErr != nil {
+			return 0, marshalErr
+		}
+		revision, floor, appended, appendErr := w.server.Store.AppendConfigRevisionCAS(ctx, w.configRevision, digest, payload, opsRaw, workerConfigOpsRetain)
+		if appendErr != nil {
+			return 0, appendErr
+		}
+		if appended {
+			w.configRevision = revision
+			w.configFloor = floor
+			w.configLast = &next
+			w.configDirty = true
+			w.server.Store.SignalConfig()
+			if err := w.writeConfigRevision(ctx, revision, next); err != nil {
+				return revision, err
+			}
+			w.configDirty = false
+			w.configTopologyGeneration = topologyGeneration
+			w.configTopologyLoaded = topologyGeneration >= 0
+			return revision, nil
+		}
+
+		// Another replica advanced the head. A winner with the same digest is
+		// sufficient for this caller; a different digest is not. Adopt and repair
+		// the winner, then reload current DB state and CAS the desired projection
+		// from that head in this call. Returning the stale winner would let an
+		// operation accept its ack before its own release was published.
+		latest, ok, loadErr := w.server.Store.LatestConfigRevision(ctx)
+		if loadErr != nil {
+			return 0, loadErr
+		}
+		if !ok || latest.Revision != revision {
+			w.configLoaded = false
+			return revision, errors.New("edge config head changed without a matching revision")
+		}
+		won, decodeErr := decodePublishedWorkerConfig(latest.Payload)
+		if decodeErr != nil {
+			w.configLoaded = false
+			return revision, decodeErr
+		}
+		winnerDigest, _, digestErr := workerConfigDigest(won)
+		if digestErr != nil {
+			w.configLoaded = false
+			return revision, digestErr
+		}
+		if winnerDigest != latest.Digest {
+			w.configLoaded = false
+			return revision, errors.New("edge config head digest does not match normalized projection")
+		}
+		w.configRevision = latest.Revision
+		w.configFloor = floor
+		w.configLast = &won
+		w.configDirty = true
+		if err := w.writeConfigRevision(ctx, latest.Revision, won); err != nil {
+			return latest.Revision, err
+		}
+		w.configDirty = false
+		if latest.Digest == digest {
+			w.configTopologyGeneration = topologyGeneration
+			w.configTopologyLoaded = topologyGeneration >= 0
+			return latest.Revision, nil
+		}
+		next, topologyGeneration, err = w.server.Store.WorkerConfigProjection(ctx, w.config.Domains)
+		if err != nil {
+			return 0, err
+		}
+		digest, payload, err = workerConfigDigest(next)
+		if err != nil {
+			return 0, err
+		}
+		if digest == latest.Digest {
+			w.configTopologyGeneration = topologyGeneration
+			w.configTopologyLoaded = topologyGeneration >= 0
+			return latest.Revision, nil
+		}
 	}
-	revision, floor, err := w.server.Store.AppendConfigRevision(ctx, digest, payload, opsRaw, workerConfigOpsRetain)
-	if err != nil {
-		return 0, err
-	}
-	w.configRevision = revision
-	w.configFloor = floor
-	w.configLast = &next
-	w.configDirty = true
-	w.server.Store.SignalConfig()
-	if err := w.writeConfigRevision(ctx, revision, next); err != nil {
-		return revision, err
-	}
-	w.configDirty = false
-	return revision, nil
+	return w.configRevision, errors.New("edge config head changed repeatedly")
 }
 
 func (w *workersController) loadConfigLocked(ctx context.Context) error {
@@ -310,19 +391,24 @@ func (w *workersController) loadConfigLocked(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	w.configLoaded = true
 	if !ok {
+		w.configLoaded = true
 		return nil
 	}
-	var projection workerConfigProjection
-	if err := json.Unmarshal(latest.Payload, &projection); err != nil {
-		// A corrupt projection is recoverable: publish the current state as a
-		// fresh full revision instead of blocking the publisher forever.
-		w.configRevision = latest.Revision
-		w.configLast = nil
-		w.configDirty = true
-		return nil
+	projection, err := decodePublishedWorkerConfig(latest.Payload)
+	if err != nil {
+		// Fail closed. Diffing from nil would emit only upserts and could leave a
+		// deleted route alive on runtimes that already applied the prior head.
+		return err
 	}
+	digest, _, err := workerConfigDigest(projection)
+	if err != nil {
+		return err
+	}
+	if digest != latest.Digest {
+		return errors.New("edge config head digest does not match normalized projection")
+	}
+	w.configLoaded = true
 	w.configRevision = latest.Revision
 	w.configLast = &projection
 	if _, floor, err := w.server.Store.ConfigState(ctx); err == nil {
@@ -349,26 +435,55 @@ func (w *workersController) writeConfigRevision(ctx context.Context, revision in
 		return err
 	}
 	key := workerConfigSnapshotKey(revision)
-	if err := w.putBytes(ctx, key, raw, minio.PutObjectOptions{ContentType: "application/gzip", CacheControl: "no-store"}); err != nil {
+	if w.s3 != nil {
+		if err := w.putImmutable(ctx, key, raw); err != nil {
+			return err
+		}
+	} else if err := w.putBytes(ctx, key, raw, minio.PutObjectOptions{ContentType: "application/gzip", CacheControl: "no-store"}); err != nil {
 		return err
 	}
 	return w.writeConfigLatest(ctx, workerConfigLatest{ConfigRevision: revision, Snapshot: workerConfigSnapshotRel(revision), SHA256: bytesDigest(raw), OpsFloor: w.configFloor, GeneratedAt: now().UTC().Format(time.RFC3339)})
 }
 
 func (w *workersController) writeConfigLatest(ctx context.Context, next workerConfigLatest) error {
-	// The pointer is the only mutable object. Never let a stale leader move it
-	// backwards; readers also reject lower revisions.
-	if w.s3 != nil {
-		if raw, err := w.getObject(ctx, workerConfigLatestKey); err == nil {
-			var current workerConfigLatest
-			if json.Unmarshal(raw, &current) == nil && current.ConfigRevision > next.ConfigRevision {
-				return nil
-			}
-		}
-	}
 	raw, err := json.Marshal(next)
 	if err != nil {
 		return err
 	}
-	return w.putBytes(ctx, workerConfigLatestKey, raw, minio.PutObjectOptions{ContentType: "application/json", CacheControl: "no-store"})
+	if w.s3 == nil {
+		return w.putBytes(ctx, workerConfigLatestKey, raw, minio.PutObjectOptions{ContentType: "application/json", CacheControl: "no-store"})
+	}
+	// The pointer is the only mutable object. Use the object's ETag as a second
+	// CAS so an older publisher cannot overwrite a newer revision between GET
+	// and PUT. A precondition race is retried after observing the winner.
+	for attempts := 0; attempts < 4; attempts++ {
+		stat, statErr := w.s3.StatObject(ctx, w.config.S3Bucket, workerConfigLatestKey, minio.StatObjectOptions{})
+		opts := minio.PutObjectOptions{ContentType: "application/json", CacheControl: "no-store"}
+		if statErr == nil {
+			currentRaw, readErr := w.getObject(ctx, workerConfigLatestKey)
+			if readErr != nil {
+				return readErr
+			}
+			var current workerConfigLatest
+			if json.Unmarshal(currentRaw, &current) == nil {
+				if current.ConfigRevision > next.ConfigRevision {
+					return nil
+				}
+				if current.ConfigRevision == next.ConfigRevision && current.Snapshot == next.Snapshot && current.SHA256 == next.SHA256 && current.OpsFloor == next.OpsFloor {
+					return nil
+				}
+			}
+			opts.SetMatchETag(stat.ETag)
+		} else if code := minio.ToErrorResponse(statErr).Code; code == "NoSuchKey" || code == "NoSuchObject" || code == "NotFound" {
+			opts.SetMatchETagExcept("*")
+		} else {
+			return statErr
+		}
+		if err := w.putBytes(ctx, workerConfigLatestKey, raw, opts); err == nil {
+			return nil
+		} else if minio.ToErrorResponse(err).Code != "PreconditionFailed" {
+			return err
+		}
+	}
+	return errors.New("edge config pointer changed repeatedly")
 }

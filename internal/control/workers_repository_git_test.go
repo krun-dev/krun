@@ -105,7 +105,7 @@ func TestCloneResolvesCommitAndReadsTree(t *testing.T) {
 
 func TestCloneHonoursRootDirectoryAndWrangler(t *testing.T) {
 	dir, head, _ := newLocalGitRepo(t, map[string]string{
-		"apps/demo/src/index.ts": "export default {fetch(){return new Response('demo')}}",
+		"apps/demo/src/index.ts":  "export default {fetch(){return new Response('demo')}}",
 		"apps/demo/public/a.html": "<!doctype html><title>a</title>",
 		"apps/demo/wrangler.jsonc": `{
   // comments and trailing commas are legal JSONC
@@ -137,7 +137,7 @@ func TestCloneHonoursRootDirectoryAndWrangler(t *testing.T) {
 	if entry != "src/index.ts" || assets.Directory != "public" {
 		t.Fatalf("resolved %q %q", entry, assets.Directory)
 	}
-	assetFiles, err := extractRepositoryAssets(raw, "", assets.Directory)
+	assetFiles, err := extractRepositoryAssets(raw, "apps/demo", assets.Directory)
 	if err != nil || len(assetFiles) != 1 {
 		t.Fatalf("assets: %v %v", keys(assetFiles), err)
 	}
@@ -185,6 +185,116 @@ func TestRepositoryCommitPinningSurvivesMove(t *testing.T) {
 	}
 	if !strings.Contains(files["src/index.ts"], "v2") {
 		t.Fatalf("pinned commit was not used: %s", files["src/index.ts"])
+	}
+}
+
+func TestRepositoryCloneIsHistoryBoundedAndRemoved(t *testing.T) {
+	dir, _, _ := newLocalGitRepo(t, map[string]string{"src/index.ts": "export const revision = 'second'"})
+	repo, err := git.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worktree, err := repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := &object.Signature{Name: "test", Email: "test@example.test", When: time.Now()}
+	var head string
+	for i := 0; i < 40; i++ {
+		body := "export const revision = " + strings.Repeat("x", i+1)
+		if err := os.WriteFile(filepath.Join(dir, "src/index.ts"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := worktree.Add("src/index.ts"); err != nil {
+			t.Fatal(err)
+		}
+		hash, err := worktree.Commit("history", &git.CommitOptions{Author: sig})
+		if err != nil {
+			t.Fatal(err)
+		}
+		head = hash.String()
+	}
+	cloneBase := t.TempDir()
+	cloned, cloneDir, err := cloneRepository(context.Background(), localProvider(dir), "", "", head, "master", cloneBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	iter, err := cloned.Log(&git.LogOptions{All: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commits := 0
+	if err := iter.ForEach(func(*object.Commit) error { commits++; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if commits > 32 || commits >= 42 {
+		t.Fatalf("clone pulled unbounded history: %d commits", commits)
+	}
+	if err := os.RemoveAll(cloneDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(cloneDir); !os.IsNotExist(err) {
+		t.Fatalf("clone directory remains after cleanup: %v", err)
+	}
+}
+
+func TestRepositoryFetchRemovesCloneDirectory(t *testing.T) {
+	dir, head, _ := newLocalGitRepo(t, map[string]string{"src/index.ts": "export const revision = 'second'"})
+	cloneBase := t.TempDir()
+	s := &Server{Config: Config{Workers: &WorkersConfig{CloneDirectory: cloneBase}}}
+	_, _, err := s.fetchRepositorySource(context.Background(), localProvider(dir), WorkerBuildRepository{
+		WorkerRepositorySource: WorkerRepositorySource{Ref: "master"},
+		Commit:                 head,
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(cloneBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("temporary clone was not removed: %v", entries)
+	}
+}
+
+func TestRepositoryFetchRejectsLargeBlobBeforeReadingIt(t *testing.T) {
+	dir, head, _ := newLocalGitRepo(t, map[string]string{
+		"public/oversized.bin": strings.Repeat("x", repositorySingleFileLimit+1),
+	})
+	cloneBase := t.TempDir()
+	s := &Server{Config: Config{Workers: &WorkersConfig{CloneDirectory: cloneBase}}}
+	_, _, err := s.fetchRepositorySource(context.Background(), localProvider(dir), WorkerBuildRepository{
+		WorkerRepositorySource: WorkerRepositorySource{Ref: "master"},
+		Commit:                 head,
+	}, "")
+	if err == nil || !strings.Contains(err.Error(), "resource limits") {
+		t.Fatalf("large repository blob accepted: %v", err)
+	}
+	entries, readErr := os.ReadDir(cloneBase)
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("rejected clone was not removed: entries=%v err=%v", entries, readErr)
+	}
+}
+
+func TestRepositoryArchiveRejectsFileCountBeforeReadingExtraBlob(t *testing.T) {
+	dir, head, _ := newLocalGitRepo(t, map[string]string{
+		"bounded/a.ts": "a",
+		"bounded/b.ts": "b",
+		"bounded/c.ts": strings.Repeat("x", 1<<20),
+	})
+	repo, err := git.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = archiveRepositoryCommitWithLimits(repo, head, "bounded", repositoryArchiveLimits{
+		maxCompressedBytes: 2 << 20,
+		maxExpandedBytes:   2 << 20,
+		maxFileBytes:       2 << 20,
+		maxFiles:           2,
+	})
+	if err == nil || !strings.Contains(err.Error(), "2 files") {
+		t.Fatalf("file-count limit was not applied before the third blob: %v", err)
 	}
 }
 

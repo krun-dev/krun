@@ -29,19 +29,19 @@ spec:
       ports:
         - protocol: TCP
           port: 8081
-    - ports:
-        - protocol: TCP
-          port: 8083
+    # There is deliberately no pod/network ingress rule for management 8083.
+    # Local-first reaches it only through kubectl port-forward; node-to-local-
+    # pod traffic is exempt from NetworkPolicy by the Kubernetes contract.
   egress:
-    # MinIO runs in this namespace, so object storage is reached by pod selector
-    # rather than a host IP; the control plane stays outside the cluster.
+    # Both MinIO and the control plane run on the development machine. Keep the
+    # destination explicit so local-first cannot silently depend on a cluster
+    # storage deployment.
     - to:
-        - podSelector:
-            matchLabels:
-              app: minio
+        - ipBlock:
+            cidr: __MINIO_HOST__/32
       ports:
         - protocol: TCP
-          port: 9000
+          port: __MINIO_PORT__
     - to:
         - ipBlock:
             cidr: __CONTROL_HOST__/32

@@ -107,6 +107,8 @@ func truncateControlTables(t *testing.T, store *Store) {
 		return
 	}
 	tables := []string{
+		"worker_config_ops", "worker_config_revisions", "worker_config_routes", "worker_config_releases", "worker_runtime_acks",
+		"krun_rate_limits", "krun_audits",
 		"krun_sessions", "krun_browsers", "krun_login_states", "krun_email_logins",
 		"krun_device_codes", "krun_invitations", "krun_repository_connect_states",
 		"krun_repository_connections", "krun_api_key_hashes", "krun_api_keys",
@@ -115,6 +117,7 @@ func truncateControlTables(t *testing.T, store *Store) {
 		"krun_identity_providers", "krun_identity_sources",
 		"krun_worker_history", "krun_worker_idempotency", "krun_worker_operations",
 		"krun_worker_releases", "krun_worker_artifacts", "krun_worker_build_private",
+		"krun_worker_source_uploads",
 		"krun_worker_builds", "krun_worker_environments", "krun_worker_service_domains",
 		"krun_worker_services",
 	}
@@ -123,7 +126,9 @@ func truncateControlTables(t *testing.T, store *Store) {
 			return
 		}
 	}
-	_, _ = store.pool.Exec(context.Background(), `DELETE FROM krun_meta WHERE key IN ('revision','bootstrapped')`)
+	_, _ = store.pool.Exec(context.Background(), `DELETE FROM krun_meta WHERE key IN ('revision','bootstrapped','worker_config_head','worker_topology_generation')`)
+	_, _ = store.pool.Exec(context.Background(), `INSERT INTO krun_meta (key,value) VALUES
+		('worker_config_head','0'),('worker_topology_generation','0') ON CONFLICT (key) DO NOTHING`)
 }
 
 func TestPostgresBrowserLoginSurvivesRestart(t *testing.T) {
@@ -137,7 +142,7 @@ func TestPostgresBrowserLoginSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	csrfResponse := browserRequest(s, "GET", "/api/auth/csrf", nil, nil)
+	csrfResponse := browserRequest(s, "POST", "/api/auth/csrf", nil, nil)
 	var csrf struct {
 		Token string `json:"csrf_token"`
 	}
@@ -169,7 +174,7 @@ func TestPostgresBrowserLoginSurvivesRestart(t *testing.T) {
 	if me := browserRequest(s, "GET", "/api/auth/me", nil, cookies); me.Code != 200 {
 		t.Fatal("session lost across restart", me.Code)
 	}
-	csrfResponse = browserRequest(s, "GET", "/api/auth/csrf", nil, cookies)
+	csrfResponse = browserRequest(s, "POST", "/api/auth/csrf", nil, cookies)
 	if csrfResponse.Code != 200 || json.Unmarshal(csrfResponse.Body.Bytes(), &csrf) != nil {
 		t.Fatal("persisted CSRF cannot be read")
 	}
@@ -187,8 +192,8 @@ func TestPostgresAuditRetentionPersists(t *testing.T) {
 	_, _ = store.pool.Exec(ctx, "DELETE FROM krun_audits")
 	// One expired, one fresh entry.
 	if err := store.Update(ctx, PartitionAll, func(st *State) error {
-		store.recordAudit(Audit{ID: "old", Time: now().Add(-8 * 24 * time.Hour)})
-		store.recordAudit(Audit{ID: "new", Time: now()})
+		st.recordAudit(Audit{ID: "old", Time: now().Add(-8 * 24 * time.Hour)})
+		st.recordAudit(Audit{ID: "new", Time: now()})
 		return nil
 	}); err != nil {
 		t.Fatal(err)

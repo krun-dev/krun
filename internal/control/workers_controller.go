@@ -30,16 +30,19 @@ type workersController struct {
 	config    *WorkersConfig
 	s3        *minio.Client
 	putObject workerPutObject
-	// s3Builder signs builder upload URLs against the in-cluster endpoint; signing is offline, no connectivity needed.
+	// Builder and runtime URLs may use different network views of the same
+	// immutable bucket. Presigning is offline; the control process need not
+	// resolve either endpoint.
 	s3Builder *minio.Client
+	s3Runtime *minio.Client
 	kube      *workerKubernetes
 	http      *http.Client
 	// Parsed asset manifests are immutable per artifact; cache them so presigning
 	// a single file does not re-download the archive.
 	assetMu    sync.RWMutex
 	assetCache map[string]workerCachedAssets
-	// Edge config publication is single-writer: only the elected controller
-	// assigns revisions and writes snapshots.
+	// Edge config publication is coordinated by a durable revision CAS; every
+	// replica may race without electing a process-wide leader.
 	configMu       sync.Mutex
 	configLoaded   bool
 	configDirty    bool
@@ -47,9 +50,20 @@ type workersController struct {
 	configLast     *workerConfigProjection
 	configRevision int64
 	configFloor    int64
+	// configTopologyGeneration gates the expensive edge read model. PostgreSQL
+	// mutations advance the durable generation in the same transaction as a
+	// topology change, so idle reconcile cycles need only read one meta row.
+	configTopologyGeneration  int64
+	configTopologyLoaded      bool
+	routingTopology           map[string]WorkerService
+	routingTopologyGeneration int64
+	routingTopologyLoaded     bool
+	lastGC                    time.Time
 	// Local build executor state for builder_mode: local.
 	localMu     sync.Mutex
 	localBuilds map[string]*workerLocalBuild
+	localWG     sync.WaitGroup
+	lifecycle   context.Context
 	// replica identifies this process in claimed_by columns. It only needs to be
 	// unique among live replicas, not stable across restarts.
 	replica string
@@ -74,11 +88,18 @@ func newWorkersController(s *Server) (*workersController, error) {
 			return nil, e
 		}
 	}
-	k, e := newWorkerKubernetes(s.Config.Workers.Namespace)
+	s3Runtime := s3Builder
+	if s.Config.Workers.S3RuntimeEndpoint != s.Config.Workers.S3BuilderEndpoint {
+		s3Runtime, e = newWorkerS3Endpoint(s.Config.Workers, s.Config.Workers.S3RuntimeEndpoint)
+		if e != nil {
+			return nil, e
+		}
+	}
+	k, e := newWorkerKubernetes(s.Config.Workers)
 	if e != nil {
 		return nil, e
 	}
-	return &workersController{server: s, config: s.Config.Workers, s3: s3, putObject: s3.PutObject, s3Builder: s3Builder, kube: k, http: &http.Client{Timeout: 8 * time.Second}, assetCache: map[string]workerCachedAssets{}, localBuilds: map[string]*workerLocalBuild{}, replica: workerReplicaID()}, nil
+	return &workersController{server: s, config: s.Config.Workers, s3: s3, putObject: s3.PutObject, s3Builder: s3Builder, s3Runtime: s3Runtime, kube: k, http: &http.Client{Timeout: 8 * time.Second}, assetCache: map[string]workerCachedAssets{}, localBuilds: map[string]*workerLocalBuild{}, replica: workerReplicaID()}, nil
 }
 
 // workerReplicaID names this process in claimed_by columns.
@@ -109,11 +130,13 @@ func (w *workersController) putBytes(ctx context.Context, key string, data []byt
 }
 
 func (w *workersController) run(ctx context.Context) {
+	w.lifecycle = ctx
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			w.localWG.Wait()
 			return
 		case <-ticker.C:
 			if w.server.Store.pool == nil {
@@ -132,19 +155,6 @@ func (w *workersController) run(ctx context.Context) {
 	}
 }
 
-// read loads the Workers partition. The loaded state is already a fresh copy
-// per call, so the previous marshal/unmarshal round trip only to deep-copy was
-// redundant.
-func (w *workersController) read(ctx context.Context) (*WorkerState, error) {
-	st, e := w.server.Store.Open(ctx, PartitionWorkers)
-	if e != nil {
-		return nil, e
-	}
-	if st.Workers == nil {
-		return newWorkerState(), nil
-	}
-	return st.Workers, nil
-}
 // reconcile runs one cycle. It reads only the routing topology plus unfinished
 // work, so an idle control plane scans no build or operation rows and never
 // deserializes a whole document.
@@ -155,9 +165,30 @@ func (w *workersController) reconcile(ctx context.Context) error {
 	if _, e := w.publishConfig(ctx); e != nil {
 		failures = append(failures, e)
 	}
-	topology, e := w.server.Store.Open(ctx, PartitionWorkers)
+	if w.lastGC.IsZero() || now().Sub(w.lastGC) >= time.Minute {
+		// Rate-limit even failed attempts; an object-store outage must not turn
+		// the one-second reconcile loop into a tight remote retry loop.
+		w.lastGC = now()
+		if e := w.collectWorkerObjects(ctx); e != nil {
+			failures = append(failures, e)
+		}
+	}
+	// The route reconciler repairs Kubernetes every cycle, but its desired
+	// topology changes far less often. Keep the compact read model behind the
+	// same durable generation used by config publication.
+	topology := w.routingTopology
+	generation, e := w.server.Store.WorkerTopologyGeneration(ctx)
 	if e != nil {
 		return e
+	}
+	if !w.routingTopologyLoaded || generation < 0 || generation != w.routingTopologyGeneration {
+		topology, generation, e = w.server.Store.WorkerRoutingTopology(ctx)
+		if e != nil {
+			return e
+		}
+		w.routingTopology = topology
+		w.routingTopologyGeneration = generation
+		w.routingTopologyLoaded = generation >= 0
 	}
 	pending, e := w.server.Store.pendingWork(ctx, 100)
 	if e != nil {
@@ -172,7 +203,16 @@ func (w *workersController) reconcile(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if e = w.processBuild(ctx, b, pending.BuildPrivate[b.ID]); e != nil {
+		claimed, claimErr := w.server.Store.claimBuild(ctx, b.ID, w.replica)
+		if claimErr != nil {
+			failures = append(failures, claimErr)
+			continue
+		}
+		if !claimed {
+			continue
+		}
+		b.State = "building"
+		if e = w.processClaimedBuild(ctx, b, pending.BuildPrivate[b.ID]); e != nil {
 			failures = append(failures, e)
 		}
 	}
@@ -194,24 +234,37 @@ func (w *workersController) reconcile(ctx context.Context) error {
 	}
 	// Static routes from a previous catalog (renamed or removed domains) would
 	// keep serving objects on hosts nobody configured any more.
-	for _, n := range staleWorkerRoutes(ctx, w.kube, "workers-static-", desiredStatic) {
-		if e := w.kube.deleteRoute(ctx, n); e != nil {
-			failures = append(failures, e)
+	staleStatic, staleErr := staleWorkerRoutes(ctx, w.kube, "workers-static-", desiredStatic)
+	if staleErr != nil {
+		failures = append(failures, staleErr)
+	} else {
+		for _, n := range staleStatic {
+			if e := w.kube.deleteRoute(ctx, n); e != nil {
+				failures = append(failures, e)
+			}
 		}
 	}
 	// One HTTPRoute per (service, Gateway instance). Hosts are grouped by the
 	// Gateway their domain is bound to, so routes never carry a hostname the
 	// instance is not meant to serve.
 	routesReady := map[string]bool{}
-	for _, service := range topology.Workers.Services {
+	desiredRoutes := map[string]bool{}
+	for name := range desiredStatic {
+		desiredRoutes[name] = true
+	}
+	for _, service := range topology {
 		hostsByGateway := map[string][]string{}
+		selectedDomains := service.Domains
+		if len(selectedDomains) == 0 {
+			selectedDomains = w.config.defaultDomains()
+		}
 		for _, env := range service.Environments {
 			if !env.Enabled {
 				continue
 			}
 			// Hosts are derived from the domain catalog, never persisted, so a
 			// catalog change cannot leave stale hosts behind.
-			for _, id := range service.Domains {
+			for _, id := range selectedDomains {
 				d, ok := w.config.domain(id)
 				if !ok {
 					continue
@@ -223,10 +276,30 @@ func (w *workersController) reconcile(ctx context.Context) error {
 				hostsByGateway[d.Gateway] = append(hostsByGateway[d.Gateway], host)
 			}
 		}
-		ready, routeError := w.kube.ensureRoutes(ctx, w.config, "workers-"+digest(service.Organization+"/"+service.Service)[:24], hostsByGateway)
+		baseName := "workers-" + digest(service.Organization + "/" + service.Service)[:24]
+		for i, gateway := range w.config.Gateways {
+			name := baseName
+			if i > 0 {
+				name += "-" + gateway.ID
+			}
+			desiredRoutes[name] = true
+		}
+		ready, routeError := w.kube.ensureRoutes(ctx, w.config, baseName, hostsByGateway)
 		routesReady[service.Service] = ready && routeError == nil
 		if routeError != nil {
 			failures = append(failures, routeError)
+		}
+	}
+	// A service that disappeared from IAM is not visited above. Remove its old
+	// HTTPRoutes explicitly rather than waiting for a future service write.
+	staleRoutes, staleErr := staleWorkerRoutes(ctx, w.kube, "workers-", desiredRoutes)
+	if staleErr != nil {
+		failures = append(failures, staleErr)
+	} else {
+		for _, name := range staleRoutes {
+			if e := w.kube.deleteRoute(ctx, name); e != nil {
+				failures = append(failures, e)
+			}
 		}
 	}
 	ops := make([]WorkerOperation, 0, len(pending.Operations))
@@ -244,8 +317,52 @@ func (w *workersController) reconcile(ctx context.Context) error {
 	}
 	return errors.Join(failures...)
 }
+
+func (w *workersController) processClaimedBuild(ctx context.Context, b WorkerBuild, private WorkerBuildPrivate) error {
+	workCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	leaseErr := make(chan error, 1)
+	go func() {
+		ticker := time.NewTicker(20 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-workCtx.Done():
+				return
+			case <-ticker.C:
+				owned, err := w.server.Store.renewBuildClaim(workCtx, b.ID, w.replica)
+				if err == nil && owned {
+					continue
+				}
+				if err == nil {
+					err = errors.New("build lease lost")
+				}
+				select {
+				case <-done:
+					return
+				default:
+					leaseErr <- err
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	err := w.processBuild(workCtx, b, private)
+	close(done)
+	cancel()
+	select {
+	case lost := <-leaseErr:
+		if err == nil {
+			return lost
+		}
+	default:
+	}
+	return err
+}
+
 func (w *workersController) failBuild(ctx context.Context, id, message, log string) error {
-	return w.server.Store.finishBuild(ctx, id, "failed", message, "", safeWorkerLog(log))
+	return w.server.Store.finishClaimedBuild(ctx, id, w.replica, "failed", message, "", safeWorkerLog(log))
 }
 func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, private WorkerBuildPrivate) error {
 	denied, e := w.authorizeActor(ctx, private.Actor, b.Service, b.Environment, "build.start")
@@ -266,6 +383,9 @@ func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, pri
 		var err error
 		b, private, err = w.prepareRepositoryBuild(ctx, b, private)
 		if err != nil {
+			if errors.Is(err, errBuildClaimLost) || ctx.Err() != nil {
+				return err
+			}
 			return w.failBuild(ctx, b.ID, err.Error(), private.Log)
 		}
 	}
@@ -309,14 +429,7 @@ func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, pri
 		if e = w.kube.ensureBuildJob(ctx, b, private, sourceURL, signed, w.config.BuilderImage, w.config.BuilderPullPolicy); e != nil {
 			return e
 		}
-		return w.server.Store.Update(ctx, PartitionWorkers, func(st *State) error {
-			current := st.Workers.Builds[b.ID]
-			if current.State == "queued" || current.State == "fetching" {
-				current.State = "building"
-				st.Workers.Builds[b.ID] = current
-			}
-			return nil
-		})
+		return nil
 	}
 	if e != nil {
 		return e
@@ -329,6 +442,9 @@ func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, pri
 	}
 	artifact, e := w.finalizeBuild(ctx, b)
 	if e != nil {
+		if errors.Is(e, errArtifactBeingCollected) {
+			return nil
+		}
 		return w.failBuild(ctx, b.ID, "Artifact validation failed: "+e.Error(), w.kube.buildLog(ctx, b.Job))
 	}
 	log := safeWorkerLog(private.Log + w.kube.buildLog(ctx, b.Job))
@@ -340,7 +456,7 @@ func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, pri
 	if denied != nil {
 		return w.failBuild(ctx, b.ID, "Build permission revoked", log)
 	}
-	e = w.server.Store.finishBuildWithArtifact(ctx, b.ID, "succeeded", "", artifact, log)
+	e = w.server.Store.finishClaimedBuildWithArtifact(ctx, b.ID, w.replica, "succeeded", "", artifact, log)
 	if e == nil {
 		_ = w.s3.RemoveObject(ctx, w.config.S3Bucket, workerUploadKey(b), minio.RemoveObjectOptions{})
 	}
@@ -481,19 +597,30 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 		if auth != nil {
 			return w.failOperation(ctx, op.ID, "Release permission revoked")
 		}
-		if _, e := w.server.Store.commitOperation(ctx, op); e != nil {
+		committed, e := w.server.Store.commitOperation(ctx, op)
+		if e != nil {
 			return e
 		}
+		if !committed {
+			return nil
+		}
 	}
-	// Publish the configuration revision that contains this commit. Runtimes
-	// learn about it through the incremental feed; the controller does not run a
-	// per-Pod management RPC, so a slow member cannot block the release pipeline.
-	revision, e := w.publishConfig(ctx)
-	if e != nil {
-		return w.noteOperation(ctx, op.ID, "Committed; waiting for configuration publication")
-	}
-	if e := w.server.Store.setOperationEdgeRevision(ctx, op.ID, revision); e != nil {
-		return e
+	// Publish once and freeze the first configuration revision that contains
+	// this commit. Subsequent topology churn must not keep moving this
+	// operation's acknowledgement target forward.
+	revision := int64(op.EdgeRevision)
+	if revision == 0 {
+		revision, e = w.publishConfig(ctx)
+		if e != nil {
+			return w.noteOperation(ctx, op.ID, "Committed; waiting for configuration publication")
+		}
+		revision, e = w.server.Store.setOperationEdgeRevision(ctx, op.ID, revision)
+		if e != nil {
+			return e
+		}
+		if revision == 0 {
+			return nil
+		}
 	}
 	pods, e = w.kube.runtimeMembers(ctx, w.config.RuntimeService)
 	if e != nil {
@@ -536,20 +663,11 @@ func (w *workersController) processLocalBuild(ctx context.Context, b WorkerBuild
 	}
 	w.localBuilds[b.ID] = &workerLocalBuild{Running: true}
 	w.localMu.Unlock()
-	if e := w.server.Store.Update(ctx, PartitionWorkers, func(st *State) error {
-		current := st.Workers.Builds[b.ID]
-		if current.State == "queued" || current.State == "fetching" {
-			current.State = "building"
-			st.Workers.Builds[b.ID] = current
-		}
-		return nil
-	}); e != nil {
-		w.localMu.Lock()
-		delete(w.localBuilds, b.ID)
-		w.localMu.Unlock()
-		return e
-	}
-	go w.runLocalBuild(b, private)
+	w.localWG.Add(1)
+	go func() {
+		defer w.localWG.Done()
+		w.runLocalBuild(b, private)
+	}()
 	return nil
 }
 
@@ -559,15 +677,52 @@ func (w *workersController) runLocalBuild(b WorkerBuild, private WorkerBuildPriv
 		delete(w.localBuilds, b.ID)
 		w.localMu.Unlock()
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	parent := w.lifecycle
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 180*time.Second)
 	defer cancel()
+	done := make(chan struct{})
+	defer close(done)
+	leaseLost := make(chan struct{}, 1)
+	go func() {
+		ticker := time.NewTicker(20 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				owned, err := w.server.Store.renewBuildClaim(ctx, b.ID, w.replica)
+				if err == nil && owned {
+					continue
+				}
+				leaseLost <- struct{}{}
+				cancel()
+				return
+			}
+		}
+	}()
 	log, e := w.executeLocalBuilder(ctx, b, private)
+	select {
+	case <-leaseLost:
+		// Another replica owns the row now. Its attempt is responsible for the
+		// terminal transition; this process must not overwrite it.
+		return
+	default:
+	}
 	if e != nil {
 		_ = w.failBuild(ctx, b.ID, "Builder failed", log)
 		return
 	}
 	artifact, e := w.finalizeBuild(ctx, b)
 	if e != nil {
+		if errors.Is(e, errArtifactBeingCollected) {
+			return
+		}
 		_ = w.failBuild(ctx, b.ID, "Artifact validation failed: "+e.Error(), log)
 		return
 	}
@@ -582,7 +737,7 @@ func (w *workersController) runLocalBuild(b WorkerBuild, private WorkerBuildPriv
 		_ = w.failBuild(ctx, b.ID, "Build permission revoked", log)
 		return
 	}
-	e = w.server.Store.finishBuildWithArtifact(ctx, b.ID, "succeeded", "", artifact, safeWorkerLog(private.Log+log))
+	e = w.server.Store.finishClaimedBuildWithArtifact(ctx, b.ID, w.replica, "succeeded", "", artifact, safeWorkerLog(private.Log+log))
 	if e == nil {
 		_ = w.s3.RemoveObject(ctx, w.config.S3Bucket, workerUploadKey(b), minio.RemoveObjectOptions{})
 	}

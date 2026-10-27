@@ -215,7 +215,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		return c.call(ctx, "GET", "/api/v1/me", nil)
 	case "logout":
 		if c.Profile.Token != "" && !strings.HasPrefix(c.Profile.Token, "krun_key_") {
-			if e = c.request(ctx, "POST", "/auth/logout", map[string]any{}, nil, false); e != nil {
+			if e = c.request(ctx, "POST", "/api/auth/logout", map[string]any{}, nil, false); e != nil {
 				var apiErr *responseError
 				if !errors.As(e, &apiErr) || apiErr.Status != 401 {
 					return e
@@ -322,7 +322,7 @@ func (c *Client) login(ctx context.Context, args []string) error {
 		Expires  int    `json:"expires_in"`
 		Interval int    `json:"interval"`
 	}
-	if e := c.request(ctx, "POST", "/auth/cli/start", map[string]any{}, &device, true); e != nil {
+	if e := c.request(ctx, "POST", "/api/auth/cli/start", map[string]any{}, &device, true); e != nil {
 		return e
 	}
 	base, _ := url.Parse(c.Profile.Server)
@@ -365,7 +365,7 @@ func (c *Client) login(ctx context.Context, args []string) error {
 			var result struct {
 				Token string `json:"token"`
 			}
-			e = c.request(loginCtx, "POST", "/auth/cli/poll", map[string]string{"device_code": device.Code}, &result, true)
+			e = c.request(loginCtx, "POST", "/api/auth/cli/poll", map[string]string{"device_code": device.Code}, &result, true)
 			if e != nil {
 				var pending *responseError
 				if errors.As(e, &pending) && pending.Code == "AUTHORIZATION_PENDING" {

@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -44,6 +47,9 @@ func TestCatalogValidationAndDefaults(t *testing.T) {
 	if c.Domains[0].StaticDomain != "static.workers.test" {
 		t.Fatalf("static domain default: %q", c.Domains[0].StaticDomain)
 	}
+	if c.S3BuilderEndpoint != c.S3Endpoint || c.S3RuntimeEndpoint != c.S3BuilderEndpoint {
+		t.Fatalf("storage endpoint defaults: control=%q builder=%q runtime=%q", c.S3Endpoint, c.S3BuilderEndpoint, c.S3RuntimeEndpoint)
+	}
 	if got := c.defaultDomains(); len(got) != 1 || got[0] != "internal" {
 		t.Fatalf("default domains: %v", got)
 	}
@@ -77,6 +83,24 @@ func TestCatalogRejectsBrokenReferences(t *testing.T) {
 	c.Domains = nil
 	if err := c.validate(); err == nil {
 		t.Fatal("empty domain list accepted")
+	}
+}
+
+func TestRuntimeStorageEndpointValidation(t *testing.T) {
+	c := catalogConfig()
+	c.S3BuilderEndpoint = "http://builder.storage.test:9000"
+	c.S3RuntimeEndpoint = "http://static-assets.workers-mvp.svc:9000"
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	if c.S3RuntimeEndpoint != "http://static-assets.workers-mvp.svc:9000" {
+		t.Fatalf("runtime endpoint changed: %q", c.S3RuntimeEndpoint)
+	}
+
+	c = catalogConfig()
+	c.S3RuntimeEndpoint = "file:///tmp/storage"
+	if err := c.validate(); err == nil || !strings.Contains(err.Error(), "runtime endpoint") {
+		t.Fatalf("invalid runtime endpoint accepted: %v", err)
 	}
 }
 
@@ -123,9 +147,16 @@ func TestServiceDomainsUpdateAddsAndRemovesHosts(t *testing.T) {
 	s.routes()
 
 	// Adding a domain at the service level adds one host to every environment.
-	r := request(s, "PUT", base+"/domains", "krun_cli_admin", `{"domains":["internal","external"]}`)
+	r := request(s, "PUT", base+"/domains", "krun_cli_admin", `{"domains":["internal","external"],"expected_revision":0}`)
 	if r.Code != 200 {
 		t.Fatal(r.Code, r.Body.String())
+	}
+	var updated struct {
+		Revision int `json:"revision"`
+	}
+	_ = json.Unmarshal(r.Body.Bytes(), &updated)
+	if updated.Revision != 1 {
+		t.Fatalf("domain revision after add: %d", updated.Revision)
 	}
 	envs := request(s, "GET", base+"/environments", "krun_cli_admin", "")
 	var list struct {
@@ -139,7 +170,7 @@ func TestServiceDomainsUpdateAddsAndRemovesHosts(t *testing.T) {
 	}
 
 	// Removing it drops the host everywhere and prunes nothing else.
-	r = request(s, "PUT", base+"/domains", "krun_cli_admin", `{"domains":["internal"]}`)
+	r = request(s, "PUT", base+"/domains", "krun_cli_admin", `{"domains":["internal"],"expected_revision":1}`)
 	if r.Code != 200 {
 		t.Fatal(r.Code, r.Body.String())
 	}
@@ -190,6 +221,7 @@ func TestServiceDomainsReadReturnsCatalog(t *testing.T) {
 	var out struct {
 		Selected []string           `json:"selected"`
 		Catalog  []WorkerDomainView `json:"catalog"`
+		Revision int                `json:"revision"`
 	}
 	_ = json.Unmarshal(r.Body.Bytes(), &out)
 	if len(out.Selected) != 1 || out.Selected[0] != "internal" {
@@ -197,6 +229,24 @@ func TestServiceDomainsReadReturnsCatalog(t *testing.T) {
 	}
 	if len(out.Catalog) != 2 {
 		t.Fatalf("catalog: %+v", out.Catalog)
+	}
+	if out.Revision != 0 {
+		t.Fatalf("revision: %d", out.Revision)
+	}
+}
+
+func TestServiceDomainsRequiresCurrentRevision(t *testing.T) {
+	s, _, base := workerTestServer(t)
+	s.Config.Workers = catalogConfig()
+	if err := s.Config.Workers.validate(); err != nil {
+		t.Fatal(err)
+	}
+	s.routes()
+	if r := request(s, "PUT", base+"/domains", "krun_cli_admin", `{"domains":["internal","external"]}`); r.Code != 422 {
+		t.Fatalf("missing revision accepted: %d %s", r.Code, r.Body.String())
+	}
+	if r := request(s, "PUT", base+"/domains", "krun_cli_admin", `{"domains":["internal","external"],"expected_revision":9}`); r.Code != 409 {
+		t.Fatalf("stale revision accepted: %d %s", r.Code, r.Body.String())
 	}
 }
 
@@ -355,6 +405,114 @@ func TestEnsureRoutesGroupsHostsByGateway(t *testing.T) {
 		if strings.HasSuffix(raw.(string), "."+c.Domains[0].Domain) {
 			t.Fatalf("internal host leaked onto the external route: %v", external["hostnames"])
 		}
+	}
+}
+
+func TestStaleWorkerRoutesPropagatesListFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	k := &workerKubernetes{base: srv.URL, namespace: "workers-mvp", client: srv.Client()}
+	if _, err := staleWorkerRoutes(context.Background(), k, "workers-", map[string]bool{}); err == nil {
+		t.Fatal("route list failure was hidden")
+	}
+}
+
+func TestKubernetesClientReloadsRotatedBearerToken(t *testing.T) {
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenPath, []byte("token-one\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	seen := []string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Get("Authorization"))
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	k := &workerKubernetes{base: srv.URL, tokenFile: tokenPath, namespace: "workers-mvp", client: srv.Client()}
+	for _, token := range []string{"token-one", "token-two"} {
+		if err := os.WriteFile(tokenPath, []byte(token), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var response map[string]any
+		if err := k.call(context.Background(), http.MethodGet, "/version", nil, &response); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(seen) != 2 || seen[0] != "Bearer token-one" || seen[1] != "Bearer token-two" {
+		t.Fatalf("authorization headers=%v", seen)
+	}
+}
+
+func TestProcessOperationStopsAfterCommitCASConflict(t *testing.T) {
+	s, store, _ := workerTestServer(t)
+	raw := workerArchive(t, []string{"manifest.json", "modules/index.js"}, "export default {}", false)
+	code, manifest, err := parseWorkerArchive(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s3Server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
+		w.Header().Set("ETag", `"archive"`)
+		w.Header().Set("Last-Modified", now().UTC().Format(http.TimeFormat))
+		if r.Method == http.MethodHead {
+			return
+		}
+		_, _ = w.Write(raw)
+	}))
+	defer s3Server.Close()
+
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/pods"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
+				"metadata": map[string]any{"name": "runtime-0", "uid": "pod-1"},
+				"status":   map[string]any{"podIP": "127.0.0.1", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}},
+			}}})
+		case strings.HasSuffix(r.URL.Path, "/endpointslices"):
+			ready := true
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{"endpoints": []any{map[string]any{
+				"addresses": []string{"127.0.0.1"}, "conditions": map[string]any{"ready": ready}, "targetRef": map[string]any{"uid": "pod-1"},
+			}}}}})
+		case r.URL.Path == "/validate":
+			_ = json.NewEncoder(w).Encode(map[string]any{"pod_uid": "pod-1", "release_id": "rel-cas", "archive_sha256": code.ArchiveDigest})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer apiServer.Close()
+
+	c := testWorkersConfig()
+	c.S3Endpoint, c.S3BuilderEndpoint = s3Server.URL, s3Server.URL
+	c.S3Bucket, c.S3AccessKey, c.S3SecretKey, c.S3LocationID = "artifacts", "access", "secret", "test"
+	c.RuntimeService, c.RuntimeManagementBase, c.ManagementToken = "runtime-default", apiServer.URL, strings.Repeat("m", 24)
+	s.Config.Workers = c
+	s3, err := newWorkerS3(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller := &workersController{
+		server: s, config: c, s3: s3, s3Builder: s3,
+		kube: &workerKubernetes{base: apiServer.URL, namespace: c.Namespace, client: apiServer.Client()},
+		http: apiServer.Client(), assetCache: map[string]workerCachedAssets{}, replica: "test",
+	}
+	release := WorkerRelease{ID: "rel-cas", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-cas", ArchiveDigest: code.ArchiveDigest, ModuleDigest: code.Digest, Pool: "default"}
+	artifact := WorkerArtifact{ID: "art-cas", Organization: "org-a", State: "finalized", ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, Size: len(raw), ObjectKey: "v1/org-a/archive.tar.gz", StorageLocation: "test", Bucket: "artifacts", Created: now()}
+	op := WorkerOperation{ID: "op-cas", Kind: "publish", Service: "svc-a", Organization: "org-a", Environment: "production", State: "validating", Release: release.ID, ExpectedRevision: 99, Created: now()}
+	state := WorkerState{
+		Releases: map[string]WorkerRelease{release.ID: release}, Artifacts: map[string]WorkerArtifact{artifact.ID: artifact},
+		Operations: map[string]WorkerOperation{op.ID: op}, OperationPrivate: map[string]WorkerOperationPrivate{op.ID: {Actor: WorkerActor{User: "admin", AuthVersion: 1}}},
+	}
+	if err := controller.processOperation(context.Background(), op, state, true); err != nil {
+		t.Fatal(err)
+	}
+	latest, _, err := store.ConfigState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest != 0 {
+		t.Fatalf("commit CAS conflict still published edge config revision %d", latest)
 	}
 }
 

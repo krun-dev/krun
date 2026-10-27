@@ -137,8 +137,8 @@ func (s *Server) emailCodeHandler(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, emailUnavailable())
 		return
 	}
-	if s.limited(r) {
-		s.writeError(w, r, problem(429, "RATE_LIMITED", "Try again later"))
+	if err := s.checkRateLimit(r); err != nil {
+		s.writeError(w, r, err)
 		return
 	}
 	var input struct {
@@ -167,7 +167,7 @@ func (s *Server) emailCodeHandler(w http.ResponseWriter, r *http.Request) {
 	code := fmt.Sprintf("%06d", number.Int64())
 	id := randomToken()
 	browserHash := digest(s.cookie(r, "browser"))
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	ip := s.clientIP(r)
 	browser, ok, err := s.Store.browserFor(r.Context(), browserHash)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -177,29 +177,8 @@ func (s *Server) emailCodeHandler(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, problem(403, "CSRF_INVALID", "Login CSRF verification failed"))
 		return
 	}
-	// The cooldown counters are index-backed queries now, not a scan of every
-	// outstanding challenge in the state document.
-	sentFromIP, recent, err := s.Store.emailSendBudget(r.Context(), ip, email, browserHash, time.Minute)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if recent {
-		s.writeError(w, r, problem(429, "RATE_LIMITED", "Wait 60 seconds before requesting another code"))
-		return
-	}
-	if sentFromIP >= 10 {
-		s.writeError(w, r, problem(429, "RATE_LIMITED", "Try again later"))
-		return
-	}
-	browser.Generation++
-	browser.Expires = now().Add(15 * time.Minute)
-	if err = s.Store.upsertBrowser(r.Context(), browserHash, browser); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	challenge := EmailLogin{Provider: p.config.ID, Browser: browserHash, Fingerprint: loginFingerprint(p.config), Email: email, CodeHash: digest(id + "\x00" + code), ReturnTo: returnTo, IP: ip, Generation: browser.Generation, Sent: now(), Expires: now().Add(10 * time.Minute)}
-	if err = s.Store.insertEmailLogin(r.Context(), digest(id), challenge); err != nil {
+	challenge := EmailLogin{Provider: p.config.ID, Browser: browserHash, Fingerprint: loginFingerprint(p.config), Email: email, CodeHash: digest(id + "\x00" + code), ReturnTo: returnTo, IP: ip, Sent: now(), Expires: now().Add(10 * time.Minute)}
+	if _, err = s.Store.beginEmailLogin(r.Context(), browserHash, browser, digest(id), challenge, time.Minute, 10); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -207,8 +186,7 @@ func (s *Server) emailCodeHandler(w http.ResponseWriter, r *http.Request) {
 		// Retain the cooldown while making an undelivered code unusable.
 		cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 		defer cancel()
-		challenge.Consumed = true
-		_ = s.Store.updateEmailLogin(cleanupContext, digest(id), challenge)
+		_ = s.Store.invalidateEmailLogin(cleanupContext, digest(id))
 		s.writeError(w, r, problem(503, "EMAIL_DELIVERY_FAILED", "Unable to send the verification email. Try again later"))
 		return
 	}
@@ -221,8 +199,8 @@ func (s *Server) emailVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, emailUnavailable())
 		return
 	}
-	if s.limited(r) {
-		s.writeError(w, r, problem(429, "RATE_LIMITED", "Try again later"))
+	if err := s.checkRateLimit(r); err != nil {
+		s.writeError(w, r, err)
 		return
 	}
 	var input struct {
@@ -254,11 +232,11 @@ func (s *Server) emailVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, problem(400, "EMAIL_CODE_INVALID", "Invalid or expired verification code"))
 		return
 	}
-	challenge.Attempts++
 	if len(input.Code) != 6 || subtle.ConstantTimeCompare([]byte(digest(input.Challenge+"\x00"+input.Code)), []byte(challenge.CodeHash)) != 1 {
 		// Persist the failed attempt so the retry counter cannot be reset by
-		// reconnecting.
-		if e := s.Store.updateEmailLogin(r.Context(), key, challenge); e != nil {
+		// reconnecting. The store applies the increment conditionally so
+		// concurrent failures cannot overwrite one another.
+		if _, e := s.Store.failEmailLogin(r.Context(), key); e != nil {
 			s.writeError(w, r, e)
 			return
 		}
@@ -266,12 +244,7 @@ func (s *Server) emailVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, problem(400, "EMAIL_CODE_INVALID", "Invalid or expired verification code"))
 		return
 	}
-	challenge.Consumed = true
-	if e := s.Store.updateEmailLogin(r.Context(), key, challenge); e != nil {
-		s.writeError(w, r, e)
-		return
-	}
-	if e := s.finishLogin(r.Context(), r, p, browserHash, identity{Subject: challenge.Email, Name: challenge.Email, Email: challenge.Email}, sessionToken); e != nil {
+	if e := s.finishEmailLogin(r.Context(), r, p, browserHash, challenge.Generation, identity{Subject: challenge.Email, Name: challenge.Email, Email: challenge.Email}, sessionToken, key); e != nil {
 		s.recordAnonymousAudit(r, p, "auth.login.failed."+e.Error())
 		s.writeError(w, r, e)
 		return

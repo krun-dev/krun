@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -20,7 +19,7 @@ import (
 
 type workerKubernetes struct {
 	base      string
-	token     string
+	tokenFile string
 	client    *http.Client
 	namespace string
 }
@@ -32,20 +31,12 @@ type workerKubeError struct {
 func (e *workerKubeError) Error() string {
 	return fmt.Sprintf("Kubernetes %s returned %d", e.operation, e.status)
 }
-func newWorkerKubernetes(ns string) (*workerKubernetes, error) {
-	dir := os.Getenv("KRUN_KUBE_SA_DIR")
-	if dir == "" {
-		dir = "/var/run/secrets/kubernetes.io/serviceaccount/"
-	}
-	token, e := os.ReadFile(filepath.Join(dir, "token"))
+func newWorkerKubernetes(config *WorkersConfig) (*workerKubernetes, error) {
+	token, e := os.ReadFile(config.KubernetesTokenFile)
 	if e != nil {
 		return nil, e
 	}
-	caPath := os.Getenv("KRUN_KUBE_CA")
-	if caPath == "" {
-		caPath = filepath.Join(dir, "ca.crt")
-	}
-	ca, e := os.ReadFile(caPath)
+	ca, e := os.ReadFile(config.KubernetesCAFile)
 	if e != nil {
 		return nil, e
 	}
@@ -53,11 +44,10 @@ func newWorkerKubernetes(ns string) (*workerKubernetes, error) {
 	if !roots.AppendCertsFromPEM(ca) {
 		return nil, errors.New("invalid Kubernetes CA")
 	}
-	base := os.Getenv("KRUN_KUBE_API")
-	if base == "" {
-		base = "https://kubernetes.default.svc"
+	if strings.TrimSpace(string(token)) == "" {
+		return nil, errors.New("empty Kubernetes bearer token")
 	}
-	return &workerKubernetes{base: base, token: strings.TrimSpace(string(token)), namespace: ns, client: &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}}}, nil
+	return &workerKubernetes{base: config.KubernetesAPI, tokenFile: config.KubernetesTokenFile, namespace: config.Namespace, client: &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}}}, nil
 }
 func (k *workerKubernetes) call(ctx context.Context, method, route string, in, out any) error {
 	var raw []byte
@@ -72,7 +62,20 @@ func (k *workerKubernetes) call(ctx context.Context, method, route string, in, o
 	if e != nil {
 		return e
 	}
-	req.Header.Set("Authorization", "Bearer "+k.token)
+	// Projected service-account tokens rotate. Re-reading this tiny local file
+	// per API call follows the rotation atomically performed by kubelet and
+	// avoids pinning a token that will expire during a long-running controller.
+	if k.tokenFile != "" {
+		token, readErr := os.ReadFile(k.tokenFile)
+		if readErr != nil {
+			return readErr
+		}
+		value := strings.TrimSpace(string(token))
+		if value == "" {
+			return errors.New("empty Kubernetes bearer token")
+		}
+		req.Header.Set("Authorization", "Bearer "+value)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	if method == http.MethodPatch {
 		req.Header.Set("Content-Type", "application/merge-patch+json")
@@ -222,6 +225,7 @@ func (k *workerKubernetes) buildLog(ctx context.Context, job string) string {
 	}
 	return safeWorkerLog(text)
 }
+
 // ensureRoutes reconciles one HTTPRoute per (worker, Gateway instance). Grouping
 // by Gateway rather than by a network concept is what makes the isolation
 // structural: an instance's route table only ever contains the hostnames of the
@@ -246,7 +250,11 @@ func (k *workerKubernetes) ensureRoutes(ctx context.Context, c *WorkersConfig, n
 	}
 	// Routes written under an older catalog naming (a Gateway id that no longer
 	// exists) would otherwise keep answering for hosts nobody selected.
-	for _, n := range staleWorkerRoutes(ctx, k, name+"-", desired) {
+	stale, err := staleWorkerRoutes(ctx, k, name+"-", desired)
+	if err != nil {
+		return false, err
+	}
+	for _, n := range stale {
 		if e := k.deleteRoute(ctx, n); e != nil {
 			return false, e
 		}
@@ -283,10 +291,10 @@ func (k *workerKubernetes) deleteRoute(ctx context.Context, name string) error {
 }
 
 // staleWorkerRoutes lists routes with the given prefix that are not desired.
-func staleWorkerRoutes(ctx context.Context, k *workerKubernetes, prefix string, desired map[string]bool) []string {
+func staleWorkerRoutes(ctx context.Context, k *workerKubernetes, prefix string, desired map[string]bool) ([]string, error) {
 	names, e := k.listRoutes(ctx)
 	if e != nil {
-		return nil
+		return nil, e
 	}
 	out := []string{}
 	for _, n := range names {
@@ -294,7 +302,7 @@ func staleWorkerRoutes(ctx context.Context, k *workerKubernetes, prefix string, 
 			out = append(out, n)
 		}
 	}
-	return out
+	return out, nil
 }
 
 func (k *workerKubernetes) ensureRoute(ctx context.Context, c *WorkersConfig, name string, g WorkerGateway, hosts []string) (bool, error) {

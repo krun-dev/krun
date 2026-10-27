@@ -1,0 +1,49 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #0b0d0c;
+  color: #f0f7f2;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 70% 0%, #193d2d 0, #0b0d0c 42%); }
+main { width: min(1080px, calc(100% - 40px)); margin: 0 auto; padding: 72px 0; }
+.hero { max-width: 760px; }
+.eyebrow { color: #5ee69b; font: 700 12px/1 ui-monospace, monospace; letter-spacing: .18em; }
+h1 { margin: 18px 0; font-size: clamp(44px, 7vw, 82px); line-height: .98; letter-spacing: -.055em; }
+.hero > p, .standalone > p { max-width: 650px; color: #aab8af; font-size: 18px; line-height: 1.7; }
+nav { display: flex; gap: 12px; margin-top: 28px; }
+a { color: #c7d4cb; text-decoration: none; }
+nav a, .button-link { border: 1px solid #35433a; border-radius: 999px; padding: 10px 15px; }
+nav a:hover, .button-link:hover { border-color: #5ee69b; color: #5ee69b; }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-top: 58px; }
+.card, .route-card { border: 1px solid #29342d; border-radius: 18px; background: rgba(18, 23, 20, .88); padding: 24px; box-shadow: 0 20px 70px rgba(0, 0, 0, .28); }
+.card-heading { display: flex; align-items: center; gap: 10px; }
+.card h2 { margin: 0; font-size: 18px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: #5ee69b; box-shadow: 0 0 18px #5ee69b; }
+#api-status { color: #f3c969; }
+#api-status[data-state="ok"] { color: #5ee69b; }
+#api-status[data-state="error"] { color: #ff8a8a; }
+dl { margin: 22px 0 0; }
+dl div { display: flex; justify-content: space-between; gap: 20px; border-top: 1px solid #283129; padding: 12px 0; }
+dt { color: #839087; }
+dd { margin: 0; max-width: 70%; overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
+label { display: block; margin: 22px 0 9px; color: #aab8af; }
+.form-row { display: flex; gap: 8px; }
+input, button { border-radius: 10px; border: 1px solid #35433a; font: inherit; }
+input { min-width: 0; flex: 1; padding: 11px 12px; background: #0c100e; color: inherit; }
+button { padding: 11px 18px; background: #5ee69b; color: #07150d; font-weight: 700; cursor: pointer; }
+output { display: block; min-height: 24px; margin-top: 18px; color: #5ee69b; overflow-wrap: anywhere; }
+.route-card { margin-top: 18px; }
+.route-card span { color: #839087; }
+.route-card strong { display: block; margin: 12px 0; font: 700 24px/1.2 ui-monospace, monospace; }
+.route-card p { margin: 0; color: #aab8af; }
+.standalone { max-width: 760px; }
+.standalone .button-link { display: inline-block; margin-top: 16px; }
+code { color: #5ee69b; }
+
+@media (max-width: 720px) {
+  main { width: min(100% - 28px, 1080px); padding: 44px 0; }
+  .grid { grid-template-columns: 1fr; margin-top: 40px; }
+  nav { flex-wrap: wrap; }
+}

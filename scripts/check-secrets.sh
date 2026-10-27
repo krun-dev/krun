@@ -37,7 +37,10 @@ if [[ -f .data/dev.yaml ]]; then
   password="$(printf '%s' "$db" | sed -n 's#.*://[^:]*:\([^@]*\)@.*#\1#p')"
   check_value "database password" "$password"
   minio="$(sed -n 's/^[[:space:]]*s3_endpoint:[[:space:]]*//p' .data/dev.yaml | head -1 | sed 's/^"//; s/"$//; s#^[a-z]*://##; s#/.*##; s#:.*##')"
-  check_value "minio host" "$minio"
+  case "$minio" in
+    ""|127.0.0.1|localhost|::1) ;;
+    *) check_value "minio host" "$minio" ;;
+  esac
 fi
 
 for file in "${files[@]}"; do

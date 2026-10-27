@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -63,6 +64,90 @@ func TestWorkerBuildPermissionScopeAndIdempotency(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+func TestWorkerPreviewLimitAndRevisionLifecycle(t *testing.T) {
+	s, store, base := workerTestServer(t)
+	s.Config.Workers.PreviewLimit = 1
+	if r := request(s, "POST", base+"/environments", "krun_cli_admin", `{"name":"second"}`); r.Code != 409 {
+		t.Fatalf("preview limit not enforced: %d %s", r.Code, r.Body.String())
+	}
+	if r := request(s, "DELETE", base+"/environments/fix-demo", "krun_cli_admin", ""); r.Code != 204 {
+		t.Fatalf("delete preview: %d %s", r.Code, r.Body.String())
+	}
+	if r := request(s, "POST", base+"/environments", "krun_cli_admin", `{"name":"second"}`); r.Code != 201 {
+		t.Fatalf("create replacement preview: %d %s", r.Code, r.Body.String())
+	}
+	if r := request(s, "POST", base+"/environments", "krun_cli_admin", `{"name":"third"}`); r.Code != 409 {
+		t.Fatalf("replacement exceeded preview limit: %d %s", r.Code, r.Body.String())
+	}
+	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
+		service := st.Workers.Services["svc-a"]
+		if service.PreviewRevision != 2 || previewCount(service.Environments) != 1 {
+			t.Fatalf("preview lifecycle state: %+v", service)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTerminalBuildRetentionDoesNotBlockNextBuild(t *testing.T) {
+	s, store, base := workerTestServer(t)
+	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
+		for i := 0; i < workerBuildRetainPerService; i++ {
+			id := fmt.Sprintf("old-%03d", i)
+			st.Workers.Builds[id] = WorkerBuild{ID: id, Organization: "org-a", Service: "svc-a", Environment: "production", State: "succeeded", Created: now()}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	payload := `{"environment":"production","entrypoint":"index.ts","files":{"index.ts":"export default {fetch(){return new Response('ok')}}"},"idempotency_key":"after-retention-cap"}`
+	if response := request(s, "POST", base+"/builds", "krun_cli_admin", payload); response.Code != 202 {
+		t.Fatalf("terminal build history permanently blocked a new build: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestWorkerOverviewAggregatesPollingState(t *testing.T) {
+	s, store, base := workerTestServer(t)
+	build := seedWorkerBuild(t, s, store, base)
+	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
+		release := WorkerRelease{ID: "rel-overview", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: build.Artifact, Pool: "default", Created: now()}
+		st.Workers.Releases[release.ID] = release
+		service := st.Workers.Services["svc-a"]
+		env := service.Environments["production"]
+		env.Release, env.Confirmed = release.ID, release.ID
+		service.Environments["production"] = env
+		st.Workers.Services[service.Service] = service
+		st.Workers.Histories["svc-a/production"] = []WorkerHistory{{Revision: 1, Release: release.ID, Operation: "op-overview", Kind: "publish", Time: now()}}
+		st.Workers.Operations["op-overview"] = WorkerOperation{ID: "op-overview", Service: "svc-a", Organization: "org-a", Environment: "production", State: "available", Release: release.ID, Created: now()}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	response := request(s, "GET", base+"/overview", "krun_cli_admin", "")
+	if response.Code != 200 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	var overview struct {
+		Builds       []WorkerBuild               `json:"builds"`
+		Environments []workerOverviewEnvironment `json:"environments"`
+		Operations   []WorkerOperation           `json:"operations"`
+		Releases     map[string]WorkerRelease    `json:"releases"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &overview); err != nil {
+		t.Fatal(err)
+	}
+	if len(overview.Builds) != 1 || len(overview.Environments) != 2 || len(overview.Operations) != 1 {
+		t.Fatalf("unexpected overview: %+v", overview)
+	}
+	if overview.Releases["rel-overview"].Artifact != build.Artifact {
+		t.Fatalf("history release missing from overview: %+v", overview.Releases)
+	}
+	if overview.Environments[0].Environment.Name != "production" || len(overview.Environments[0].History) != 1 || overview.Environments[0].CurrentRelease == nil {
+		t.Fatalf("production overview incomplete: %+v", overview.Environments[0])
+	}
 }
 func TestWorkerSourcesCannotEscapeOrOverridePlatformEntry(t *testing.T) {
 	cases := []struct {

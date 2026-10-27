@@ -9,8 +9,7 @@
     "check": "tsc -b",
     "test": "go test ./...",
     "test:permissions": "node --experimental-strip-types --test web/src/lib/permissions.test.mjs",
-    "test:i18n": "node --experimental-strip-types --test web/src/lib/i18n.test.mjs",
-    "dev:kind": "node scripts/kind-console.mjs"
+    "test:i18n": "node --experimental-strip-types --test web/src/lib/i18n.test.mjs"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

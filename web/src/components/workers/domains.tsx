@@ -23,6 +23,7 @@ export function ServiceDomains({
   base,
   domains,
   environments,
+  revision,
   active,
   reload,
   notify,
@@ -30,6 +31,7 @@ export function ServiceDomains({
   base: string;
   domains: WorkerDomain[];
   environments: Environment[];
+  revision: number;
   active: boolean;
   reload: () => void;
   notify: (s: string) => void;
@@ -47,13 +49,17 @@ export function ServiceDomains({
   async function persist(next: string[]) {
     setBusy(true);
     try {
-      await api<{ selected: string[] }>(base + "/domains", "PUT", {
+      await api<{ selected: string[]; revision: number }>(base + "/domains", "PUT", {
         domains: next,
+        expected_revision: revision,
       });
       reload();
       return true;
     } catch (e) {
       notify(errorMessage(e));
+      // A revision conflict means another console or replica won. Refresh the
+      // selected domains and token before the user retries.
+      reload();
       return false;
     } finally {
       setBusy(false);

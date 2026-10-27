@@ -29,7 +29,8 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/domains", protect(false, s.workerDomains))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/repository-providers", protect(false, s.workerRepositoryProviders))
 	m.HandleFunc("POST /api/v1/orgs/{org}/workers/repository/{provider}/connect", protect(true, s.workerRepositoryConnect))
-	m.HandleFunc("POST /api/v1/orgs/{org}/workers/repository/{provider}/disconnect", protect(true, s.workerRepositoryDisconnect))
+	m.HandleFunc("DELETE /api/v1/orgs/{org}/workers/repository/{provider}/disconnect", protect(true, s.workerRepositoryDisconnect))
+	m.HandleFunc("GET /api/v1/workers/repository/{provider}/callback", s.workerRepositoryCallback)
 	m.HandleFunc("POST /api/v1/workers/repository/{provider}/callback", s.workerRepositoryCallback)
 	m.HandleFunc("GET "+base+"/domains", protect(false, s.workerServiceDomains))
 	m.HandleFunc("PUT "+base+"/domains", protect(false, s.workerServiceDomainsUpdate))
@@ -41,6 +42,7 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET "+base+"/builds/{build}", protect(false, s.workerBuildGet))
 	m.HandleFunc("GET "+base+"/builds/{build}/logs", protect(false, s.workerBuildLogs))
 	m.HandleFunc("GET "+base+"/builds/{build}/source", protect(false, s.workerBuildSource))
+	m.HandleFunc("GET "+base+"/overview", protect(false, s.workerOverview))
 	m.HandleFunc("GET "+base+"/environments", protect(false, s.workerEnvironments))
 	m.HandleFunc("POST "+base+"/environments", protect(false, s.workerEnvironmentCreate))
 	m.HandleFunc("DELETE "+base+"/environments/{environment}", protect(false, s.workerEnvironmentDelete))
@@ -272,12 +274,12 @@ func (s *Server) workerBuildCreate(st *State, p Principal, r *http.Request) (any
 	}
 	count := 0
 	for _, b := range st.Workers.Builds {
-		if b.Service == t.ID {
+		if b.Service == t.ID && b.State != "succeeded" && b.State != "failed" {
 			count++
 		}
 	}
-	if count >= 100 {
-		return nil, 0, problem(409, "BUILD_LIMIT", "MVP retains at most 100 builds per service")
+	if count >= workerActiveBuildLimit {
+		return nil, 0, problem(409, "BUILD_LIMIT", "At most 100 builds may be active per service")
 	}
 	raw, _ := json.Marshal(in.Files)
 	id = randomID("bld")
@@ -351,14 +353,27 @@ func (s *Server) workerBuildLogs(st *State, p Principal, r *http.Request) (any, 
 	if e != nil {
 		return nil, 0, e
 	}
-	return map[string]any{"build_id": b.ID, "state": b.State, "log": st.Workers.BuildPrivate[b.ID].Log}, 200, nil
+	private, ok, e := s.Store.workerBuildPrivate(r.Context(), b.ID)
+	if e != nil {
+		return nil, 0, e
+	}
+	if !ok {
+		private = WorkerBuildPrivate{}
+	}
+	return map[string]any{"build_id": b.ID, "state": b.State, "log": private.Log}, 200, nil
 }
 func (s *Server) workerBuildSource(st *State, p Principal, r *http.Request) (any, int, error) {
 	b, e := s.workerGetBuild(st, p, r, "source.read")
 	if e != nil {
 		return nil, 0, e
 	}
-	private := st.Workers.BuildPrivate[b.ID]
+	private, ok, e := s.Store.workerBuildPrivate(r.Context(), b.ID)
+	if e != nil {
+		return nil, 0, e
+	}
+	if !ok {
+		private = WorkerBuildPrivate{}
+	}
 	if private.SourceKey != "" {
 		url, e := s.workers.sourceBundleURL(r.Context(), private.SourceKey)
 		if e != nil {
@@ -404,6 +419,105 @@ func (s *Server) workerEnvironments(st *State, p Principal, r *http.Request) (an
 	return items(out)
 }
 
+type workerOverviewEnvironment struct {
+	Environment      WorkerEnvironment `json:"environment"`
+	History          []WorkerHistory   `json:"history"`
+	CurrentRelease   *WorkerRelease    `json:"current_release,omitempty"`
+	ConfirmedRelease *WorkerRelease    `json:"confirmed_release,omitempty"`
+}
+
+// workerOverview is the console polling read model. It deliberately contains
+// only public Workers fields and applies the same per-environment permissions
+// as the individual collection endpoints.
+func (s *Server) workerOverview(st *State, p Principal, r *http.Request) (any, int, error) {
+	t, err := s.workerCollectionTarget(st, r, "service.read", p)
+	if err != nil {
+		return nil, 0, err
+	}
+	ws := s.workerServiceView(st, t)
+	names := make([]string, 0, len(ws.Environments))
+	for name := range ws.Environments {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if names[i] == workerBaseline {
+			return true
+		}
+		if names[j] == workerBaseline {
+			return false
+		}
+		return names[i] < names[j]
+	})
+
+	environments := []workerOverviewEnvironment{}
+	versionVisible := map[string]bool{}
+	releaseIDs := map[string]bool{}
+	for _, name := range names {
+		target := Target{Kind: "service", ID: t.ID, Organization: t.Organization, Environment: name}
+		read, authErr := Authorize(st, p, "service.read", target)
+		if authErr != nil {
+			return nil, 0, authErr
+		}
+		if !read.Allowed {
+			continue
+		}
+		env := ws.Environments[name]
+		s.syncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains)
+		entry := workerOverviewEnvironment{Environment: env, History: []WorkerHistory{}}
+		versions, authErr := Authorize(st, p, "service.version.read", target)
+		if authErr != nil {
+			return nil, 0, authErr
+		}
+		if versions.Allowed {
+			versionVisible[name] = true
+			entry.History = append(entry.History, st.Workers.Histories[t.ID+"/"+name]...)
+			for _, history := range entry.History {
+				releaseIDs[history.Release] = true
+			}
+			if release, ok := st.Workers.Releases[env.Release]; ok {
+				value := release
+				entry.CurrentRelease = &value
+				releaseIDs[release.ID] = true
+			}
+			if release, ok := st.Workers.Releases[env.Confirmed]; ok {
+				value := release
+				entry.ConfirmedRelease = &value
+				releaseIDs[release.ID] = true
+			}
+		}
+		environments = append(environments, entry)
+	}
+
+	builds := []WorkerBuild{}
+	for _, build := range st.Workers.Builds {
+		if build.Service == t.ID && build.Organization == t.Organization && versionVisible[build.Environment] {
+			builds = append(builds, build)
+		}
+	}
+	sort.Slice(builds, func(i, j int) bool { return builds[i].Created.After(builds[j].Created) })
+
+	operations := []WorkerOperation{}
+	for _, operation := range st.Workers.Operations {
+		if operation.Service == t.ID && operation.Organization == t.Organization && versionVisible[operation.Environment] {
+			operations = append(operations, operation)
+		}
+	}
+	sort.Slice(operations, func(i, j int) bool { return operations[i].Created.After(operations[j].Created) })
+	if len(operations) > 100 {
+		operations = operations[:100]
+	}
+	releases := map[string]WorkerRelease{}
+	for id := range releaseIDs {
+		if release, ok := st.Workers.Releases[id]; ok && release.Service == t.ID && release.Organization == t.Organization && versionVisible[release.Environment] {
+			releases[id] = release
+		}
+	}
+	return map[string]any{
+		"builds": builds, "environments": environments, "operations": operations, "releases": releases,
+		"domains_revision": ws.DomainsRevision,
+	}, 200, nil
+}
+
 // workerServiceDomains returns the service-level domain selection together with
 // the catalog, so the console can render the routing page in one round trip.
 func (s *Server) workerServiceDomains(st *State, p Principal, r *http.Request) (any, int, error) {
@@ -412,7 +526,9 @@ func (s *Server) workerServiceDomains(st *State, p Principal, r *http.Request) (
 		return nil, 0, e
 	}
 	ws := s.workerServiceView(st, t)
-	return map[string]any{"selected": s.syncServiceDomains(ws), "catalog": s.domainCatalog()}, 200, nil
+	return map[string]any{
+		"selected": s.syncServiceDomains(ws), "catalog": s.domainCatalog(), "revision": ws.DomainsRevision,
+	}, 200, nil
 }
 
 // workerServiceDomainsUpdate replaces the service-level domain selection. Every
@@ -423,8 +539,8 @@ func (s *Server) workerServiceDomainsUpdate(st *State, p Principal, r *http.Requ
 		return nil, 0, e
 	}
 	var in struct {
-		Domains []string `json:"domains"`
-		Key     string   `json:"idempotency_key,omitempty"`
+		Domains          []string `json:"domains"`
+		ExpectedRevision *int     `json:"expected_revision"`
 	}
 	if e = body(r, &in); e != nil {
 		return nil, 0, e
@@ -443,11 +559,18 @@ func (s *Server) workerServiceDomainsUpdate(st *State, p Principal, r *http.Requ
 		seen[id] = true
 	}
 	ws := s.workerService(st, t)
+	if in.ExpectedRevision == nil {
+		return nil, 0, problem(422, "DOMAINS_INVALID", "expected_revision is required")
+	}
+	if *in.ExpectedRevision != ws.DomainsRevision {
+		return nil, 0, problem(409, "REVISION_CONFLICT", "Domain configuration changed")
+	}
 	ws.Domains = append([]string(nil), in.Domains...)
+	ws.DomainsRevision++
 	selected := s.syncServiceHosts(&ws)
 	st.Workers.Services[t.ID] = ws
 	s.audit(st, p, r, "workers.domains.update", t.ID, true)
-	return map[string]any{"selected": selected, "catalog": s.domainCatalog()}, 200, nil
+	return map[string]any{"selected": selected, "catalog": s.domainCatalog(), "revision": ws.DomainsRevision}, 200, nil
 }
 func workerBusy(st *State, service, env string) bool {
 	for _, op := range st.Workers.Operations {
@@ -495,6 +618,7 @@ func (s *Server) workerEnvironmentCreate(st *State, p Principal, r *http.Request
 	env := WorkerEnvironment{Name: in.Name, Enabled: true, ConfigRevision: 1, Variables: map[string]string{}}
 	s.syncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains)
 	ws.Environments[in.Name] = env
+	ws.PreviewRevision++
 	st.Workers.Services[t.ID] = ws
 	s.audit(st, p, r, "workers.environment.create", t.ID+"/"+in.Name, true)
 	return env, 201, nil
@@ -516,6 +640,7 @@ func (s *Server) workerEnvironmentDelete(st *State, p Principal, r *http.Request
 		return nil, 0, problem(409, "RELEASE_BUSY", "Wait for the active release operation")
 	}
 	delete(ws.Environments, env)
+	ws.PreviewRevision++
 	st.Workers.Services[t.ID] = ws
 	s.audit(st, p, r, "workers.environment.delete", t.ID+"/"+env, true)
 	return nil, 204, nil

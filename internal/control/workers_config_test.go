@@ -142,6 +142,97 @@ func TestConfigRevisionStoreAndAcks(t *testing.T) {
 	}
 }
 
+func TestConfigRevisionCASRejectsStalePublisher(t *testing.T) {
+	store := memoryStore()
+	ctx := context.Background()
+	revision, _, appended, err := store.AppendConfigRevisionCAS(ctx, 0, "first", []byte(`{"routes":[]}`), []byte(`[]`), 10)
+	if err != nil || !appended || revision != 1 {
+		t.Fatalf("first CAS: revision=%d appended=%v err=%v", revision, appended, err)
+	}
+	revision, _, appended, err = store.AppendConfigRevisionCAS(ctx, 0, "stale", []byte(`{"routes":[]}`), []byte(`[]`), 10)
+	if err != nil || appended || revision != 1 {
+		t.Fatalf("stale CAS: revision=%d appended=%v err=%v", revision, appended, err)
+	}
+	items, _, err := store.ConfigRevisionsSince(ctx, 0, 10)
+	if err != nil || len(items) != 1 || items[0].Digest != "first" {
+		t.Fatalf("stale publisher created a duplicate revision: %+v err=%v", items, err)
+	}
+}
+
+func TestLoadConfigFailsClosedOnDigestMismatch(t *testing.T) {
+	s, store := testServer(t)
+	projection := workerConfigProjection{
+		Routes:   []workerConfigRoute{{Host: "stale.workers.test", Path: "/", Enabled: true}},
+		Releases: map[string]WorkerRelease{},
+	}
+	_, payload, err := workerConfigDigest(projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revision, _, appended, err := store.AppendConfigRevisionCAS(context.Background(), 0, "corrupt-digest", payload, []byte(`[]`), 10); err != nil || !appended || revision != 1 {
+		t.Fatalf("seed corrupt head: revision=%d appended=%v err=%v", revision, appended, err)
+	}
+	controller := &workersController{server: s, config: s.Config.Workers}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := controller.loadConfigLocked(context.Background()); err == nil {
+			t.Fatalf("attempt %d accepted a normalized head whose digest does not match", attempt+1)
+		}
+		if controller.configLoaded || controller.configLast != nil {
+			t.Fatalf("attempt %d left corrupt head loaded: loaded=%v projection=%+v", attempt+1, controller.configLoaded, controller.configLast)
+		}
+	}
+}
+
+func TestPublishConfigCASDoesNotReturnStaleWinner(t *testing.T) {
+	s, store := testServer(t)
+	s.Config.Workers = testWorkersConfig()
+	st, _, _ := fixture()
+	service := WorkerService{Service: "svc-a", Organization: "org-a", Domains: []string{"internal"}, Environments: map[string]WorkerEnvironment{
+		"production": {Name: "production", Enabled: true, Release: "rel-fresh"},
+	}}
+	st.Workers.Services[service.Service] = service
+	st.Workers.Releases["rel-fresh"] = WorkerRelease{ID: "rel-fresh", Service: service.Service, Organization: service.Organization, Environment: "production", Artifact: "art-fresh", Pool: "default"}
+	if err := store.Update(context.Background(), PartitionAll, func(current *State) error { *current = *st; return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate another replica winning revision 1 from a projection it read
+	// before rel-fresh committed.
+	stale := workerConfigProjection{Routes: []workerConfigRoute{}, Releases: map[string]WorkerRelease{}}
+	staleDigest, stalePayload, err := workerConfigDigest(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleOps, _ := json.Marshal(diffWorkerConfig(nil, stale))
+	if revision, _, appended, err := store.AppendConfigRevisionCAS(context.Background(), 0, staleDigest, stalePayload, staleOps, workerConfigOpsRetain); err != nil || !appended || revision != 1 {
+		t.Fatalf("seed stale winner: revision=%d appended=%v err=%v", revision, appended, err)
+	}
+
+	controller := &workersController{server: s, config: s.Config.Workers, configLoaded: true, configRevision: 0, assetCache: map[string]workerCachedAssets{}}
+	controller.putObject = func(_ context.Context, _, _ string, reader io.Reader, _ int64, _ minio.PutObjectOptions) (minio.UploadInfo, error) {
+		_, err := io.ReadAll(reader)
+		return minio.UploadInfo{}, err
+	}
+	revision, err := controller.publishConfig(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revision != 2 {
+		t.Fatalf("publish returned stale revision %d, want fresh revision 2", revision)
+	}
+	latest, ok, err := store.LatestConfigRevision(context.Background())
+	if err != nil || !ok || latest.Revision != revision {
+		t.Fatalf("latest=%+v ok=%v err=%v", latest, ok, err)
+	}
+	var projection workerConfigProjection
+	if err := json.Unmarshal(latest.Payload, &projection); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := projection.Releases["rel-fresh"]; !ok {
+		t.Fatalf("returned revision does not contain fresh release: %+v", projection)
+	}
+}
+
 func TestPublishConfigCreatesRevisionsAndObjects(t *testing.T) {
 	s, store := testServer(t)
 	s.Config.Workers = testWorkersConfig()

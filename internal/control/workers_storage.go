@@ -15,6 +15,7 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ const workerAssetsTotalMax = 20 << 20
 const workerAssetsFilesMax = 500
 const workerSourceMax = 32 << 20
 const workerProfile = "esbuild-esm-v1"
+const workerUploadRetain = 24 * time.Hour
 
 type workerManifest struct {
 	Schema     int                    `json:"schema_version"`
@@ -340,6 +342,16 @@ func (w *workersController) builderS3() *minio.Client {
 	return w.s3Builder
 }
 
+func (w *workersController) runtimeS3() *minio.Client {
+	// A few narrow controller tests construct the seam directly. Production
+	// always wires s3Runtime in newWorkersController; the fallback also keeps
+	// older embedded callers source-compatible.
+	if w.s3Runtime != nil {
+		return w.s3Runtime
+	}
+	return w.s3Builder
+}
+
 func (w *workersController) uploadURL(ctx context.Context, b WorkerBuild) (string, error) {
 	// Sign with the builder-visible endpoint so in-cluster Pods can reach (and verify) the URL.
 	u, e := w.builderS3().PresignedPutObject(ctx, w.config.S3Bucket, workerUploadKey(b), 15*time.Minute)
@@ -349,13 +361,15 @@ func (w *workersController) uploadURL(ctx context.Context, b WorkerBuild) (strin
 	return u.String(), nil
 }
 
-// Runtimes live in the same network position as builders, so artifact GET URLs
-// are signed against the same in-cluster endpoint. Signing is offline.
+// Runtime artifact URLs use the runtime's own network view. In a full
+// in-cluster deployment this normally equals the builder endpoint; local-first
+// keeps the builder local while the runtime reaches MinIO through a selectorless
+// Service, so the two endpoints must be independently configurable.
 func (w *workersController) downloadURL(ctx context.Context, a WorkerArtifact) (string, error) {
 	if a.StorageLocation != w.config.S3LocationID || a.Bucket != w.config.S3Bucket {
 		return "", errors.New("artifact storage location mismatch")
 	}
-	u, e := w.s3Builder.PresignedGetObject(ctx, w.config.S3Bucket, a.ObjectKey, 15*time.Minute, nil)
+	u, e := w.runtimeS3().PresignedGetObject(ctx, w.config.S3Bucket, a.ObjectKey, 15*time.Minute, nil)
 	if e != nil {
 		return "", e
 	}
@@ -378,6 +392,9 @@ func validWorkerSourceUpload(organization, key string) bool {
 func (w *workersController) sourceUploadURL(ctx context.Context, organization string) (string, string, error) {
 	id := randomID("src")
 	key := workerSourceUploadKey(organization, id)
+	if e := w.server.Store.issueWorkerSourceUpload(ctx, key, organization); e != nil {
+		return "", "", e
+	}
 	u, e := w.s3.PresignedPutObject(ctx, w.config.S3Bucket, key, 15*time.Minute)
 	if e != nil {
 		return "", "", e
@@ -388,6 +405,13 @@ func (w *workersController) sourceUploadURL(ctx context.Context, organization st
 // Builder and runtime live inside the cluster, so read URLs are signed against
 // the in-cluster endpoint. Signing is offline.
 func (w *workersController) sourceBundleURL(ctx context.Context, key string) (string, error) {
+	info, e := w.s3.StatObject(ctx, w.config.S3Bucket, key, minio.StatObjectOptions{})
+	if e != nil {
+		return "", e
+	}
+	if info.Size <= 0 || info.Size > workerSourceMax {
+		return "", errors.New("source bundle exceeds size limit")
+	}
 	u, e := w.builderS3().PresignedGetObject(ctx, w.config.S3Bucket, key, 15*time.Minute, nil)
 	if e != nil {
 		return "", e
@@ -482,6 +506,9 @@ func (w *workersController) finalizeBuild(ctx context.Context, b WorkerBuild) (W
 		return WorkerArtifact{}, e
 	}
 	a := WorkerArtifact{ID: "art_" + digest(b.Organization+"/"+code.ArchiveDigest), Organization: b.Organization, State: "finalized", StorageLocation: w.config.S3LocationID, Bucket: w.config.S3Bucket, ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, Size: len(raw), ObjectKey: "v1/" + b.Organization + "/sha256/" + code.ArchiveDigest + "/bundle.tar.gz", Created: now()}
+	if e := w.server.Store.reserveBuildArtifact(ctx, b.ID, w.replica, a); e != nil {
+		return a, e
+	}
 	if e := w.putImmutable(ctx, a.ObjectKey, raw); e != nil {
 		return a, e
 	}
@@ -512,6 +539,140 @@ func (w *workersController) artifactCode(ctx context.Context, a WorkerArtifact) 
 		return code, fmt.Errorf("artifact metadata mismatch")
 	}
 	return code, nil
+}
+
+// collectWorkerObjects bounds every object family produced by builds and edge
+// publication. Metadata for artifacts is removed only after S3 cleanup
+// succeeds, retaining enough information to retry after an outage.
+func (w *workersController) collectWorkerObjects(ctx context.Context) error {
+	artifacts, err := w.server.Store.garbageArtifacts(ctx, now().Add(-workerArtifactRetain), 32)
+	if err != nil {
+		return err
+	}
+	var failures []error
+	for _, artifact := range artifacts {
+		if artifact.StorageLocation != w.config.S3LocationID || artifact.Bucket != w.config.S3Bucket {
+			blocked, blockErr := w.server.Store.blockGarbageArtifact(ctx, artifact.ID, w.replica, artifact.UseRevision)
+			if blockErr != nil {
+				failures = append(failures, blockErr)
+			} else if blocked {
+				failures = append(failures, fmt.Errorf("artifact %s cleanup blocked: storage location %q bucket %q is not managed by this controller", artifact.ID, artifact.StorageLocation, artifact.Bucket))
+			}
+			continue
+		}
+		claimed, err := w.server.Store.claimGarbageArtifact(ctx, artifact.ID, w.replica, artifact.UseRevision)
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		if !claimed {
+			continue
+		}
+		if err := w.s3.RemoveObject(ctx, artifact.Bucket, artifact.ObjectKey, minio.RemoveObjectOptions{}); err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		// Assets are organized by service while artifacts are content-addressed
+		// and may have been used by more than one service. Once no release
+		// references the artifact, remove every matching digest in the org.
+		assetFailed := false
+		for _, prefix := range []string{"pub/" + artifact.Organization + "/", "int/" + artifact.Organization + "/"} {
+			if err := w.removeWorkerObjects(ctx, prefix, func(key string, _ time.Time) bool {
+				return strings.Contains(key, "/"+artifact.ArchiveDigest+"/")
+			}); err != nil {
+				failures = append(failures, err)
+				assetFailed = true
+			}
+		}
+		if assetFailed {
+			continue
+		}
+		if err := w.server.Store.deleteGarbageArtifact(ctx, artifact.ID, w.replica); err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		w.assetMu.Lock()
+		delete(w.assetCache, artifact.ID)
+		w.assetMu.Unlock()
+	}
+	// Source uploads have their own reservation/lease metadata. The build CAS
+	// and this GC claim share use_revision, so a stale listing can never delete
+	// a bundle that a build just accepted.
+	sources, sourceErr := w.server.Store.garbageWorkerSourceUploads(ctx, now().Add(-workerUploadRetain), 64)
+	if sourceErr != nil {
+		failures = append(failures, sourceErr)
+	} else {
+		for _, source := range sources {
+			claimed, claimErr := w.server.Store.claimGarbageWorkerSourceUpload(ctx, source.Key, w.replica, source.UseRevision)
+			if claimErr != nil {
+				failures = append(failures, claimErr)
+				continue
+			}
+			if !claimed {
+				continue
+			}
+			if removeErr := w.s3.RemoveObject(ctx, w.config.S3Bucket, source.Key, minio.RemoveObjectOptions{}); removeErr != nil {
+				failures = append(failures, removeErr)
+				continue
+			}
+			if deleteErr := w.server.Store.deleteGarbageWorkerSourceUpload(ctx, source.Key, w.replica); deleteErr != nil {
+				failures = append(failures, deleteErr)
+			}
+		}
+	}
+	// Output bundles are never build inputs and may be removed by age. Unknown
+	// legacy source objects use a longer grace period and are checked against
+	// the metadata table before deletion; all new client sources are registered
+	// before their URL is issued.
+	if err := w.removeWorkerObjects(ctx, "uploads/", func(key string, modified time.Time) bool {
+		if modified.IsZero() {
+			return false
+		}
+		if !strings.Contains(key, "/src/") {
+			return modified.Before(now().Add(-workerUploadRetain))
+		}
+		if !modified.Before(now().Add(-7 * 24 * time.Hour)) {
+			return false
+		}
+		known, knownErr := w.server.Store.workerSourceUploadKnown(ctx, key)
+		if knownErr != nil {
+			failures = append(failures, knownErr)
+			return false
+		}
+		return !known
+	}); err != nil {
+		failures = append(failures, err)
+	}
+	// PostgreSQL retains the incremental window; mirror that floor in object
+	// storage so immutable snapshots do not accumulate forever.
+	_, floor, err := w.server.Store.ConfigState(ctx)
+	if err != nil {
+		failures = append(failures, err)
+	} else if floor > 0 {
+		if err := w.removeWorkerObjects(ctx, workerConfigSnapshotDir, func(key string, _ time.Time) bool {
+			name := strings.TrimSuffix(strings.TrimPrefix(key, workerConfigSnapshotDir), ".json.gz")
+			revision, parseErr := strconv.ParseInt(name, 10, 64)
+			return parseErr == nil && revision < floor
+		}); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func (w *workersController) removeWorkerObjects(ctx context.Context, prefix string, remove func(string, time.Time) bool) error {
+	for object := range w.s3.ListObjects(ctx, w.config.S3Bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+		if object.Err != nil {
+			return object.Err
+		}
+		if !remove(object.Key, object.LastModified) {
+			continue
+		}
+		if err := w.s3.RemoveObject(ctx, w.config.S3Bucket, object.Key, minio.RemoveObjectOptions{}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 func safeWorkerLog(text string) string {
 	if len(text) > 32768 {

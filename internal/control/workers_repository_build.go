@@ -13,22 +13,20 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 	if err != nil {
 		return build, private, fmt.Errorf("Repository provider or repository is no longer enabled for this build")
 	}
-	if err := w.server.Store.Update(ctx, PartitionWorkers, func(st *State) error {
-		current := st.Workers.Builds[build.ID]
-		current.State = "fetching"
-		st.Workers.Builds[build.ID] = current
-		return nil
-	}); err != nil {
+	owned, err := w.server.Store.setClaimedBuildState(ctx, build.ID, w.replica, "building", "fetching")
+	if err != nil {
 		return build, private, err
 	}
+	if !owned {
+		return build, private, errBuildClaimLost
+	}
+	build.State = "fetching"
 	// Resolve the fetch credential once: the connecting user's OAuth grant,
 	// falling back to the provider's shared PAT.
-	var fetchToken string
-	_ = w.server.Store.Update(ctx, PartitionWorkers, func(st *State) error {
-		actor := st.Workers.OperationPrivate[build.ID].Actor.User
-		fetchToken = w.server.repositoryCredential(st, provider, actor)
-		return nil
-	})
+	fetchToken, err := w.server.repositoryCredential(ctx, provider, private.Actor.User)
+	if err != nil {
+		return build, private, err
+	}
 	if source.Commit == "" {
 		commit, err := w.server.resolveRepositoryCommit(ctx, provider, source.WorkerRepositorySource, fetchToken)
 		if err != nil {
@@ -37,13 +35,12 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 		source.Commit = commit
 		build.Repository = &source
 		// Pin the commit before downloading; retries must not follow a moving branch.
-		if err := w.server.Store.Update(ctx, PartitionWorkers, func(st *State) error {
-			current := st.Workers.Builds[build.ID]
-			current.Repository = &source
-			st.Workers.Builds[build.ID] = current
-			return nil
-		}); err != nil {
+		owned, err := w.server.Store.setClaimedBuildRepository(ctx, build.ID, w.replica, source)
+		if err != nil {
 			return build, private, err
+		}
+		if !owned {
+			return build, private, errBuildClaimLost
 		}
 	}
 	files, archiveRaw, err := w.server.fetchRepositorySource(ctx, provider, source, fetchToken)
@@ -121,10 +118,6 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 	if denied != nil {
 		return build, private, fmt.Errorf("Build permission revoked")
 	}
-	err = w.server.Store.Update(ctx, PartitionWorkers, func(st *State) error {
-		st.Workers.Builds[build.ID] = build
-		st.Workers.BuildPrivate[build.ID] = private
-		return nil
-	})
+	err = w.server.Store.storeClaimedRepositoryBuild(ctx, build.ID, w.replica, build, private)
 	return build, private, err
 }

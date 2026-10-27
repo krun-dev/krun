@@ -8,11 +8,11 @@ const config :W.Config = (
    (name="POD_UID",text=embed "/pod/uid"),
    (name="RUNTIME_TOKEN",text=embed "/secrets/KRUN_RUNTIME_TOKEN"),
    (name="MANAGEMENT_TOKEN",text=embed "/secrets/KRUN_MANAGEMENT_TOKEN"),
-   (name="CONFIG_BASE",text="http://minio.workers-mvp.svc.cluster.local:9000/krun-artifacts/config"),
+   (name="CONFIG_BASE",text="http://__MINIO_HOST__:__MINIO_PORT__/krun-artifacts/config"),
    (name="ASSETS_CACHE_MAX",text="67108864")
   ],globalOutbound="storage")),
   (name="platform",external=(address="__CONTROL_HOST__:9001",http=())),
-  (name="storage",network=(allow=["__MINIO_SERVICE_CIDR__","__MINIO_POD_CIDR__","__CONTROL_HOST__/32"])),
+  (name="storage",network=(allow=["__MINIO_HOST__/32","__CONTROL_HOST__/32"])),
   (name="deny",network=(allow=[]))
  ], sockets=[
   (name="private",address="*:8081",http=(),service=(name="entry",entrypoint="Private")),

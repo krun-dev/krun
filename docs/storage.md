@@ -86,7 +86,9 @@ UPDATE krun_worker_environments SET release_id=$4, release_revision=release_revi
 2. 成功后把旧表改名为 `krun_control_state_legacy`（保留以便回滚与对账），不会再次读取。
 3. 导入失败则整体回滚并**拒绝启动**，旧数据不受影响。
 
-回滚方式：回退二进制并把 legacy 表改回原名。没有双写。
+回滚方式：回退二进制并把 legacy 表改回原名。没有双写。若回滚版本产生了新写入，
+再次升级会检测到 `legacy_imported=1` 与固定名 legacy 表同时存在并拒绝启动；必须先
+人工对账/迁移这些回滚期写入，绝不会静默删除后继续启动。
 
 ## 已知限制
 

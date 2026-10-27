@@ -51,7 +51,9 @@ func TestSeparatedFrontendProxyLogin(t *testing.T) {
 	s.routes()
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{Jar: jar, Timeout: 5 * time.Second}
-	response, err := client.Get(frontend.URL + "/api/auth/csrf")
+	csrfRequest, _ := http.NewRequest(http.MethodPost, frontend.URL+"/api/auth/csrf", nil)
+	csrfRequest.Header.Set("Origin", frontend.URL)
+	response, err := client.Do(csrfRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +98,9 @@ func TestSeparatedFrontendProxyLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Fetch session CSRF via the same origin and log out through the proxy.
-	response, err = client.Get(frontend.URL + "/api/auth/csrf")
+	csrfRequest, _ = http.NewRequest(http.MethodPost, frontend.URL+"/api/auth/csrf", nil)
+	csrfRequest.Header.Set("Origin", frontend.URL)
+	response, err = client.Do(csrfRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +157,7 @@ func TestDevelopmentConsoleUsesPublicOrigin(t *testing.T) {
 		}
 	}
 	// Redirecting the console must not relax origin checks on login writes.
-	csrf := browserRequest(s, http.MethodGet, "/api/auth/csrf", nil, nil)
+	csrf := browserRequest(s, http.MethodPost, "/api/auth/csrf", nil, nil)
 	var token struct {
 		Value string `json:"csrf_token"`
 	}
@@ -185,5 +189,29 @@ func TestDevelopmentConsoleUsesPublicOrigin(t *testing.T) {
 	s.routes()
 	if w := request(s, http.MethodGet, "http://127.0.0.1:8080/", "", ""); w.Code != http.StatusOK {
 		t.Fatalf("production console routing changed: %d", w.Code)
+	}
+}
+
+func TestStaticBuildRootServesOnlyConsoleArtifact(t *testing.T) {
+	s, _ := testServer(t)
+	root := t.TempDir()
+	console := filepath.Join(root, "console")
+	if err := os.MkdirAll(filepath.Join(console, "assets"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(console, "index.html"), []byte("static console"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "server-secret"), []byte("must not be served"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.Config.StaticDir = root
+	s.Config.Development = false
+	s.routes()
+	if w := request(s, http.MethodGet, "/", "", ""); w.Code != http.StatusOK || w.Body.String() != "static console" {
+		t.Fatalf("console artifact was not served: %d %q", w.Code, w.Body.String())
+	}
+	if w := request(s, http.MethodGet, "/server-secret", "", ""); w.Code != http.StatusNotFound || strings.Contains(w.Body.String(), "must not be served") {
+		t.Fatalf("file outside dist/console became public: %d %q", w.Code, w.Body.String())
 	}
 }

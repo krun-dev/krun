@@ -1,83 +1,79 @@
-# 前后端分离部署
+# 部署
 
-前端是 Vite 静态构建，后端是独立 Go 服务，可以部署在不同机器或容器。浏览器通过一个公开 origin 访问前端：`/console/` 由静态服务器提供，`/auth/` 和 `/api/` 代理到 Go。前端不需要 Node.js 运行时。
+生产控制台是纯静态站点：`npm run build` 只生成 `dist/console/index.html` 和
+`dist/console/assets/`。把 **`dist/console/` 的内容** 上传到 OSS bucket 根目录；生产
+环境不运行 Node，也不要把仓库、`dist/` 的其他内容或配置文件一起上传。
 
-Workers 的构建与发布为后端可选能力，见 [接口与流程](workers-backend.md) 和 [kind 部署](../deploy/workers-kind/README.md)。该实验部署仅运行后端，不包含控制台前端。
+浏览器只访问一个公开 origin。这个 origin 前的 CDN / 反向代理必须实现且只实现：
 
-`static_dir` 只控制 Go 是否托管静态文件：
-
-| 配置 | 后端行为 |
+| 外部路径 | 上游 |
 | --- | --- |
-| `static_dir: dist` | 合并部署，Go 同时提供 dist/console/ 与 API |
-| `static_dir: ""` 或省略字段 | 分离部署，Go 只提供认证、API 与 healthz；不读取或暴露静态文件 |
+| `/api/*` | Go 控制面，保留原始路径 |
+| `/`、`/assets/*` | OSS 静态 bucket |
+| 其他路径 | 404 |
 
-## 后端
+页面状态保存在查询参数中，因此不需要把未知路径重写到 `index.html`。OSS 的 default
+document 设为 `index.html` 即可。只有 bucket 域名、没有同域 `/api/*` 转发能力的
+静态托管不能运行本控制台。
 
-从 [统一配置示例](../config/example.yaml) 复制自己的配置，填写数据库与需要的登录来源。分离部署时调整：
+## 后端配置
 
 ```yaml
 listen: 0.0.0.0:8080
 public_url: https://console.example.com
 development: false
 static_dir: ""
+trusted_proxy_cidrs:
+  - 10.20.0.0/16 # 只填写真实 CDN / 反向代理的源网段
+db: ${KRUN_DATABASE_URL}
 ```
 
-`public_url` 填浏览器使用的前端 origin。OAuth 回调和 CLI 浏览器确认链接会使用这个地址；不填后端内网地址。后端不根据 Host / X-Forwarded-* 推导公开地址。
+`public_url` 必须是浏览器实际使用的 HTTPS origin。OAuth 回调地址是
+`https://console.example.com/api/auth/<provider-id>/callback`，CLI 使用
+`krun login --server https://console.example.com`。后端不会从 Host 或
+`X-Forwarded-*` 猜测公开地址。
 
-```sh
-go build -o bin/krun-server ./cmd/krun-server
-./bin/krun-server serve --config config/production.yaml
-```
+`trusted_proxy_cidrs` 只决定哪些直接上游有权提供 `X-Forwarded-For`；未列出的来源
+即使伪造该头也不会改变认证限流身份。生产应在防火墙层同时限制后端只能由这些上游
+访问。
 
-后端机器只需要 Go 二进制、YAML 配置和 PostgreSQL 连接，不需要复制 dist。监控直接访问后端 `/healthz`。
+浏览器认证依赖同源 Cookie（Secure、HttpOnly、SameSite=Lax），后端不提供 CORS。
+不要把前端改成请求另一个域名，也不要在前端注入后端地址或凭据。
 
-## 前端
+## 路由示例
 
-```sh
+仓库中的 [`deploy/production/nginx.conf.example`](../deploy/production/nginx.conf.example)
+是同一契约的 Nginx 模板；替换证书路径、域名、上游和静态根目录后再执行 `nginx -t`。
+使用云 CDN 时配置等价的两个 origin behavior：优先匹配
+`/api/*` 到 Go，其余请求到 OSS；OSS 对不存在的对象返回 404。
+
+代理必须透传 Host、Cookie、Authorization、Origin、X-CSRF-Token 和响应
+Set-Cookie；`/api/*` 不得缓存。每一层代理都应把自己的直接下游地址追加到
+`X-Forwarded-For`；最外层 CDN 应清洗公网传入的同名头。Go 会从右向左剥离
+`trusted_proxy_cidrs`，并采用遇到的第一个不可信地址作为客户端地址。
+
+`index.html` 必须 `no-store`（或至少每次重新验证），带内容哈希的 `/assets/*` 才能
+长期 immutable 缓存。静态入口还应下发 CSP、`nosniff`、点击劫持和 Referrer-Policy
+等浏览器安全头；Nginx 模板给出了与当前纯静态前端兼容的基线。
+
+健康检查访问 `/api/healthz`。它执行轻量数据库连通性检查，不加载完整 IAM 或
+Workers 状态。启用 `workers:` 时必须配置 `internal_listen`，并通过内部 Service 与
+NetworkPolicy 仅暴露给 runtime；该端口承载配置流、制品下载和 ACK，不得接入公网
+网关。任一监听器绑定失败都会让进程退出，不会留下半健康实例。
+
+## 本地
+
+日常开发遵循 local-first 拓扑，详见 [local-dev.md](local-dev.md)。Vite 只在本机把
+`/api/*` 代理到 Go。也可以执行 `npm run build` 后让 Go 用 `static_dir: dist` 直接
+托管 `dist/console/`，访问 `http://127.0.0.1:8080/`。
+
+## 发布门禁
+
+```bash
 npm ci
 npm run build
+make check-secrets check-static-build
 ```
 
-把生成的整个 dist 目录复制到前端静态服务器，例如 `/srv/krun/dist`。构建产物为 dist/console/index.html 和 dist/console/assets/，访问路径保持 `/console/`。
-
-以下 Nginx 配置假设前端入口的 HTTPS 已由 Ingress / 负载均衡终止，`krun-backend:8080` 可从 Nginx 内网访问；替换成实际后端地址。如由 Nginx 自己终止 HTTPS，应使用其正常的 TLS server 配置。
-
-```nginx
-server {
-    listen 80;
-    server_name console.example.com;
-    root /srv/krun/dist;
-
-    location = / {
-        return 302 /console/;
-    }
-    location = /console {
-        return 302 /console/;
-    }
-    location /console/assets/ {
-        try_files $uri =404;
-    }
-    location /console/ {
-        try_files $uri $uri/ /console/index.html;
-        add_header Cache-Control "no-cache";
-    }
-    location ~ ^/(auth|api)/ {
-        proxy_pass http://krun-backend:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header Connection "";
-        proxy_cache off;
-    }
-    location / {
-        return 404;
-    }
-}
-```
-
-`proxy_pass` 不带路径，保留原始 `/auth/...` 与 `/api/...`；不要去掉前缀，也不要把认证回调落到静态首页。保留客户端的 Origin、Cookie、Authorization、X-CSRF-Token 与响应 Set-Cookie，认证和 API 请求不缓存。相关指令见 [Nginx proxy_pass](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_pass) 与 [try_files](https://nginx.org/en/docs/http/ngx_http_core_module.html#try_files)。
-
-前端代码使用同源相对地址，不需要为后端注入域名。生产 Session Cookie 使用 Secure / HttpOnly / SameSite=Lax，因此浏览器入口必须 HTTPS。SSO 应用的 Redirect URI 填 `https://console.example.com/auth/<provider-id>/callback`；CLI 也连接公开地址 `krun login --server https://console.example.com`。
-
-前端可放对象存储 / CDN，但公开入口仍需将 `/auth/` 与 `/api/` 路由到后端。只有静态文件、没有 API 代理的托管无法完成登录和管理操作。当前不提供浏览器跨 origin API 模式；独立服务器 / 容器部署通过上述同域代理实现。
-
-本地 Vite 已代理 /auth 与 /api 到 8080，可把开发配置的 static_dir 留空，并以 `http://127.0.0.1:5173` 为 public_url 验证分离模式。
+只有输出包含 `publish_allowed=true` 且 `dist/console/` 中仅有静态产物时才上传。
+CI 还会运行 Go race 测试以及 builder/runtime 测试。

@@ -29,7 +29,11 @@ jobs:
       - run: npm ci
       - run: npm run test:permissions
       - run: npm run test:i18n
+      - run: npm --prefix web test
       - run: npm run build
+      - run: make check-secrets check-static-build
+      - run: npm ci --prefix workers/builder && npm test --prefix workers/builder
+      - run: npm ci --prefix workers/runtime && npm test --prefix workers/runtime
       - run: go vet ./...
       - run: go test -race ./...
         env:

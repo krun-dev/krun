@@ -130,7 +130,7 @@
   "invalid verification URL": "登录验证网址无效",
   "krun API Key required": "必须提供 krun API 密钥",
   "krun audit retention cleanup failed:": "krun 审计记录清理失败：",
-  "krun control server: %s/console/\n": "krun 控制服务：%s/console/\n",
+  "krun control server: %s/\n": "krun 控制服务：%s/\n",
   "line %d: YAML keys must be strings": "第 %d 行：YAML 键必须是字符串",
   "line %d: duplicate YAML key": "第 %d 行：YAML 包含重复键",
   "line %d: invalid integer": "第 %d 行：整数无效",

@@ -180,6 +180,14 @@ CREATE TABLE IF NOT EXISTS krun_email_logins (
 CREATE INDEX IF NOT EXISTS krun_email_logins_ip ON krun_email_logins (ip, sent_at DESC);
 CREATE INDEX IF NOT EXISTS krun_email_logins_expiry ON krun_email_logins (expires_at);
 
+CREATE TABLE IF NOT EXISTS krun_email_send_locks (
+	scope      text NOT NULL,
+	key_hash   text NOT NULL,
+	touched_at timestamptz NOT NULL,
+	PRIMARY KEY (scope, key_hash)
+);
+CREATE INDEX IF NOT EXISTS krun_email_send_locks_age ON krun_email_send_locks (touched_at);
+
 CREATE TABLE IF NOT EXISTS krun_device_codes (
 	code_hash  text PRIMARY KEY,
 	user_code  text NOT NULL,
@@ -188,14 +196,21 @@ CREATE TABLE IF NOT EXISTS krun_device_codes (
 	approved   boolean NOT NULL DEFAULT false,
 	consumed   boolean NOT NULL DEFAULT false
 );
-CREATE INDEX IF NOT EXISTS krun_device_codes_user_code ON krun_device_codes (user_code);
+CREATE UNIQUE INDEX IF NOT EXISTS krun_device_codes_user_code_unique ON krun_device_codes (user_code);
 CREATE INDEX IF NOT EXISTS krun_device_codes_expiry ON krun_device_codes (expires_at);
 
 CREATE TABLE IF NOT EXISTS krun_repository_connections (
-	user_id      text NOT NULL,
-	provider_id  text NOT NULL,
-	access_token text NOT NULL,
-	connected_at timestamptz NOT NULL DEFAULT now(),
+	user_id            text NOT NULL,
+	provider_id        text NOT NULL,
+	access_token       text NOT NULL,
+	token_type         text NOT NULL DEFAULT '',
+	refresh_token      text NOT NULL DEFAULT '',
+	expires_at         timestamptz,
+	token_revision     bigint NOT NULL DEFAULT 1,
+	refresh_state      text NOT NULL DEFAULT 'ready' CONSTRAINT krun_repository_connections_refresh_state CHECK (refresh_state IN ('ready','refreshing')),
+	refresh_claimed_at timestamptz,
+	reconnect_required boolean NOT NULL DEFAULT false,
+	connected_at       timestamptz NOT NULL DEFAULT now(),
 	PRIMARY KEY (user_id, provider_id)
 );
 
@@ -203,6 +218,7 @@ CREATE TABLE IF NOT EXISTS krun_repository_connect_states (
 	state        text PRIMARY KEY,
 	user_id      text NOT NULL,
 	provider_id  text NOT NULL,
+	org_id       text NOT NULL DEFAULT '',
 	browser_hash text NOT NULL,
 	expires_at   timestamptz NOT NULL
 );
@@ -213,6 +229,9 @@ CREATE TABLE IF NOT EXISTS krun_worker_services (
 	org_id              text NOT NULL,
 	repository          jsonb,
 	repository_revision integer NOT NULL DEFAULT 0,
+	domains_revision    integer NOT NULL DEFAULT 0,
+	preview_revision    integer NOT NULL DEFAULT 0,
+	active_build_count  integer NOT NULL DEFAULT 0 CHECK (active_build_count >= 0),
 	updated_at          timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS krun_worker_services_org ON krun_worker_services (org_id);
@@ -270,6 +289,18 @@ CREATE TABLE IF NOT EXISTS krun_worker_build_private (
 	log                text NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS krun_worker_source_uploads (
+	object_key      text PRIMARY KEY,
+	org_id          text NOT NULL,
+	state           text NOT NULL,
+	build_id        text NOT NULL DEFAULT '',
+	use_revision    bigint NOT NULL DEFAULT 0,
+	created_at      timestamptz NOT NULL DEFAULT now(),
+	gc_claimed_by   text NOT NULL DEFAULT '',
+	gc_claimed_at   timestamptz
+);
+CREATE INDEX IF NOT EXISTS krun_worker_source_uploads_created ON krun_worker_source_uploads (created_at);
+
 CREATE TABLE IF NOT EXISTS krun_worker_artifacts (
 	artifact_id      text PRIMARY KEY,
 	org_id           text NOT NULL,
@@ -281,7 +312,10 @@ CREATE TABLE IF NOT EXISTS krun_worker_artifacts (
 	object_key       text NOT NULL DEFAULT '',
 	storage_location text NOT NULL DEFAULT '',
 	bucket           text NOT NULL DEFAULT '',
-	created_at       timestamptz NOT NULL DEFAULT now()
+	created_at       timestamptz NOT NULL DEFAULT now(),
+	use_revision     bigint NOT NULL DEFAULT 0,
+	gc_claimed_by    text NOT NULL DEFAULT '',
+	gc_claimed_at    timestamptz
 );
 CREATE INDEX IF NOT EXISTS krun_worker_artifacts_created ON krun_worker_artifacts (created_at);
 
@@ -348,9 +382,9 @@ CREATE TABLE IF NOT EXISTS krun_worker_idempotency (
 CREATE INDEX IF NOT EXISTS krun_worker_idempotency_age ON krun_worker_idempotency (created_at);
 `
 
-// storeSchemaVersion is bumped whenever the DDL changes shape. The migration
-// step reads it to decide whether the legacy snapshot still needs importing.
-const storeSchemaVersion = "2"
+// storeSchemaVersion mirrors the newest successfully applicable migration.
+// The ledger, not this diagnostic value, is authoritative.
+const storeSchemaVersion = "14"
 
 // Retained row limits. Every table that grows per request, per build or per
 // release has a bound here and a matching DELETE in retention.go.

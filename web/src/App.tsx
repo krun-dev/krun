@@ -60,19 +60,40 @@ import {
   QuickLink,
   SelectField,
 } from "@/components/common";
-import { Login } from "@/components/login";
-import {
-  IAMPage,
-  CheckPage,
-  UsersPage,
-  ResourcesPage,
-} from "@/components/management";
-
-import { AuditPage } from "@/components/audit";
+const Login = lazy(() =>
+  import("@/components/login").then((module) => ({ default: module.Login })),
+);
+const IAMPage = lazy(() =>
+  import("@/components/management").then((module) => ({
+    default: module.IAMPage,
+  })),
+);
+const CheckPage = lazy(() =>
+  import("@/components/management").then((module) => ({
+    default: module.CheckPage,
+  })),
+);
+const UsersPage = lazy(() =>
+  import("@/components/management").then((module) => ({
+    default: module.UsersPage,
+  })),
+);
+const ResourcesPage = lazy(() =>
+  import("@/components/management").then((module) => ({
+    default: module.ResourcesPage,
+  })),
+);
+const AuditPage = lazy(() =>
+  import("@/components/audit").then((module) => ({
+    default: module.AuditPage,
+  })),
+);
 const WorkersPage = lazy(() =>
   import("@/components/workers").then((m) => ({ default: m.WorkersPage })),
 );
-import { KeysPage } from "@/components/keys";
+const KeysPage = lazy(() =>
+  import("@/components/keys").then((module) => ({ default: module.KeysPage })),
+);
 
 type Section =
   | "overview"
@@ -104,6 +125,20 @@ const adminNavigation: { id: Section; name: string }[] = [
   { id: "audit", name: "全平台审计" },
   { id: "keys", name: "全平台 API 密钥" },
 ];
+
+function repositoryCallbackNotice(): string {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("repository_status") === "connected") {
+    return t("仓库账号连接成功。");
+  }
+  if (params.get("repository_status") === "error") {
+    return t("仓库账号连接失败（{{code}}）。", {
+      code: params.get("error") || "UNKNOWN",
+    });
+  }
+  return "";
+}
+
 export default function App() {
   useTranslation();
   const [theme, setTheme] = useState(() =>
@@ -144,7 +179,7 @@ export default function App() {
       ];
       return known.includes(page as Section) ? (page as Section) : "overview";
     }),
-    [notice, setNotice] = useState(""),
+    [notice, setNotice] = useState(repositoryCallbackNotice),
     [refresh, setRefresh] = useState(0),
     [menu, setMenu] = useState(false);
   const [workersNavigation, setWorkersNavigation] = useState(0);
@@ -159,6 +194,16 @@ export default function App() {
   );
   const notify = useCallback((message: string) => setNotice(message), []);
   const reload = useCallback(() => setRefresh((x) => x + 1), []);
+  useEffect(() => {
+    if (!me) return;
+    const url = new URL(location.href);
+    if (!url.searchParams.has("repository_status")) return;
+    url.searchParams.delete("repository_status");
+    url.searchParams.delete("repository_provider");
+    url.searchParams.delete("error");
+    url.searchParams.delete("request_id");
+    history.replaceState(null, "", url);
+  }, [me]);
   // Keep the URL in step with the visible section. Navigating used to leave the
   // previous page's parameters behind, so refreshing or sharing a link reopened
   // the wrong page.
@@ -273,13 +318,15 @@ export default function App() {
     );
   if (!me)
     return (
-      <Login
-        providers={providers}
-        development={development}
-        error={
-          new URLSearchParams(window.location.search).get("error") ?? undefined
-        }
-      />
+      <Suspense fallback={<Loading />}>
+        <Login
+          providers={providers}
+          development={development}
+          error={
+            new URLSearchParams(window.location.search).get("error") ?? undefined
+          }
+        />
+      </Suspense>
     );
   const base = system
     ? "/api/v1/system"
@@ -574,6 +621,7 @@ export default function App() {
             </CardContent>
           </Card>
         )}
+        <Suspense fallback={<Loading />}>
         {orgs.length === 0 && !system ? (
           <NoOrganization
             canCreate={canCreateOrg}
@@ -754,14 +802,12 @@ export default function App() {
               )}
             />
           ) : (
-            <Suspense fallback={<Loading />}>
-              <WorkersPage
-                key={`${scope}:${workersNavigation}`}
-                base={base}
-                system={system}
-                notify={notify}
-              />
-            </Suspense>
+            <WorkersPage
+              key={`${scope}:${workersNavigation}`}
+              base={base}
+              system={system}
+              notify={notify}
+            />
           )
         ) : section === "resources" ? (
           <ResourcesPage
@@ -777,6 +823,7 @@ export default function App() {
         ) : (
           <AuditPage key={base} base={base} refresh={refresh} />
         )}
+        </Suspense>
       </main>
       <Dialog open={orgDialog} onOpenChange={setOrgDialog}>
         <DialogContent>

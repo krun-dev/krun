@@ -18,6 +18,7 @@ workers:
       enabled: true
       priority: 10
       base_url: https://gitlab.example.internal
+      allow_private_network: true
       token: ${KRUN_GITLAB_REPOSITORY_TOKEN:-}
       allowed_repositories: [team/worker-service]
       # organization_ids: [org_example]
@@ -37,10 +38,19 @@ workers:
 
 - `enabled` 必须显式为 true 才会展示与接受新仓库构建；未配置来源时页面显示尚未启用。
 - `priority` 越小越靠前；相同值按 id 排序。新服务默认选择第一个启用来源。
-- `type: gitlab` 同时支持 GitLab.com 和自建实例，`base_url` 必须为固定 HTTPS origin。GitHub 使用 github.com。
+- `type: gitlab` 同时支持 GitLab.com 和自建实例，`base_url` 必须为固定 HTTPS origin。GitHub 使用 github.com。OAuth endpoint 默认拒绝私网/loopback 解析；只有管理员确认目标是受信任内网实例后才可为该 GitLab 显式设置 `allow_private_network: true`，GitHub 禁止开启。
 - `token` 可通过配置文件的环境变量展开注入；公开仓库可以省略。私有仓库使用管理员提供的只读凭证。配置了共享 Token 时，`allowed_repositories` 必须列出允许读取的完整 namespace/name，不支持通配符。
 - `organization_ids` 可限定来源可用于哪些平台组织，省略时对有服务权限的组织用户开放。共享 Token 的访问范围由这些配置与服务权限共同限制。
 - 修改后重启控制面生效。Token 不出现在来源列表、构建 API、日志、Kubernetes 构建 Job 输入或 workerd 中。页面会说明所选来源是否配置了凭证。
+
+配置 `client_id` / `client_secret` 后，用户可连接自己的 GitHub/GitLab OAuth
+授权。access token、refresh token、到期时间和轮换 revision 只保存在控制面的私有凭据
+表；普通 Workers 快照和 API 不加载这些字段。控制面在构建前刷新即将到期的授权，
+通过 CAS 租约保证多副本不会同时消费轮换型 refresh token。授权失效时必须由用户重连，
+不会静默退回管理员共享 Token。Token endpoint 请求固定在配置的 provider host，拒绝
+重定向并受连接、响应头、响应体和总时限约束；生产默认拒绝解析到 loopback、私网或
+link-local 地址。可信内网 GitLab 可以逐 provider 显式放行 private/loopback，但
+link-local/unspecified 永远拒绝，不能把普通 OAuth 配置变成任意内网请求入口。
 
 GitHub API 用 Bearer Token，GitLab 用 PRIVATE-TOKEN。GitHub 归档下载会跳转到 codeload.github.com，该请求不会携带 GitHub API 的 Token；其他跨来源跳转拒绝。接口依据 [GitHub 仓库归档 API](https://docs.github.com/en/rest/repos/contents#download-a-repository-archive-tar)、[GitLab Commit API](https://docs.gitlab.com/api/commits/#retrieve-a-commit) 和 [GitLab 归档 API](https://docs.gitlab.com/api/repositories/#get-file-archive) 实现。
 
@@ -61,7 +71,7 @@ GitHub API 用 Bearer Token，GitLab 用 PRIVATE-TOKEN。GitHub 归档下载会�
 
 kind 只为控制面增加已配置仓库 API / 下载域名解析所得 IP 的 TCP 443 出口；builder 仍只访问 MinIO，runtime 仍只访问平台代码接口。后端镜像安装系统 CA，TLS 校验保持启用。实验网络策略中的 IP 是部署时解析的快照，DNS 地址变化需要重新生成；生产环境应使用可持续管理域名访问的出口代理或网络策略。
 
-本地 `npm run dev:kind` 继续连接 kind 后端。公司 GitLab URL 已放在 kind 配置首位；当前没有该实例私有仓库的凭证，不能将接口测试结果视为真实私有仓库验收。
+日常本地开发使用 `make dev` 的 local-first 拓扑；完整集群验收才使用 `deploy/workers-kind`。私有仓库只有在 `.data/dev.yaml` 或独立 E2E 生成配置中提供了真实测试凭据后才算完成验收，不能把公开仓库接口测试当作私有仓库验收。
 
 ## kind 与浏览器验收 · 2026-10-13
 

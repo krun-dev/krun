@@ -123,8 +123,15 @@ func (s *Server) resourceDelete(st *State, p Principal, r *http.Request) (any, i
 		return nil, 0, e
 	}
 	delete(st.Resources, t.ID)
+	deletedGroups := map[string]bool{}
+	for id, group := range st.Groups {
+		if group.ScopeKind == t.Kind && group.ScopeID == t.ID {
+			deletedGroups[id] = true
+			delete(st.Groups, id)
+		}
+	}
 	for id, a := range st.Assignments {
-		if a.ScopeKind == t.Kind && a.ScopeID == t.ID {
+		if (a.ScopeKind == t.Kind && a.ScopeID == t.ID) || (a.SubjectKind == "group" && deletedGroups[a.SubjectID]) {
 			delete(st.Assignments, id)
 		}
 	}

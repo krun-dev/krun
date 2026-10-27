@@ -12,12 +12,12 @@ type workerServiceSummary struct {
 }
 
 type WorkerEnvironmentSummary struct {
-	Name      string `json:"name"`
+	Name      string   `json:"name"`
 	Domains   []string `json:"domains,omitempty"`
 	Hosts     []string `json:"hosts,omitempty"`
-	Enabled   bool   `json:"enabled"`
-	Release   string `json:"release_id,omitempty"`
-	Confirmed string `json:"confirmed_release_id,omitempty"`
+	Enabled   bool     `json:"enabled"`
+	Release   string   `json:"release_id,omitempty"`
+	Confirmed string   `json:"confirmed_release_id,omitempty"`
 }
 
 // WorkerDomainView is the client-facing domain catalog entry. Label is a note
@@ -122,7 +122,11 @@ func (s *Server) workerRepositoryProviders(st *State, p Principal, r *http.Reque
 	if err := s.require(st, p, r, "service.list", target); err != nil {
 		return nil, 0, err
 	}
-	return items(s.visibleRepositoryProviders(st, target.ID, p.User.ID))
+	connected, err := s.Store.connectedRepositoryProviders(r.Context(), p.User.ID)
+	if err != nil {
+		return nil, 0, err
+	}
+	return items(s.visibleRepositoryProviders(target.ID, connected))
 }
 
 func (s *Server) workerRepositoryGet(st *State, p Principal, r *http.Request) (any, int, error) {

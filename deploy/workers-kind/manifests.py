@@ -3,7 +3,9 @@ import json,pathlib,secrets,os,ipaddress,socket
 root=pathlib.Path(__file__).resolve().parent
 out=root/'generated';out.mkdir(exist_ok=True)
 credential_file=out/'credentials.json'
-if credential_file.exists(): credentials=json.loads(credential_file.read_text())
+if credential_file.exists():
+ credential_file.chmod(0o600)
+ credentials=json.loads(credential_file.read_text())
 else:
  credentials={k:secrets.token_hex(24) for k in ['db_password','s3_secret','runtime_token','management_token']};credentials['s3_access']='krun-workers';credential_file.write_text(json.dumps(credentials));credential_file.chmod(0o600)
 api_ips=[str(ipaddress.ip_address(x)) for x in os.environ['KRUN_KUBE_API_IPS'].split(',')]
@@ -20,7 +22,7 @@ def env(name):return {'name':name,'valueFrom':{'secretKeyRef':{'name':'workers-c
 def limits(memory='256Mi',request='64Mi'):return {'requests':{'cpu':'50m','memory':request},'limits':{'cpu':'1','memory':memory}}
 def secure():return {'allowPrivilegeEscalation':False,'readOnlyRootFilesystem':True,'runAsNonRoot':True,'runAsUser':1000,'capabilities':{'drop':['ALL']},'seccompProfile':{'type':'RuntimeDefault'}}
 deployment('postgres',[{'name':'postgres','image':'postgres:18-alpine','imagePullPolicy':'Never','env':[env('POSTGRES_PASSWORD')],'volumeMounts':[{'name':'data','mountPath':'/var/lib/postgresql'}],'readinessProbe':{'exec':{'command':['pg_isready','-U','postgres']},'periodSeconds':2},'resources':limits('1Gi','256Mi')}],volumes=[{'name':'data','persistentVolumeClaim':{'claimName':'postgres-data'}}]);service('postgres',[5432])
-deployment('minio',[{'name':'minio','image':'quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z','imagePullPolicy':'Never','command':['minio','server','/data','--console-address',':9001'],'env':[env('MINIO_ROOT_USER'),env('MINIO_ROOT_PASSWORD')],'volumeMounts':[{'name':'data','mountPath':'/data'}],'readinessProbe':{'httpGet':{'path':'/minio/health/ready','port':9000},'periodSeconds':2},'resources':limits('512Mi')}],volumes=[{'name':'data','persistentVolumeClaim':{'claimName':'minio-data'}}]);service('minio',[9000]);service('static-assets',[9000],selector={'app':'minio'})
+deployment('minio',[{'name':'minio','image':'krun-e2e-minio:20250907','imagePullPolicy':'Never','args':['server','/data','--console-address',':9001'],'env':[env('MINIO_ROOT_USER'),env('MINIO_ROOT_PASSWORD')],'volumeMounts':[{'name':'data','mountPath':'/data'}],'readinessProbe':{'httpGet':{'path':'/minio/health/ready','port':9000},'periodSeconds':2},'resources':limits('512Mi')}],volumes=[{'name':'data','persistentVolumeClaim':{'claimName':'minio-data'}}]);service('minio',[9000]);service('static-assets',[9000],selector={'app':'minio'})
 config='''listen: 0.0.0.0:9000
 internal_listen: 0.0.0.0:9001
 public_url: http://127.0.0.1:4380
@@ -53,7 +55,7 @@ workers:
       label: 内网
       gateway: internal
       default: true
-      static_domain: static.internal.workers.test
+      static_domain: static.workers.test
     - id: external
       domain: public.workers.test
       label: 公网
@@ -92,7 +94,7 @@ items.append(resource('ConfigMap','control-config',data={'control.yaml':config})
 items.append(resource('ServiceAccount','workers-control'))
 items.append(resource('Role','workers-control',apiVersion='rbac.authorization.k8s.io/v1',rules=[{'apiGroups':[''],'resources':['pods','pods/log'],'verbs':['get','list']},{'apiGroups':[''],'resources':['configmaps'],'verbs':['get','create','patch','delete']},{'apiGroups':['batch'],'resources':['jobs'],'verbs':['get','list','create','delete']},{'apiGroups':['discovery.k8s.io'],'resources':['endpointslices'],'verbs':['get','list']},{'apiGroups':['gateway.networking.k8s.io'],'resources':['httproutes'],'verbs':['get','list','create','patch','delete'] }]))
 items.append(resource('RoleBinding','workers-control',apiVersion='rbac.authorization.k8s.io/v1',roleRef={'apiGroup':'rbac.authorization.k8s.io','kind':'Role','name':'workers-control'},subjects=[{'kind':'ServiceAccount','name':'workers-control','namespace':ns}]))
-items.append({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'Role','metadata':{'name':'workers-mvp-reader','namespace':'kgateway-system'},'rules':[{'apiGroups':['gateway.networking.k8s.io'],'resources':['gateways'],'resourceNames':['workers-mvp'],'verbs':['get']}]})
+items.append({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'Role','metadata':{'name':'workers-mvp-reader','namespace':'kgateway-system'},'rules':[{'apiGroups':['gateway.networking.k8s.io'],'resources':['gateways'],'resourceNames':['workers-mvp','workers-public'],'verbs':['get']}]})
 items.append({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'RoleBinding','metadata':{'name':'workers-mvp-reader','namespace':'kgateway-system'},'roleRef':{'apiGroup':'rbac.authorization.k8s.io','kind':'Role','name':'workers-mvp-reader'},'subjects':[{'kind':'ServiceAccount','name':'workers-control','namespace':ns}]})
 deployment('backend',[{'name':'backend','image':f'krun-workers-backend:{tag}','imagePullPolicy':'Never','env':[env(n) for n in ['KRUN_DATABASE_URL','KRUN_S3_ACCESS','KRUN_S3_SECRET','KRUN_RUNTIME_TOKEN','KRUN_MANAGEMENT_TOKEN']],'securityContext':secure(),'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},{'name':'workdir','mountPath':'/workdir'}],'resources':limits('1Gi','128Mi'),'readinessProbe':{'httpGet':{'path':'/api/healthz','port':9000},'periodSeconds':5}}],serviceAccountName='workers-control',automountServiceAccountToken=True,volumes=[{'name':'config','configMap':{'name':'control-config'}},{'name':'workdir','emptyDir':{'sizeLimit':'1Gi'}}],terminationGracePeriodSeconds=10);service('backend',[9000,9001])
 # Runtime has no Kubernetes token, DB identity, S3 credentials or public

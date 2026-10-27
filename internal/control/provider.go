@@ -292,15 +292,15 @@ func loginReturnPath(value string) (string, error) {
 		return "/", nil
 	}
 	u, err := url.Parse(value)
-	if err != nil || u.IsAbs() || u.Host != "" || !strings.HasPrefix(u.Path, "/") || strings.ContainsAny(value, "\\\r\n") {
+	if err != nil || u.IsAbs() || u.Host != "" || u.Path != "/" || u.RawPath != "" || u.Fragment != "" || strings.ContainsAny(value, "\\\r\n") {
 		return "", problem(400, "INVALID_REQUEST", "Invalid return path")
 	}
 	return value, nil
 }
 
 func (s *Server) loginHandler(w http.ResponseWriter, r *http.Request) {
-	if s.limited(r) {
-		s.writeError(w, r, problem(429, "RATE_LIMITED", "Try again later"))
+	if err := s.checkRateLimit(r); err != nil {
+		s.writeError(w, r, err)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
@@ -331,13 +331,8 @@ func (s *Server) loginHandler(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, problem(403, "CSRF_INVALID", "Login CSRF verification failed"))
 		return
 	}
-	browser.Generation++
-	if e = s.Store.upsertBrowser(r.Context(), browserHash, browser); e != nil {
-		s.writeError(w, r, e)
-		return
-	}
-	login := Login{Provider: p.config.ID, Browser: browserHash, Fingerprint: loginFingerprint(p.config), Verifier: verifier, Nonce: nonce, ReturnTo: returnTo, Generation: browser.Generation, Expires: now().Add(5 * time.Minute)}
-	if e = s.Store.insertLoginState(r.Context(), digest(state), login); e != nil {
+	login := Login{Provider: p.config.ID, Browser: browserHash, Fingerprint: loginFingerprint(p.config), Verifier: verifier, Nonce: nonce, ReturnTo: returnTo, Expires: now().Add(5 * time.Minute)}
+	if _, e = s.Store.beginLoginState(r.Context(), browserHash, browser, digest(state), login); e != nil {
 		s.writeError(w, r, e)
 		return
 	}
@@ -349,8 +344,13 @@ func (s *Server) loginHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, redirect, http.StatusSeeOther)
 }
 func (s *Server) callbackHandler(w http.ResponseWriter, r *http.Request) {
-	if s.limited(r) {
-		s.callbackError(w, r, "RATE_LIMITED")
+	if err := s.checkRateLimit(r); err != nil {
+		var apiError *APIError
+		if errors.As(err, &apiError) && apiError.Code == "RATE_LIMITED" {
+			s.callbackRedirect(w, r, "RATE_LIMITED")
+		} else {
+			s.writeError(w, r, err)
+		}
 		return
 	}
 	p, ok := s.providers[r.PathValue("provider")]
@@ -403,7 +403,7 @@ func (s *Server) callbackHandler(w http.ResponseWriter, r *http.Request) {
 		s.callbackError(w, r, "AUTH_STATE_INVALID")
 		return
 	}
-	if e := s.finishLogin(r.Context(), r, p, tx.Browser, identity, sessionToken); e != nil {
+	if e := s.finishLogin(r.Context(), r, p, tx.Browser, tx.Generation, identity, sessionToken); e != nil {
 		code := "AUTH_UPSTREAM_FAILED"
 		var a *APIError
 		if errors.As(e, &a) {
@@ -416,73 +416,109 @@ func (s *Server) callbackHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, tx.ReturnTo, http.StatusSeeOther)
 }
 
-// finishLogin creates or refreshes the user and issues a session. The IAM half
-// (user row, invitation, audit) goes through the IAM partition; the session and
-// browser rows are separate single-statement writes. Losing atomicity between
-// them costs at most a retried login, never a revoked identity gaining access.
-func (s *Server) finishLogin(ctx context.Context, r *http.Request, p *provider, browserHash string, id identity, sessionToken string) error {
+// finishLogin creates or refreshes the user and issues a session. The user,
+// invitation, session, browser-generation CAS and audit are committed by the
+// IAM store in one small transaction.
+func (s *Server) finishLogin(ctx context.Context, r *http.Request, p *provider, browserHash string, expectedGeneration int, id identity, sessionToken string) error {
+	return s.finishLoginCommit(ctx, r, p, browserHash, expectedGeneration, id, sessionToken, "")
+}
+
+func (s *Server) finishEmailLogin(ctx context.Context, r *http.Request, p *provider, browserHash string, expectedGeneration int, id identity, sessionToken, challengeHash string) error {
+	return s.finishLoginCommit(ctx, r, p, browserHash, expectedGeneration, id, sessionToken, challengeHash)
+}
+
+func (s *Server) finishLoginCommit(ctx context.Context, r *http.Request, p *provider, browserHash string, expectedGeneration int, id identity, sessionToken, challengeHash string) error {
 	at := now()
 	session := Session{Hash: digest(sessionToken), CSRF: randomToken(), Created: at, Seen: at, Absolute: at.Add(8 * time.Hour)}
-	if e := s.Store.Update(ctx, PartitionIAM, func(st *State) error {
-		var user User
-		for _, u := range st.Users {
-			if u.Source == p.config.Source && u.Subject == id.Subject {
-				user = u
-				break
+	for attempt := 0; ; attempt++ {
+		err := s.Store.Update(ctx, PartitionIAM, func(st *State) error {
+			if s.Store.pool == nil {
+				browser, ok := st.Browsers[browserHash]
+				if !ok || browser.Generation != expectedGeneration || !now().Before(browser.Expires) {
+					return problem(403, "AUTH_STATE_INVALID", "Login state changed")
+				}
+				if challengeHash != "" {
+					challenge, ok := st.EmailLogins[challengeHash]
+					if !ok || challenge.Generation != expectedGeneration || challenge.Consumed || challenge.Attempts >= 5 || !now().Before(challenge.Expires) {
+						return problem(400, "EMAIL_CODE_INVALID", "Invalid or expired verification code")
+					}
+				}
 			}
-		}
-		if user.ID == "" {
-			invite := p.config.Source + "\x00" + id.Subject
-			if p.config.Registration != "jit" && !at.Before(st.Invitations[invite]) {
-				return problem(403, "REGISTRATION_DENIED", "Invitation required")
+			var user User
+			for _, u := range st.Users {
+				if u.Source == p.config.Source && u.Subject == id.Subject {
+					user = u
+					break
+				}
 			}
-			delete(st.Invitations, invite)
-			user = User{ID: randomID("usr"), Source: p.config.Source, Subject: id.Subject, Status: "active", AuthVersion: 1}
+			if user.ID == "" {
+				invite := p.config.Source + "\x00" + id.Subject
+				if p.config.Registration != "jit" && !at.Before(st.Invitations[invite]) {
+					return problem(403, "REGISTRATION_DENIED", "Invitation required")
+				}
+				delete(st.Invitations, invite)
+				user = User{ID: randomID("usr"), Source: p.config.Source, Subject: id.Subject, Status: "active", AuthVersion: 1}
+			}
+			if user.Status != "active" {
+				return problem(403, "USER_DISABLED", "User disabled")
+			}
+			user.Name = id.Name
+			user.Email = id.Email
+			st.Users[user.ID] = user
+			st.Revision++
+			session.User = user.ID
+			session.AuthVersion = user.AuthVersion
+			oldSessionHash := ""
+			if old := s.cookie(r, "session"); old != "" {
+				oldSessionHash = digest(old)
+			}
+			if s.Store.pool == nil {
+				if challengeHash != "" {
+					challenge := st.EmailLogins[challengeHash]
+					challenge.Attempts++
+					challenge.Consumed = true
+					st.EmailLogins[challengeHash] = challenge
+				}
+				if oldSessionHash != "" {
+					delete(st.Sessions, oldSessionHash)
+				}
+				st.Sessions[session.Hash] = session
+				browser := st.Browsers[browserHash]
+				browser.Generation++
+				st.Browsers[browserHash] = browser
+			} else {
+				st.pendingLogin = &pendingLoginCommit{Session: session, DeleteSessionHash: oldSessionHash, BrowserHash: browserHash, ExpectedGeneration: expectedGeneration, EmailChallengeHash: challengeHash}
+			}
+			s.audit(st, Principal{User: user, Kind: "session"}, r, "auth.login", user.ID, true)
+			return nil
+		})
+		if err == nil {
+			break
 		}
-		if user.Status != "active" {
-			return problem(403, "USER_DISABLED", "User disabled")
+		var conflict *APIError
+		if attempt == 0 && errors.As(err, &conflict) && conflict.Code == "REVISION_CONFLICT" {
+			// A concurrent callback may have created the same stable identity.
+			// Reload once so both logins converge on that durable user row.
+			continue
 		}
-		user.Name = id.Name
-		user.Email = id.Email
-		st.Users[user.ID] = user
-		st.Revision++
-		session.User = user.ID
-		session.AuthVersion = user.AuthVersion
-		s.audit(st, Principal{User: user, Kind: "session"}, r, "auth.login", user.ID, true)
-		return nil
-	}); e != nil {
-		return e
-	}
-	// Drop the session this browser was holding before the new one lands.
-	if old := s.cookie(r, "session"); old != "" {
-		if e := s.Store.deleteSession(ctx, digest(old)); e != nil {
-			return e
-		}
-	}
-	if e := s.Store.insertSession(ctx, sessionToken, session); e != nil {
-		return e
-	}
-	browser, ok, e := s.Store.browserFor(ctx, browserHash)
-	if e != nil {
-		return e
-	}
-	if ok {
-		browser.Generation++
-		return s.Store.upsertBrowser(ctx, browserHash, browser)
+		return err
 	}
 	return nil
 }
 
 func (s *Server) callbackError(w http.ResponseWriter, r *http.Request, code string) {
-	_ = s.Store.Update(r.Context(), PartitionIAM, func(st *State) error {
-		s.audit(st, Principal{Kind: "anonymous"}, r, "auth.login.failed."+code, r.PathValue("provider"), false)
-		return nil
-	})
+	// Callback failures are attacker-controlled read traffic. Persisting one
+	// audit row per failure lets invalid or rate-limited requests amplify writes;
+	// successful login remains durably audited in finishLogin.
+	s.callbackRedirect(w, r, code)
+}
+
+func (s *Server) callbackRedirect(w http.ResponseWriter, r *http.Request, code string) {
 	http.Redirect(w, r, "/?error="+url.QueryEscape(code)+"&request_id="+url.QueryEscape(r.Header.Get("X-Krun-Request-ID")), http.StatusSeeOther)
 }
 func (s *Server) deviceStart(w http.ResponseWriter, r *http.Request) {
-	if s.limited(r) {
-		s.writeError(w, r, problem(429, "RATE_LIMITED", "Try again later"))
+	if err := s.checkRateLimit(r); err != nil {
+		s.writeError(w, r, err)
 		return
 	}
 	var input struct{}
@@ -490,17 +526,33 @@ func (s *Server) deviceStart(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, e)
 		return
 	}
-	device := randomToken()
-	user := strings.ToUpper(digest(randomToken())[:8])
-	if e := s.Store.insertDevice(r.Context(), Device{CodeHash: digest(device), UserCode: user, Expires: now().Add(5 * time.Minute)}); e != nil {
-		s.writeError(w, r, e)
+	device, user := "", ""
+	for attempt := 0; attempt < 8; attempt++ {
+		device = randomToken()
+		// Fourteen hexadecimal characters carry 56 bits. The previous eight
+		// characters were only 32 bits and could be enumerated by an authenticated
+		// attacker despite the short lifetime.
+		rawUserCode := strings.ToUpper(digest(randomToken())[:14])
+		user = rawUserCode[:7] + "-" + rawUserCode[7:]
+		e := s.Store.insertDevice(r.Context(), Device{CodeHash: digest(device), UserCode: user, Expires: now().Add(5 * time.Minute)})
+		if e == nil {
+			break
+		}
+		if !errors.Is(e, errDeviceCodeCollision) {
+			s.writeError(w, r, e)
+			return
+		}
+		device = ""
+	}
+	if device == "" {
+		s.writeError(w, r, errors.New("unable to allocate a unique device code"))
 		return
 	}
 	s.json(w, 200, map[string]any{"device_code": device, "user_code": user, "verification_uri": s.Config.PublicURL + "/?cli=" + user, "expires_in": 300, "interval": 3})
 }
 func (s *Server) devicePoll(w http.ResponseWriter, r *http.Request) {
-	if s.limited(r) {
-		s.writeError(w, r, problem(429, "RATE_LIMITED", "Try again later"))
+	if err := s.checkRateLimit(r); err != nil {
+		s.writeError(w, r, err)
 		return
 	}
 	var input struct {
@@ -539,6 +591,22 @@ func (s *Server) deviceApprove(st *State, p Principal, r *http.Request) (any, in
 	if p.Kind != "session" {
 		return nil, 0, forbidden()
 	}
+	for _, limit := range []struct {
+		scope string
+		key   string
+		max   int
+	}{
+		{scope: "cli-approve-user", key: p.User.ID, max: 10},
+		{scope: "cli-approve-ip", key: s.clientIP(r), max: 30},
+	} {
+		exceeded, err := s.Store.RateLimitExceeded(r.Context(), limit.scope, limit.key, time.Minute, limit.max)
+		if err != nil {
+			return nil, 0, err
+		}
+		if exceeded {
+			return nil, 0, problem(429, "RATE_LIMITED", "Try again later")
+		}
+	}
 	var input struct {
 		Code string `json:"user_code"`
 	}
@@ -558,12 +626,20 @@ func (s *Server) deviceApprove(st *State, p Principal, r *http.Request) (any, in
 	token := "krun_cli_" + randomToken()
 	at := now()
 	session := Session{User: p.User.ID, Hash: digest(token), AuthVersion: p.User.AuthVersion, Created: at, Seen: at, Absolute: at.Add(time.Hour), CLI: true}
-	if e = s.Store.insertSession(r.Context(), token, session); e != nil {
-		return nil, 0, e
-	}
-	if e = s.Store.approveDevice(r.Context(), device.CodeHash, token); e != nil {
-		return nil, 0, e
-	}
 	s.audit(st, p, r, "auth.cli.approve", p.User.ID, true)
+	var approved bool
+	if s.Store.pool != nil {
+		audits := append([]Audit(nil), st.pendingAudits...)
+		st.pendingAudits = nil
+		approved, e = s.Store.approveDeviceAudited(r.Context(), device.CodeHash, token, session, audits)
+	} else {
+		approved, e = s.Store.approveDevice(r.Context(), device.CodeHash, token, session)
+	}
+	if e != nil {
+		return nil, 0, e
+	}
+	if !approved {
+		return nil, 0, problem(400, "DEVICE_EXPIRED", "Approval expired")
+	}
 	return map[string]string{"status": "approved"}, 200, nil
 }

@@ -40,7 +40,7 @@ func emailTestServer(t *testing.T, store *Store) (*Server, *string) {
 
 func emailBrowser(t *testing.T, s *Server) ([]*http.Cookie, string) {
 	t.Helper()
-	w := browserRequest(s, "GET", "/api/auth/csrf", nil, nil)
+	w := browserRequest(s, "POST", "/api/auth/csrf", nil, nil)
 	var data struct {
 		Token string `json:"csrf_token"`
 	}
@@ -67,7 +67,7 @@ func emailRequest(s *Server, path string, value any, cookies []*http.Cookie, csr
 
 func emailChallenge(t *testing.T, s *Server, cookies []*http.Cookie, csrf string) string {
 	t.Helper()
-	w := emailRequest(s, "/api/auth/email/email/code", map[string]string{"email": " Person@Example.COM ", "return_to": "/console/?cli=ABCDEFG"}, cookies, csrf)
+	w := emailRequest(s, "/api/auth/email/email/code", map[string]string{"email": " Person@Example.COM ", "return_to": "/?cli=ABCDEFG"}, cookies, csrf)
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
@@ -93,7 +93,7 @@ func TestEmailLoginIdentitySessionAndReplay(t *testing.T) {
 	}
 	input := map[string]string{"challenge_id": challenge, "code": *code}
 	w := emailRequest(s, "/api/auth/email/email/verify", input, cookies, csrf)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "/console/?cli=ABCDEFG") {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "/?cli=ABCDEFG") {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	cookies = append(cookies, w.Result().Cookies()...)

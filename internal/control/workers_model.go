@@ -20,6 +20,12 @@ type WorkersConfig struct {
 	BuilderMode    string `json:"builder_mode"`
 	BuilderScript  string `json:"builder_script"`
 	RuntimeService string `json:"runtime_service"`
+	// Kubernetes connection settings are regular application configuration.
+	// They intentionally live here instead of being read from hidden process
+	// environment variables so every runtime input passes through LoadConfig.
+	KubernetesAPI       string `json:"kubernetes_api"`
+	KubernetesTokenFile string `json:"kubernetes_token_file"`
+	KubernetesCAFile    string `json:"kubernetes_ca_file"`
 	// Gateways and Domains are the routing catalog. Neither carries a network
 	// classification: a domain is just a suffix plus which Gateway instance
 	// serves it. Label is display text and never participates in routing.
@@ -30,6 +36,7 @@ type WorkersConfig struct {
 	RuntimeManagementBase string          `json:"runtime_management_base"`
 	S3Endpoint            string          `json:"s3_endpoint"`
 	S3BuilderEndpoint     string          `json:"s3_builder_endpoint"`
+	S3RuntimeEndpoint     string          `json:"s3_runtime_endpoint"`
 	S3Bucket              string          `json:"s3_bucket"`
 	S3LocationID          string          `json:"s3_location_id"`
 	S3AccessKey           string          `json:"s3_access_key"`
@@ -108,11 +115,28 @@ func (c *WorkersConfig) validate() error {
 	if c.RuntimeService == "" {
 		c.RuntimeService = "runtime-default"
 	}
+	if c.KubernetesAPI == "" {
+		c.KubernetesAPI = "https://kubernetes.default.svc"
+	}
+	u, e := url.Parse(c.KubernetesAPI)
+	if e != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("invalid Workers Kubernetes API")
+	}
+	c.KubernetesAPI = strings.TrimSuffix(c.KubernetesAPI, "/")
+	if c.KubernetesTokenFile == "" {
+		c.KubernetesTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+	}
+	if c.KubernetesCAFile == "" {
+		c.KubernetesCAFile = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+	}
+	if !path.IsAbs(c.KubernetesTokenFile) || !path.IsAbs(c.KubernetesCAFile) {
+		return fmt.Errorf("Workers Kubernetes credential files must be absolute paths")
+	}
 	dns := regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,180}$`)
 	if e := c.validateCatalog(dns); e != nil {
 		return e
 	}
-	u, e := url.Parse(c.S3Endpoint)
+	u, e = url.Parse(c.S3Endpoint)
 	if e != nil || u.Host == "" || u.Path != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return fmt.Errorf("invalid Workers S3 endpoint")
 	}
@@ -123,6 +147,17 @@ func (c *WorkersConfig) validate() error {
 		}
 	} else {
 		c.S3BuilderEndpoint = c.S3Endpoint
+	}
+	if c.S3RuntimeEndpoint != "" {
+		u, e := url.Parse(c.S3RuntimeEndpoint)
+		if e != nil || u.Host == "" || u.Path != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("invalid Workers S3 runtime endpoint")
+		}
+	} else {
+		// Existing deployments used the builder-visible endpoint for runtime
+		// downloads as well. Keep that default while allowing local-first to
+		// give an off-host runtime a distinct, reachable origin.
+		c.S3RuntimeEndpoint = c.S3BuilderEndpoint
 	}
 	if (c.BuilderMode != "local" && c.BuilderImage == "") || len(c.RuntimeToken) < 24 || len(c.ManagementToken) < 24 || c.S3AccessKey == "" || c.S3SecretKey == "" {
 		return fmt.Errorf("Workers image and credentials required")
@@ -350,6 +385,10 @@ type WorkerBuild struct {
 	Error        string                 `json:"error,omitempty"`
 	Created      time.Time              `json:"created_at"`
 	Finished     *time.Time             `json:"finished_at,omitempty"`
+	// Claim metadata participates in storage CAS only. It is never returned by
+	// the API and cannot be changed through the generic snapshot writer.
+	ClaimedBy string     `json:"-"`
+	ClaimedAt *time.Time `json:"-"`
 }
 
 // Private job inputs and credentials are not returned by Build APIs.
@@ -371,6 +410,9 @@ type WorkerArtifact struct {
 	StorageLocation string    `json:"storage_location_id"`
 	Bucket          string    `json:"bucket"`
 	Created         time.Time `json:"created_at"`
+	// UseRevision arbitrates build reservations against object-store GC. It is
+	// storage coordination metadata and is never exposed by the API.
+	UseRevision int64 `json:"-"`
 }
 type WorkerEnvironment struct {
 	Name    string `json:"name"`
@@ -394,8 +436,14 @@ type WorkerEnvironment struct {
 type WorkerService struct {
 	Repository         *WorkerRepositorySource `json:"repository_source,omitempty"`
 	RepositoryRevision int                     `json:"repository_revision"`
-	Service            string                  `json:"service_id"`
-	Organization       string                  `json:"organization_id"`
+	// DomainsRevision is the optimistic-concurrency token for replacing the
+	// service's routing domains. PreviewRevision is internal coordination for
+	// changes to the preview-environment set; it prevents concurrent creates
+	// from both passing the configured preview limit.
+	DomainsRevision int    `json:"domains_revision"`
+	PreviewRevision int    `json:"preview_revision"`
+	Service         string `json:"service_id"`
+	Organization    string `json:"organization_id"`
 	// Domains is the service-level domain selection. Every environment of the
 	// service is served on every selected domain, so adding a domain adds one
 	// host per environment without touching per-environment configuration.

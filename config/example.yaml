@@ -3,12 +3,18 @@
 # 本地：development: true，listen: 127.0.0.1:8080，public_url: http://127.0.0.1:5173。
 # 若不用 Vite、直接访问 Go 提供的静态前端，本地 public_url 改为 http://127.0.0.1:8080。
 listen: 0.0.0.0:8080
+# Workers runtime 的配置流、制品下载与 ACK 只监听此端口。启用下方 workers:
+# 时必填；仅通过内部 Service/NetworkPolicy 暴露给 runtime，不得接入公网网关。
+internal_listen: 0.0.0.0:8081
 public_url: https://console.example.com
 development: false
 # 允许任何已登录用户创建组织（默认 false：仅系统管理员）
 organization_self_service: false
 db: ${KRUN_DATABASE_URL}
-static_dir: dist
+# 生产控制台由 OSS/CDN 提供；Go 只接收 /api/*。
+static_dir: ""
+# 仅列出实际 CDN / 反向代理的源网段。未受信任来源的 X-Forwarded-For 会被忽略。
+trusted_proxy_cidrs: []
 
 # 所有字符串可直接填写，或使用 ${NAME} / ${NAME:-默认值}；$$ 表示字面美元符号。
 # db 示例：postgres://krun:密码@127.0.0.1:25432/krun_dev?sslmode=disable
@@ -27,7 +33,7 @@ smtp:
 
 # 所有来源默认关闭，按需 enabled: true 并填写凭据。enabled 省略时默认启用。
 # 禁用来源也会拒绝其已有 Session、CLI Session 和 API Key 的访问。
-# id 用于回调路径 /auth/<id>/callback；source_id 是稳定身份命名空间，投入使用后不要改名。
+# id 用于回调路径 /api/auth/<id>/callback；source_id 是稳定身份命名空间，投入使用后不要改名。
 # 默认认证成功后创建账号，无需 registration: jit；邀请注册可加 registration: invite_only。
 providers:
   # 开发环境一键登录，无邮箱验证；生产必须保持禁用。
@@ -132,6 +138,11 @@ providers:
 # 控制台显示“Workers 未配置”。删除此段即可关闭 Workers。
 workers:
   namespace: workers-mvp
+  # 集群内可省略以下三项，默认使用 Pod service account；local-first 开发
+  # 在 .data/dev.yaml 中显式填写本机可达 API 与 .data/kind-creds 的绝对路径。
+  kubernetes_api: https://kubernetes.default.svc
+  kubernetes_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+  kubernetes_ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
   builder_image: krun-worker-builder:20261013
   builder_pull_policy: IfNotPresent
   runtime_service: runtime-default
@@ -169,6 +180,9 @@ workers:
   runtime_token: ${KRUN_RUNTIME_TOKEN:-replace-with-a-24-plus-character-token}
   management_token: ${KRUN_MANAGEMENT_TOKEN:-replace-with-a-24-plus-character-token}
   s3_endpoint: https://s3.example.com
+  # 可省略；分别用于 builder 上传和 runtime 下载时看到的同一个桶地址。
+  s3_builder_endpoint: https://s3.builder.internal.example.com
+  s3_runtime_endpoint: https://s3.runtime.internal.example.com
   s3_bucket: krun-artifacts
   s3_location_id: primary
   s3_access_key: ${KRUN_S3_ACCESS:-replace-me}
@@ -191,5 +205,7 @@ workers:
       enabled: false
       priority: 20
       base_url: https://gitlab.com
+      # 自建 GitLab 的 OAuth endpoint 若解析到私网地址，必须由管理员显式改为 true。
+      allow_private_network: false
       client_id: ${KRUN_REPO_GITLAB_CLIENT_ID:-}
       client_secret: ${KRUN_REPO_GITLAB_CLIENT_SECRET:-}

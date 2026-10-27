@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN" data-app="krun-workers-fullstack">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="krun Workers 全栈能力验证项目" />
+    <link rel="stylesheet" href="/assets/styles-a1b2c3d4.css" />
+    <link rel="icon" href="/assets/krun-a1b2c3d4.svg" type="image/svg+xml" />
+    <title>krun Workers · Full-stack verification</title>
+  </head>
+  <body>
+    <main>
+      <header class="hero">
+        <span class="eyebrow">KRUN WORKERS</span>
+        <h1>一份 Release，<br />同时交付页面和 API。</h1>
+        <p>
+          当前页面由静态资产 serving；状态卡片与回声表单由同源 Worker API 驱动。
+        </p>
+        <nav aria-label="示例导航">
+          <a href="/">首页</a>
+          <a href="/dashboard">SPA 路由</a>
+          <a href="/about">静态 HTML</a>
+        </nav>
+      </header>
+
+      <section class="grid" aria-label="验证状态">
+        <article class="card">
+          <div class="card-heading">
+            <span class="dot" aria-hidden="true"></span>
+            <h2>Worker API</h2>
+          </div>
+          <p id="api-status" role="status">正在请求 /api/health…</p>
+          <dl>
+            <div><dt>环境</dt><dd id="environment">—</dd></div>
+            <div><dt>Release</dt><dd id="release">—</dd></div>
+          </dl>
+        </article>
+
+        <article class="card">
+          <div class="card-heading">
+            <span class="dot" aria-hidden="true"></span>
+            <h2>同源 POST</h2>
+          </div>
+          <form id="echo-form">
+            <label for="message">发送给 Worker 的消息</label>
+            <div class="form-row">
+              <input id="message" name="message" value="hello from the browser" maxlength="200" />
+              <button type="submit">发送</button>
+            </div>
+          </form>
+          <output id="echo-result" for="message">等待发送</output>
+        </article>
+      </section>
+
+      <section class="route-card">
+        <span>当前前端路由</span>
+        <strong id="current-route">/</strong>
+        <p>直接打开不存在的页面路径时，导航请求会回落到同一份 index.html。</p>
+      </section>
+    </main>
+    <script type="module" src="/assets/app-a1b2c3d4.js"></script>
+  </body>
+</html>

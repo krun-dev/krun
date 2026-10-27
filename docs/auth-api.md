@@ -8,23 +8,23 @@
 
 | 方法 | 路径 | 行为 |
 | --- | --- | --- |
-| GET | /auth/providers | 公共登录来源的 id/type/name；不含配置或 secret |
-| GET | /auth/csrf | 建立浏览器绑定，返回登录或 Session CSRF |
-| POST | /auth/:provider/login | form body，CSRF 与 Origin 检查；`return_to` 仅限 `/console/`；303 或 Accept:application/json 时返回 redirect_url |
-| GET | /auth/:provider/callback | 一次性 state、浏览器绑定、generation、过期与配置指纹，锁外兑换 Token，再原子签发本地 Session |
-| POST | /auth/:provider/email/code | 仅 email 来源；JSON `{email,return_to}`，Origin + 浏览器 CSRF，发送邮箱验证码，返回 challenge_id / expires_in / retry_after |
-| POST | /auth/:provider/email/verify | JSON `{challenge_id,code}`，Origin + 浏览器 CSRF，原子消费验证码并建立浏览器 Session，返回 redirect_url |
-| GET | /auth/me | 当前主体、凭据类型、系统管理员状态及权限修订 |
-| POST | /auth/logout | 浏览器或 CLI Session 撤销；清浏览器 Cookie |
-| POST | /auth/cli/start | 公共接口，返回 5 分钟 device_code/user_code、浏览器确认 URL |
-| POST | /auth/cli/approve | 仅浏览器 Session + CSRF；核对 user_code 后签发 1 小时 CLI Session |
-| POST | /auth/cli/poll | 凭 256 bit device_code 领取一次 CLI Session；未批准 409，过期/重放 400 |
+| GET | /api/auth/providers | 公共登录来源的 id/type/name；不含配置或 secret |
+| POST | /api/auth/csrf | 受限地建立浏览器绑定，返回登录或 Session CSRF |
+| POST | /api/auth/:provider/login | form body，CSRF 与 Origin 检查；`return_to` 仅限根页面的查询参数路径；303 或 Accept:application/json 时返回 redirect_url |
+| GET | /api/auth/:provider/callback | 一次性 state、浏览器绑定、generation、过期与配置指纹，锁外兑换 Token，再原子签发本地 Session |
+| POST | /api/auth/:provider/email/code | 仅 email 来源；JSON `{email,return_to}`，Origin + 浏览器 CSRF，发送邮箱验证码，返回 challenge_id / expires_in / retry_after |
+| POST | /api/auth/:provider/email/verify | JSON `{challenge_id,code}`，Origin + 浏览器 CSRF，原子消费验证码并建立浏览器 Session，返回 redirect_url |
+| GET | /api/auth/me | 当前主体、凭据类型、系统管理员状态及权限修订 |
+| POST | /api/auth/logout | 浏览器或 CLI Session 撤销；清浏览器 Cookie |
+| POST | /api/auth/cli/start | 公共接口，返回 5 分钟 device_code/user_code、浏览器确认 URL |
+| POST | /api/auth/cli/approve | 仅浏览器 Session + CSRF；核对 user_code 后签发 1 小时 CLI Session |
+| POST | /api/auth/cli/poll | 凭 256 bit device_code 领取一次 CLI Session；未批准 409，过期/重放 400 |
 
 CLI Session audience 只限 krun Control API，凭据前缀 `krun_cli_`，作为短期人类会话使用；它不是 API Key，不能批准其他终端登录。浏览器 Session 的绝对期限 8 小时，CLI 1 小时，闲置期限均 30 分钟；无 refresh token。客户端必须明确核对终端显示的确认码。
 
 Session Cookie：生产 `__Host-krun_session`，Secure/HttpOnly/SameSite=Lax/Path=/、无 Domain；开发使用独立 `krun_dev_session`。Cookie 写操作要求固定 Origin 和 CSRF header，预登录 form 可用 csrf_token 字段。Bearer 不要求 CSRF，仍检查凭据、用户状态、auth_version 与启用来源。
 
-支持前后端分离部署：后端 static_dir 为空或省略时只提供 API，前端公开 origin 代理 /auth 和 /api。public_url、SSO 回调与 CLI 浏览器确认 URL 都使用前端 origin，详见 [部署说明](deployment.md)。
+生产前端是 OSS 上的静态文件，公开 origin 只把 `/api/*` 转发给 Go。`public_url`、SSO 回调与 CLI 浏览器确认 URL 都使用这个同源入口，详见 [部署说明](deployment.md)。
 
 ## Provider 配置
 
@@ -102,6 +102,6 @@ Key 创建：`{name, expires_in, policy}`。`expires_in` 必填，`0` 表示长�
 
 响应为 `{items,total,limit,has_more,cursor,next_cursor,as_of,retention_days}`；最后一页 `has_more:false, next_cursor:""`。按 time / id 倒序，首个请求固定 `as_of` 快照；翻页和返回之前的 `cursor` 不受新日志插入影响。刷新时不传 cursor 获取最新快照。`total` 统计该快照中仍处于保留期且属于请求范围的记录；若翻页期间记录跨过 7 天边界，过期记录仍会被删除。超过保留期的游标返回 409 `AUDIT_CURSOR_EXPIRED`，无效、篡改、跨范围游标及非法 limit 返回 400。
 
-审计仅保留滚动最近 7 天。每个存储事务提交前清理过期记录；服务启动读取存储时执行清理，运行中每分钟清理一次，空闲时也生效。删除直接持久化到PostgreSQL 快照，未提供长期归档。
+审计仅保留滚动最近 7 天。后台保留任务每分钟清理过期行，空闲时也生效；未提供长期归档。
 
 CLI 同步支持 `krun audit --org ID --limit 100 --cursor CURSOR`；不指定 org 查询系统审计，仍要求系统审计权限。

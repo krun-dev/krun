@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -43,10 +45,6 @@ func body(r *http.Request, value any) error {
 	return nil
 }
 
-type rateEntry struct {
-	Start time.Time
-	Count int
-}
 type Server struct {
 	workers                *workersController
 	workerInvokeClient     *http.Client
@@ -56,8 +54,7 @@ type Server struct {
 	mux                    *http.ServeMux
 	internalMux            *http.ServeMux
 	providers              map[string]*provider
-	rateMu                 sync.Mutex
-	rates                  map[string]rateEntry
+	trustedProxies         []*net.IPNet
 	sendEmail              func(context.Context, string, string, string) error
 }
 
@@ -65,7 +62,11 @@ func NewServer(ctx context.Context, c Config, store *Store) (*Server, error) {
 	if e := c.Validate(); e != nil {
 		return nil, e
 	}
-	s := &Server{Config: c, Store: store, providers: map[string]*provider{}, rates: map[string]rateEntry{}}
+	s := &Server{Config: c, Store: store, providers: map[string]*provider{}}
+	for _, cidr := range c.TrustedProxyCIDRs {
+		_, network, _ := net.ParseCIDR(cidr) // Config.Validate already checked it.
+		s.trustedProxies = append(s.trustedProxies, network)
+	}
 	s.workerInvokeClient = newWorkerInvokeClient()
 	s.workerRepositoryClient = newWorkerRepositoryClient()
 	s.sendEmail = c.sendVerificationEmail
@@ -116,14 +117,14 @@ func (s *Server) routes() {
 	m := http.NewServeMux()
 	s.mux = m
 	m.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, r *http.Request) {
-		if e := s.Store.View(r.Context(), PartitionIAM, func(*State) error { return nil }); e != nil {
+		if e := s.Store.Ping(r.Context()); e != nil {
 			s.writeError(w, r, e)
 			return
 		}
 		s.json(w, 200, map[string]string{"status": "ok"})
 	})
 	m.HandleFunc("GET /api/auth/providers", s.providersHandler)
-	m.HandleFunc("GET /api/auth/csrf", s.csrfHandler)
+	m.HandleFunc("POST /api/auth/csrf", s.csrfHandler)
 	m.HandleFunc("POST /api/auth/{provider}/login", s.loginHandler)
 	m.HandleFunc("POST /api/auth/{provider}/email/code", s.emailCodeHandler)
 	m.HandleFunc("POST /api/auth/{provider}/email/verify", s.emailVerifyHandler)
@@ -150,7 +151,18 @@ func (s *Server) routes() {
 		m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { s.writeError(w, r, notFound()) })
 		return
 	}
-	fs := http.FileServer(http.Dir(s.Config.StaticDir))
+	staticRoot := s.Config.StaticDir
+	// The deployable frontend is deliberately isolated under dist/console so
+	// uploading the console cannot accidentally include server binaries or
+	// other repository output. For local all-in-one serving, accept the build
+	// root (dist) and descend into that static artifact automatically.
+	if _, err := os.Stat(filepath.Join(staticRoot, "index.html")); errors.Is(err, os.ErrNotExist) {
+		consoleRoot := filepath.Join(staticRoot, "console")
+		if _, consoleErr := os.Stat(filepath.Join(consoleRoot, "index.html")); consoleErr == nil {
+			staticRoot = consoleRoot
+		}
+	}
+	fs := http.FileServer(http.Dir(staticRoot))
 	publicOrigin, _ := url.Parse(s.Config.PublicURL)
 	m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" && r.Method != "HEAD" {
@@ -238,6 +250,7 @@ func (s *Server) sourceEnabled(source string) bool {
 	}
 	return false
 }
+
 // credentials are the single-row lookups resolved before the IAM snapshot is
 // loaded. Keeping them separate is what makes an authenticated read cost one
 // session lookup instead of a whole-document write.
@@ -246,7 +259,7 @@ type authCredentials struct {
 	sessionHash string
 	hasSession  bool
 	isKey       bool
-	keyHash     string
+	keyID       string
 }
 
 func (s *Server) readCredentials(r *http.Request) (authCredentials, error) {
@@ -269,7 +282,13 @@ func (s *Server) readCredentials(r *http.Request) (authCredentials, error) {
 	switch {
 	case strings.HasPrefix(token, "krun_key_"):
 		c.isKey = true
-		c.keyHash = digest(token)
+		keyID, ok, err := s.Store.apiKeyIDByHash(r.Context(), digest(token))
+		if err != nil {
+			return c, err
+		}
+		if ok {
+			c.keyID = keyID
+		}
 	case token != "":
 		session, ok, err := s.Store.sessionByHash(r.Context(), digest(token))
 		if err != nil {
@@ -287,18 +306,10 @@ func (s *Server) readCredentials(r *http.Request) (authCredentials, error) {
 func (s *Server) authenticate(st *State, c authCredentials, r *http.Request) (Principal, error) {
 	p := Principal{}
 	if c.isKey {
-		for id, h := range st.KeyHashes {
-			if subtle.ConstantTimeCompare([]byte(c.keyHash), []byte(h)) != 1 {
-				continue
-			}
-			k, ok := st.Keys[id]
-			if !ok || !k.active() {
-				break
-			}
+		if k, ok := st.Keys[c.keyID]; ok && k.active() {
 			p.User = st.Users[k.Owner]
 			p.Kind = "api_key"
 			p.Key = &k
-			break
 		}
 	} else if c.hasSession {
 		session := c.session
@@ -354,6 +365,19 @@ func (s *Server) protectedWorkers(sessionOnly bool, fn endpoint) http.HandlerFun
 
 func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, fn endpoint) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		requestPersist := persist
+		c, e := s.readCredentials(r)
+		if e != nil {
+			s.writeError(w, r, e)
+			return
+		}
+		// Credential lookups above are single-row indexed reads. Reject a
+		// missing or unknown credential before reading a potentially slow body
+		// or loading an IAM/Workers snapshot.
+		if !c.hasSession && c.keyID == "" {
+			s.writeError(w, r, problem(401, "UNAUTHENTICATED", "Authentication required"))
+			return
+		}
 		// Read the bounded request outside the state transaction; slow clients
 		// must not hold a database transaction open.
 		if r.Body != nil && r.Method != "GET" && r.Method != "HEAD" {
@@ -364,20 +388,14 @@ func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, f
 			}
 			r.Body = io.NopCloser(bytes.NewReader(raw))
 		}
-		// A read must never write. Denials are still audited because audits are
-		// flushed independently of the state partitions.
+		// A read must never write, including on authorization denial.
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
-			persist = 0
-		}
-		c, e := s.readCredentials(r)
-		if e != nil {
-			s.writeError(w, r, e)
-			return
+			requestPersist = 0
 		}
 		var out any
 		status := 200
 		var appErr error
-		err := s.Store.Mutate(r.Context(), load, persist, func(st *State) error {
+		err := s.Store.Mutate(r.Context(), load, requestPersist, func(st *State) error {
 			p, e := s.protectedPrincipal(st, c, r, sessionOnly)
 			if e != nil {
 				appErr = e
@@ -385,14 +403,21 @@ func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, f
 			}
 			// Snapshot the loaded state so a rejected handler cannot leave a
 			// partial mutation behind while its denial audit still commits.
-			checkpoint, e := cloneState(st)
-			if e != nil {
-				return e
+			var checkpoint *State
+			if requestPersist != 0 {
+				checkpoint, e = cloneState(st)
+				if e != nil {
+					return e
+				}
 			}
 			out, status, appErr = fn(st, p, r)
 			if appErr != nil {
-				*st = *checkpoint
-				s.audit(st, p, r, r.Method+" "+r.Pattern, r.PathValue("org"), false)
+				if checkpoint != nil {
+					*st = *checkpoint
+				}
+				if r.Method != http.MethodGet && r.Method != http.MethodHead {
+					s.audit(st, p, r, r.Method+" "+r.Pattern, r.PathValue("org"), false)
+				}
 			}
 			return nil
 		})
@@ -431,45 +456,73 @@ func (s *Server) audit(st *State, p Principal, r *http.Request, action, target s
 	if key, ok := st.Keys[target]; ok {
 		org = key.Organization
 	}
-	s.Store.recordAudit(Audit{ID: randomID("audit"), Time: now(), Actor: p.User.ID, Credential: p.Kind, KeyID: key, Action: action, Resource: target, Organization: org, Allowed: allowed, RequestID: r.Header.Get("X-Krun-Request-ID"), Revision: st.Revision})
+	st.recordAudit(Audit{ID: randomID("audit"), Time: now(), Actor: p.User.ID, Credential: p.Kind, KeyID: key, Action: action, Resource: target, Organization: org, Allowed: allowed, RequestID: r.Header.Get("X-Krun-Request-ID"), Revision: st.Revision})
 }
 func (s *Server) require(st *State, p Principal, r *http.Request, action string, t Target) error {
 	d, e := Authorize(st, p, action, t)
 	if e != nil {
 		return e
 	}
-	// Read decisions are not audited: polling traffic would grow the audit
-	// log (and therefore the whole state blob) without bound. Denials stay.
-	if d.Allowed && r.Method != http.MethodGet && r.Method != http.MethodHead {
+	// Reads, including denials, never append audit rows. A caller can otherwise
+	// turn an inexpensive forbidden GET into an unbounded database write path.
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		s.audit(st, p, r, action, t.ID, d.Allowed)
 	}
 	if !d.Allowed {
-		s.audit(st, p, r, action, t.ID, d.Allowed)
 		return forbidden()
 	}
 	return nil
 }
-func (s *Server) limited(r *http.Request) bool {
-	s.rateMu.Lock()
-	defer s.rateMu.Unlock()
-	n := now()
-	for k, e := range s.rates {
-		if n.Sub(e.Start) > time.Minute {
-			delete(s.rates, k)
+func (s *Server) checkRateLimit(r *http.Request) error {
+	exceeded, err := s.Store.RateLimitExceeded(r.Context(), "auth", s.clientIP(r), time.Minute, 120)
+	if err != nil {
+		return err
+	}
+	if exceeded {
+		return problem(429, "RATE_LIMITED", "Try again later")
+	}
+	return nil
+}
+
+func (s *Server) trustedProxy(ip net.IP) bool {
+	for _, network := range s.trustedProxies {
+		if network.Contains(ip) {
+			return true
 		}
 	}
-	host := r.RemoteAddr
-	if i := strings.LastIndex(host, ":"); i >= 0 {
-		host = host[:i]
-	}
-	e := s.rates[host]
-	if n.Sub(e.Start) > time.Minute {
-		e = rateEntry{Start: n}
-	}
-	e.Count++
-	s.rates[host] = e
-	return e.Count > 120 || len(s.rates) > 10000
+	return false
 }
+
+// clientIP walks a trusted X-Forwarded-For chain from the nearest hop toward
+// the browser. A malformed chain is ignored in full; accepting only its useful
+// prefix would let an attacker influence the result.
+func (s *Server) clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	peer := net.ParseIP(host)
+	if peer == nil || !s.trustedProxy(peer) {
+		return host
+	}
+	raw := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
+	parts := strings.Split(raw, ",")
+	chain := make([]net.IP, 0, len(parts))
+	for _, part := range parts {
+		ip := net.ParseIP(strings.TrimSpace(part))
+		if ip == nil {
+			return host
+		}
+		chain = append(chain, ip)
+	}
+	for i := len(chain) - 1; i >= 0; i-- {
+		if !s.trustedProxy(chain[i]) || i == 0 {
+			return chain[i].String()
+		}
+	}
+	return host
+}
+
 // cleanup is gone from the request path: expired sessions, browsers and login
 // transactions are deleted by the background retention loop in retention.go.
 func (s *Server) me(st *State, p Principal, r *http.Request) (any, int, error) {
@@ -479,10 +532,19 @@ func (s *Server) me(st *State, p Principal, r *http.Request) (any, int, error) {
 // logout deletes this session row and bumps the browser generation so a
 // concurrent login cannot be replayed onto the just-closed browser.
 func (s *Server) logout(st *State, p Principal, r *http.Request) (any, int, error) {
+	browserHash := digest(s.cookie(r, "browser"))
+	s.audit(st, p, r, "auth.logout", p.User.ID, true)
+	if s.Store.pool != nil {
+		audits := append([]Audit(nil), st.pendingAudits...)
+		st.pendingAudits = nil
+		if e := s.Store.logoutSessionAudited(r.Context(), p.SessionHash, browserHash, audits); e != nil {
+			return nil, 0, e
+		}
+		return nil, 204, nil
+	}
 	if e := s.Store.deleteSession(r.Context(), p.SessionHash); e != nil {
 		return nil, 0, e
 	}
-	browserHash := digest(s.cookie(r, "browser"))
 	if browser, ok, e := s.Store.browserFor(r.Context(), browserHash); e != nil {
 		return nil, 0, e
 	} else if ok {
@@ -491,7 +553,6 @@ func (s *Server) logout(st *State, p Principal, r *http.Request) (any, int, erro
 			return nil, 0, e
 		}
 	}
-	s.audit(st, p, r, "auth.logout", p.User.ID, true)
 	return nil, 204, nil
 }
 func (s *Server) providersHandler(w http.ResponseWriter, r *http.Request) {
@@ -504,9 +565,14 @@ func (s *Server) providersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	s.json(w, 200, map[string]any{"providers": out, "development": s.Config.Development, "organization_self_service": s.Config.OrganizationSelfService})
 }
+
 // csrfHandler issues the token a browser needs before a mutating request. It
 // touches only the session or browser row involved.
 func (s *Server) csrfHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Origin") != s.Config.PublicURL {
+		s.writeError(w, r, problem(403, "CSRF_INVALID", "CSRF verification failed"))
+		return
+	}
 	sessionHash := digest(s.cookie(r, "session"))
 	if session, ok, e := s.Store.sessionByHash(r.Context(), sessionHash); e != nil {
 		s.writeError(w, r, e)
@@ -523,6 +589,15 @@ func (s *Server) csrfHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok || !now().Before(browser.Expires) {
+		exceeded, err := s.Store.RateLimitExceeded(r.Context(), "csrf", s.clientIP(r), time.Minute, 30)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		if exceeded {
+			s.writeError(w, r, problem(429, "RATE_LIMITED", "Try again later"))
+			return
+		}
 		browserToken = randomToken()
 		browserHash = digest(browserToken)
 		browser = Browser{CSRF: randomToken(), Expires: now().Add(15 * time.Minute)}
@@ -537,6 +612,8 @@ func (s *Server) csrfHandler(w http.ResponseWriter, r *http.Request) {
 	s.json(w, 200, map[string]string{"csrf_token": browser.CSRF})
 }
 func Serve(ctx context.Context, c Config) error {
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
 	store, e := OpenStore(ctx, c.DB)
 	if e != nil {
 		return e
@@ -546,10 +623,16 @@ func Serve(ctx context.Context, c Config) error {
 	if e != nil {
 		return e
 	}
+	workersDone := make(chan struct{})
 	if handler.workers != nil {
-		go handler.workers.run(ctx)
+		go func() {
+			defer close(workersDone)
+			handler.workers.run(runCtx)
+		}()
+	} else {
+		close(workersDone)
 	}
-	retentionCtx, stopRetention := context.WithCancel(ctx)
+	retentionCtx, stopRetention := context.WithCancel(runCtx)
 	retentionDone := make(chan struct{})
 	go func() {
 		defer close(retentionDone)
@@ -557,32 +640,55 @@ func Serve(ctx context.Context, c Config) error {
 		// here instead of on the request path.
 		store.retain(retentionCtx, time.Minute)
 	}()
-	defer func() { stopRetention(); <-retentionDone }()
 	server := &http.Server{Addr: c.Listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 25 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 	servers := []*http.Server{server}
 	if c.InternalListen != "" {
 		servers = append(servers, &http.Server{Addr: c.InternalListen, Handler: http.HandlerFunc(handler.serveInternal), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 35 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10})
 	}
-	go func() {
-		<-ctx.Done()
-		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		for _, srv := range servers {
-			_ = srv.Shutdown(shutdown)
-		}
-	}()
 	fmt.Print(localize.Format(localize.Language(ctx), "krun control server: %s/\n", c.PublicURL))
-	for _, srv := range servers[1:] {
+	err := serveHTTPServers(runCtx, servers)
+	// Stop every background user of the Store before its deferred Close runs.
+	// A listener bind failure follows the same order as a normal shutdown.
+	cancelRun()
+	stopRetention()
+	<-retentionDone
+	<-workersDone
+	return err
+}
+
+// serveHTTPServers treats every configured listener as required. In
+// particular, a failed internal runtime listener must fail the process instead
+// of leaving a superficially healthy public server with a broken data plane.
+func serveHTTPServers(ctx context.Context, servers []*http.Server) error {
+	errCh := make(chan error, len(servers))
+	var wg sync.WaitGroup
+	for _, srv := range servers {
+		wg.Add(1)
 		go func(srv *http.Server) {
-			e := srv.ListenAndServe()
-			if !errors.Is(e, http.ErrServerClosed) && e != nil {
-				fmt.Fprintln(os.Stderr, "internal listener:", e)
+			defer wg.Done()
+			err := srv.ListenAndServe()
+			if errors.Is(err, http.ErrServerClosed) {
+				err = nil
 			}
+			if err != nil {
+				err = fmt.Errorf("listen %s: %w", srv.Addr, err)
+			}
+			errCh <- err
 		}(srv)
 	}
-	e = server.ListenAndServe()
-	if errors.Is(e, http.ErrServerClosed) {
-		return nil
+	var result error
+	select {
+	case <-ctx.Done():
+	case result = <-errCh:
+		if result == nil && ctx.Err() == nil {
+			result = errors.New("HTTP listener stopped unexpectedly")
+		}
 	}
-	return e
+	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	for _, srv := range servers {
+		_ = srv.Shutdown(shutdown)
+	}
+	cancel()
+	wg.Wait()
+	return result
 }

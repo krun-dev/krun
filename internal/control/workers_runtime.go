@@ -181,6 +181,15 @@ func (s *Server) workerRuntimeAck(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, problem(422, "ACK_INVALID", "Pod UID and pool required"))
 		return
 	}
+	head, _, e := s.Store.ConfigState(r.Context())
+	if e != nil {
+		s.writeError(w, r, e)
+		return
+	}
+	if in.Revision < 0 || int64(in.Revision) > head {
+		s.writeError(w, r, problem(422, "ACK_INVALID", "Config revision is outside the published range"))
+		return
+	}
 	in.Time = now()
 	if e := s.Store.RecordAck(r.Context(), in); e != nil {
 		s.writeError(w, r, e)
@@ -276,7 +285,7 @@ func (s *Server) workerRuntimeReleaseAssetURL(w http.ResponseWriter, r *http.Req
 		return
 	}
 	key := workerAssetObjectKey("pub", assets.Release.Organization, assets.Release.Service, assets.Artifact.ArchiveDigest, name)
-	signed, e := s.workers.s3Builder.PresignedGetObject(r.Context(), s.workers.config.S3Bucket, key, 15*time.Minute, nil)
+	signed, e := s.workers.runtimeS3().PresignedGetObject(r.Context(), s.workers.config.S3Bucket, key, 15*time.Minute, nil)
 	if e != nil {
 		s.writeError(w, r, problem(503, "ASSET_UNAVAILABLE", "Asset storage unavailable"))
 		return

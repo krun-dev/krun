@@ -39,7 +39,7 @@ func (s *Server) orgCreate(st *State, p Principal, r *http.Request) (any, int, e
 	if !nameValid(in.Name) {
 		return nil, 0, problem(422, "INVALID_REQUEST", "Name required (max 128 bytes)")
 	}
-	org := Organization{ID: randomID("org"), Name: in.Name, Sources: []string{}}
+	org := Organization{ID: randomID("org"), Name: in.Name, Sources: []string{}, Revision: 1}
 	st.Organizations[org.ID] = org
 	st.Members[memberKey(org.ID, p.User.ID)] = Member{org.ID, p.User.ID}
 	id := randomID("role")
@@ -69,8 +69,9 @@ func (s *Server) orgUpdate(st *State, p Principal, r *http.Request) (any, int, e
 		return nil, 0, e
 	}
 	var in struct {
-		Name    string   `json:"name"`
-		Sources []string `json:"allowed_sources"`
+		Name     string   `json:"name"`
+		Sources  []string `json:"allowed_sources"`
+		Revision int      `json:"expected_revision"`
 	}
 	if e = body(r, &in); e != nil {
 		return nil, 0, e
@@ -84,8 +85,12 @@ func (s *Server) orgUpdate(st *State, p Principal, r *http.Request) (any, int, e
 		}
 	}
 	org := st.Organizations[t.ID]
+	if in.Revision != org.Revision {
+		return nil, 0, problem(409, "REVISION_CONFLICT", "Organization changed")
+	}
 	org.Name = in.Name
 	org.Sources = in.Sources
+	org.Revision++
 	st.Organizations[t.ID] = org
 	st.Revision++
 	return org, 200, nil

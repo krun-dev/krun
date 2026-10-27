@@ -65,15 +65,19 @@ type SMTPConfig struct {
 }
 
 type Config struct {
-	Workers        *WorkersConfig   `json:"workers,omitempty"`
-	SMTP           SMTPConfig       `json:"smtp"`
-	Listen         string           `json:"listen"`
-	InternalListen string           `json:"internal_listen"`
-	PublicURL      string           `json:"public_url"`
-	DB             string           `json:"db"`
-	Development    bool             `json:"development"`
-	StaticDir      string           `json:"static_dir"`
-	Providers      []ProviderConfig `json:"providers"`
+	Workers        *WorkersConfig `json:"workers,omitempty"`
+	SMTP           SMTPConfig     `json:"smtp"`
+	Listen         string         `json:"listen"`
+	InternalListen string         `json:"internal_listen"`
+	PublicURL      string         `json:"public_url"`
+	DB             string         `json:"db"`
+	Development    bool           `json:"development"`
+	StaticDir      string         `json:"static_dir"`
+	// TrustedProxyCIDRs is the explicit set of reverse-proxy source networks
+	// allowed to supply X-Forwarded-For. The header is ignored for every other
+	// peer so clients cannot choose their own rate-limit identity.
+	TrustedProxyCIDRs []string         `json:"trusted_proxy_cidrs"`
+	Providers         []ProviderConfig `json:"providers"`
 	// OrganizationSelfService lets any signed-in user create an organization.
 	// Off by default: organization.create remains system-admin only.
 	OrganizationSelfService bool `json:"organization_self_service"`
@@ -106,6 +110,9 @@ func (c *Config) Validate() error {
 	if _, _, err := net.SplitHostPort(c.Listen); err != nil {
 		return errors.New("listen must be host:port")
 	}
+	if c.Workers != nil && strings.TrimSpace(c.InternalListen) == "" {
+		return errors.New("internal_listen required when Workers are configured")
+	}
 	if c.InternalListen != "" {
 		if _, _, err := net.SplitHostPort(c.InternalListen); err != nil {
 			return errors.New("internal_listen must be host:port")
@@ -124,6 +131,11 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(c.DB) == "" {
 		return errors.New("PostgreSQL db connection string required")
+	}
+	for _, cidr := range c.TrustedProxyCIDRs {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return fmt.Errorf("invalid trusted_proxy_cidrs entry %q", cidr)
+		}
 	}
 	if _, err := pgxpool.ParseConfig(c.DB); err != nil {
 		return errors.New("invalid PostgreSQL db connection string")

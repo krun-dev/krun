@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -18,19 +19,192 @@ import (
 
 const workerClaimLease = "60 seconds"
 
-// claimBuild moves a build from an active state to building. It returns false
-// when the build is already finished or claimed by a live replica.
+var errArtifactBeingCollected = errors.New("artifact is being garbage-collected")
+var errBuildClaimLost = errors.New("build claim is no longer owned")
+
+// claimBuild moves a queued build to building, refreshes the current owner's
+// lease, or takes over a lease whose owner stopped making progress. A
+// controller calls this before every externally-visible build side effect.
 func (s *Store) claimBuild(ctx context.Context, id, replica string) (bool, error) {
 	if s.pool == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.memory == nil {
+			return false, errors.New("store is not initialized")
+		}
+		build, ok := s.memory.Workers.Builds[id]
+		if !ok || workerBuildTerminal(build.State) {
+			return false, nil
+		}
+		claimed := now()
+		build.State, build.ClaimedBy, build.ClaimedAt = "building", replica, &claimed
+		s.memory.Workers.Builds[id] = build
 		return true, nil
 	}
 	tag, err := s.pool.Exec(ctx, `UPDATE krun_worker_builds
 		SET state='building', claimed_by=$2, claimed_at=now()
-		WHERE build_id=$1 AND state IN ('queued','fetching')`, id, replica)
+		WHERE build_id=$1 AND (
+			state='queued'
+			OR (state IN ('fetching','building') AND (
+				claimed_by=$2 OR claimed_at IS NULL OR claimed_at < now() - $3::interval
+			))
+		)`, id, replica, workerClaimLease)
 	if err != nil {
 		return false, err
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+func (s *Store) renewBuildClaim(ctx context.Context, id, replica string) (bool, error) {
+	if s.pool == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.memory == nil {
+			return false, errors.New("store is not initialized")
+		}
+		build, ok := s.memory.Workers.Builds[id]
+		if !ok || build.ClaimedBy != replica || (build.State != "fetching" && build.State != "building") {
+			return false, nil
+		}
+		claimed := now()
+		build.ClaimedAt = &claimed
+		s.memory.Workers.Builds[id] = build
+		return true, nil
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE krun_worker_builds SET claimed_at=now()
+		WHERE build_id=$1 AND claimed_by=$2 AND state IN ('fetching','building')`, id, replica)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// setClaimedBuildState applies a controller transition only while this replica
+// still owns the build lease. Generic snapshot writes are intentionally not
+// used for controller progress because their read happens before the write
+// transaction and can otherwise revive a terminal build.
+func (s *Store) setClaimedBuildState(ctx context.Context, id, replica, from, to string) (bool, error) {
+	if s.pool == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.memory == nil {
+			return false, errors.New("store is not initialized")
+		}
+		build, ok := s.memory.Workers.Builds[id]
+		if !ok || build.ClaimedBy != replica || build.State != from {
+			return false, nil
+		}
+		build.State = to
+		s.memory.Workers.Builds[id] = build
+		return true, nil
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE krun_worker_builds SET state=$4
+		WHERE build_id=$1 AND claimed_by=$2 AND state=$3`, id, replica, from, to)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+func (s *Store) setClaimedBuildRepository(ctx context.Context, id, replica string, source WorkerBuildRepository) (bool, error) {
+	raw, err := json.Marshal(source)
+	if err != nil {
+		return false, err
+	}
+	if s.pool == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.memory == nil {
+			return false, errors.New("store is not initialized")
+		}
+		build, ok := s.memory.Workers.Builds[id]
+		if !ok || build.ClaimedBy != replica || (build.State != "fetching" && build.State != "building") {
+			return false, nil
+		}
+		build.Repository = &source
+		s.memory.Workers.Builds[id] = build
+		return true, nil
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE krun_worker_builds SET repository=$3
+		WHERE build_id=$1 AND claimed_by=$2 AND state IN ('fetching','building')`, id, replica, raw)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// storeClaimedRepositoryBuild atomically persists the fetched source metadata,
+// source reservation and private log while this replica still owns an active
+// build. A terminal transition or lease takeover makes the whole write a no-op
+// with errBuildClaimLost instead of restoring stale state.
+func (s *Store) storeClaimedRepositoryBuild(ctx context.Context, id, replica string, build WorkerBuild, private WorkerBuildPrivate) error {
+	if s.pool == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.memory == nil {
+			return errors.New("store is not initialized")
+		}
+		current, ok := s.memory.Workers.Builds[id]
+		if !ok || current.ClaimedBy != replica || workerBuildTerminal(current.State) {
+			return errBuildClaimLost
+		}
+		build.ClaimedBy, build.ClaimedAt = current.ClaimedBy, current.ClaimedAt
+		s.memory.Workers.Builds[id] = build
+		s.memory.Workers.BuildPrivate[id] = private
+		return nil
+	}
+	repository, err := json.Marshal(build.Repository)
+	if err != nil {
+		return err
+	}
+	var assets []byte
+	if build.Assets != nil {
+		assets, err = json.Marshal(build.Assets)
+		if err != nil {
+			return err
+		}
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `UPDATE krun_worker_builds
+		SET state=$3, entrypoint=$4, source_digest=$5, profile=$6, job=$7,
+		    artifact_id=$8, error=$9, repository=$10, assets=$11, finished_at=$12
+		WHERE build_id=$1 AND claimed_by=$2 AND state IN ('fetching','building')`,
+		id, replica, build.State, build.Entrypoint, build.SourceDigest, build.Profile,
+		build.Job, build.Artifact, build.Error, repository, assets, build.Finished)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return errBuildClaimLost
+	}
+	var oldSource string
+	if err = tx.QueryRow(ctx, `SELECT source_key FROM krun_worker_build_private WHERE build_id=$1`, id).Scan(&oldSource); err != nil {
+		return err
+	}
+	if private.SourceKey != "" && private.SourceKey != oldSource {
+		if err = registerGeneratedBuildSourceTx(ctx, tx, id, build.Organization, private.SourceKey); err != nil {
+			return err
+		}
+	}
+	var files []byte
+	if private.Files != nil {
+		files, err = json.Marshal(private.Files)
+		if err != nil {
+			return err
+		}
+	}
+	if _, err = tx.Exec(ctx, `UPDATE krun_worker_build_private
+		SET actor_user_id=$2, actor_key_id=$3, actor_auth_version=$4,
+		    source_key=$5, files=$6, log=$7 WHERE build_id=$1`, id,
+		private.Actor.User, private.Actor.Key, private.Actor.AuthVersion,
+		private.SourceKey, files, private.Log); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // claimOperation prepares a queued operation for validation.
@@ -47,7 +221,8 @@ func (s *Store) claimOperation(ctx context.Context, id, replica string) (bool, e
 	return tag.RowsAffected() == 1, nil
 }
 
-// claimStaleOperation takes over a validating operation whose claimer died.
+// claimStaleOperation refreshes the current owner's validating lease or takes
+// over one whose claimer died.
 func (s *Store) claimStaleOperation(ctx context.Context, id, replica string) (bool, error) {
 	if s.pool == nil {
 		return false, nil
@@ -55,7 +230,7 @@ func (s *Store) claimStaleOperation(ctx context.Context, id, replica string) (bo
 	tag, err := s.pool.Exec(ctx, `UPDATE krun_worker_operations
 		SET claimed_by=$2, claimed_at=now()
 		WHERE operation_id=$1 AND state='validating'
-		  AND claimed_at < now() - $3::interval`, id, replica, workerClaimLease)
+		  AND (claimed_by=$2 OR claimed_at IS NULL OR claimed_at < now() - $3::interval)`, id, replica, workerClaimLease)
 	if err != nil {
 		return false, err
 	}
@@ -75,15 +250,18 @@ func (s *Store) commitOperation(ctx context.Context, op WorkerOperation) (bool, 
 	}
 	defer tx.Rollback(ctx)
 
-	// Supersede any earlier committed operation for the same environment; it is
-	// still converging and its release is about to be replaced.
-	if _, err = tx.Exec(ctx, `UPDATE krun_worker_operations
-		SET state='superseded', error='Replaced by '||$3, finished_at=now()
-		WHERE service_id=$1 AND env_name=$2 AND operation_id<>$3 AND state='committed'`,
-		op.Service, op.Environment, op.ID); err != nil {
+	// Win this operation before changing the environment. The transient state
+	// is visible only inside this transaction, so a crash rolls it back and a
+	// concurrent committer cannot publish a release for an operation it lost.
+	tag, err := tx.Exec(ctx, `UPDATE krun_worker_operations SET state='committing'
+		WHERE operation_id=$1 AND state IN ('queued','validating')`, op.ID)
+	if err != nil {
 		return false, err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE krun_worker_environments
+	if tag.RowsAffected() == 0 {
+		return false, tx.Commit(ctx)
+	}
+	tag, err = tx.Exec(ctx, `UPDATE krun_worker_environments
 		SET release_id=$4, release_revision=release_revision+1, updated_at=now()
 		WHERE service_id=$1 AND env_name=$2 AND release_revision=$3 AND enabled`,
 		op.Service, op.Environment, op.ExpectedRevision, op.Release)
@@ -95,10 +273,21 @@ func (s *Store) commitOperation(ctx context.Context, op WorkerOperation) (bool, 
 		// previous single-writer version also did on a revision conflict.
 		if _, err = tx.Exec(ctx, `UPDATE krun_worker_operations
 			SET state='failed', error='Release or configuration revision conflict', finished_at=now()
-			WHERE operation_id=$1 AND state IN ('queued','validating')`, op.ID); err != nil {
+			WHERE operation_id=$1 AND state='committing'`, op.ID); err != nil {
 			return false, err
 		}
 		return false, tx.Commit(ctx)
+	}
+	if err = bumpWorkerTopologyGeneration(ctx, tx); err != nil {
+		return false, err
+	}
+	// Supersede an earlier committed operation only after this release has won
+	// the environment CAS. A stale operation must not cancel live convergence.
+	if _, err = tx.Exec(ctx, `UPDATE krun_worker_operations
+		SET state='superseded', error='Replaced by '||$3, finished_at=now()
+		WHERE service_id=$1 AND env_name=$2 AND operation_id<>$3 AND state='committed'`,
+		op.Service, op.Environment, op.ID); err != nil {
+		return false, err
 	}
 	var revision int
 	if err = tx.QueryRow(ctx, `SELECT release_revision FROM krun_worker_environments WHERE service_id=$1 AND env_name=$2`, op.Service, op.Environment).Scan(&revision); err != nil {
@@ -116,7 +305,7 @@ func (s *Store) commitOperation(ctx context.Context, op WorkerOperation) (bool, 
 		            WHEN 'synchronize' THEN jsonb_set(step, '{state}', '"running"')
 		            ELSE step END), steps)
 		        FROM jsonb_array_elements(steps) AS step)
-		WHERE operation_id=$1 AND state IN ('queued','validating')`, op.ID, revision)
+		WHERE operation_id=$1 AND state='committing'`, op.ID, revision)
 	if err != nil {
 		return false, err
 	}
@@ -162,14 +351,41 @@ func (s *Store) confirmOperation(ctx context.Context, op WorkerOperation) error 
 	return tx.Commit(ctx)
 }
 
-// setOperationEdgeRevision records the published config revision. Zero means it
-// has not been published yet.
-func (s *Store) setOperationEdgeRevision(ctx context.Context, id string, revision int64) error {
+// setOperationEdgeRevision records the first published config revision that
+// contains this operation's commit. That revision is a durable lower bound for
+// convergence: later unrelated publishes must not move an older operation's
+// acknowledgement target forward forever.
+func (s *Store) setOperationEdgeRevision(ctx context.Context, id string, revision int64) (int64, error) {
 	if s.pool == nil {
-		return nil
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.memory == nil {
+			return 0, errors.New("store is not initialized")
+		}
+		op, ok := s.memory.Workers.Operations[id]
+		if !ok || op.State != "committed" {
+			return 0, nil
+		}
+		if op.EdgeRevision == 0 {
+			op.EdgeRevision = int(revision)
+			s.memory.Workers.Operations[id] = op
+		}
+		return int64(op.EdgeRevision), nil
 	}
-	_, err := s.pool.Exec(ctx, `UPDATE krun_worker_operations SET edge_revision=$2 WHERE operation_id=$1 AND state='committed' AND edge_revision<>$2`, id, revision)
-	return err
+	tag, err := s.pool.Exec(ctx, `UPDATE krun_worker_operations SET edge_revision=$2
+		WHERE operation_id=$1 AND state='committed' AND edge_revision=0`, id, revision)
+	if err != nil {
+		return 0, err
+	}
+	var stored int64
+	if err = s.pool.QueryRow(ctx, `SELECT edge_revision FROM krun_worker_operations
+		WHERE operation_id=$1`, id).Scan(&stored); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) && tag.RowsAffected() == 0 {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return stored, nil
 }
 
 func (s *Store) setOperationState(ctx context.Context, id, from, to, message string) error {
@@ -195,10 +411,13 @@ func (s *Store) noteOperationMessage(ctx context.Context, id, message string) er
 // packed into a bundle, and drops the inlined copy.
 func (s *Store) setBuildSource(ctx context.Context, id, key string) error {
 	if s.pool == nil {
-		return nil
+		return s.registerGeneratedBuildSource(ctx, id, "", key)
 	}
-	_, err := s.pool.Exec(ctx, `UPDATE krun_worker_build_private SET source_key=$2, files=NULL WHERE build_id=$1`, id, key)
-	return err
+	var organization string
+	if err := s.pool.QueryRow(ctx, `SELECT org_id FROM krun_worker_builds WHERE build_id=$1`, id).Scan(&organization); err != nil {
+		return err
+	}
+	return s.registerGeneratedBuildSource(ctx, id, organization, key)
 }
 
 // failOperation marks an in-flight operation failed and stamps whichever step
@@ -222,7 +441,34 @@ func (s *Store) failOperation(ctx context.Context, id, message string) error {
 // finishBuild records a terminal build state together with its log. Only one
 // writer wins because the state transition is conditional.
 func (s *Store) finishBuild(ctx context.Context, id, state, message, artifact, log string) error {
+	return s.finishBuildOwned(ctx, id, "", state, message, artifact, log)
+}
+
+func (s *Store) finishClaimedBuild(ctx context.Context, id, replica, state, message, artifact, log string) error {
+	return s.finishBuildOwned(ctx, id, replica, state, message, artifact, log)
+}
+
+func (s *Store) finishBuildOwned(ctx context.Context, id, replica, state, message, artifact, log string) error {
+	if !workerBuildTerminal(state) {
+		return errors.New("finishBuild requires a terminal state")
+	}
 	if s.pool == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.memory == nil {
+			return errors.New("store is not initialized")
+		}
+		build, ok := s.memory.Workers.Builds[id]
+		if !ok || workerBuildTerminal(build.State) || (replica != "" && build.ClaimedBy != replica) {
+			return nil
+		}
+		build.State, build.Error, build.Artifact = state, message, artifact
+		finished := now()
+		build.Finished = &finished
+		s.memory.Workers.Builds[id] = build
+		private := s.memory.Workers.BuildPrivate[id]
+		private.Log = log
+		s.memory.Workers.BuildPrivate[id] = private
 		return nil
 	}
 	tx, err := s.pool.Begin(ctx)
@@ -230,14 +476,22 @@ func (s *Store) finishBuild(ctx context.Context, id, state, message, artifact, l
 		return err
 	}
 	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `UPDATE krun_worker_builds
+	var service string
+	err = tx.QueryRow(ctx, `UPDATE krun_worker_builds
 		SET state=$2, error=$3, artifact_id=$4, finished_at=now()
-		WHERE build_id=$1 AND state NOT IN ('succeeded','failed')`, id, state, message, artifact)
+		WHERE build_id=$1 AND state NOT IN ('succeeded','failed')
+		  AND ($5='' OR claimed_by=$5)
+		RETURNING service_id`, id, state, message, artifact, replica).Scan(&service)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return tx.Commit(ctx)
+	}
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return tx.Commit(ctx)
+	if _, err = tx.Exec(ctx, `UPDATE krun_worker_services
+		SET active_build_count=GREATEST(active_build_count-1,0), updated_at=now()
+		WHERE service_id=$1`, service); err != nil {
+		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE krun_worker_build_private SET log=$2 WHERE build_id=$1`, id, log); err != nil {
 		return err
@@ -245,10 +499,33 @@ func (s *Store) finishBuild(ctx context.Context, id, state, message, artifact, l
 	return tx.Commit(ctx)
 }
 
-// finishBuildWithArtifact is finishBuild plus an artifact insert in one batch,
-// used by the local builder which produces both at once.
-func (s *Store) finishBuildWithArtifact(ctx context.Context, id, state, message string, artifact WorkerArtifact, log string) error {
+// reserveBuildArtifact creates a durable build reference before S3 publication.
+// Incrementing use_revision on the artifact row races directly with the GC
+// claimant's CAS; whichever wins prevents the other side from deleting or
+// reusing the same content-addressed object underneath an active build.
+func (s *Store) reserveBuildArtifact(ctx context.Context, id, replica string, artifact WorkerArtifact) error {
 	if s.pool == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.memory == nil {
+			return errors.New("store is not initialized")
+		}
+		existing, ok := s.memory.Workers.Artifacts[artifact.ID]
+		if ok && existing.State == "deleting" {
+			return errArtifactBeingCollected
+		}
+		if !ok {
+			existing = artifact
+			existing.State = "staging"
+		}
+		existing.UseRevision++
+		s.memory.Workers.Artifacts[artifact.ID] = existing
+		build, ok := s.memory.Workers.Builds[id]
+		if !ok || build.State == "succeeded" || build.State == "failed" || build.ClaimedBy != replica {
+			return errors.New("build is no longer active")
+		}
+		build.Artifact = artifact.ID
+		s.memory.Workers.Builds[id] = build
 		return nil
 	}
 	tx, err := s.pool.Begin(ctx)
@@ -256,19 +533,115 @@ func (s *Store) finishBuildWithArtifact(ctx context.Context, id, state, message 
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `INSERT INTO krun_worker_artifacts (artifact_id, org_id, state, archive_digest, manifest_digest, module_digest, size_bytes, object_key, storage_location, bucket, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (artifact_id) DO NOTHING`,
-		artifact.ID, artifact.Organization, artifact.State, artifact.ArchiveDigest, artifact.ManifestDigest, artifact.ModuleDigest, artifact.Size, artifact.ObjectKey, artifact.StorageLocation, artifact.Bucket, artifact.Created); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO krun_worker_artifacts
+		(artifact_id, org_id, state, archive_digest, manifest_digest, module_digest, size_bytes, object_key, storage_location, bucket, created_at)
+		VALUES ($1,$2,'staging',$3,$4,$5,$6,$7,$8,$9,$10)
+		ON CONFLICT (artifact_id) DO NOTHING`, artifact.ID, artifact.Organization,
+		artifact.ArchiveDigest, artifact.ManifestDigest, artifact.ModuleDigest,
+		artifact.Size, artifact.ObjectKey, artifact.StorageLocation, artifact.Bucket, artifact.Created); err != nil {
 		return err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE krun_worker_builds
-		SET state=$2, error=$3, artifact_id=$4, finished_at=now()
-		WHERE build_id=$1 AND state NOT IN ('succeeded','failed')`, id, state, message, artifact.ID)
+	var state string
+	err = tx.QueryRow(ctx, `UPDATE krun_worker_artifacts SET use_revision=use_revision+1
+		WHERE artifact_id=$1 AND state IN ('staging','finalized')
+		  AND org_id=$2 AND archive_digest=$3 AND manifest_digest=$4 AND module_digest=$5
+		  AND size_bytes=$6 AND object_key=$7 AND storage_location=$8 AND bucket=$9
+		RETURNING state`, artifact.ID, artifact.Organization, artifact.ArchiveDigest,
+		artifact.ManifestDigest, artifact.ModuleDigest, artifact.Size, artifact.ObjectKey,
+		artifact.StorageLocation, artifact.Bucket).Scan(&state)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errArtifactBeingCollected
+	}
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	tag, err := tx.Exec(ctx, `UPDATE krun_worker_builds SET artifact_id=$2
+		WHERE build_id=$1 AND state NOT IN ('succeeded','failed') AND claimed_by=$3`, id, artifact.ID, replica)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("build is no longer active")
+	}
+	return tx.Commit(ctx)
+}
+
+// finishBuildWithArtifact finalizes a previously reserved artifact and the
+// build in one transaction.
+func (s *Store) finishBuildWithArtifact(ctx context.Context, id, state, message string, artifact WorkerArtifact, log string) error {
+	return s.finishBuildWithArtifactOwned(ctx, id, "", state, message, artifact, log)
+}
+
+func (s *Store) finishClaimedBuildWithArtifact(ctx context.Context, id, replica, state, message string, artifact WorkerArtifact, log string) error {
+	return s.finishBuildWithArtifactOwned(ctx, id, replica, state, message, artifact, log)
+}
+
+func (s *Store) finishBuildWithArtifactOwned(ctx context.Context, id, replica, state, message string, artifact WorkerArtifact, log string) error {
+	if !workerBuildTerminal(state) {
+		return errors.New("finishBuildWithArtifact requires a terminal state")
+	}
+	if s.pool == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.memory == nil {
+			return errors.New("store is not initialized")
+		}
+		build, ok := s.memory.Workers.Builds[id]
+		if !ok || workerBuildTerminal(build.State) || (replica != "" && build.ClaimedBy != replica) {
+			return nil
+		}
+		stored, ok := s.memory.Workers.Artifacts[artifact.ID]
+		if !ok || (stored.State != "staging" && stored.State != "finalized") {
+			return errArtifactBeingCollected
+		}
+		stored.State = "finalized"
+		s.memory.Workers.Artifacts[artifact.ID] = stored
+		build.State, build.Error, build.Artifact = state, message, artifact.ID
+		finished := now()
+		build.Finished = &finished
+		s.memory.Workers.Builds[id] = build
+		private := s.memory.Workers.BuildPrivate[id]
+		private.Log = log
+		s.memory.Workers.BuildPrivate[id] = private
+		return nil
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `UPDATE krun_worker_artifacts
+		SET state='finalized', gc_claimed_by='', gc_claimed_at=NULL
+		WHERE artifact_id=$1 AND state IN ('staging','finalized')
+		  AND org_id=$2 AND archive_digest=$3 AND manifest_digest=$4 AND module_digest=$5
+		  AND size_bytes=$6 AND object_key=$7 AND storage_location=$8 AND bucket=$9`,
+		artifact.ID, artifact.Organization, artifact.ArchiveDigest, artifact.ManifestDigest,
+		artifact.ModuleDigest, artifact.Size, artifact.ObjectKey, artifact.StorageLocation, artifact.Bucket)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return errArtifactBeingCollected
+	}
+	var service string
+	err = tx.QueryRow(ctx, `UPDATE krun_worker_builds
+		SET state=$2, error=$3, artifact_id=$4, finished_at=now()
+		WHERE build_id=$1 AND state NOT IN ('succeeded','failed')
+		  AND ($5='' OR claimed_by=$5)
+		RETURNING service_id`, id, state, message, artifact.ID, replica).Scan(&service)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if replica != "" {
+			return nil
+		}
 		return tx.Commit(ctx)
+	}
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE krun_worker_services
+		SET active_build_count=GREATEST(active_build_count-1,0), updated_at=now()
+		WHERE service_id=$1`, service); err != nil {
+		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE krun_worker_build_private SET log=$2 WHERE build_id=$1`, id, log); err != nil {
 		return err
@@ -319,7 +692,7 @@ func (s *Store) pendingWork(ctx context.Context, limit int) (WorkerState, error)
 		state.Operations[op.Operation.ID] = op.Operation
 		state.OperationPrivate[op.Operation.ID] = WorkerOperationPrivate{Actor: op.Actor}
 	}
-	rows, err = s.pool.Query(ctx, `SELECT build_id, org_id, service_id, env_name, state, entrypoint, source_digest, profile, job, artifact_id, error, repository, assets, created_at, finished_at
+	rows, err = s.pool.Query(ctx, `SELECT build_id, org_id, service_id, env_name, state, entrypoint, source_digest, profile, job, artifact_id, error, repository, assets, created_at, finished_at, claimed_by, claimed_at
 		FROM krun_worker_builds
 		WHERE state NOT IN ('succeeded','failed')
 		ORDER BY created_at LIMIT $1`, limit)
@@ -474,7 +847,7 @@ func scanBuilds(rows pgx.Rows) ([]WorkerBuild, error) {
 	for rows.Next() {
 		var b WorkerBuild
 		var repository, assets []byte
-		if err := rows.Scan(&b.ID, &b.Organization, &b.Service, &b.Environment, &b.State, &b.Entrypoint, &b.SourceDigest, &b.Profile, &b.Job, &b.Artifact, &b.Error, &repository, &assets, &b.Created, &b.Finished); err != nil {
+		if err := rows.Scan(&b.ID, &b.Organization, &b.Service, &b.Environment, &b.State, &b.Entrypoint, &b.SourceDigest, &b.Profile, &b.Job, &b.Artifact, &b.Error, &repository, &assets, &b.Created, &b.Finished, &b.ClaimedBy, &b.ClaimedAt); err != nil {
 			return nil, err
 		}
 		if len(repository) > 0 {

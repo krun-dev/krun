@@ -780,6 +780,7 @@ function WorkerDetail({
               base={base}
               domains={domains}
               environments={data.environments}
+              revision={data.domainsRevision}
               active={active}
               reload={reload}
               notify={notify}

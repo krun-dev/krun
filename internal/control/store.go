@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -23,10 +24,11 @@ type Store struct {
 	pool   *pgxpool.Pool
 	mu     sync.Mutex
 	memory *State
-	// Pending audit entries gathered during an Update; flushed on commit.
-	pendingAudits []Audit
 	// memoryAudits backs the in-memory store used by tests.
 	memoryAudits []Audit
+	// memoryRateLimits backs distributed rate-limit buckets in memory tests.
+	rateMu           sync.Mutex
+	memoryRateLimits map[rateLimitBucket]int
 	// memTx is the working copy of an in-flight memory Update. Session helpers
 	// write here so their changes are not overwritten by the clone commit.
 	memTx *State
@@ -75,29 +77,7 @@ func OpenStore(ctx context.Context, dsn string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err = pool.Exec(ctx, storeSchema); err != nil {
-		pool.Close()
-		return nil, err
-	}
-	// Audits are an append-only event stream in their own table.
-	if _, err = pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS krun_audits (id text PRIMARY KEY, time timestamptz NOT NULL, actor text NOT NULL DEFAULT '', credential text NOT NULL DEFAULT '', key_id text NOT NULL DEFAULT '', action text NOT NULL DEFAULT '', resource text NOT NULL DEFAULT '', organization_id text NOT NULL DEFAULT '', allowed boolean NOT NULL DEFAULT false, request_id text NOT NULL DEFAULT '', revision integer NOT NULL DEFAULT 0); CREATE INDEX IF NOT EXISTS krun_audits_time ON krun_audits (time DESC)`); err != nil {
-		pool.Close()
-		return nil, err
-	}
-	// Runtime-facing edge configuration is a small append-only revision log.
-	// Full snapshots are materialised to object storage; these rows are the
-	// incremental feed and the bootstrap fallback.
-	if _, err = pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS worker_config_revisions (config_revision bigserial PRIMARY KEY, digest text NOT NULL, payload jsonb NOT NULL, ops jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now())`); err != nil {
-		pool.Close()
-		return nil, err
-	}
-	// Acks are per runtime Pod, not part of the control-plane rows: they change
-	// on a timer and must not rewrite anything else.
-	if _, err = pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS worker_runtime_acks (pod_uid text PRIMARY KEY, pool text NOT NULL, revision bigint NOT NULL, updated_at timestamptz NOT NULL)`); err != nil {
-		pool.Close()
-		return nil, err
-	}
-	if _, err = pool.Exec(ctx, `INSERT INTO krun_meta (key, value) VALUES ('schema_version',$1) ON CONFLICT (key) DO UPDATE SET value=excluded.value`, storeSchemaVersion); err != nil {
+	if err = applyStoreMigrations(ctx, pool); err != nil {
 		pool.Close()
 		return nil, err
 	}
@@ -113,6 +93,25 @@ func (s *Store) Close() {
 	if s.pool != nil {
 		s.pool.Close()
 	}
+}
+
+// Ping verifies that the store can serve a query without loading any control
+// plane tables. The in-memory implementation is used only by tests, where an
+// initialized state is the equivalent readiness check.
+func (s *Store) Ping(ctx context.Context) error {
+	if s.pool != nil {
+		var one int
+		return s.pool.QueryRow(ctx, `SELECT 1`).Scan(&one)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.memory == nil {
+		return errors.New("store is not initialized")
+	}
+	return nil
 }
 
 // load reads one partition into a fresh State.
@@ -151,37 +150,68 @@ func (s *Store) Mutate(ctx context.Context, loadPartition, persistPartition Stat
 		if err != nil {
 			return err
 		}
-		s.pendingAudits = nil
 		// A read persists nothing, so it needs no pre-image to diff against.
 		// Skipping the clone here keeps GET requests to one batched read.
 		if persistPartition == 0 {
 			if err = fn(st); err != nil {
-				s.pendingAudits = nil
+				if auditErr := s.flushAudits(ctx, deniedAudits(st.pendingAudits)); auditErr != nil {
+					return auditErr
+				}
 				return err
 			}
-			return s.flushAudits(ctx)
+			return s.flushAudits(ctx, st.pendingAudits)
 		}
 		before, err := cloneState(st)
 		if err != nil {
 			return err
 		}
 		if err = fn(st); err != nil {
-			s.pendingAudits = nil
+			if auditErr := s.flushAudits(ctx, deniedAudits(st.pendingAudits)); auditErr != nil {
+				return auditErr
+			}
 			return err
 		}
 		if persistPartition&PartitionIAM != 0 {
-			if err = s.persistIAM(ctx, before, st); err != nil {
+			if err = s.persistIAM(ctx, before, st, st.pendingAudits); err != nil {
 				return err
 			}
+			st.pendingAudits = nil
 		}
 		if persistPartition&PartitionWorkers != 0 {
-			if err = s.persistWorkers(ctx, before, st); err != nil {
+			if err = s.persistWorkers(ctx, before, st, st.pendingAudits); err != nil {
 				return err
 			}
+			st.pendingAudits = nil
 		}
-		return s.flushAudits(ctx)
+		return s.flushAudits(ctx, st.pendingAudits)
+	}
+	if persistPartition == 0 {
+		return s.readMemory(fn)
 	}
 	return s.updateMemory(fn)
+}
+
+// readMemory gives tests the same request-local snapshot semantics as the
+// PostgreSQL read path. Handler mutations are discarded, while audit entries
+// are copied to their separately retained stream.
+func (s *Store) readMemory(fn func(*State) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.memory == nil {
+		return errors.New("store is not initialized")
+	}
+	st, err := cloneState(s.memory)
+	if err != nil {
+		return err
+	}
+	err = fn(st)
+	audits := st.pendingAudits
+	if err != nil {
+		audits = deniedAudits(audits)
+	}
+	s.memoryAudits = append(s.memoryAudits, audits...)
+	s.memoryAudits = pruneMemoryAudits(s.memoryAudits, now())
+	return err
 }
 
 func (s *Store) updateMemory(fn func(*State) error) error {
@@ -190,7 +220,6 @@ func (s *Store) updateMemory(fn func(*State) error) error {
 	if s.memory == nil {
 		return errors.New("store is not initialized")
 	}
-	s.pendingAudits = nil
 	src := s.memory
 	after, err := cloneState(s.memory)
 	if err != nil {
@@ -201,16 +230,18 @@ func (s *Store) updateMemory(fn func(*State) error) error {
 	s.memTx = after
 	defer func() { s.memTx = nil }()
 	if err = fn(after); err != nil {
-		s.pendingAudits = nil
+		s.memoryAudits = append(s.memoryAudits, deniedAudits(after.pendingAudits)...)
+		s.memoryAudits = pruneMemoryAudits(s.memoryAudits, now())
 		return err
 	}
+	audits := after.pendingAudits
+	after.pendingAudits = nil
 	s.memory = after
 	if s.onPersist != nil && !sameStateContent(src, after) {
 		s.onPersist()
 	}
-	s.memoryAudits = append(s.memoryAudits, s.pendingAudits...)
+	s.memoryAudits = append(s.memoryAudits, audits...)
 	s.memoryAudits = pruneMemoryAudits(s.memoryAudits, now())
-	s.pendingAudits = nil
 	return nil
 }
 
@@ -263,24 +294,59 @@ func (s *Store) View(ctx context.Context, partition StatePartition, fn func(*Sta
 	return fn(st)
 }
 
-// flushAudits writes queued audit entries after the state rows are durable.
-func (s *Store) flushAudits(ctx context.Context) error {
-	if len(s.pendingAudits) == 0 {
+// flushAudits writes a request-local batch atomically. IAM mutations call the
+// same insertion helper from their business transaction instead.
+func (s *Store) flushAudits(ctx context.Context, entries []Audit) error {
+	if len(entries) == 0 {
 		return nil
 	}
-	entries := s.pendingAudits
-	s.pendingAudits = nil
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = insertAudits(ctx, tx, entries); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func insertAudits(ctx context.Context, tx interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}, entries []Audit) error {
 	for _, a := range entries {
-		if _, err := s.pool.Exec(ctx, `INSERT INTO krun_audits (id, time, actor, credential, key_id, action, resource, organization_id, allowed, request_id, revision) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (id) DO NOTHING`, a.ID, a.Time, a.Actor, a.Credential, a.KeyID, a.Action, a.Resource, a.Organization, a.Allowed, a.RequestID, a.Revision); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO krun_audits (id, time, actor, credential, key_id, action, resource, organization_id, allowed, request_id, revision) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (id) DO NOTHING`, a.ID, a.Time, a.Actor, a.Credential, a.KeyID, a.Action, a.Resource, a.Organization, a.Allowed, a.RequestID, a.Revision); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// recordAudit queues an entry for the current Update.
-func (s *Store) recordAudit(a Audit) {
-	s.pendingAudits = append(s.pendingAudits, a)
+func (s *Store) appendAudits(ctx context.Context, entries []Audit) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	if s.pool != nil {
+		return s.flushAudits(ctx, entries)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.memory == nil {
+		return errors.New("store is not initialized")
+	}
+	s.memoryAudits = append(s.memoryAudits, entries...)
+	s.memoryAudits = pruneMemoryAudits(s.memoryAudits, now())
+	return nil
+}
+
+func deniedAudits(entries []Audit) []Audit {
+	denied := make([]Audit, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.Allowed {
+			denied = append(denied, entry)
+		}
+	}
+	return denied
 }
 func pruneMemoryAudits(entries []Audit, at time.Time) []Audit {
 	cutoff := at.Add(-auditRetention)
@@ -361,7 +427,7 @@ func Bootstrap(ctx context.Context, s *Store, user string) error {
 		st.Assignments[id] = Assignment{ID: id, SubjectKind: "user", SubjectID: user, Role: "system_admin", ScopeKind: "system", ScopeID: "system", Revision: 1}
 		st.Bootstrapped = true
 		st.Revision++
-		s.recordAudit(Audit{ID: randomID("audit"), Time: now(), Actor: user, Credential: "bootstrap", Action: "system.bootstrap", Resource: "system", Allowed: true, Revision: st.Revision})
+		st.recordAudit(Audit{ID: randomID("audit"), Time: now(), Actor: user, Credential: "bootstrap", Action: "system.bootstrap", Resource: "system", Allowed: true, Revision: st.Revision})
 		return nil
 	})
 }
@@ -389,6 +455,35 @@ func cloneState(src *State) (*State, error) {
 	dst := newState()
 	if err = json.Unmarshal(raw, dst); err != nil {
 		return nil, err
+	}
+	// Refresh tokens and their CAS/lease metadata are intentionally omitted
+	// from JSON. Preserve them only for the in-memory test store; PostgreSQL
+	// never loads repository credentials into a generic State snapshot.
+	for key, source := range src.RepositoryConnections {
+		connection, ok := dst.RepositoryConnections[key]
+		if !ok {
+			continue
+		}
+		connection.AccessToken = source.AccessToken
+		connection.TokenType = source.TokenType
+		connection.RefreshToken = source.RefreshToken
+		connection.ExpiresAt = source.ExpiresAt
+		connection.TokenRevision = source.TokenRevision
+		connection.RefreshState = source.RefreshState
+		connection.RefreshClaimedAt = source.RefreshClaimedAt
+		connection.ReconnectRequired = source.ReconnectRequired
+		dst.RepositoryConnections[key] = connection
+	}
+	// Build lease metadata is also storage-private, but the diff writer needs
+	// the exact pre-image for its state/owner CAS.
+	for id, source := range src.Workers.Builds {
+		build, ok := dst.Workers.Builds[id]
+		if !ok {
+			continue
+		}
+		build.ClaimedBy = source.ClaimedBy
+		build.ClaimedAt = source.ClaimedAt
+		dst.Workers.Builds[id] = build
 	}
 	return dst, nil
 }

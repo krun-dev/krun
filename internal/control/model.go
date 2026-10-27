@@ -12,9 +12,10 @@ type User struct {
 	AuthVersion int    `json:"auth_version"`
 }
 type Organization struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
-	Sources []string `json:"allowed_sources"`
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	Sources  []string `json:"allowed_sources"`
+	Revision int      `json:"revision"`
 }
 type Member struct {
 	Organization string `json:"organization_id"`
@@ -150,6 +151,26 @@ type State struct {
 	RepositoryConnections map[string]WorkerRepositoryConnection
 	// In-flight repository OAuth connect requests, keyed by CSRF state.
 	RepositoryConnectStates map[string]WorkerRepositoryConnectState
+	// pendingAudits belongs to this loaded/mutated snapshot. Keeping it on the
+	// request-local State (and out of JSON) prevents concurrent requests from
+	// clearing or flushing one another's audit decisions.
+	pendingAudits []Audit
+	// pendingLogin is a request-local command applied by persistIAM in the same
+	// transaction as the user/JIT mutation and login audit. It is intentionally
+	// absent from JSON snapshots.
+	pendingLogin *pendingLoginCommit
+}
+
+type pendingLoginCommit struct {
+	Session            Session
+	DeleteSessionHash  string
+	BrowserHash        string
+	ExpectedGeneration int
+	EmailChallengeHash string
+}
+
+func (s *State) recordAudit(a Audit) {
+	s.pendingAudits = append(s.pendingAudits, a)
 }
 
 func newState() *State {

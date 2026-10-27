@@ -4,6 +4,11 @@
 
 Workers 与认证配置在同一个 YAML 文件，完整示例见 [config/example.yaml](../config/example.yaml) 的 `workers:` 段。配置该段即启用 Workers；省略时控制面仍正常启动，所有 Workers 接口返回 `503 WORKERS_NOT_CONFIGURED`，`/api/auth/me` 的 `workers_configured` 为 `false`，控制台显示“Workers 未配置”。
 
+对象存储可按网络视角配置三个地址：`s3_endpoint` 供控制面读写，
+`s3_builder_endpoint` 供构建器上传，`s3_runtime_endpoint` 供 runtime 冷加载制品和资产。
+三者必须指向同一个桶；完整集群部署通常相同，local-first 的 runtime 地址则应使用集群
+可达的 `static-assets` Service。后两项省略时会逐级回退，兼容原有配置。
+
 ## 实际流程
 
 ```mermaid
@@ -32,7 +37,7 @@ sequenceDiagram
     A->>A: 当前所有 serving 成员已 ack -> Operation available（可观测性）
 ```
 
-构建和发布都异步处理。Build、源码、Operation、Release、历史、幂等记录和执行者身份持久化在 PostgreSQL 的现有 `krun_control_state` 快照中。边缘配置另存为不可变的 `worker_config_revisions`（每个 revision 一行，包含 routes/releases 投影和增量 ops），runtime ack 存在独立的 `worker_runtime_acks`（每个 Pod 一行），两者都不重写 IAM 快照。未完成记录就是持久化工作队列；控制服务重启后扫描恢复。多个控制服务通过 PostgreSQL session advisory lock 选出一个协调者，确定性 Job 名防止重复创建。此版没有引入 Redis 或外部消息队列。
+构建和发布都异步处理。Build、源码、Operation、Release、历史、幂等记录和执行者身份都按实体持久化在 PostgreSQL 的 `krun_worker_*` 表中；`krun_control_state` 只作为迁移期遗留数据源。边缘配置的当前发布头按 route / release 分行保存在 `worker_config_routes` 与 `worker_config_releases`，`worker_config_revisions` 只保存 revision 元数据，增量则是一条 op 一行的 `worker_config_ops`。runtime ack 存在独立的 `worker_runtime_acks`（每个 Pod 一行）。未完成的 Build / Operation 行就是持久化工作队列；控制服务重启后扫描恢复。多个控制服务通过行级 CAS 与超时租约竞争不同工作，配置发布通过 `worker_config_head` CAS 线性推进，不做 advisory-lock 选主。此版没有引入 Redis 或外部消息队列。
 
 Kubernetes、S3 和 runtime HTTP 请求均在 IAM 状态事务外进行。执行者的用户状态、AuthVersion、API Key 和当前权限会在执行及提交前重新检查。
 
@@ -115,7 +120,7 @@ Host 默认形如 `w-{组织与服务 hash 前16位}-{environment}.workers.test`
 3. **应用**：ops 只有 `release_put` / `route_upsert` / `route_delete`，在内存 Map 副本上应用后原子替换视图；不落盘、不落本地 DB。
 4. **ack**：每个 Pod 应用新 revision 后上报 `{pod_uid, pool, revision}`，并每 5 秒心跳；ack 写入独立的 `worker_runtime_acks`，不参与 IAM 快照。
 
-`config/` 前缀与 `pub/`、`int/` 一样匿名可读，但只能通过集群内 endpoint 访问（`config_base_url` 必须指向私有地址）；生产应使用独立桶或带 VPC 条件的桶策略。快照只含 host → release 指针和不可变 Release 描述符，不含 Build、Operation、日志或 IAM 数据。`worker_config_revisions` 默认只保留最近 512 个 revision，超窗的 Pod 通过 409 回全量。
+`config/` 前缀与 `pub/`、`int/` 一样匿名可读，但只能通过集群内 endpoint 访问（`config_base_url` 必须指向私有地址）；生产应使用独立桶或带 VPC 条件的桶策略。对象存储快照只含 host → release 指针和不可变 Release 描述符，不含 Build、Operation、日志或 IAM 数据。PostgreSQL 不保存每个 revision 的全量投影，只保存一份归一化当前头和最近 512 个 revision 的逐实体 ops；超窗的 Pod 通过 409 回全量。
 
 控制面不可用时，已运行的 Pod 继续用最后一份内存视图服务；新 Pod 仍可从对象存储 bootstrap。尚未缓存的 Release 冷加载仍需控制面签发短时 presigned URL，因此“新版本冷启动”依赖控制面，“已加载版本继续服务”不依赖。
 

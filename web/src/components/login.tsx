@@ -34,6 +34,7 @@ export function Login({
     setFailed("");
     try {
       const response = await fetch("/api/auth/csrf", {
+        method: "POST",
         credentials: "same-origin",
         headers: { "Accept-Language": locale() },
       });

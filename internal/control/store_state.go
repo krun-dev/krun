@@ -28,7 +28,7 @@ import (
 func (s *Store) loadIAM(ctx context.Context, st *State) error {
 	batch := &pgx.Batch{}
 	batch.Queue(`SELECT user_id, source, subject, name, email, status, auth_version FROM krun_users`)
-	batch.Queue(`SELECT org_id, name FROM krun_organizations`)
+	batch.Queue(`SELECT org_id, name, revision FROM krun_organizations`)
 	batch.Queue(`SELECT org_id, source FROM krun_org_sources ORDER BY source`)
 	batch.Queue(`SELECT org_id, user_id FROM krun_members`)
 	batch.Queue(`SELECT group_id, scope_kind, scope_id, name, revision FROM krun_groups`)
@@ -36,7 +36,6 @@ func (s *Store) loadIAM(ctx context.Context, st *State) error {
 	batch.Queue(`SELECT assignment_id, subject_kind, subject_id, role, scope_kind, scope_id, conditions, revision FROM krun_assignments`)
 	batch.Queue(`SELECT resource_id, kind, org_id, name, revision FROM krun_resources`)
 	batch.Queue(`SELECT key_id, owner_user_id, org_id, scope_kind, name, prefix, policy, expires_at, revoked, revision FROM krun_api_keys`)
-	batch.Queue(`SELECT key_id, hash FROM krun_api_key_hashes`)
 	batch.Queue(`SELECT source, subject, expires_at FROM krun_invitations`)
 	batch.Queue(`SELECT source, fingerprint FROM krun_identity_sources`)
 	batch.Queue(`SELECT provider_id, source, namespace FROM krun_identity_providers`)
@@ -70,9 +69,6 @@ func (s *Store) loadIAM(ctx context.Context, st *State) error {
 		return err
 	}
 	if err := readAPIKeys(results, st); err != nil {
-		return err
-	}
-	if err := readKeyHashes(results, st); err != nil {
 		return err
 	}
 	if err := readInvitations(results, st); err != nil {
@@ -111,7 +107,7 @@ func readOrganizations(results pgx.BatchResults, st *State) error {
 	defer rows.Close()
 	for rows.Next() {
 		var o Organization
-		if err = rows.Scan(&o.ID, &o.Name); err != nil {
+		if err = rows.Scan(&o.ID, &o.Name, &o.Revision); err != nil {
 			return err
 		}
 		o.Sources = []string{}
@@ -249,22 +245,6 @@ func readAPIKeys(results pgx.BatchResults, st *State) error {
 	return rows.Err()
 }
 
-func readKeyHashes(results pgx.BatchResults, st *State) error {
-	rows, err := results.Query()
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id, hash string
-		if err = rows.Scan(&id, &hash); err != nil {
-			return err
-		}
-		st.KeyHashes[id] = hash
-	}
-	return rows.Err()
-}
-
 func readInvitations(results pgx.BatchResults, st *State) error {
 	rows, err := results.Query()
 	if err != nil {
@@ -347,33 +327,32 @@ func parseIntDefault(raw string) int {
 	return n
 }
 
-// loadWorkers fills the Workers half of st, including repository connections,
-// in one round trip.
+// loadWorkers fills the public Workers metadata in one round trip. Build
+// source/log blobs and repository access tokens are intentionally fetched by
+// key only at the endpoints that need them.
 func (s *Store) loadWorkers(ctx context.Context, st *State) error {
 	if st.Workers == nil {
 		st.Workers = newWorkerState()
 	}
 	batch := &pgx.Batch{}
-	batch.Queue(`SELECT service_id, org_id, repository, repository_revision FROM krun_worker_services`)
+	batch.Queue(`SELECT service_id, org_id, repository, repository_revision, domains_revision, preview_revision FROM krun_worker_services`)
 	batch.Queue(`SELECT service_id, domain_id FROM krun_worker_service_domains ORDER BY service_id, ordinal`)
 	batch.Queue(`SELECT service_id, env_name, enabled, config_revision, variables, release_revision, release_id, confirmed_release_id FROM krun_worker_environments`)
-	batch.Queue(`SELECT build_id, org_id, service_id, env_name, state, entrypoint, source_digest, profile, job, artifact_id, error, repository, assets, created_at, finished_at FROM krun_worker_builds`)
-	batch.Queue(`SELECT build_id, actor_user_id, actor_key_id, actor_auth_version, source_key, files, log FROM krun_worker_build_private`)
+	batch.Queue(`SELECT build_id, org_id, service_id, env_name, state, entrypoint, source_digest, profile, job, artifact_id, error, repository, assets, created_at, finished_at, claimed_by, claimed_at FROM krun_worker_builds`)
 	batch.Queue(`SELECT artifact_id, org_id, state, archive_digest, manifest_digest, module_digest, size_bytes, object_key, storage_location, bucket, created_at FROM krun_worker_artifacts`)
 	batch.Queue(`SELECT release_id, org_id, service_id, env_name, artifact_id, archive_digest, module_digest, config_revision, variables, pool, created_at FROM krun_worker_releases`)
 	batch.Queue(`SELECT operation_id, kind, org_id, service_id, env_name, state, build_id, release_id, expected_revision, config_revision, edge_revision, release_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at FROM krun_worker_operations`)
 	batch.Queue(`SELECT service_id, env_name, revision, release_id, operation_id, kind, created_at FROM krun_worker_history ORDER BY created_at DESC`)
 	batch.Queue(`SELECT idem_key, digest, target_id FROM krun_worker_idempotency`)
-	batch.Queue(`SELECT user_id, provider_id, access_token, connected_at FROM krun_repository_connections`)
 
 	results := s.pool.SendBatch(ctx, batch)
 	defer results.Close()
 
 	for _, read := range []func(pgx.BatchResults, *State) error{
 		readWorkerServices, readWorkerDomains, readWorkerEnvironments,
-		readWorkerBuilds, readWorkerBuildPrivate, readWorkerArtifacts,
+		readWorkerBuilds, readWorkerArtifacts,
 		readWorkerReleases, readWorkerOperations, readWorkerHistory,
-		readWorkerIdempotency, readRepositoryConnections,
+		readWorkerIdempotency,
 	} {
 		if err := read(results, st); err != nil {
 			return err
@@ -392,11 +371,15 @@ func readWorkerServices(results pgx.BatchResults, st *State) error {
 	for rows.Next() {
 		var id, org string
 		var repository []byte
-		var revision int
-		if err = rows.Scan(&id, &org, &repository, &revision); err != nil {
+		var repositoryRevision, domainsRevision, previewRevision int
+		if err = rows.Scan(&id, &org, &repository, &repositoryRevision, &domainsRevision, &previewRevision); err != nil {
 			return err
 		}
-		svc := WorkerService{Service: id, Organization: org, RepositoryRevision: revision, Domains: []string{}, Environments: map[string]WorkerEnvironment{}}
+		svc := WorkerService{
+			Service: id, Organization: org, RepositoryRevision: repositoryRevision,
+			DomainsRevision: domainsRevision, PreviewRevision: previewRevision,
+			Domains: []string{}, Environments: map[string]WorkerEnvironment{},
+		}
 		if len(repository) > 0 {
 			var src WorkerRepositorySource
 			if err = json.Unmarshal(repository, &src); err != nil {
@@ -469,7 +452,7 @@ func readWorkerBuilds(results pgx.BatchResults, st *State) error {
 	for rows.Next() {
 		var b WorkerBuild
 		var repository, assets []byte
-		if err = rows.Scan(&b.ID, &b.Organization, &b.Service, &b.Environment, &b.State, &b.Entrypoint, &b.SourceDigest, &b.Profile, &b.Job, &b.Artifact, &b.Error, &repository, &assets, &b.Created, &b.Finished); err != nil {
+		if err = rows.Scan(&b.ID, &b.Organization, &b.Service, &b.Environment, &b.State, &b.Entrypoint, &b.SourceDigest, &b.Profile, &b.Job, &b.Artifact, &b.Error, &repository, &assets, &b.Created, &b.Finished, &b.ClaimedBy, &b.ClaimedAt); err != nil {
 			return err
 		}
 		if len(repository) > 0 {
@@ -487,30 +470,6 @@ func readWorkerBuilds(results pgx.BatchResults, st *State) error {
 			b.Assets = &a
 		}
 		ws.Builds[b.ID] = b
-	}
-	return rows.Err()
-}
-
-func readWorkerBuildPrivate(results pgx.BatchResults, st *State) error {
-	ws := st.Workers
-	rows, err := results.Query()
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		var p WorkerBuildPrivate
-		var files []byte
-		if err = rows.Scan(&id, &p.Actor.User, &p.Actor.Key, &p.Actor.AuthVersion, &p.SourceKey, &files, &p.Log); err != nil {
-			return err
-		}
-		if len(files) > 0 {
-			if err = json.Unmarshal(files, &p.Files); err != nil {
-				return err
-			}
-		}
-		ws.BuildPrivate[id] = p
 	}
 	return rows.Err()
 }
@@ -614,24 +573,6 @@ func readWorkerIdempotency(results pgx.BatchResults, st *State) error {
 			return err
 		}
 		ws.Idempotency[key] = record
-	}
-	return rows.Err()
-}
-
-func readRepositoryConnections(results pgx.BatchResults, st *State) error {
-	rows, err := results.Query()
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var user, provider string
-		var c WorkerRepositoryConnection
-		if err = rows.Scan(&user, &provider, &c.AccessToken, &c.ConnectedAt); err != nil {
-			return err
-		}
-		c.User, c.Provider = user, provider
-		st.RepositoryConnections[user+"\x00"+provider] = c
 	}
 	return rows.Err()
 }

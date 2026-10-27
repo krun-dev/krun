@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type List, type Resource } from "./api";
+import { api, type Resource } from "./api";
 import { errorMessage } from "./i18n";
+import { nextWorkerPollDelay } from "./worker-polling";
 
 export type RepositoryBinding = {
   source: RepositorySource | null;
@@ -95,6 +96,19 @@ export type WorkerData = {
   operations: Operation[];
   histories: Record<string, History[]>;
   releases: Record<string, Release>;
+  domainsRevision: number;
+};
+type WorkerOverview = {
+  builds: Build[];
+  environments: {
+    environment: Environment;
+    history: History[];
+    current_release?: Release;
+    confirmed_release?: Release;
+  }[];
+  operations: Operation[];
+  releases: Record<string, Release>;
+  domains_revision: number;
 };
 export const pending = (state: string) =>
   ["queued", "fetching", "building", "validating", "committed"].includes(state);
@@ -103,97 +117,95 @@ export const shortID = (id?: string) => (id ? id.slice(0, 16) : "—");
 export function useWorkerData(base: string, revision: number) {
   const [data, setData] = useState<WorkerData | null>(null);
   const [error, setError] = useState("");
-  const cache = useRef<Record<string, Release>>({});
+  const previousBase = useRef(base);
   useEffect(() => {
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout>;
+    let disposed = false;
+    let inFlight = false;
+    let failures = 0;
+    let reloadAfterFlight = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let request: AbortController | undefined;
+
+    if (previousBase.current !== base) {
+      previousBase.current = base;
+      setData(null);
+      setError("");
+    }
+
+    function schedule(delay: number) {
+      if (timer) clearTimeout(timer);
+      if (!disposed && !document.hidden) timer = setTimeout(load, delay);
+    }
+
     async function load() {
-      let delay = 5000;
+      if (disposed || document.hidden || inFlight) return;
+      inFlight = true;
+      const currentRequest = new AbortController();
+      request = currentRequest;
+      let hasPendingWork = false;
       try {
-        const [b, e, o] = await Promise.all([
-          api<List<Build>>(
-            base + "/builds",
-            "GET",
-            undefined,
-            controller.signal,
-          ),
-          api<List<Environment>>(
-            base + "/environments",
-            "GET",
-            undefined,
-            controller.signal,
-          ),
-          api<List<Operation>>(
-            base + "/operations",
-            "GET",
-            undefined,
-            controller.signal,
-          ),
-        ]);
-        const histories = Object.fromEntries(
-          await Promise.all(
-            e.items.map(
-              async (env) =>
-                [
-                  env.name,
-                  (
-                    await api<List<History>>(
-                      base + "/environments/" + env.name + "/history",
-                      "GET",
-                      undefined,
-                      controller.signal,
-                    )
-                  ).items,
-                ] as const,
-            ),
-          ),
+        const overview = await api<WorkerOverview>(
+          base + "/overview",
+          "GET",
+          undefined,
+          currentRequest.signal,
         );
-        const ids = new Set(
-          e.items
-            .flatMap((env) => [
-              env.release_id,
-              env.confirmed_release_id,
-              ...histories[env.name].map((h) => h.release_id),
-            ])
-            .filter((id): id is string => !!id),
-        );
-        const fresh = await Promise.all(
-          [...ids]
-            .filter((id) => !cache.current[id])
-            .map((id) =>
-              api<Release>(
-                base + "/releases/" + id,
-                "GET",
-                undefined,
-                controller.signal,
-              ),
-            ),
-        );
-        if (controller.signal.aborted) return;
-        for (const d of fresh) cache.current[d.id] = d;
+        if (disposed || currentRequest.signal.aborted) return;
+        hasPendingWork =
+          overview.builds.some((build) => pending(build.state)) ||
+          overview.operations.some((operation) => pending(operation.state));
         setData({
-          builds: b.items,
-          environments: e.items,
-          operations: o.items,
-          histories,
-          releases: { ...cache.current },
+          builds: overview.builds,
+          environments: overview.environments.map((entry) => entry.environment),
+          operations: overview.operations,
+          histories: Object.fromEntries(
+            overview.environments.map((entry) => [
+              entry.environment.name,
+              entry.history,
+            ]),
+          ),
+          releases: overview.releases,
+          domainsRevision: overview.domains_revision,
         });
         setError("");
-        if (
-          b.items.some((b) => pending(b.state)) ||
-          o.items.some((o) => pending(o.state))
-        )
-          delay = 1200;
-      } catch (e) {
-        if (!controller.signal.aborted) setError(errorMessage(e));
+        failures = 0;
+      } catch (cause) {
+        if (!disposed && !currentRequest.signal.aborted) {
+          failures++;
+          setError(errorMessage(cause));
+        }
       } finally {
-        if (!controller.signal.aborted) timer = setTimeout(load, delay);
+        inFlight = false;
+        if (request === currentRequest) request = undefined;
+        if (reloadAfterFlight && !document.hidden) {
+          reloadAfterFlight = false;
+          schedule(0);
+        } else {
+          schedule(nextWorkerPollDelay(hasPendingWork, failures));
+        }
       }
     }
+
+    function visibilityChanged() {
+      if (document.hidden) {
+        if (timer) clearTimeout(timer);
+        request?.abort();
+        return;
+      }
+      if (inFlight) {
+        reloadAfterFlight = true;
+        return;
+      }
+      void load();
+    }
+
+    document.addEventListener("visibilitychange", visibilityChanged);
     void load();
     return () => {
-      controller.abort();
-      clearTimeout(timer);
+      disposed = true;
+      document.removeEventListener("visibilitychange", visibilityChanged);
+      request?.abort();
+      if (timer) clearTimeout(timer);
     };
   }, [base, revision]);
   return { data, error };

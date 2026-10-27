@@ -1,64 +1,62 @@
-# 后端 kind 实验
+# Workers kind 独立 E2E
 
-本目录只部署后端。使用已有 kind 集群，独立命名空间 `workers-mvp`，不会删除或修改已有 `workers-lab`。需要集群已经安装 kgateway / Gateway API、支持 NetworkPolicy 的 CNI（本次 Calico）和默认 StorageClass。
+本目录创建完整、独立的集群验收栈：backend、PostgreSQL、MinIO、builder、runtime
+和 kgateway 都在 kind 内。它不是日常开发环境；不要与
+[local-first](../../docs/local-dev.md) 同时运行。
 
-> ⚠️ 这是完整的独立 kind 验收环境：backend、Postgres、MinIO、runtime 都在集群里。日常 local-first 开发请用 [本地开发环境](../../docs/local-dev.md)：控制面、Postgres、MinIO、builder 在开发机，集群只保留 runtime + kgateway。不要同时运行两套 backend/Postgres/MinIO。
+## 前置条件
 
-本次机器：`<user>@<kind-host>`。集群 `krun-workers-20261010`，kubeconfig `/home/<user>/kind/kubeconfig`，源代码目录 `/home/<user>/krun`。
+- Docker、kubectl、Python 3、Node.js、Go 1.26
+- 已安装 Gateway API、kgateway、支持 NetworkPolicy 的 CNI 和默认 StorageClass
+- 明确指定的 kind kubeconfig 与集群名
+
+实际主机、路径和集群名只放在 `.data/dev.env` 或当前 shell，不写入 tracked 文件：
+
+```bash
+export KUBECONFIG=/absolute/path/to/kind-kubeconfig
+export KIND_CLUSTER_NAME=my-krun-e2e
+```
+
+部署脚本会同时校验当前 context 必须等于 `kind-$KIND_CLUSTER_NAME`，防止把破坏性
+故障注入发到错误集群。
 
 ## 部署
 
-需要 Docker、kubectl、Python 3、Node.js，以及 Go 1.26。远端缺少 Go 时可在本地先交叉编译，并将源码与二进制一起复制过去：
-
-```sh
-mkdir -p deploy/workers-kind/generated
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
-  -o deploy/workers-kind/generated/krun-server ./cmd/krun-server
-```
-
-在 Docker 所在机器的代码根目录执行：
-
-```sh
-export KUBECONFIG=/home/<user>/kind/kubeconfig
-export KIND_CLUSTER_NAME=krun-workers-20261010
+```bash
 bash deploy/workers-kind/deploy.sh
 ```
 
-脚本校验 kubeconfig 指向预期 kind context，构建并导入三个镜像，自动读取 Kubernetes API 的 IP 收紧出口策略，生成并应用 manifest，等待部署和 Gateway Ready。镜像导入指定 `linux/amd64`，适配本次 Docker 29 的多架构存储行为。
+脚本按目标 kind 节点的 `amd64` / `arm64` 架构构建控制面与镜像、导入目标节点、
+生成 manifest、部署并等待 Gateway 和各 Deployment 就绪。MinIO 镜像从固定的官方
+GitHub release 二进制构建，并校验仓库内固定的 SHA-256；不依赖已撤下的公共容器
+镜像。生成的凭据、manifest 与二进制位于 gitignored 的
+`deploy/workers-kind/generated/`。凭据会复用；已有 PVC 对应的凭据丢失时应先恢复或
+显式迁移，不能直接生成一套新凭据覆盖。
 
-PostgreSQL 和 MinIO 分别使用 1 GiB PVC。生成的凭证、manifest、二进制位于被 Git 忽略的 `generated/`；凭证重用而非每次重生成。丢失 `credentials.json` 时不要直接重新部署到已有 PVC，需要先恢复凭证或显式迁移。
+## E2E
 
-Builder `imagePullPolicy: Never` 仅用于此 kind 预加载镜像；后端通用配置默认 `IfNotPresent`。重新部署会滚动重启平台 Pod。业务版本发布通过 Loader 完成，不滚动重启 runtime Pod。
-
-## 验收
-
-在远端执行：
-
-```sh
+```bash
 cd deploy/workers-kind
-KUBECONFIG=/home/<user>/kind/kubeconfig node e2e.mjs
+KUBECONFIG="$KUBECONFIG" KIND_CLUSTER_NAME="$KIND_CLUSTER_NAME" node e2e.mjs
 ```
 
-脚本创建独立测试组织、服务和 API Key，真实调用现有登录 / IAM 接口，提交构建 Job、读写 MinIO、发布到两个 workerd 副本，并从 tester Pod 经 kgateway 调用业务 Host。它会重启实验 backend、替换一个 runtime Pod；故障恢复检查通过 kind 节点的 nsenter，临时在 backend Pod 的独立网络命名空间拒绝到达 internal listener 9001 的入站请求（配置增量流与 ack），随后删除同一条规则。需要远端 Docker 权限及 kind 节点中的 crictl / nsenter / iptables。旧实验不参与测试。
+脚本会：
 
-证据输出 `evidence/e2e.json`，新鲜测试 Key 只保存在 `generated/api-key.json`（0600）。测试默认从 tester Pod 直接发送 API 请求，不依赖 port-forward。读取请求遇到传输中断最多重试 3 次，另写 `evidence/transport-retries.json`，写操作不自动重试。本次 kind 节点 containerd 2.1.1 在创建 Pod 时多次 SIGSEGV 并被 systemd 重启，曾中断 port-forward / exec；该实验环境问题单独记录。可用 `KRUN_E2E_TRANSPORT=port-forward` 切换测试传输，此模式指定 `KUBECTL_PORT_FORWARD_WEBSOCKETS=false`。具体结果见 [验证报告](../../docs/workers-kind-verification.md)。
+- 通过真实 `/api/auth/*` 登录并创建临时组织、服务和限时 API Key；
+- 提交 Kubernetes build Job、读写 MinIO、发布并经 kgateway 调用 workerd；
+- 验证幂等、权限隔离、配置 revision/ack、回滚和静态资产；
+- 发布 [`examples/workers-fullstack`](../../examples/workers-fullstack/README.md) 的真实前后端项目，
+  验证同源 API、SPA fallback、HTML 规范化、ETag/304、immutable 缓存与静态域；
+- 重启 backend、替换 runtime Pod，并验证认领租约与持久化恢复；
+- 在目标 kind 节点做临时网络故障注入，随后撤销同一规则。
 
-## API 访问
+因此运行者需要 Docker 权限以及 kind 节点中的 `crictl`、`nsenter`、`iptables`。
+测试默认从 tester Pod 请求 API；设置 `KRUN_E2E_TRANSPORT=port-forward` 可改用本机
+4380 端口。写请求不自动重试，只有幂等 GET 会有限重试。
 
-kind 开发登录只能经本机回环口访问。远端先运行：
+证据写入 gitignored 的 `evidence/`；临时 API Key 只写入权限为 0600 的
+`generated/api-key.json`。验收结束后应删除测试 namespace/集群或按组织 ID 清理测试
+数据，不能把生成凭据提交到仓库。
 
-```sh
-KUBECTL_PORT_FORWARD_WEBSOCKETS=false kubectl \
-  --kubeconfig /home/<user>/kind/kubeconfig \
-  -n workers-mvp port-forward deployment/backend 4380:9000 --address=127.0.0.1
-```
-
-本机另开 SSH tunnel：
-
-```sh
-ssh -N -L 4380:127.0.0.1:4380 <user>@<kind-host>
-```
-
-控制 API 位于 `http://127.0.0.1:4380`；本轮没有部署控制台前端。可通过现有鉴权流程或验收 Key 调用 API。完整请求格式见 [后端接口与流程](../../docs/workers-backend.md)。
-
-Runtime 内部服务 API 经后端的独立端口 9001 提供，仅允许 runtime 访问；用户端口 9000 不转发 `/internal/workers/*`。默认环境业务 Host 仅在实验私网入口暴露，尚未设置公网 DNS / TLS。
+Runtime 内部 API 位于独立端口 9001，只允许 runtime 网络访问；外部 9000 只暴露
+`/api/*`，不额外增加根级路由。

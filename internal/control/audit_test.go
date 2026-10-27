@@ -16,10 +16,10 @@ func seedAuditPages(t *testing.T, store *Store) {
 	err := store.Update(context.Background(), PartitionAll, func(st *State) error {
 		for i := 0; i < 237; i++ {
 			// Equal times deliberately exercise the ID tie breaker.
-			store.recordAudit(Audit{ID: fmt.Sprintf("entry-%04d", i), Time: at.Add(time.Duration(i/3) * time.Second), Organization: "org-a", Actor: "admin", Action: "service.read", Resource: "svc-a", Allowed: true})
+			st.recordAudit(Audit{ID: fmt.Sprintf("entry-%04d", i), Time: at.Add(time.Duration(i/3) * time.Second), Organization: "org-a", Actor: "admin", Action: "service.read", Resource: "svc-a", Allowed: true})
 		}
-		store.recordAudit(Audit{ID: "other-org", Time: at, Organization: "org-b", Resource: "svc-b"})
-		store.recordAudit(Audit{ID: "old", Time: now().Add(-8 * 24 * time.Hour), Organization: "org-a"})
+		st.recordAudit(Audit{ID: "other-org", Time: at, Organization: "org-b", Resource: "svc-b"})
+		st.recordAudit(Audit{ID: "old", Time: now().Add(-8 * 24 * time.Hour), Organization: "org-a"})
 		return nil
 	})
 	if err != nil {
@@ -50,7 +50,7 @@ func TestAuditPaginationSnapshotAndScope(t *testing.T) {
 	}
 	// Live traffic and pagination requests cannot shift the snapshot.
 	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
-		store.recordAudit(Audit{ID: "new", Time: now(), Organization: "org-a"})
+		st.recordAudit(Audit{ID: "new", Time: now(), Organization: "org-a"})
 		return nil
 	})
 	seen := map[string]bool{}

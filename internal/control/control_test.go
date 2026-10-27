@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -241,7 +242,7 @@ func browserRequest(s *Server, method, path string, form url.Values, cookies []*
 }
 func TestLoginCSRFReplayLogoutAndStableIdentity(t *testing.T) {
 	s, store := testServer(t)
-	csrfResponse := browserRequest(s, "GET", "/api/auth/csrf", nil, nil)
+	csrfResponse := browserRequest(s, "POST", "/api/auth/csrf", nil, nil)
 	var csrf struct {
 		Token string `json:"csrf_token"`
 	}
@@ -277,7 +278,7 @@ func TestLoginCSRFReplayLogoutAndStableIdentity(t *testing.T) {
 	if browserRequest(s, "POST", "/api/auth/local/login", badForm, cookies).Code != 403 {
 		t.Fatal("invalid csrf accepted")
 	}
-	csrfResponse = browserRequest(s, "GET", "/api/auth/csrf", nil, cookies)
+	csrfResponse = browserRequest(s, "POST", "/api/auth/csrf", nil, cookies)
 	_ = json.Unmarshal(csrfResponse.Body.Bytes(), &csrf)
 	form.Set("csrf_token", csrf.Token)
 	logout := browserRequest(s, "POST", "/api/auth/logout", form, cookies)
@@ -288,7 +289,7 @@ func TestLoginCSRFReplayLogoutAndStableIdentity(t *testing.T) {
 		t.Fatal("logout cookie replay accepted")
 	}
 	// The next authenticated login maps to the same stable source/subject account.
-	csrfResponse = browserRequest(s, "GET", "/api/auth/csrf", nil, csrfResponse.Result().Cookies())
+	csrfResponse = browserRequest(s, "POST", "/api/auth/csrf", nil, csrfResponse.Result().Cookies())
 	_ = json.Unmarshal(csrfResponse.Body.Bytes(), &csrf)
 	cookies = csrfResponse.Result().Cookies()
 	form.Set("csrf_token", csrf.Token)
@@ -303,6 +304,27 @@ func TestLoginCSRFReplayLogoutAndStableIdentity(t *testing.T) {
 	}
 	_ = store
 }
+func TestLoginReturnPathUsesRootQueryNavigation(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		ok    bool
+	}{
+		{"", true},
+		{"/", true},
+		{"/?page=workers&workspace=org_1", true},
+		{"/console/", false},
+		{"/other", false},
+		{"//evil.example", false},
+		{"/?page=workers#fragment", false},
+		{"https://evil.example/", false},
+	} {
+		_, err := loginReturnPath(tc.value)
+		if (err == nil) != tc.ok {
+			t.Errorf("loginReturnPath(%q) error=%v, want ok=%v", tc.value, err, tc.ok)
+		}
+	}
+}
+
 func TestSessionCSRFAndAmbiguousCredential(t *testing.T) {
 	s, store := testServer(t)
 	token := randomToken()
@@ -335,6 +357,9 @@ func TestDeviceApprovalAndSingleConsumption(t *testing.T) {
 		UserCode   string `json:"user_code"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &device)
+	if len(device.UserCode) != 15 || device.UserCode[7] != '-' {
+		t.Fatalf("device user code does not carry the required 56-bit format: %q", device.UserCode)
+	}
 	raw := fmt.Sprintf(`{"device_code":%q}`, device.DeviceCode)
 	if request(s, "POST", "/api/auth/cli/poll", "", raw).Code != 409 {
 		t.Fatal("unapproved device issued token")
@@ -349,11 +374,70 @@ func TestDeviceApprovalAndSingleConsumption(t *testing.T) {
 		st.Devices[d.CodeHash] = d
 		return nil
 	})
-	if request(s, "POST", "/api/auth/cli/poll", "", raw).Code != 200 {
+	polled := request(s, "POST", "/api/auth/cli/poll", "", raw)
+	if polled.Code != 200 {
 		t.Fatal("approved device cannot poll")
+	}
+	var credential struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(polled.Body.Bytes(), &credential); err != nil || credential.Token != "krun_cli_test" {
+		t.Fatal("device poll did not return the approved token", err, polled.Body.String())
 	}
 	if request(s, "POST", "/api/auth/cli/poll", "", raw).Code != 400 {
 		t.Fatal("device token issued twice")
+	}
+}
+
+func TestDeviceApprovalIsRateLimitedPerSessionUser(t *testing.T) {
+	s, store := testServer(t)
+	const sessionToken = "browser-rate-limit"
+	const csrf = "browser-rate-csrf"
+	if err := store.Update(context.Background(), PartitionIAM, func(st *State) error {
+		at := now()
+		st.Sessions[digest(sessionToken)] = Session{User: "admin", Hash: digest(sessionToken), CSRF: csrf, AuthVersion: 1, Created: at, Seen: at, Absolute: at.Add(time.Hour)}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 1; attempt <= 11; attempt++ {
+		r := httptest.NewRequest(http.MethodPost, "/api/auth/cli/approve", strings.NewReader(`{"user_code":"NOT-A-REAL-CODE"}`))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Origin", s.Config.PublicURL)
+		r.Header.Set("X-CSRF-Token", csrf)
+		r.AddCookie(&http.Cookie{Name: s.cookieName("session"), Value: sessionToken})
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		if attempt <= 10 && w.Code != http.StatusNotFound {
+			t.Fatalf("attempt %d status=%d body=%s", attempt, w.Code, w.Body.String())
+		}
+		if attempt == 11 && w.Code != http.StatusTooManyRequests {
+			t.Fatalf("rate limit status=%d body=%s", w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestDeviceApprovalDoesNotCreateOrphanSession(t *testing.T) {
+	store := memoryStore()
+	device := Device{CodeHash: digest("device"), UserCode: "USERCODE", Expires: now().Add(time.Minute)}
+	if err := store.insertDevice(context.Background(), device); err != nil {
+		t.Fatal(err)
+	}
+	at := now()
+	first := Session{User: "first", Hash: digest("krun_cli_first"), AuthVersion: 1, Created: at, Seen: at, Absolute: at.Add(time.Hour), CLI: true}
+	approved, err := store.approveDevice(context.Background(), device.CodeHash, "krun_cli_first", first)
+	if err != nil || !approved {
+		t.Fatal("first approval failed", approved, err)
+	}
+	second := first
+	second.User = "second"
+	second.Hash = digest("krun_cli_second")
+	approved, err = store.approveDevice(context.Background(), device.CodeHash, "krun_cli_second", second)
+	if err != nil || approved {
+		t.Fatal("duplicate approval won", approved, err)
+	}
+	if _, exists := store.memory.Sessions[digest("krun_cli_second")]; exists {
+		t.Fatal("losing approval created an orphan session")
 	}
 }
 func TestMappingPreservesLargeInteger(t *testing.T) {
@@ -369,7 +453,7 @@ func TestMappingPreservesLargeInteger(t *testing.T) {
 
 func TestLoginGenerationAndSessionExpiration(t *testing.T) {
 	s, store := testServer(t)
-	w := browserRequest(s, "GET", "/api/auth/csrf", nil, nil)
+	w := browserRequest(s, "POST", "/api/auth/csrf", nil, nil)
 	var csrf struct {
 		Token string `json:"csrf_token"`
 	}
@@ -413,9 +497,18 @@ func TestConfigurationGuardsAndSourceTombstones(t *testing.T) {
 	if c.Validate() == nil {
 		t.Fatal("internal_listen must differ from listen")
 	}
+	c = Config{DB: "postgres://test-only/krun_test", Development: true, PublicURL: "http://127.0.0.1:8080", Workers: catalogConfig()}
+	if c.Validate() == nil {
+		t.Fatal("Workers without internal_listen accepted")
+	}
+	c.InternalListen = "127.0.0.1:9001"
+	if err := c.Validate(); err != nil {
+		t.Fatal("Workers with internal_listen rejected:", err)
+	}
 	store := memoryStore()
 	c.Listen = "127.0.0.1:8080"
 	c.InternalListen = ""
+	c.Workers = nil
 	c.Providers = []ProviderConfig{{ID: "local", Source: "source1", Type: "dev", Registration: "jit"}}
 	if _, e := NewServer(context.Background(), c, store); e != nil {
 		t.Fatal(e)
@@ -426,11 +519,116 @@ func TestConfigurationGuardsAndSourceTombstones(t *testing.T) {
 	}
 }
 
+func TestProtectedRejectsAnonymousBeforeLoadingState(t *testing.T) {
+	s := &Server{
+		Config: Config{Development: true, PublicURL: "http://127.0.0.1:8080"},
+		Store:  &Store{},
+	}
+	s.routes()
+	w := request(s, http.MethodGet, "/api/auth/me", "", "")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous request reached the uninitialized store: %d %s", w.Code, w.Body.String())
+	}
+	w = request(s, http.MethodPost, "/api/v1/orgs", "", strings.Repeat("x", (1<<20)+1))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous request body was read before rejection: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCSRFIssuanceIsPostOnlyAndRateLimited(t *testing.T) {
+	s, store := testServer(t)
+	if w := browserRequest(s, http.MethodGet, "/api/auth/csrf", nil, nil); w.Code != http.StatusNotFound {
+		t.Fatalf("GET CSRF status=%d, want 404", w.Code)
+	}
+	for i := 0; i < 30; i++ {
+		if w := browserRequest(s, http.MethodPost, "/api/auth/csrf", nil, nil); w.Code != http.StatusOK {
+			t.Fatalf("CSRF request %d failed: %d %s", i+1, w.Code, w.Body.String())
+		}
+	}
+	for i := 0; i < 10; i++ {
+		if w := browserRequest(s, http.MethodPost, "/api/auth/csrf", nil, nil); w.Code != http.StatusTooManyRequests {
+			t.Fatalf("over-limit CSRF request accepted: %d %s", w.Code, w.Body.String())
+		}
+	}
+	if len(store.memory.Browsers) != 30 {
+		t.Fatalf("browser rows=%d, want bounded 30", len(store.memory.Browsers))
+	}
+	store.rateMu.Lock()
+	defer store.rateMu.Unlock()
+	for _, count := range store.memoryRateLimits {
+		if count > 31 {
+			t.Fatalf("rate-limit counter kept growing after rejection: %d", count)
+		}
+	}
+}
+
+func TestDeniedReadsDoNotAppendAuditRows(t *testing.T) {
+	s, store := testServer(t)
+	if w := request(s, http.MethodGet, "/api/v1/orgs/org-b", "krun_cli_viewer", ""); w.Code < 400 {
+		t.Fatalf("denied read status=%d body=%s", w.Code, w.Body.String())
+	}
+	if len(store.memoryAudits) != 0 {
+		t.Fatalf("denied read appended %d audit rows", len(store.memoryAudits))
+	}
+}
+
+func TestCallbackFailuresAndRateLimitsDoNotAppendAuditRows(t *testing.T) {
+	s, store := testServer(t)
+	path := "/api/auth/local/callback?state=invalid&code=invalid"
+	var last *httptest.ResponseRecorder
+	for i := 0; i < 121; i++ {
+		last = browserRequest(s, http.MethodGet, path, nil, nil)
+	}
+	if location := last.Header().Get("Location"); !strings.Contains(location, "RATE_LIMITED") {
+		t.Fatalf("callback was not rate limited: status=%d location=%q", last.Code, location)
+	}
+	if len(store.memoryAudits) != 0 {
+		t.Fatalf("attacker-controlled callback failures appended %d audit rows", len(store.memoryAudits))
+	}
+}
+
+func TestClientIPTrustsOnlyConfiguredProxyChain(t *testing.T) {
+	_, trusted, _ := net.ParseCIDR("10.0.0.0/8")
+	s := &Server{trustedProxies: []*net.IPNet{trusted}}
+	cases := []struct {
+		name, remote, forwarded, want string
+	}{
+		{"direct-spoof-ignored", "203.0.113.8:4444", "198.51.100.2", "203.0.113.8"},
+		{"trusted-proxy", "10.0.0.4:443", "198.51.100.2", "198.51.100.2"},
+		{"trusted-chain", "10.0.0.4:443", "198.51.100.2, 10.1.2.3", "198.51.100.2"},
+		{"malformed-chain", "10.0.0.4:443", "198.51.100.2, garbage", "10.0.0.4"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			r.RemoteAddr = tc.remote
+			r.Header.Set("X-Forwarded-For", tc.forwarded)
+			if got := s.clientIP(r); got != tc.want {
+				t.Fatalf("clientIP=%q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRequiredListenerFailureStopsServerGroup(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err = serveHTTPServers(ctx, []*http.Server{{Addr: occupied.Addr().String(), Handler: http.NotFoundHandler()}})
+	if err == nil || !strings.Contains(err.Error(), occupied.Addr().String()) {
+		t.Fatalf("listener bind failure was not propagated: %v", err)
+	}
+}
+
 func TestInviteOnlyRequiresExactUnexpiredIdentity(t *testing.T) {
 	s, store := testServer(t)
 	s.providers["local"].config.Registration = "invite_only"
 	login := func() string {
-		w := browserRequest(s, "GET", "/api/auth/csrf", nil, nil)
+		w := browserRequest(s, "POST", "/api/auth/csrf", nil, nil)
 		var csrf struct {
 			Token string `json:"csrf_token"`
 		}

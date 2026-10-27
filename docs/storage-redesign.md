@@ -271,6 +271,8 @@ CREATE TABLE IF NOT EXISTS krun_worker_services (
   org_id              text NOT NULL,
   repository          jsonb,                      -- WorkerRepositorySource 或 NULL
   repository_revision integer NOT NULL DEFAULT 0,
+  domains_revision    integer NOT NULL DEFAULT 0, -- 域名集合替换 CAS
+  preview_revision    integer NOT NULL DEFAULT 0, -- 预览环境集合 CAS / 限额仲裁
   updated_at          timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS krun_worker_services_org ON krun_worker_services (org_id);
@@ -419,13 +421,15 @@ CREATE INDEX IF NOT EXISTS krun_worker_idempotency_age
 `krun_worker_operations` 里的 `actor_*` 是从 `WorkerOperationPrivate` 内联进来的：它只有三个标量，
 不需要单独一张表，但**绝不能出现在列表查询的 select 列表里**（沿用现在的隐藏语义）。
 
-### 2.6 保留不动
+### 2.6 独立运行表与边缘配置头
 
 - `krun_audits`（追加型事件流，已有独立表）
-- `worker_config_revisions`（边缘配置不可变修订日志）
 - `worker_runtime_acks`（每 Pod 心跳）
+- `worker_config_revisions`（只保存 revision、digest、时间）
+- `worker_config_ops`（每 revision 的每个 route/release op 一行）
+- `worker_config_routes` / `worker_config_releases`（归一化的当前已发布头）
 
-这三张已经是正确形状，只补索引与保留期，不改结构。
+数据库不再为每个 revision 保存完整 routes/releases 文档。全量不可变快照只写对象存储；控制面回退接口从归一化当前头在单个一致快照中重建。
 
 ---
 
@@ -476,8 +480,7 @@ UPDATE ... SET status='disabled'
 
 ### 4.1 操作行即队列，用 CAS 认领取代 advisory lock
 
-现在 `workers_controller.run()` 每秒抢 `pg_try_advisory_lock(724618031)`，拿到锁的副本独占
-全部 reconcile。改为每行独立认领：
+`workers_controller.run()` 不再抢全局 advisory lock，而是每行独立认领：
 
 ```sql
 UPDATE krun_worker_operations
@@ -514,13 +517,12 @@ SELECT ... FROM krun_worker_builds     WHERE state NOT IN (terminal) ORDER BY cr
 
 两条查询都走部分索引，空闲时是 0 行。对比现在的「读 39 KB + 两次 JSON 往返」。
 
-`publishConfig` 的 digest 幂等逻辑保持原样，但输入改为
-`SELECT services + domains + environments + 被引用的 releases`，不再整份快照。
+`publishConfig` 的输入是专用一致性读模型：
+`SELECT services + domains + environments + 被引用的 releases`，不再加载 builds、artifacts、operations、history 或 IAM 全表。空闲周期先读取 `worker_topology_generation`；generation 未变且没有待补写的对象存储快照时直接返回。HTTPRoute reconcile 共用同一 generation，并缓存更小的 service/domain/environment 拓扑。
 
 ### 4.3 边缘收敛
 
-不变：写入 `worker_config_revisions` → 快照进对象存储 → runtime 长轮询 + ack。
-这条链路本来就是最终一致，且已有 resync 语义，不需要改。
+发布者在一个小事务内 CAS `worker_config_head`、替换归一化 route/release 当前头、写 revision 元数据与逐实体 ops，并清理 512 条以外的 revision/ops；随后把全量快照写入对象存储，runtime 继续长轮询 + ack。CAS 失败的副本从归一化已发布头重建基线后重试。重建内容与 revision digest 不一致时 fail closed，避免从残缺基线 diff 后留下幽灵路由。
 
 ---
 
@@ -563,7 +565,7 @@ SELECT ... FROM krun_worker_builds     WHERE state NOT IN (terminal) ORDER BY cr
 | `krun_sessions` | `absolute_at` 过期即删；后台每分钟清理 |
 | `krun_browsers` / `krun_login_states` / `krun_email_logins` / `krun_device_codes` | 过期即删，同上 |
 | `krun_audits` | 维持 7 天 |
-| `worker_config_revisions` | 维持 512 条 |
+| `worker_config_revisions` + `worker_config_ops` | 维持 512 个 revision；先显式删对应 ops，不使用外键 |
 | `worker_runtime_acks` | 维持 1 分钟 |
 
 清理统一放在一个后台 goroutine（每分钟），用 `DELETE ... WHERE ...` 单语句完成。
@@ -584,7 +586,8 @@ SELECT ... FROM krun_worker_builds     WHERE state NOT IN (terminal) ORDER BY cr
 3. 导入成功后把旧表改名：`ALTER TABLE krun_control_state RENAME TO krun_control_state_legacy`
    （不删，留作回滚与对账）。
 4. 导入失败则整体回滚，服务**拒绝启动**（fail closed），旧数据完好。
-5. 回滚方式：把二进制回退一个版本 + 把 legacy 表改回原名。不做双写。
+5. 回滚方式：把二进制回退一个版本 + 把 legacy 表改回原名。不做双写。若回滚期
+   产生新写入，再次升级必须 fail closed，先人工对账/迁移，不能丢弃固定名表。
 
 导入脚本建议放 `internal/control/migrate.go`，用现有 `pgx`，不引入迁移框架。
 

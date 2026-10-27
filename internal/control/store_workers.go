@@ -3,16 +3,19 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // persistWorkers writes only changed Workers rows. Operation and build state
 // transitions use conditional updates so a concurrent claimer wins cleanly and
 // this writer simply skips; that is the extent of the concurrency guarantee
 // (AGENTS.md section 9: builds and releases converge eventually).
-func (s *Store) persistWorkers(ctx context.Context, before, after *State) error {
+func (s *Store) persistWorkers(ctx context.Context, before, after *State, audits []Audit) error {
+	topologyChanged := workerEdgeTopologyChanged(before, after)
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -21,7 +24,65 @@ func (s *Store) persistWorkers(ctx context.Context, before, after *State) error 
 	if err = writeWorkersDiff(ctx, tx, before, after); err != nil {
 		return err
 	}
+	if err = insertAudits(ctx, tx, audits); err != nil {
+		return err
+	}
+	if topologyChanged {
+		if err = bumpWorkerTopologyGeneration(ctx, tx); err != nil {
+			return err
+		}
+	}
 	return tx.Commit(ctx)
+}
+
+func bumpWorkerTopologyGeneration(ctx context.Context, tx interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}) error {
+	_, err := tx.Exec(ctx, `INSERT INTO krun_meta (key, value) VALUES ('worker_topology_generation','1')
+		ON CONFLICT (key) DO UPDATE SET value=(krun_meta.value::bigint + 1)::text`)
+	return err
+}
+
+// workerEdgeTopologyChanged mirrors workerConfigFromState's durable inputs.
+// Build/operation/log mutations intentionally do not wake config publishers.
+func workerEdgeTopologyChanged(before, after *State) bool {
+	bw, aw := before.Workers, after.Workers
+	if bw == nil {
+		bw = newWorkerState()
+	}
+	if aw == nil {
+		aw = newWorkerState()
+	}
+	if len(bw.Services) != len(aw.Services) {
+		return true
+	}
+	referenced := map[string]bool{}
+	for id, current := range aw.Services {
+		previous, ok := bw.Services[id]
+		if !ok || current.Service != previous.Service || current.Organization != previous.Organization || !sameStrings(current.Domains, previous.Domains) || len(current.Environments) != len(previous.Environments) {
+			return true
+		}
+		for name, env := range current.Environments {
+			old, ok := previous.Environments[name]
+			if !ok || env.Enabled != old.Enabled || env.Release != old.Release {
+				return true
+			}
+			if env.Release != "" {
+				referenced[env.Release] = true
+			}
+			if old.Release != "" {
+				referenced[old.Release] = true
+			}
+		}
+	}
+	for id := range referenced {
+		old, oldOK := bw.Releases[id]
+		current, currentOK := aw.Releases[id]
+		if oldOK != currentOK || oldOK && !sameRelease(old, current) {
+			return true
+		}
+	}
+	return false
 }
 
 func writeWorkersDiff(ctx context.Context, tx pgx.Tx, before, after *State) error {
@@ -31,6 +92,12 @@ func writeWorkersDiff(ctx context.Context, tx pgx.Tx, before, after *State) erro
 	}
 	if aw == nil {
 		aw = newWorkerState()
+	}
+	// Reserve idempotency keys before inserting their build/operation rows.
+	// The unique key is the cross-replica arbiter; a losing request rolls this
+	// transaction back before it can create a second target.
+	if err := writeIdempotency(ctx, tx, bw, aw); err != nil {
+		return err
 	}
 	if err := writeServices(ctx, tx, bw, aw); err != nil {
 		return err
@@ -50,16 +117,14 @@ func writeWorkersDiff(ctx context.Context, tx pgx.Tx, before, after *State) erro
 	if err := writeHistories(ctx, tx, bw, aw); err != nil {
 		return err
 	}
-	if err := writeIdempotency(ctx, tx, bw, aw); err != nil {
-		return err
-	}
-	return writeRepositoryConnections(ctx, tx, before.RepositoryConnections, after.RepositoryConnections)
+	return nil
 }
-
 func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 	for id, svc := range aw.Services {
 		old, existed := bw.Services[id]
 		repositoryChanged := !existed || old.RepositoryRevision != svc.RepositoryRevision || !reflect.DeepEqual(old.Repository, svc.Repository)
+		domainsChanged := existed && old.DomainsRevision != svc.DomainsRevision
+		previewSetChanged := !existed && previewCount(svc.Environments) > 0 || existed && !samePreviewSet(old.Environments, svc.Environments)
 		if repositoryChanged {
 			var repository []byte
 			if svc.Repository != nil {
@@ -69,13 +134,70 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 				}
 				repository = raw
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_services (service_id, org_id, repository, repository_revision) VALUES ($1,$2,$3,$4) ON CONFLICT (service_id) DO UPDATE SET org_id=excluded.org_id, repository=excluded.repository, repository_revision=excluded.repository_revision, updated_at=now()`, id, svc.Organization, repository, svc.RepositoryRevision); err != nil {
+			if !existed {
+				tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_services
+					(service_id, org_id, repository, repository_revision, domains_revision, preview_revision)
+					VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (service_id) DO NOTHING`, id, svc.Organization,
+					repository, svc.RepositoryRevision, svc.DomainsRevision, svc.PreviewRevision)
+				if err != nil {
+					return err
+				}
+				if tag.RowsAffected() == 1 {
+					domainsChanged = true
+				}
+				// A default row may be materialised by two otherwise independent
+				// requests (for example, the first two builds). That insert is
+				// idempotent. A repository mutation, however, promises CAS semantics
+				// for expected_revision=0 and only one writer may win.
+				if tag.RowsAffected() == 0 && (svc.RepositoryRevision != 0 || svc.Repository != nil || svc.DomainsRevision != 0 || svc.PreviewRevision != 0) {
+					return problem(409, "REVISION_CONFLICT", "Repository configuration changed")
+				}
+			} else {
+				if svc.RepositoryRevision != old.RepositoryRevision+1 {
+					return problem(409, "REVISION_CONFLICT", "Repository configuration changed")
+				}
+				tag, err := tx.Exec(ctx, `UPDATE krun_worker_services
+					SET repository=$2, repository_revision=$3, updated_at=now()
+					WHERE service_id=$1 AND repository_revision=$4`, id, repository, svc.RepositoryRevision, old.RepositoryRevision)
+				if err != nil {
+					return err
+				}
+				if tag.RowsAffected() != 1 {
+					return problem(409, "REVISION_CONFLICT", "Repository configuration changed")
+				}
+			}
+		}
+		if existed && old.DomainsRevision != svc.DomainsRevision {
+			if svc.DomainsRevision != old.DomainsRevision+1 {
+				return problem(409, "REVISION_CONFLICT", "Domain configuration changed")
+			}
+			tag, err := tx.Exec(ctx, `UPDATE krun_worker_services
+				SET domains_revision=$2, updated_at=now()
+				WHERE service_id=$1 AND domains_revision=$3`, id, svc.DomainsRevision, old.DomainsRevision)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() != 1 {
+				return problem(409, "REVISION_CONFLICT", "Domain configuration changed")
+			}
+		}
+		if domainsChanged {
+			if err := replaceServiceDomains(ctx, tx, id, svc.Domains); err != nil {
 				return err
 			}
 		}
-		if !existed || !sameStrings(old.Domains, svc.Domains) {
-			if err := replaceServiceDomains(ctx, tx, id, svc.Domains); err != nil {
+		if existed && previewSetChanged {
+			if svc.PreviewRevision != old.PreviewRevision+1 {
+				return problem(409, "REVISION_CONFLICT", "Preview environments changed")
+			}
+			tag, err := tx.Exec(ctx, `UPDATE krun_worker_services
+				SET preview_revision=$2, updated_at=now()
+				WHERE service_id=$1 AND preview_revision=$3`, id, svc.PreviewRevision, old.PreviewRevision)
+			if err != nil {
 				return err
+			}
+			if tag.RowsAffected() != 1 {
+				return problem(409, "REVISION_CONFLICT", "Preview environments changed")
 			}
 		}
 		for name, env := range svc.Environments {
@@ -87,14 +209,44 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_environments (service_id, env_name, enabled, config_revision, variables, release_revision, release_id, confirmed_release_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (service_id, env_name) DO UPDATE SET enabled=excluded.enabled, config_revision=excluded.config_revision, variables=excluded.variables, release_revision=excluded.release_revision, release_id=excluded.release_id, confirmed_release_id=excluded.confirmed_release_id, updated_at=now()`, id, name, env.Enabled, env.ConfigRevision, variables, env.Revision, env.Release, env.Confirmed); err != nil {
-				return err
+			if !ok {
+				tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_environments
+					(service_id, env_name, enabled, config_revision, variables, release_revision, release_id, confirmed_release_id)
+					VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (service_id, env_name) DO NOTHING`,
+					id, name, env.Enabled, env.ConfigRevision, variables, env.Revision, env.Release, env.Confirmed)
+				if err != nil {
+					return err
+				}
+				if tag.RowsAffected() == 0 && !defaultWorkerBaseline(name, env) {
+					return problem(409, "REVISION_CONFLICT", "Environment configuration changed")
+				}
+			} else {
+				tag, err := tx.Exec(ctx, `UPDATE krun_worker_environments
+					SET enabled=$3, config_revision=$4, variables=$5, release_revision=$6,
+					    release_id=$7, confirmed_release_id=$8, updated_at=now()
+					WHERE service_id=$1 AND env_name=$2 AND config_revision=$9
+					  AND release_revision=$10 AND release_id=$11 AND confirmed_release_id=$12`,
+					id, name, env.Enabled, env.ConfigRevision, variables, env.Revision, env.Release, env.Confirmed,
+					oldEnv.ConfigRevision, oldEnv.Revision, oldEnv.Release, oldEnv.Confirmed)
+				if err != nil {
+					return err
+				}
+				if tag.RowsAffected() != 1 {
+					return problem(409, "REVISION_CONFLICT", "Environment configuration changed")
+				}
 			}
 		}
-		for name := range old.Environments {
+		for name, oldEnv := range old.Environments {
 			if _, ok := svc.Environments[name]; !ok {
-				if _, err := tx.Exec(ctx, `DELETE FROM krun_worker_environments WHERE service_id=$1 AND env_name=$2`, id, name); err != nil {
+				tag, err := tx.Exec(ctx, `DELETE FROM krun_worker_environments
+					WHERE service_id=$1 AND env_name=$2 AND config_revision=$3
+					  AND release_revision=$4 AND release_id=$5 AND confirmed_release_id=$6`,
+					id, name, oldEnv.ConfigRevision, oldEnv.Revision, oldEnv.Release, oldEnv.Confirmed)
+				if err != nil {
 					return err
+				}
+				if tag.RowsAffected() != 1 {
+					return problem(409, "REVISION_CONFLICT", "Environment configuration changed")
 				}
 			}
 		}
@@ -116,6 +268,40 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 		}
 	}
 	return nil
+}
+
+// The baseline row is lazily materialised. Two independent first requests may
+// race to insert this exact value; the loser can safely continue because it did
+// not intend to change environment configuration.
+func defaultWorkerBaseline(name string, env WorkerEnvironment) bool {
+	return name == workerBaseline && env.Name == workerBaseline && env.Enabled &&
+		env.ConfigRevision == 1 && env.Revision == 0 && env.Release == "" && env.Confirmed == "" &&
+		len(env.Variables) == 0
+}
+
+func previewCount(environments map[string]WorkerEnvironment) int {
+	count := 0
+	for name := range environments {
+		if name != workerBaseline {
+			count++
+		}
+	}
+	return count
+}
+
+func samePreviewSet(a, b map[string]WorkerEnvironment) bool {
+	if previewCount(a) != previewCount(b) {
+		return false
+	}
+	for name := range a {
+		if name == workerBaseline {
+			continue
+		}
+		if _, ok := b[name]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func replaceServiceDomains(ctx context.Context, tx pgx.Tx, service string, domains []string) error {
@@ -158,19 +344,65 @@ func writeBuilds(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 			assets = raw
 		}
 		if !existed {
+			if !workerBuildTerminal(b.State) {
+				tag, err := tx.Exec(ctx, `UPDATE krun_worker_services
+					SET active_build_count=active_build_count+1, updated_at=now()
+					WHERE service_id=$1 AND active_build_count < $2`, b.Service, workerActiveBuildLimit)
+				if err != nil {
+					return err
+				}
+				if tag.RowsAffected() != 1 {
+					return problem(409, "BUILD_LIMIT", "At most 100 builds may be active per service")
+				}
+			}
+			if private, ok := aw.BuildPrivate[id]; ok && private.SourceKey != "" {
+				if err := reserveWorkerSourceUpload(ctx, tx, private.SourceKey, b.Organization, id); err != nil {
+					return err
+				}
+			}
 			if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_builds (build_id, org_id, service_id, env_name, state, entrypoint, source_digest, profile, job, artifact_id, error, repository, assets, created_at, finished_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`, id, b.Organization, b.Service, b.Environment, b.State, b.Entrypoint, b.SourceDigest, b.Profile, b.Job, b.Artifact, b.Error, repository, assets, b.Created, b.Finished); err != nil {
 				return err
 			}
-		} else if _, err := tx.Exec(ctx, `UPDATE krun_worker_builds SET org_id=$2, service_id=$3, env_name=$4, state=$5, entrypoint=$6, source_digest=$7, profile=$8, job=$9, artifact_id=$10, error=$11, repository=$12, assets=$13, created_at=$14, finished_at=$15 WHERE build_id=$1`, id, b.Organization, b.Service, b.Environment, b.State, b.Entrypoint, b.SourceDigest, b.Profile, b.Job, b.Artifact, b.Error, repository, assets, b.Created, b.Finished); err != nil {
-			return err
+		} else {
+			tag, err := tx.Exec(ctx, `UPDATE krun_worker_builds
+				SET org_id=$2, service_id=$3, env_name=$4, state=$5, entrypoint=$6,
+				    source_digest=$7, profile=$8, job=$9, artifact_id=$10, error=$11,
+				    repository=$12, assets=$13, created_at=$14, finished_at=$15
+				WHERE build_id=$1 AND state=$16 AND claimed_by=$17
+				  AND claimed_at IS NOT DISTINCT FROM $18`, id, b.Organization, b.Service,
+				b.Environment, b.State, b.Entrypoint, b.SourceDigest, b.Profile, b.Job,
+				b.Artifact, b.Error, repository, assets, b.Created, b.Finished,
+				old.State, old.ClaimedBy, old.ClaimedAt)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() != 1 {
+				return errors.New("build changed while persisting snapshot")
+			}
 		}
 	}
 	for id := range bw.Builds {
 		if _, ok := aw.Builds[id]; ok {
 			continue
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM krun_worker_builds WHERE build_id=$1`, id); err != nil {
+		var deletedState, deletedService string
+		old := bw.Builds[id]
+		err := tx.QueryRow(ctx, `DELETE FROM krun_worker_builds
+			WHERE build_id=$1 AND state=$2 AND claimed_by=$3
+			  AND claimed_at IS NOT DISTINCT FROM $4
+			RETURNING state, service_id`, id, old.State, old.ClaimedBy, old.ClaimedAt).Scan(&deletedState, &deletedService)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errors.New("build changed while deleting snapshot")
+		}
+		if err != nil {
 			return err
+		}
+		if !workerBuildTerminal(deletedState) {
+			if _, err := tx.Exec(ctx, `UPDATE krun_worker_services
+				SET active_build_count=GREATEST(active_build_count-1,0), updated_at=now()
+				WHERE service_id=$1`, deletedService); err != nil {
+				return err
+			}
 		}
 	}
 	for id, p := range aw.BuildPrivate {
@@ -186,6 +418,16 @@ func writeBuilds(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 			}
 			files = raw
 		}
+		_, buildExisted := bw.Builds[id]
+		if buildExisted && (!existed || old.SourceKey == "") && p.SourceKey != "" {
+			build, ok := aw.Builds[id]
+			if !ok {
+				return errors.New("build source has no build metadata")
+			}
+			if err := registerGeneratedBuildSourceTx(ctx, tx, id, build.Organization, p.SourceKey); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_build_private (build_id, actor_user_id, actor_key_id, actor_auth_version, source_key, files, log) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (build_id) DO UPDATE SET actor_user_id=excluded.actor_user_id, actor_key_id=excluded.actor_key_id, actor_auth_version=excluded.actor_auth_version, source_key=excluded.source_key, files=excluded.files, log=excluded.log`, id, p.Actor.User, p.Actor.Key, p.Actor.AuthVersion, p.SourceKey, files, p.Log); err != nil {
 			return err
 		}
@@ -198,6 +440,12 @@ func writeBuilds(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 		}
 	}
 	return nil
+}
+
+const workerActiveBuildLimit = 100
+
+func workerBuildTerminal(state string) bool {
+	return state == "succeeded" || state == "failed"
 }
 
 func sameBuild(a, b WorkerBuild) bool {
@@ -219,6 +467,32 @@ func sameBuild(a, b WorkerBuild) bool {
 
 func sameBuildPrivate(a, b WorkerBuildPrivate) bool {
 	return a.Actor == b.Actor && a.SourceKey == b.SourceKey && reflect.DeepEqual(a.Files, b.Files) && a.Log == b.Log
+}
+
+// workerBuildPrivate fetches one potentially large source/log row. List and
+// metadata endpoints deliberately never materialize this table.
+func (s *Store) workerBuildPrivate(ctx context.Context, id string) (WorkerBuildPrivate, bool, error) {
+	if s.pool == nil {
+		private, ok := s.memState().Workers.BuildPrivate[id]
+		return private, ok, nil
+	}
+	var private WorkerBuildPrivate
+	var files []byte
+	err := s.pool.QueryRow(ctx, `SELECT actor_user_id, actor_key_id, actor_auth_version, source_key, files, log
+        FROM krun_worker_build_private WHERE build_id=$1`, id).
+		Scan(&private.Actor.User, &private.Actor.Key, &private.Actor.AuthVersion, &private.SourceKey, &files, &private.Log)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WorkerBuildPrivate{}, false, nil
+	}
+	if err != nil {
+		return WorkerBuildPrivate{}, false, err
+	}
+	if len(files) > 0 {
+		if err = json.Unmarshal(files, &private.Files); err != nil {
+			return WorkerBuildPrivate{}, false, err
+		}
+	}
+	return private, true, nil
 }
 
 func writeArtifacts(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
@@ -249,14 +523,28 @@ func sameRelease(a, b WorkerRelease) bool {
 
 func writeReleases(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 	for id, r := range aw.Releases {
-		if old, ok := bw.Releases[id]; ok && sameRelease(old, r) {
+		old, existed := bw.Releases[id]
+		if existed && sameRelease(old, r) {
 			continue
 		}
 		variables, err := json.Marshal(r.Variables)
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_releases (release_id, org_id, service_id, env_name, artifact_id, archive_digest, module_digest, config_revision, variables, pool, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (release_id) DO UPDATE SET archive_digest=excluded.archive_digest, module_digest=excluded.module_digest, config_revision=excluded.config_revision, variables=excluded.variables, pool=excluded.pool`, id, r.Organization, r.Service, r.Environment, r.Artifact, r.ArchiveDigest, r.ModuleDigest, r.ConfigRevision, variables, r.Pool, r.Created); err != nil {
+		if !existed {
+			tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_releases (release_id, org_id, service_id, env_name, artifact_id, archive_digest, module_digest, config_revision, variables, pool, created_at)
+				SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11
+				WHERE EXISTS (SELECT 1 FROM krun_worker_artifacts WHERE artifact_id=$5 AND state='finalized')
+				ON CONFLICT (release_id) DO UPDATE SET release_id=excluded.release_id`, id, r.Organization, r.Service, r.Environment, r.Artifact, r.ArchiveDigest, r.ModuleDigest, r.ConfigRevision, variables, r.Pool, r.Created)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 0 {
+				return problem(409, "ARTIFACT_UNAVAILABLE", "Artifact is no longer available")
+			}
+			continue
+		}
+		if _, err := tx.Exec(ctx, `UPDATE krun_worker_releases SET archive_digest=$2, module_digest=$3, config_revision=$4, variables=$5, pool=$6 WHERE release_id=$1`, id, r.ArchiveDigest, r.ModuleDigest, r.ConfigRevision, variables, r.Pool); err != nil {
 			return err
 		}
 	}
@@ -348,35 +636,24 @@ func splitHistoryKey(key string) (string, string) {
 
 func writeIdempotency(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 	for key, record := range aw.Idempotency {
-		if old, ok := bw.Idempotency[key]; ok && old == record {
+		if old, ok := bw.Idempotency[key]; ok {
+			if old != record {
+				return problem(409, "IDEMPOTENCY_CONFLICT", "Idempotency key was already used for another request")
+			}
 			continue
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_idempotency (idem_key, digest, target_id) VALUES ($1,$2,$3) ON CONFLICT (idem_key) DO UPDATE SET digest=excluded.digest, target_id=excluded.target_id`, key, record.Digest, record.ID); err != nil {
+		tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_idempotency (idem_key, digest, target_id)
+			VALUES ($1,$2,$3) ON CONFLICT (idem_key) DO NOTHING`, key, record.Digest, record.ID)
+		if err != nil {
 			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return problem(409, "IDEMPOTENCY_CONFLICT", "Idempotency key is being handled by another request; retry")
 		}
 	}
 	for key := range bw.Idempotency {
 		if _, ok := aw.Idempotency[key]; !ok {
 			if _, err := tx.Exec(ctx, `DELETE FROM krun_worker_idempotency WHERE idem_key=$1`, key); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func writeRepositoryConnections(ctx context.Context, tx pgx.Tx, before, after map[string]WorkerRepositoryConnection) error {
-	for key, c := range after {
-		if old, ok := before[key]; ok && old == c {
-			continue
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO krun_repository_connections (user_id, provider_id, access_token, connected_at) VALUES ($1,$2,$3,$4) ON CONFLICT (user_id, provider_id) DO UPDATE SET access_token=excluded.access_token, connected_at=excluded.connected_at`, c.User, c.Provider, c.AccessToken, c.ConnectedAt); err != nil {
-			return err
-		}
-	}
-	for key, c := range before {
-		if _, ok := after[key]; !ok {
-			if _, err := tx.Exec(ctx, `DELETE FROM krun_repository_connections WHERE user_id=$1 AND provider_id=$2`, c.User, c.Provider); err != nil {
 				return err
 			}
 		}

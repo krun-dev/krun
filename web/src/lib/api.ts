@@ -15,6 +15,9 @@ export async function api<T>(
   input?: unknown,
   signal?: AbortSignal,
 ): Promise<T> {
+  if (!path.startsWith("/api/")) {
+    throw new APIError(0, "INVALID_API_PATH", "Refusing a non-API request path");
+  }
   signal = signal
     ? AbortSignal.any([signal, AbortSignal.timeout(20000)])
     : AbortSignal.timeout(20000);
@@ -24,6 +27,7 @@ export async function api<T>(
   };
   if (method !== "GET") {
     const response = await fetch("/api/auth/csrf", {
+      method: "POST",
       credentials: "same-origin",
       signal,
       headers: { "Accept-Language": locale() },
@@ -83,6 +87,7 @@ export type Organization = {
   id: string;
   name: string;
   allowed_sources: string[];
+  revision: number;
 };
 export type Group = {
   id: string;

@@ -1,4 +1,4 @@
-.PHONY: build test check-secrets dev dev-down runtime-image runtime-config clean
+.PHONY: build test check-secrets check-static check-static-build dev dev-down runtime-image runtime-config clean
 build:
 	npm ci
 	npm run build
@@ -8,13 +8,23 @@ build:
 check-secrets:
 	./scripts/check-secrets.sh
 
+check-static:
+	python3 scripts/check-static-console.py
+
+check-static-build:
+	python3 scripts/check-static-console.py --dist
+
 test:
 	./scripts/check-secrets.sh
+	python3 scripts/check-static-console.py
 	go test -race ./...
 	go vet ./...
 	npm run check
 	npm run test:permissions
 	npm run test:i18n
+	npm --prefix web test
+	npm test --prefix workers/builder
+	npm test --prefix workers/runtime
 
 dev:
 	./scripts/dev-up.sh

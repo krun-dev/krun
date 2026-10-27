@@ -1,0 +1,8 @@
+{
+  "name": "@krun/example-workers-fullstack-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node --check public/assets/app-a1b2c3d4.js"
+  }
+}
