@@ -87,7 +87,7 @@ func TestSeparatedFrontendProxyLogin(t *testing.T) {
 	if err != nil || response.StatusCode != http.StatusOK || me.User.Subject != "developer" {
 		t.Fatal(response.StatusCode, me, err)
 	}
-	if err := store.Update(context.Background(), func(st *State) error {
+	if err := store.Update(context.Background(), PartitionAll, func(st *State) error {
 		if st.Users[me.User.ID].Subject != "developer" {
 			t.Error("proxy login was not persisted")
 		}

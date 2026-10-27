@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,9 @@ type workersController struct {
 	// Local build executor state for builder_mode: local.
 	localMu     sync.Mutex
 	localBuilds map[string]*workerLocalBuild
+	// replica identifies this process in claimed_by columns. It only needs to be
+	// unique among live replicas, not stable across restarts.
+	replica string
 }
 
 type workerLocalBuild struct{ Running bool }
@@ -74,7 +78,25 @@ func newWorkersController(s *Server) (*workersController, error) {
 	if e != nil {
 		return nil, e
 	}
-	return &workersController{server: s, config: s.Config.Workers, s3: s3, putObject: s3.PutObject, s3Builder: s3Builder, kube: k, http: &http.Client{Timeout: 8 * time.Second}, assetCache: map[string]workerCachedAssets{}, localBuilds: map[string]*workerLocalBuild{}}, nil
+	return &workersController{server: s, config: s.Config.Workers, s3: s3, putObject: s3.PutObject, s3Builder: s3Builder, kube: k, http: &http.Client{Timeout: 8 * time.Second}, assetCache: map[string]workerCachedAssets{}, localBuilds: map[string]*workerLocalBuild{}, replica: workerReplicaID()}, nil
+}
+
+// workerReplicaID names this process in claimed_by columns.
+func workerReplicaID() string {
+	host, _ := os.Hostname()
+	return host + "/" + strconv.FormatInt(time.Now().UnixNano()%1e9, 36)
+}
+
+// authorizeActor re-checks a durable operation's actor against current IAM
+// state. Authorization needs both partitions: the grants and user rows are IAM,
+// but resolve() looks the service up in krun_resources, which is Workers.
+func (w *workersController) authorizeActor(ctx context.Context, actor WorkerActor, service, env, action string) (error, error) {
+	var denied error
+	err := w.server.Store.View(ctx, PartitionAll, func(st *State) error {
+		denied = w.server.workerAuthorizeActor(st, actor, service, env, action)
+		return nil
+	})
+	return denied, err
 }
 
 // putBytes writes a whole object through the injected storage hook.
@@ -94,69 +116,63 @@ func (w *workersController) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// A session advisory lock elects one reconciler across control replicas, without holding the IAM row lock during network operations.
 			if w.server.Store.pool == nil {
 				continue
 			}
-			conn, e := w.server.Store.pool.Acquire(ctx)
-			if e != nil {
-				continue
-			}
-			var locked bool
-			e = conn.QueryRow(ctx, "SELECT pg_try_advisory_lock(724618031)").Scan(&locked)
-			if e == nil && locked {
-				cycle, cancel := context.WithTimeout(ctx, 25*time.Second)
-				e = w.reconcile(cycle)
-				cancel()
-				unlock, c := context.WithTimeout(context.Background(), time.Second)
-				_, _ = conn.Exec(unlock, "SELECT pg_advisory_unlock(724618031)")
-				c()
-			}
-			conn.Release()
+			// No leader election: each cycle claims individual operations and
+			// builds with a conditional update, so replicas work on different
+			// rows instead of queueing behind one advisory lock.
+			cycle, cancel := context.WithTimeout(ctx, 25*time.Second)
+			e := w.reconcile(cycle)
+			cancel()
 			if e != nil && ctx.Err() == nil {
 				fmt.Println("workers reconcile:", e)
 			}
 		}
 	}
 }
+
+// read loads the Workers partition. The loaded state is already a fresh copy
+// per call, so the previous marshal/unmarshal round trip only to deep-copy was
+// redundant.
 func (w *workersController) read(ctx context.Context) (*WorkerState, error) {
-	var out *WorkerState
-	e := w.server.Store.View(ctx, func(st *State) error {
-		if st.Workers == nil {
-			st.Workers = newWorkerState()
-		}
-		raw, e := json.Marshal(st.Workers)
-		if e != nil {
-			return e
-		}
-		out = newWorkerState()
-		return json.Unmarshal(raw, out)
-	})
-	return out, e
-}
-func (w *workersController) reconcile(ctx context.Context) error {
-	state, e := w.read(ctx)
+	st, e := w.server.Store.Open(ctx, PartitionWorkers)
 	if e != nil {
-		return e
+		return nil, e
 	}
+	if st.Workers == nil {
+		return newWorkerState(), nil
+	}
+	return st.Workers, nil
+}
+// reconcile runs one cycle. It reads only the routing topology plus unfinished
+// work, so an idle control plane scans no build or operation rows and never
+// deserializes a whole document.
+func (w *workersController) reconcile(ctx context.Context) error {
 	var failures []error
 	// Materialise an edge-config revision whenever routes or releases changed.
 	// A digest match is a no-op, so this is safe to run every cycle.
-	if _, e = w.publishConfig(ctx); e != nil {
+	if _, e := w.publishConfig(ctx); e != nil {
 		failures = append(failures, e)
 	}
-	builds := []WorkerBuild{}
-	for _, b := range state.Builds {
-		if !workerTerminal(b.State) {
-			builds = append(builds, b)
-		}
+	topology, e := w.server.Store.Open(ctx, PartitionWorkers)
+	if e != nil {
+		return e
+	}
+	pending, e := w.server.Store.pendingWork(ctx, 100)
+	if e != nil {
+		return e
+	}
+	builds := make([]WorkerBuild, 0, len(pending.Builds))
+	for _, b := range pending.Builds {
+		builds = append(builds, b)
 	}
 	sort.Slice(builds, func(i, j int) bool { return builds[i].Created.Before(builds[j].Created) })
 	for _, b := range builds {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if e = w.processBuild(ctx, b, state.BuildPrivate[b.ID]); e != nil {
+		if e = w.processBuild(ctx, b, pending.BuildPrivate[b.ID]); e != nil {
 			failures = append(failures, e)
 		}
 	}
@@ -187,17 +203,21 @@ func (w *workersController) reconcile(ctx context.Context) error {
 	// Gateway their domain is bound to, so routes never carry a hostname the
 	// instance is not meant to serve.
 	routesReady := map[string]bool{}
-	for _, service := range state.Services {
+	for _, service := range topology.Workers.Services {
 		hostsByGateway := map[string][]string{}
 		for _, env := range service.Environments {
 			if !env.Enabled {
 				continue
 			}
-			// Hosts already encode the service's domain selection; classify each
-			// by the domain it belongs to so it lands on the right instance.
-			for _, host := range env.Hosts {
-				d, ok := w.config.domainForHost(host)
+			// Hosts are derived from the domain catalog, never persisted, so a
+			// catalog change cannot leave stale hosts behind.
+			for _, id := range service.Domains {
+				d, ok := w.config.domain(id)
 				if !ok {
+					continue
+				}
+				host := hostFor(workerSlug(service.Organization, service.Service), env.Name, d.Domain)
+				if host == "" {
 					continue
 				}
 				hostsByGateway[d.Gateway] = append(hostsByGateway[d.Gateway], host)
@@ -209,48 +229,30 @@ func (w *workersController) reconcile(ctx context.Context) error {
 			failures = append(failures, routeError)
 		}
 	}
-	ops := []WorkerOperation{}
-	for _, op := range state.Operations {
-		if !workerTerminal(op.State) {
-			ops = append(ops, op)
-		}
+	ops := make([]WorkerOperation, 0, len(pending.Operations))
+	for _, op := range pending.Operations {
+		ops = append(ops, op)
 	}
 	sort.Slice(ops, func(i, j int) bool { return ops[i].Created.Before(ops[j].Created) })
 	for _, op := range ops {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if e = w.processOperation(ctx, op, state, routesReady[op.Service]); e != nil {
+		if e = w.processOperation(ctx, op, pending, routesReady[op.Service]); e != nil {
 			failures = append(failures, e)
 		}
 	}
 	return errors.Join(failures...)
 }
 func (w *workersController) failBuild(ctx context.Context, id, message, log string) error {
-	return w.server.Store.Update(ctx, func(st *State) error {
-		b := st.Workers.Builds[id]
-		if workerTerminal(b.State) {
-			return nil
-		}
-		b.State = "failed"
-		b.Error = message
-		b.Finished = workerCloneTime(now())
-		st.Workers.Builds[id] = b
-		private := st.Workers.BuildPrivate[id]
-		private.Log = safeWorkerLog(log)
-		st.Workers.BuildPrivate[id] = private
-		return nil
-	})
+	return w.server.Store.finishBuild(ctx, id, "failed", message, "", safeWorkerLog(log))
 }
 func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, private WorkerBuildPrivate) error {
-	var allowed error
-	if e := w.server.Store.Update(ctx, func(st *State) error {
-		allowed = w.server.workerAuthorizeActor(st, private.Actor, b.Service, b.Environment, "build.start")
-		return nil
-	}); e != nil {
+	denied, e := w.authorizeActor(ctx, private.Actor, b.Service, b.Environment, "build.start")
+	if e != nil {
 		return e
 	}
-	if allowed != nil {
+	if denied != nil {
 		return w.failBuild(ctx, b.ID, "Build permission revoked", "")
 	}
 	if now().Sub(b.Created) > 180*time.Second {
@@ -283,13 +285,7 @@ func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, pri
 		}
 		private.SourceKey = key
 		private.Files = nil
-		if e := w.server.Store.Update(ctx, func(st *State) error {
-			p := st.Workers.BuildPrivate[b.ID]
-			p.SourceKey = key
-			p.Files = nil
-			st.Workers.BuildPrivate[b.ID] = p
-			return nil
-		}); e != nil {
+		if e := w.server.Store.setBuildSource(ctx, b.ID, key); e != nil {
 			return e
 		}
 	}
@@ -297,7 +293,7 @@ func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, pri
 		return w.processLocalBuild(ctx, b, private)
 	}
 	var job workerJob
-	e := w.kube.call(ctx, "GET", w.kube.jobs()+"/"+b.Job, nil, &job)
+	e = w.kube.call(ctx, "GET", w.kube.jobs()+"/"+b.Job, nil, &job)
 	if kubeMissing(e) {
 		if e = w.ensureBucket(ctx); e != nil {
 			return e
@@ -313,7 +309,7 @@ func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, pri
 		if e = w.kube.ensureBuildJob(ctx, b, private, sourceURL, signed, w.config.BuilderImage, w.config.BuilderPullPolicy); e != nil {
 			return e
 		}
-		return w.server.Store.Update(ctx, func(st *State) error {
+		return w.server.Store.Update(ctx, PartitionWorkers, func(st *State) error {
 			current := st.Workers.Builds[b.ID]
 			if current.State == "queued" || current.State == "fetching" {
 				current.State = "building"
@@ -336,46 +332,25 @@ func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, pri
 		return w.failBuild(ctx, b.ID, "Artifact validation failed: "+e.Error(), w.kube.buildLog(ctx, b.Job))
 	}
 	log := safeWorkerLog(private.Log + w.kube.buildLog(ctx, b.Job))
-	e = w.server.Store.Update(ctx, func(st *State) error {
-		current := st.Workers.Builds[b.ID]
-		if workerTerminal(current.State) {
-			return nil
-		}
-		if auth := w.server.workerAuthorizeActor(st, private.Actor, b.Service, b.Environment, "build.start"); auth != nil {
-			current.State = "failed"
-			current.Error = "Build permission revoked"
-		} else {
-			if old, ok := st.Workers.Artifacts[artifact.ID]; ok {
-				artifact = old
-			}
-			st.Workers.Artifacts[artifact.ID] = artifact
-			current.State = "succeeded"
-			current.Artifact = artifact.ID
-		}
-		current.Finished = workerCloneTime(now())
-		st.Workers.Builds[b.ID] = current
-		p := st.Workers.BuildPrivate[b.ID]
-		p.Log = log
-		st.Workers.BuildPrivate[b.ID] = p
-		return nil
-	})
+	// Re-check permission immediately before the artifact becomes usable.
+	denied, e = w.authorizeActor(ctx, private.Actor, b.Service, b.Environment, "build.start")
+	if e != nil {
+		return e
+	}
+	if denied != nil {
+		return w.failBuild(ctx, b.ID, "Build permission revoked", log)
+	}
+	e = w.server.Store.finishBuildWithArtifact(ctx, b.ID, "succeeded", "", artifact, log)
 	if e == nil {
 		_ = w.s3.RemoveObject(ctx, w.config.S3Bucket, workerUploadKey(b), minio.RemoveObjectOptions{})
 	}
 	return e
 }
 func (w *workersController) failOperation(ctx context.Context, id, message string) error {
-	return w.server.Store.Update(ctx, func(st *State) error { workerFailOperation(st, id, message); return nil })
+	return w.server.Store.failOperation(ctx, id, message)
 }
 func (w *workersController) noteOperation(ctx context.Context, id, message string) error {
-	return w.server.Store.Update(ctx, func(st *State) error {
-		op := st.Workers.Operations[id]
-		if !workerTerminal(op.State) {
-			op.Error = message
-			st.Workers.Operations[id] = op
-		}
-		return nil
-	})
+	return w.server.Store.noteOperationMessage(ctx, id, message)
 }
 func (w *workersController) management(ctx context.Context, pod workerPod, path string, payload any) (map[string]any, int, error) {
 	raw, _ := json.Marshal(payload)
@@ -407,7 +382,7 @@ func workerMemberIDs(pods []workerPod) string {
 	sort.Strings(ids)
 	return strings.Join(ids, ",")
 }
-func (w *workersController) processOperation(ctx context.Context, op WorkerOperation, state *WorkerState, routesReady bool) error {
+func (w *workersController) processOperation(ctx context.Context, op WorkerOperation, state WorkerState, routesReady bool) error {
 	if op.State != "committed" && now().Sub(op.Created) > 180*time.Second {
 		return w.failOperation(ctx, op.ID, "Candidate preparation deadline exceeded")
 	}
@@ -423,29 +398,28 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 		if _, e := w.artifactCode(ctx, artifact); e != nil {
 			return w.failOperation(ctx, op.ID, "Artifact validation failed: "+e.Error())
 		}
-		canProceed := true
-		if e := w.server.Store.Update(ctx, func(st *State) error {
-			current := st.Workers.Operations[op.ID]
-			if workerTerminal(current.State) {
-				canProceed = false
-				return nil
-			}
-			if e := w.server.workerAuthorizeActor(st, st.Workers.OperationPrivate[op.ID].Actor, op.Service, op.Environment, "service."+op.Kind); e != nil {
-				workerFailOperation(st, op.ID, "Release permission revoked")
-				canProceed = false
-				return nil
-			}
-			current.State = "validating"
-			current.Steps[0].State = "done"
-			current.Steps[1].State = "running"
-			current.Error = ""
-			st.Workers.Operations[op.ID] = current
-			return nil
-		}); e != nil {
+		// Claim the queued operation; losing the race means another replica owns
+		// it and this cycle simply skips it.
+		claimed, e := w.server.Store.claimOperation(ctx, op.ID, w.replica)
+		if e != nil {
 			return e
 		}
-		if !canProceed {
-			return nil
+		if !claimed {
+			claimed, e = w.server.Store.claimStaleOperation(ctx, op.ID, w.replica)
+			if e != nil {
+				return e
+			}
+			if !claimed {
+				return nil
+			}
+		}
+		actor := state.OperationPrivate[op.ID].Actor
+		auth, e := w.authorizeActor(ctx, actor, op.Service, op.Environment, "service."+op.Kind)
+		if e != nil {
+			return e
+		}
+		if auth != nil {
+			return w.failOperation(ctx, op.ID, "Release permission revoked")
 		}
 	}
 	pods, e := w.kube.runtimeMembers(ctx, w.config.RuntimeService)
@@ -497,50 +471,17 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 		if workerMemberIDs(after) != workerMemberIDs(pods) {
 			return w.noteOperation(ctx, op.ID, "Runtime membership changed; validating again")
 		}
-		if e := w.server.Store.Update(ctx, func(st *State) error {
-			current := st.Workers.Operations[op.ID]
-			if workerTerminal(current.State) || current.State == "committed" {
-				return nil
-			}
-			ws, ok := st.Workers.Services[op.Service]
-			if !ok {
-				workerFailOperation(st, op.ID, "Service unavailable")
-				return nil
-			}
-			env := ws.Environments[op.Environment]
-			if e := w.server.workerAuthorizeActor(st, st.Workers.OperationPrivate[op.ID].Actor, op.Service, op.Environment, "service."+op.Kind); e != nil {
-				workerFailOperation(st, op.ID, "Release permission revoked")
-				return nil
-			}
-			if !env.Enabled || env.Revision != op.ExpectedRevision || env.ConfigRevision != op.ConfigRevision {
-				workerFailOperation(st, op.ID, "Release or configuration revision conflict")
-				return nil
-			}
-			// A validated rollback may replace a release whose convergence is stalled.
-			for id, previous := range st.Workers.Operations {
-				if id != op.ID && previous.Service == op.Service && previous.Environment == op.Environment && previous.State == "committed" {
-					previous.State = "superseded"
-					previous.Error = "Replaced by " + op.ID
-					previous.Finished = workerCloneTime(now())
-					st.Workers.Operations[id] = previous
-				}
-			}
-			env.Revision++
-			env.Release = op.Release
-			ws.Environments[op.Environment] = env
-			st.Workers.Services[op.Service] = ws
-			st.Workers.Revision++
-			current.State = "committed"
-			current.Error = ""
-			current.ReleaseRevision = env.Revision
-			// The config revision is assigned by the publisher after commit.
-			current.EdgeRevision = 0
-			current.Steps[1].State = "done"
-			current.Steps[2].State = "done"
-			current.Steps[3].State = "running"
-			st.Workers.Operations[op.ID] = current
-			return nil
-		}); e != nil {
+		// Re-authorize immediately before commit: a permission revoked during
+		// validation must stop the release.
+		actor := state.OperationPrivate[op.ID].Actor
+		auth, e := w.authorizeActor(ctx, actor, op.Service, op.Environment, "service."+op.Kind)
+		if e != nil {
+			return e
+		}
+		if auth != nil {
+			return w.failOperation(ctx, op.ID, "Release permission revoked")
+		}
+		if _, e := w.server.Store.commitOperation(ctx, op); e != nil {
 			return e
 		}
 	}
@@ -551,14 +492,7 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 	if e != nil {
 		return w.noteOperation(ctx, op.ID, "Committed; waiting for configuration publication")
 	}
-	if e := w.server.Store.Update(ctx, func(st *State) error {
-		current := st.Workers.Operations[op.ID]
-		if current.State == "committed" && current.EdgeRevision != int(revision) {
-			current.EdgeRevision = int(revision)
-			st.Workers.Operations[op.ID] = current
-		}
-		return nil
-	}); e != nil {
+	if e := w.server.Store.setOperationEdgeRevision(ctx, op.ID, revision); e != nil {
 		return e
 	}
 	pods, e = w.kube.runtimeMembers(ctx, w.config.RuntimeService)
@@ -579,41 +513,15 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 	if workerMemberIDs(after) != workerMemberIDs(pods) {
 		return w.noteOperation(ctx, op.ID, "Committed; runtime membership changed")
 	}
-	return w.server.Store.Update(ctx, func(st *State) error {
-		current := st.Workers.Operations[op.ID]
-		if current.State != "committed" {
+	// Convergence is observed through per-Pod acks. It is not a release gate:
+	// the commit above is already durable and visible.
+	for _, pod := range pods {
+		ack, ok := acks[pod.UID]
+		if !ok || ack.Pool != "default" || ack.Revision < int(revision) || now().Sub(ack.Time) > 10*time.Second {
 			return nil
 		}
-		ws := st.Workers.Services[op.Service]
-		env := ws.Environments[op.Environment]
-		if env.Release != current.Release || env.Revision != current.ReleaseRevision {
-			current.State = "superseded"
-			current.Error = "Release superseded"
-		} else {
-			// Convergence is observed through per-Pod acks. It is not a release
-			// gate: the commit above is already durable and visible.
-			if current.EdgeRevision == 0 {
-				return nil
-			}
-			for _, pod := range pods {
-				ack, ok := acks[pod.UID]
-				if !ok || ack.Pool != "default" || ack.Revision < current.EdgeRevision || now().Sub(ack.Time) > 10*time.Second {
-					return nil
-				}
-			}
-			env.Confirmed = current.Release
-			ws.Environments[op.Environment] = env
-			st.Workers.Services[op.Service] = ws
-			current.State = "available"
-			current.Error = ""
-			current.Steps[3].State = "done"
-			key := op.Service + "/" + op.Environment
-			st.Workers.Histories[key] = append([]WorkerHistory{{current.ReleaseRevision, current.Release, op.ID, op.Kind, now()}}, st.Workers.Histories[key]...)
-		}
-		current.Finished = workerCloneTime(now())
-		st.Workers.Operations[op.ID] = current
-		return nil
-	})
+	}
+	return w.server.Store.confirmOperation(ctx, op)
 }
 
 // An infrastructure error after commit leaves a durable committed operation to retry; it does not silently undo the Release.
@@ -628,7 +536,7 @@ func (w *workersController) processLocalBuild(ctx context.Context, b WorkerBuild
 	}
 	w.localBuilds[b.ID] = &workerLocalBuild{Running: true}
 	w.localMu.Unlock()
-	if e := w.server.Store.Update(ctx, func(st *State) error {
+	if e := w.server.Store.Update(ctx, PartitionWorkers, func(st *State) error {
 		current := st.Workers.Builds[b.ID]
 		if current.State == "queued" || current.State == "fetching" {
 			current.State = "building"
@@ -663,29 +571,18 @@ func (w *workersController) runLocalBuild(b WorkerBuild, private WorkerBuildPriv
 		_ = w.failBuild(ctx, b.ID, "Artifact validation failed: "+e.Error(), log)
 		return
 	}
-	e = w.server.Store.Update(ctx, func(st *State) error {
-		current := st.Workers.Builds[b.ID]
-		if workerTerminal(current.State) {
-			return nil
-		}
-		if auth := w.server.workerAuthorizeActor(st, private.Actor, b.Service, b.Environment, "build.start"); auth != nil {
-			current.State = "failed"
-			current.Error = "Build permission revoked"
-		} else {
-			if old, ok := st.Workers.Artifacts[artifact.ID]; ok {
-				artifact = old
-			}
-			st.Workers.Artifacts[artifact.ID] = artifact
-			current.State = "succeeded"
-			current.Artifact = artifact.ID
-		}
-		current.Finished = workerCloneTime(now())
-		st.Workers.Builds[b.ID] = current
-		p := st.Workers.BuildPrivate[b.ID]
-		p.Log = safeWorkerLog(private.Log + log)
-		st.Workers.BuildPrivate[b.ID] = p
-		return nil
-	})
+	// Re-check permission before the artifact becomes usable. This needs the IAM
+	// partition, so it cannot run inside a Workers-only write.
+	denied, e := w.authorizeActor(ctx, private.Actor, b.Service, b.Environment, "build.start")
+	if e != nil {
+		_ = w.failBuild(ctx, b.ID, "Build permission check unavailable", log)
+		return
+	}
+	if denied != nil {
+		_ = w.failBuild(ctx, b.ID, "Build permission revoked", log)
+		return
+	}
+	e = w.server.Store.finishBuildWithArtifact(ctx, b.ID, "succeeded", "", artifact, safeWorkerLog(private.Log+log))
 	if e == nil {
 		_ = w.s3.RemoveObject(ctx, w.config.S3Bucket, workerUploadKey(b), minio.RemoveObjectOptions{})
 	}

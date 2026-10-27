@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 
@@ -16,27 +17,33 @@ import (
 func workerConfigFixture() (*State, *Store) {
 	store := memoryStore()
 	st, _, _ := fixture()
-	ws := WorkerService{Service: "svc-a", Organization: "org-a", Environments: map[string]WorkerEnvironment{
-		"production": {Name: "production", Enabled: true, Hosts: []string{"w-prod.workers.test"}, Release: "rel-1"},
-		"preview":    {Name: "preview", Enabled: false, Hosts: []string{"w-prev.workers.test"}, Release: "rel-1"},
-		"empty":      {Name: "empty", Enabled: true, Hosts: []string{"w-empty.workers.test"}},
+	// Hosts are derived from the domain catalog, not stored.
+	ws := WorkerService{Service: "svc-a", Organization: "org-a", Domains: []string{"internal"}, Environments: map[string]WorkerEnvironment{
+		"production": {Name: "production", Enabled: true, Release: "rel-1"},
+		"preview":    {Name: "preview", Enabled: false, Release: "rel-1"},
+		"empty":      {Name: "empty", Enabled: true},
 	}}
 	st.Workers.Services["svc-a"] = ws
 	st.Workers.Releases["rel-1"] = WorkerRelease{ID: "rel-1", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1", ArchiveDigest: "archive-1", ModuleDigest: "module-1", Pool: "default", Variables: map[string]string{"A": "1"}}
 	st.Workers.Releases["rel-unused"] = WorkerRelease{ID: "rel-unused", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1", Pool: "default"}
 	st.Workers.Services["svc-deleted"] = WorkerService{Service: "svc-deleted", Organization: "org-a", Environments: map[string]WorkerEnvironment{}}
-	_ = store.Update(context.Background(), func(state *State) error { *state = *st; return nil })
+	_ = store.Update(context.Background(), PartitionAll, func(state *State) error { *state = *st; return nil })
 	return st, store
 }
 
 func TestWorkerConfigProjection(t *testing.T) {
 	st, _ := workerConfigFixture()
-	p := workerConfigFromState(st)
+	p := workerConfigFromState(st, []WorkerDomain{{ID: "internal", Domain: "workers.test"}})
 	if len(p.Routes) != 3 {
 		t.Fatalf("routes: %+v", p.Routes)
 	}
-	if p.Routes[0].Host != "w-empty.workers.test" || p.Routes[1].Host != "w-prev.workers.test" || p.Routes[2].Host != "w-prod.workers.test" {
-		t.Fatalf("routes are not sorted by host: %+v", p.Routes)
+	slug := workerSlug("org-a", "svc-a")
+	wantHosts := []string{hostFor(slug, "empty", "workers.test"), hostFor(slug, "preview", "workers.test"), hostFor(slug, "production", "workers.test")}
+	sort.Strings(wantHosts)
+	for i, want := range wantHosts {
+		if p.Routes[i].Host != want {
+			t.Fatalf("route %d host = %q, want %q (routes: %+v)", i, p.Routes[i].Host, want, p.Routes)
+		}
 	}
 	if p.Routes[1].Enabled {
 		t.Fatal("disabled environment must stay in the projection with enabled=false")
@@ -51,14 +58,14 @@ func TestWorkerConfigProjection(t *testing.T) {
 	if err != nil || digest == "" {
 		t.Fatal(err)
 	}
-	if again, _, _ := workerConfigDigest(workerConfigFromState(st)); again != digest {
+	if again, _, _ := workerConfigDigest(workerConfigFromState(st, []WorkerDomain{{ID: "internal", Domain: "workers.test"}})); again != digest {
 		t.Fatal("projection digest is not deterministic")
 	}
 }
 
 func TestWorkerConfigDiffOrdering(t *testing.T) {
 	st, _ := workerConfigFixture()
-	first := workerConfigFromState(st)
+	first := workerConfigFromState(st, []WorkerDomain{{ID: "internal", Domain: "workers.test"}})
 	ops := diffWorkerConfig(nil, first)
 	seenRoute := false
 	for _, op := range ops {
@@ -72,14 +79,15 @@ func TestWorkerConfigDiffOrdering(t *testing.T) {
 	next := first
 	next.Routes = append([]workerConfigRoute(nil), first.Routes...)
 	next.Releases = map[string]WorkerRelease{"rel-1": first.Releases["rel-1"]}
+	prodHost := hostFor(workerSlug("org-a", "svc-a"), "production", "workers.test")
 	for i := range next.Routes {
-		if next.Routes[i].Host == "w-prod.workers.test" {
+		if next.Routes[i].Host == prodHost {
 			next.Routes[i].Release = "rel-2"
 		}
 	}
 	next.Releases["rel-2"] = WorkerRelease{ID: "rel-2", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-2", Pool: "default"}
 	ops = diffWorkerConfig(&first, next)
-	if len(ops) != 2 || ops[0].Type != "release_put" || ops[0].Release.ID != "rel-2" || ops[1].Type != "route_upsert" || ops[1].Host != "w-prod.workers.test" {
+	if len(ops) != 2 || ops[0].Type != "release_put" || ops[0].Release.ID != "rel-2" || ops[1].Type != "route_upsert" || ops[1].Host != prodHost {
 		t.Fatalf("unexpected migration ops: %+v", ops)
 	}
 	next.Routes = next.Routes[:1]
@@ -148,10 +156,10 @@ func TestPublishConfigCreatesRevisionsAndObjects(t *testing.T) {
 		return minio.UploadInfo{}, nil
 	}
 	st, _, _ := fixture()
-	ws := WorkerService{Service: "svc-a", Organization: "org-a", Environments: map[string]WorkerEnvironment{"production": {Name: "production", Enabled: true, Hosts: []string{"w-prod.workers.test"}, Release: "rel-1"}}}
+	ws := WorkerService{Service: "svc-a", Organization: "org-a", Domains: []string{"internal"}, Environments: map[string]WorkerEnvironment{"production": {Name: "production", Enabled: true, Release: "rel-1"}}}
 	st.Workers.Services["svc-a"] = ws
 	st.Workers.Releases["rel-1"] = WorkerRelease{ID: "rel-1", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1", Pool: "default"}
-	if err := store.Update(context.Background(), func(state *State) error { *state = *st; return nil }); err != nil {
+	if err := store.Update(context.Background(), PartitionAll, func(state *State) error { *state = *st; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	revision, err := controller.publishConfig(context.Background())
@@ -170,7 +178,8 @@ func TestPublishConfigCreatesRevisionsAndObjects(t *testing.T) {
 	if err := json.NewDecoder(gz).Decode(&snapshot); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.ConfigRevision != 1 || len(snapshot.Routes) != 1 || snapshot.Routes[0].Host != "w-prod.workers.test" || snapshot.Releases["rel-1"].Artifact != "art-1" {
+	prodHost := hostFor(workerSlug("org-a", "svc-a"), "production", "workers.test")
+	if snapshot.ConfigRevision != 1 || len(snapshot.Routes) != 1 || snapshot.Routes[0].Host != prodHost || snapshot.Releases["rel-1"].Artifact != "art-1" {
 		t.Fatalf("snapshot payload: %+v", snapshot)
 	}
 	if _, ok := objects[workerConfigLatestKey]; !ok {
@@ -180,7 +189,7 @@ func TestPublishConfigCreatesRevisionsAndObjects(t *testing.T) {
 	if again, err := controller.publishConfig(context.Background()); err != nil || again != 1 || len(objects) != before {
 		t.Fatalf("unchanged projection must not republish: %d %v objects=%d", again, err, len(objects))
 	}
-	if err := store.Update(context.Background(), func(state *State) error {
+	if err := store.Update(context.Background(), PartitionAll, func(state *State) error {
 		env := state.Workers.Services["svc-a"].Environments["production"]
 		env.Release = "rel-2"
 		service := state.Workers.Services["svc-a"]

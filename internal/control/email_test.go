@@ -105,7 +105,7 @@ func TestEmailLoginIdentitySessionAndReplay(t *testing.T) {
 	if err := json.Unmarshal(me.Body.Bytes(), &data); err != nil || me.Code != 200 || data.User.Email != "person@example.com" || data.User.Subject != data.User.Email || data.Admin {
 		t.Fatal(me.Code, me.Body.String(), err)
 	}
-	if err := store.Update(context.Background(), func(st *State) error {
+	if err := store.Update(context.Background(), PartitionAll, func(st *State) error {
 		if len(st.Assignments) != 0 || len(st.Members) != 0 {
 			t.Error("email login granted privileges")
 		}
@@ -120,7 +120,7 @@ func TestEmailLoginIdentitySessionAndReplay(t *testing.T) {
 		t.Fatal("replayed code accepted", w.Code)
 	}
 	// A fresh browser can log in to the same local identity without merging SSO identities.
-	_ = store.Update(context.Background(), func(st *State) error {
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		for k, v := range st.EmailLogins {
 			v.Sent = now().Add(-time.Minute)
 			st.EmailLogins[k] = v
@@ -166,7 +166,7 @@ func TestEmailCodeSecurityBoundaries(t *testing.T) {
 				if w.Code != 503 || strings.Contains(w.Body.String(), "SECRET") {
 					t.Fatal(w.Code, w.Body.String())
 				}
-				_ = store.Update(context.Background(), func(st *State) error {
+				_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 					for _, v := range st.EmailLogins {
 						if !v.Consumed {
 							t.Error("undelivered code active")
@@ -191,7 +191,7 @@ func TestEmailCodeSecurityBoundaries(t *testing.T) {
 			case "other-browser":
 				cookies, csrf = emailBrowser(t, s)
 			case "expired":
-				_ = store.Update(context.Background(), func(st *State) error {
+				_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 					v := st.EmailLogins[digest(challenge)]
 					v.Expires = now().Add(-time.Second)
 					st.EmailLogins[digest(challenge)] = v
@@ -205,7 +205,7 @@ func TestEmailCodeSecurityBoundaries(t *testing.T) {
 					}
 				}
 			case "superseded":
-				_ = store.Update(context.Background(), func(st *State) error {
+				_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 					b := st.Browsers[digest(cookies[0].Value)]
 					b.Generation++
 					st.Browsers[digest(cookies[0].Value)] = b
@@ -222,7 +222,7 @@ func TestEmailCodeSecurityBoundaries(t *testing.T) {
 				return
 			case "user-disabled":
 				want = 403
-				_ = store.Update(context.Background(), func(st *State) error {
+				_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 					st.Users["disabled"] = User{ID: "disabled", Source: "email-test", Subject: "person@example.com", Status: "disabled"}
 					return nil
 				})
@@ -401,7 +401,7 @@ func TestVerificationMailSMTP(t *testing.T) {
 
 func TestPostgresEmailLoginRestartAndConcurrentConsumption(t *testing.T) {
 	store := postgresTestStore(t)
-	if err := store.Update(context.Background(), func(st *State) error { *st = *newState(); return nil }); err != nil {
+	if err := store.Update(context.Background(), PartitionAll, func(st *State) error { *st = *newState(); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	s, code := emailTestServer(t, store)

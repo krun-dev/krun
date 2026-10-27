@@ -21,7 +21,7 @@ func publishedWorkerInvokeServer(t *testing.T) (*Server, *Store, string, string)
 	s.Config.Workers.Gateways = []WorkerGateway{{ID: "internal", Name: "workers-gateway", Namespace: "gateway-system", Section: "private"}}
 	s.Config.Workers.Domains = []WorkerDomain{{ID: "internal", Domain: "workers.test", Label: "内网", Gateway: "internal", Default: true}}
 	var host string
-	if err := store.Update(context.Background(), func(st *State) error {
+	if err := store.Update(context.Background(), PartitionAll, func(st *State) error {
 		service := s.workerService(st, Target{ID: "svc-a", Organization: "org-a"})
 		env := service.Environments["production"]
 		env.Release = "rel-test"
@@ -59,7 +59,7 @@ func TestWorkerInvokeGatewayRoutingAndResponseIsolation(t *testing.T) {
 		}
 		// The IAM state must remain available while the Worker is running.
 		updated := make(chan error, 1)
-		go func() { updated <- store.Update(context.Background(), func(*State) error { return nil }) }()
+		go func() { updated <- store.Update(context.Background(), PartitionAll, func(*State) error { return nil }) }()
 		select {
 		case err := <-updated:
 			if err != nil {
@@ -202,7 +202,7 @@ func TestWorkerInvokeRejectsInvalidRequestsWithoutNetwork(t *testing.T) {
 
 func TestWorkerInvokeSessionCSRF(t *testing.T) {
 	s, store, endpoint, _ := publishedWorkerInvokeServer(t)
-	if err := store.Update(context.Background(), func(st *State) error {
+	if err := store.Update(context.Background(), PartitionAll, func(st *State) error {
 		session := st.Sessions[digest("krun_cli_admin")]
 		session.CLI = false
 		session.CSRF = "expected-csrf"

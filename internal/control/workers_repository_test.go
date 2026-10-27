@@ -90,7 +90,7 @@ func TestRepositoryBindingSnapshotAndBuildRetry(t *testing.T) {
 	if r := request(s, "POST", base+"/builds", "krun_cli_admin", stale); r.Code != 409 {
 		t.Fatal("stale repository configuration accepted", r.Code, r.Body.String())
 	}
-	if err := store.Update(context.Background(), func(st *State) error {
+	if err := store.Update(context.Background(), PartitionAll, func(st *State) error {
 		if len(st.Workers.BuildPrivate[first.ID].Files) != 0 {
 			t.Error("repository source was not queued separately")
 		}
@@ -222,7 +222,7 @@ func TestRepositoryConnectionLifecycle(t *testing.T) {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	// 手工放置连接后 providers 列表应标记 connected
-	if e := store.Update(context.Background(), func(st *State) error {
+	if e := store.Update(context.Background(), PartitionAll, func(st *State) error {
 		st.RepositoryConnections["admin\x00github"] = WorkerRepositoryConnection{User: "admin", Provider: "github", AccessToken: "tok"}
 		return nil
 	}); e != nil {

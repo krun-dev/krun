@@ -13,7 +13,7 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 	if err != nil {
 		return build, private, fmt.Errorf("Repository provider or repository is no longer enabled for this build")
 	}
-	if err := w.server.Store.Update(ctx, func(st *State) error {
+	if err := w.server.Store.Update(ctx, PartitionWorkers, func(st *State) error {
 		current := st.Workers.Builds[build.ID]
 		current.State = "fetching"
 		st.Workers.Builds[build.ID] = current
@@ -24,7 +24,7 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 	// Resolve the fetch credential once: the connecting user's OAuth grant,
 	// falling back to the provider's shared PAT.
 	var fetchToken string
-	_ = w.server.Store.Update(ctx, func(st *State) error {
+	_ = w.server.Store.Update(ctx, PartitionWorkers, func(st *State) error {
 		actor := st.Workers.OperationPrivate[build.ID].Actor.User
 		fetchToken = w.server.repositoryCredential(st, provider, actor)
 		return nil
@@ -37,7 +37,7 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 		source.Commit = commit
 		build.Repository = &source
 		// Pin the commit before downloading; retries must not follow a moving branch.
-		if err := w.server.Store.Update(ctx, func(st *State) error {
+		if err := w.server.Store.Update(ctx, PartitionWorkers, func(st *State) error {
 			current := st.Workers.Builds[build.ID]
 			current.Repository = &source
 			st.Workers.Builds[build.ID] = current
@@ -113,10 +113,15 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 		}
 		private.Log += ")\n"
 	}
-	err = w.server.Store.Update(ctx, func(st *State) error {
-		if err := w.server.workerAuthorizeActor(st, private.Actor, build.Service, build.Environment, "build.start"); err != nil {
-			return fmt.Errorf("Build permission revoked")
-		}
+	// Authorization needs the IAM partition, so it runs before the Workers write.
+	denied, authErr := w.authorizeActor(ctx, private.Actor, build.Service, build.Environment, "build.start")
+	if authErr != nil {
+		return build, private, authErr
+	}
+	if denied != nil {
+		return build, private, fmt.Errorf("Build permission revoked")
+	}
+	err = w.server.Store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Builds[build.ID] = build
 		st.Workers.BuildPrivate[build.ID] = private
 		return nil

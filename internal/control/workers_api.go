@@ -18,7 +18,7 @@ func (s *Server) requireWorkers(w http.ResponseWriter, r *http.Request) bool {
 func (s *Server) workersRoutes(m *http.ServeMux) {
 	base := "/api/v1/orgs/{org}/services/{resource}/workers"
 	protect := func(sessionOnly bool, fn endpoint) http.HandlerFunc {
-		return s.protected(sessionOnly, func(st *State, p Principal, r *http.Request) (any, int, error) {
+		return s.protectedWorkers(sessionOnly, func(st *State, p Principal, r *http.Request) (any, int, error) {
 			if s.Config.Workers == nil {
 				return nil, 0, problem(503, "WORKERS_NOT_CONFIGURED", "Workers is not configured")
 			}
@@ -98,29 +98,70 @@ func (s *Server) workerService(st *State, t Target) WorkerService {
 	}
 	ws, ok := st.Workers.Services[t.ID]
 	if !ok {
-		ws = WorkerService{Service: t.ID, Organization: t.Organization, Domains: s.Config.Workers.defaultDomains(), Environments: map[string]WorkerEnvironment{}}
+		ws = WorkerService{Service: t.ID, Organization: t.Organization, Domains: []string{}, Environments: map[string]WorkerEnvironment{}}
 	}
+	ws.Organization = t.Organization
+	ws = s.normalizeService(ws)
+	st.Workers.Services[t.ID] = ws
+	return ws
+}
+
+// workerServiceView is the read-only form of workerService: it applies the same
+// defaults to the returned value without touching the stored row. Read endpoints
+// must use this so a GET never mutates the service row.
+//
+// The environment map is copied first: normalizeService writes into it in
+// place, so returning the stored map by reference would let a read mutate the
+// loaded state (and, in the memory store, be observed as a write).
+func (s *Server) workerServiceView(st *State, t Target) WorkerService {
+	if st.Workers == nil {
+		st.Workers = newWorkerState()
+	}
+	ws, ok := st.Workers.Services[t.ID]
+	if !ok {
+		ws = WorkerService{Service: t.ID, Organization: t.Organization, Domains: []string{}, Environments: map[string]WorkerEnvironment{}}
+	}
+	ws.Organization = t.Organization
+	ws.Domains = append([]string(nil), ws.Domains...)
+	environments := make(map[string]WorkerEnvironment, len(ws.Environments))
+	for name, env := range ws.Environments {
+		environments[name] = env
+	}
+	ws.Environments = environments
+	return s.normalizeService(ws)
+}
+
+// normalizeService applies catalog defaults and derives hosts. Hosts are never
+// persisted: routing, the edge projection and API responses all compute them
+// here, so they cannot drift apart.
+func (s *Server) normalizeService(ws WorkerService) WorkerService {
 	if len(ws.Domains) == 0 {
 		// Services created before the selection moved to the service level, or
 		// whose catalog entries were all removed, fall back to the defaults so a
 		// half-migrated row never ends up unroutable.
 		ws.Domains = s.Config.Workers.defaultDomains()
 	}
-	if baseline, ok := ws.Environments[workerBaseline]; ok {
-		// The baseline serves production traffic; legacy data may have it
-		// disabled through the removed UI toggle. Self-heal on read.
-		if !baseline.Enabled {
-			baseline.Enabled = true
-			s.syncEnvironmentHosts(&baseline, t.Organization, t.ID, ws.Domains)
-			ws.Environments[workerBaseline] = baseline
-		}
-	} else {
-		baseline := WorkerEnvironment{Name: workerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{}}
-		s.syncEnvironmentHosts(&baseline, t.Organization, t.ID, ws.Domains)
-		ws.Environments[workerBaseline] = baseline
+	if ws.Environments == nil {
+		ws.Environments = map[string]WorkerEnvironment{}
 	}
-	st.Workers.Services[t.ID] = ws
-	st.Workers.Revision++
+	// The baseline always exists and always serves production traffic.
+	baseline, ok := ws.Environments[workerBaseline]
+	if !ok {
+		baseline = WorkerEnvironment{ConfigRevision: 1}
+	}
+	baseline.Name = workerBaseline
+	baseline.Enabled = true
+	if baseline.ConfigRevision == 0 {
+		baseline.ConfigRevision = 1
+	}
+	if baseline.Variables == nil {
+		baseline.Variables = map[string]string{}
+	}
+	ws.Environments[workerBaseline] = baseline
+	for name, env := range ws.Environments {
+		s.syncEnvironmentHosts(&env, ws.Organization, ws.Service, ws.Domains)
+		ws.Environments[name] = env
+	}
 	return ws
 }
 func workerIdempotent(st *State, key string, in any) (string, error) {
@@ -332,7 +373,7 @@ func (s *Server) workerEnvironments(st *State, p Principal, r *http.Request) (an
 	if e != nil {
 		return nil, 0, e
 	}
-	ws := s.workerService(st, t)
+	ws := s.workerServiceView(st, t)
 	names := make([]string, 0, len(ws.Environments))
 	for name := range ws.Environments {
 		names = append(names, name)
@@ -370,10 +411,8 @@ func (s *Server) workerServiceDomains(st *State, p Principal, r *http.Request) (
 	if e != nil {
 		return nil, 0, e
 	}
-	ws := s.workerService(st, t)
-	s.syncServiceHosts(&ws)
-	st.Workers.Services[t.ID] = ws
-	return map[string]any{"selected": ws.Domains, "catalog": s.domainCatalog()}, 200, nil
+	ws := s.workerServiceView(st, t)
+	return map[string]any{"selected": s.syncServiceDomains(ws), "catalog": s.domainCatalog()}, 200, nil
 }
 
 // workerServiceDomainsUpdate replaces the service-level domain selection. Every
@@ -407,7 +446,6 @@ func (s *Server) workerServiceDomainsUpdate(st *State, p Principal, r *http.Requ
 	ws.Domains = append([]string(nil), in.Domains...)
 	selected := s.syncServiceHosts(&ws)
 	st.Workers.Services[t.ID] = ws
-	st.Workers.Revision++
 	s.audit(st, p, r, "workers.domains.update", t.ID, true)
 	return map[string]any{"selected": selected, "catalog": s.domainCatalog()}, 200, nil
 }
@@ -458,7 +496,6 @@ func (s *Server) workerEnvironmentCreate(st *State, p Principal, r *http.Request
 	s.syncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains)
 	ws.Environments[in.Name] = env
 	st.Workers.Services[t.ID] = ws
-	st.Workers.Revision++
 	s.audit(st, p, r, "workers.environment.create", t.ID+"/"+in.Name, true)
 	return env, 201, nil
 }
@@ -480,7 +517,6 @@ func (s *Server) workerEnvironmentDelete(st *State, p Principal, r *http.Request
 	}
 	delete(ws.Environments, env)
 	st.Workers.Services[t.ID] = ws
-	st.Workers.Revision++
 	s.audit(st, p, r, "workers.environment.delete", t.ID+"/"+env, true)
 	return nil, 204, nil
 }
@@ -528,7 +564,6 @@ func (s *Server) workerEnvironmentUpdate(st *State, p Principal, r *http.Request
 	current.ConfigRevision++
 	ws.Environments[env] = current
 	st.Workers.Services[t.ID] = ws
-	st.Workers.Revision++
 	return current, 200, nil
 }
 func (s *Server) workerPublish(st *State, p Principal, r *http.Request) (any, int, error) {

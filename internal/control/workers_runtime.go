@@ -126,7 +126,9 @@ func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var out WorkerArtifact
-	e := s.Store.View(r.Context(), func(st *State) error {
+	// The liveness check below consults krun_resources, which lives in the IAM
+	// partition, so this read needs both halves.
+	e := s.Store.View(r.Context(), PartitionAll, func(st *State) error {
 		a, ok := st.Workers.Artifacts[r.PathValue("artifact")]
 		if !ok || a.State != "finalized" {
 			return notFound()
@@ -196,7 +198,8 @@ type workerReleaseAssets struct {
 
 func (w *workersController) releaseAssets(ctx context.Context, releaseID string) (workerReleaseAssets, error) {
 	var out workerReleaseAssets
-	e := w.server.Store.View(ctx, func(st *State) error {
+	// st.Resources is in the IAM partition; without it every release looks dead.
+	e := w.server.Store.View(ctx, PartitionAll, func(st *State) error {
 		rel, ok := st.Workers.Releases[releaseID]
 		if !ok || rel.Pool != "default" || st.Resources[rel.Service].ID == "" {
 			return notFound()

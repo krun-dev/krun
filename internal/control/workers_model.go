@@ -441,6 +441,21 @@ func (s *Server) syncServiceHosts(ws *WorkerService) []string {
 	if s.Config.Workers == nil || ws == nil {
 		return nil
 	}
+	ws.Domains = s.syncServiceDomains(*ws)
+	for name, env := range ws.Environments {
+		s.syncEnvironmentHosts(&env, ws.Organization, ws.Service, ws.Domains)
+		ws.Environments[name] = env
+	}
+	return ws.Domains
+}
+
+// syncServiceDomains returns the selection limited to catalog entries, in
+// catalog order, without touching any environment. Read endpoints use it so a
+// GET never rewrites a service row.
+func (s *Server) syncServiceDomains(ws WorkerService) []string {
+	if s.Config.Workers == nil {
+		return ws.Domains
+	}
 	selected := map[string]bool{}
 	for _, id := range ws.Domains {
 		selected[id] = true
@@ -451,10 +466,8 @@ func (s *Server) syncServiceHosts(ws *WorkerService) []string {
 			kept = append(kept, d.ID)
 		}
 	}
-	ws.Domains = kept
-	for name, env := range ws.Environments {
-		s.syncEnvironmentHosts(&env, ws.Organization, ws.Service, ws.Domains)
-		ws.Environments[name] = env
+	if len(kept) == 0 {
+		return s.Config.Workers.defaultDomains()
 	}
 	return kept
 }

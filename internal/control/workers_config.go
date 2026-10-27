@@ -69,7 +69,11 @@ func workerConfigSnapshotRel(revision int64) string {
 // workerConfigFromState includes the baseline and preview environments of every
 // live service. Disabled environments stay in the projection so the runtime can
 // answer 410 instead of 404; unpublished environments carry an empty release.
-func workerConfigFromState(st *State) workerConfigProjection {
+//
+// Hosts are not stored, so they are derived here from the configured domain
+// catalog and the service's selection. This is the same derivation the
+// HTTPRoute reconciler and the API use, which keeps the three from drifting.
+func workerConfigFromState(st *State, domains []WorkerDomain) workerConfigProjection {
 	out := workerConfigProjection{Routes: []workerConfigRoute{}, Releases: map[string]WorkerRelease{}}
 	if st == nil || st.Workers == nil {
 		return out
@@ -82,11 +86,19 @@ func workerConfigFromState(st *State) workerConfigProjection {
 		if _, ok := st.Organizations[ws.Organization]; !ok {
 			continue
 		}
-		for _, env := range ws.Environments {
+		hosts := serviceHostPatterns(ws, domains)
+		for name, env := range ws.Environments {
+			// The map key is authoritative: Environment.Name is a denormalised
+			// copy that older rows may not carry.
+			if name == "" {
+				continue
+			}
 			// One route per selected domain. The runtime matches purely on Host;
 			// the Gateway instance already decided which entry a request used.
-			for _, host := range env.Hosts {
-				out.Routes = append(out.Routes, workerConfigRoute{Host: host, Path: "/", Enabled: env.Enabled, Release: env.Release})
+			for _, host := range hosts {
+				if expanded := envHostName(host, name); expanded != "" {
+					out.Routes = append(out.Routes, workerConfigRoute{Host: expanded, Path: "/", Enabled: env.Enabled, Release: env.Release})
+				}
 			}
 			if env.Release == "" {
 				continue
@@ -98,6 +110,34 @@ func workerConfigFromState(st *State) workerConfigProjection {
 	}
 	sort.Slice(out.Routes, func(i, j int) bool { return out.Routes[i].Host < out.Routes[j].Host })
 	return out
+}
+
+// serviceHostPatterns returns one "<slug>\x00<suffix>" pattern per selected
+// domain, in catalog order. envHostName expands the environment segment. A
+// service with no stored selection falls back to the catalog defaults, matching
+// what normalizeService does for the API and the route reconciler.
+func serviceHostPatterns(ws WorkerService, domains []WorkerDomain) []string {
+	selected := map[string]bool{}
+	for _, id := range ws.Domains {
+		selected[id] = true
+	}
+	slug := workerSlug(ws.Organization, ws.Service)
+	out := []string{}
+	for _, d := range domains {
+		if len(selected) == 0 || selected[d.ID] {
+			out = append(out, slug+"\x00"+d.Domain)
+		}
+	}
+	return out
+}
+
+func envHostName(pattern, env string) string {
+	for i := 0; i < len(pattern); i++ {
+		if pattern[i] == 0 {
+			return hostFor(pattern[:i], env, pattern[i+1:])
+		}
+	}
+	return ""
 }
 
 // workerConfigDigest is the identity of a projection. A matching digest means
@@ -213,8 +253,10 @@ func (w *workersController) publishConfig(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	var next workerConfigProjection
-	if err := w.server.Store.View(ctx, func(st *State) error {
-		next = workerConfigFromState(st)
+	// The projection filters services down to resources that still exist in a
+	// live organization, so it needs the IAM half as well. This is a read.
+	if err := w.server.Store.View(ctx, PartitionAll, func(st *State) error {
+		next = workerConfigFromState(st, w.config.Domains)
 		return nil
 	}); err != nil {
 		return 0, err

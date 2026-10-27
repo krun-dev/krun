@@ -322,17 +322,22 @@ func (s *Server) loginHandler(w http.ResponseWriter, r *http.Request) {
 	verifier := oauth2.GenerateVerifier()
 	nonce := randomToken()
 	browserHash := digest(s.cookie(r, "browser"))
-	e = s.Store.Update(r.Context(), func(st *State) error {
-		b, ok := st.Browsers[browserHash]
-		if !ok || !now().Before(b.Expires) || !s.validCSRF(r, b.CSRF) {
-			return problem(403, "CSRF_INVALID", "Login CSRF verification failed")
-		}
-		b.Generation++
-		st.Browsers[browserHash] = b
-		st.Logins[digest(state)] = Login{Provider: p.config.ID, Browser: browserHash, Fingerprint: loginFingerprint(p.config), Verifier: verifier, Nonce: nonce, ReturnTo: returnTo, Generation: b.Generation, Expires: now().Add(5 * time.Minute)}
-		return nil
-	})
+	browser, ok, e := s.Store.browserFor(r.Context(), browserHash)
 	if e != nil {
+		s.writeError(w, r, e)
+		return
+	}
+	if !ok || !now().Before(browser.Expires) || !s.validCSRF(r, browser.CSRF) {
+		s.writeError(w, r, problem(403, "CSRF_INVALID", "Login CSRF verification failed"))
+		return
+	}
+	browser.Generation++
+	if e = s.Store.upsertBrowser(r.Context(), browserHash, browser); e != nil {
+		s.writeError(w, r, e)
+		return
+	}
+	login := Login{Provider: p.config.ID, Browser: browserHash, Fingerprint: loginFingerprint(p.config), Verifier: verifier, Nonce: nonce, ReturnTo: returnTo, Generation: browser.Generation, Expires: now().Add(5 * time.Minute)}
+	if e = s.Store.insertLoginState(r.Context(), digest(state), login); e != nil {
 		s.writeError(w, r, e)
 		return
 	}
@@ -354,22 +359,28 @@ func (s *Server) callbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stateHash := digest(r.URL.Query().Get("state"))
-	var tx Login
-	e := s.Store.Update(r.Context(), func(st *State) error {
-		v, ok := st.Logins[stateHash]
-		b, bok := st.Browsers[v.Browser]
-		if !ok || !bok || v.Consumed || v.Provider != p.config.ID || v.Browser != digest(s.cookie(r, "browser")) || v.Generation != b.Generation || !now().Before(v.Expires) || v.Fingerprint != loginFingerprint(p.config) {
-			return problem(400, "AUTH_STATE_INVALID", "Invalid login transaction")
-		}
-		v.Consumed = true
-		st.Logins[stateHash] = v
-		tx = v
-		return nil
-	})
+	login, ok, e := s.Store.loginState(r.Context(), stateHash)
 	if e != nil {
 		s.callbackError(w, r, "AUTH_STATE_INVALID")
 		return
 	}
+	browser, hasBrowser, e := s.Store.browserFor(r.Context(), login.Browser)
+	if e != nil {
+		s.callbackError(w, r, "AUTH_STATE_INVALID")
+		return
+	}
+	browserHash := digest(s.cookie(r, "browser"))
+	if !ok || !hasBrowser || login.Consumed || login.Provider != p.config.ID || login.Browser != browserHash || login.Generation != browser.Generation || !now().Before(login.Expires) || login.Fingerprint != loginFingerprint(p.config) {
+		s.callbackError(w, r, "AUTH_STATE_INVALID")
+		return
+	}
+	// Consuming the transaction is the single point that makes a replayed
+	// callback lose, so it happens before any upstream call.
+	if consumed, e := s.Store.consumeLoginState(r.Context(), stateHash); e != nil || !consumed {
+		s.callbackError(w, r, "AUTH_STATE_INVALID")
+		return
+	}
+	tx := login
 	if r.URL.Query().Get("error") != "" || r.URL.Query().Get("code") == "" {
 		s.callbackError(w, r, "AUTH_UPSTREAM_DENIED")
 		return
@@ -386,14 +397,13 @@ func (s *Server) callbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionToken := randomToken()
-	e = s.Store.Update(r.Context(), func(st *State) error {
-		b, ok := st.Browsers[tx.Browser]
-		if !ok || b.Generation != tx.Generation || !now().Before(tx.Expires) {
-			return problem(400, "AUTH_STATE_INVALID", "Login superseded")
-		}
-		return s.finishLogin(st, r, p, tx.Browser, identity, sessionToken)
-	})
-	if e != nil {
+	// The browser generation may have moved while the upstream call was in
+	// flight; a superseded login must not create a session.
+	if current, ok, e := s.Store.browserFor(r.Context(), tx.Browser); e != nil || !ok || current.Generation != tx.Generation || !now().Before(tx.Expires) {
+		s.callbackError(w, r, "AUTH_STATE_INVALID")
+		return
+	}
+	if e := s.finishLogin(r.Context(), r, p, tx.Browser, identity, sessionToken); e != nil {
 		code := "AUTH_UPSTREAM_FAILED"
 		var a *APIError
 		if errors.As(e, &a) {
@@ -406,41 +416,65 @@ func (s *Server) callbackHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, tx.ReturnTo, http.StatusSeeOther)
 }
 
-// Both SSO and verified-email logins use the same identity and session rules.
-func (s *Server) finishLogin(st *State, r *http.Request, p *provider, browserHash string, id identity, sessionToken string) error {
-	b := st.Browsers[browserHash]
-	var user User
-	for _, u := range st.Users {
-		if u.Source == p.config.Source && u.Subject == id.Subject {
-			user = u
-			break
+// finishLogin creates or refreshes the user and issues a session. The IAM half
+// (user row, invitation, audit) goes through the IAM partition; the session and
+// browser rows are separate single-statement writes. Losing atomicity between
+// them costs at most a retried login, never a revoked identity gaining access.
+func (s *Server) finishLogin(ctx context.Context, r *http.Request, p *provider, browserHash string, id identity, sessionToken string) error {
+	at := now()
+	session := Session{Hash: digest(sessionToken), CSRF: randomToken(), Created: at, Seen: at, Absolute: at.Add(8 * time.Hour)}
+	if e := s.Store.Update(ctx, PartitionIAM, func(st *State) error {
+		var user User
+		for _, u := range st.Users {
+			if u.Source == p.config.Source && u.Subject == id.Subject {
+				user = u
+				break
+			}
+		}
+		if user.ID == "" {
+			invite := p.config.Source + "\x00" + id.Subject
+			if p.config.Registration != "jit" && !at.Before(st.Invitations[invite]) {
+				return problem(403, "REGISTRATION_DENIED", "Invitation required")
+			}
+			delete(st.Invitations, invite)
+			user = User{ID: randomID("usr"), Source: p.config.Source, Subject: id.Subject, Status: "active", AuthVersion: 1}
+		}
+		if user.Status != "active" {
+			return problem(403, "USER_DISABLED", "User disabled")
+		}
+		user.Name = id.Name
+		user.Email = id.Email
+		st.Users[user.ID] = user
+		st.Revision++
+		session.User = user.ID
+		session.AuthVersion = user.AuthVersion
+		s.audit(st, Principal{User: user, Kind: "session"}, r, "auth.login", user.ID, true)
+		return nil
+	}); e != nil {
+		return e
+	}
+	// Drop the session this browser was holding before the new one lands.
+	if old := s.cookie(r, "session"); old != "" {
+		if e := s.Store.deleteSession(ctx, digest(old)); e != nil {
+			return e
 		}
 	}
-	if user.ID == "" {
-		invite := p.config.Source + "\x00" + id.Subject
-		if p.config.Registration != "jit" && !now().Before(st.Invitations[invite]) {
-			return problem(403, "REGISTRATION_DENIED", "Invitation required")
-		}
-		delete(st.Invitations, invite)
-		user = User{ID: randomID("usr"), Source: p.config.Source, Subject: id.Subject, Status: "active", AuthVersion: 1}
+	if e := s.Store.insertSession(ctx, sessionToken, session); e != nil {
+		return e
 	}
-	if user.Status != "active" {
-		return problem(403, "USER_DISABLED", "User disabled")
+	browser, ok, e := s.Store.browserFor(ctx, browserHash)
+	if e != nil {
+		return e
 	}
-	user.Name = id.Name
-	user.Email = id.Email
-	st.Users[user.ID] = user
-	st.Revision++
-	delete(st.Sessions, digest(s.cookie(r, "session")))
-	st.Sessions[digest(sessionToken)] = Session{Hash: digest(sessionToken), User: user.ID, CSRF: randomToken(), AuthVersion: user.AuthVersion, Created: now(), Seen: now(), Absolute: now().Add(8 * time.Hour)}
-	b.Generation++
-	st.Browsers[browserHash] = b
-	s.audit(st, Principal{User: user, Kind: "session"}, r, "auth.login", user.ID, true)
+	if ok {
+		browser.Generation++
+		return s.Store.upsertBrowser(ctx, browserHash, browser)
+	}
 	return nil
 }
 
 func (s *Server) callbackError(w http.ResponseWriter, r *http.Request, code string) {
-	_ = s.Store.Update(r.Context(), func(st *State) error {
+	_ = s.Store.Update(r.Context(), PartitionIAM, func(st *State) error {
 		s.audit(st, Principal{Kind: "anonymous"}, r, "auth.login.failed."+code, r.PathValue("provider"), false)
 		return nil
 	})
@@ -458,12 +492,7 @@ func (s *Server) deviceStart(w http.ResponseWriter, r *http.Request) {
 	}
 	device := randomToken()
 	user := strings.ToUpper(digest(randomToken())[:8])
-	e := s.Store.Update(r.Context(), func(st *State) error {
-		s.cleanup(st)
-		st.Devices[digest(device)] = Device{CodeHash: digest(device), UserCode: user, Expires: now().Add(5 * time.Minute)}
-		return nil
-	})
-	if e != nil {
+	if e := s.Store.insertDevice(r.Context(), Device{CodeHash: digest(device), UserCode: user, Expires: now().Add(5 * time.Minute)}); e != nil {
 		s.writeError(w, r, e)
 		return
 	}
@@ -481,23 +510,27 @@ func (s *Server) devicePoll(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, e)
 		return
 	}
-	var token string
-	e := s.Store.Update(r.Context(), func(st *State) error {
-		d, ok := st.Devices[digest(input.Code)]
-		if !ok || !now().Before(d.Expires) || d.Consumed {
-			return problem(400, "DEVICE_EXPIRED", "Login expired or consumed")
-		}
-		if !d.Approved {
-			return problem(409, "AUTHORIZATION_PENDING", "Waiting for browser approval")
-		}
-		token = d.Token
-		d.Consumed = true
-		d.Token = ""
-		st.Devices[d.CodeHash] = d
-		return nil
-	})
+	hash := digest(input.Code)
+	device, ok, e := s.Store.deviceByCode(r.Context(), hash)
 	if e != nil {
 		s.writeError(w, r, e)
+		return
+	}
+	if !ok || !now().Before(device.Expires) || device.Consumed {
+		s.writeError(w, r, problem(400, "DEVICE_EXPIRED", "Login expired or consumed"))
+		return
+	}
+	if !device.Approved {
+		s.writeError(w, r, problem(409, "AUTHORIZATION_PENDING", "Waiting for browser approval"))
+		return
+	}
+	token, collected, e := s.Store.consumeDevice(r.Context(), hash)
+	if e != nil {
+		s.writeError(w, r, e)
+		return
+	}
+	if !collected {
+		s.writeError(w, r, problem(400, "DEVICE_EXPIRED", "Login expired or consumed"))
 		return
 	}
 	s.json(w, 200, map[string]any{"token": token, "expires_in": 3600, "token_type": "Bearer", "audience": "krun-control-api"})
@@ -512,20 +545,25 @@ func (s *Server) deviceApprove(st *State, p Principal, r *http.Request) (any, in
 	if e := body(r, &input); e != nil {
 		return nil, 0, e
 	}
-	for hash, d := range st.Devices {
-		if d.UserCode != input.Code {
-			continue
-		}
-		if d.Approved || d.Consumed || !now().Before(d.Expires) {
-			return nil, 0, problem(400, "DEVICE_EXPIRED", "Approval expired")
-		}
-		token := "krun_cli_" + randomToken()
-		st.Sessions[digest(token)] = Session{User: p.User.ID, Hash: digest(token), AuthVersion: p.User.AuthVersion, Created: now(), Seen: now(), Absolute: now().Add(time.Hour), CLI: true}
-		d.Approved = true
-		d.Token = token
-		st.Devices[hash] = d
-		s.audit(st, p, r, "auth.cli.approve", p.User.ID, true)
-		return map[string]string{"status": "approved"}, 200, nil
+	device, ok, e := s.Store.deviceByUserCode(r.Context(), input.Code)
+	if e != nil {
+		return nil, 0, e
 	}
-	return nil, 0, notFound()
+	if !ok {
+		return nil, 0, notFound()
+	}
+	if device.Approved || device.Consumed || !now().Before(device.Expires) {
+		return nil, 0, problem(400, "DEVICE_EXPIRED", "Approval expired")
+	}
+	token := "krun_cli_" + randomToken()
+	at := now()
+	session := Session{User: p.User.ID, Hash: digest(token), AuthVersion: p.User.AuthVersion, Created: at, Seen: at, Absolute: at.Add(time.Hour), CLI: true}
+	if e = s.Store.insertSession(r.Context(), token, session); e != nil {
+		return nil, 0, e
+	}
+	if e = s.Store.approveDevice(r.Context(), device.CodeHash, token); e != nil {
+		return nil, 0, e
+	}
+	s.audit(st, p, r, "auth.cli.approve", p.User.ID, true)
+	return map[string]string{"status": "approved"}, 200, nil
 }

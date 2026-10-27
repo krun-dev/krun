@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -79,7 +80,7 @@ func NewServer(ctx context.Context, c Config, store *Store) (*Server, error) {
 		}
 		s.providers[pc.ID] = p
 	}
-	if e := store.Update(ctx, func(st *State) error {
+	if e := store.Update(ctx, PartitionIAM, func(st *State) error {
 		for _, p := range s.providers {
 			fp := fingerprint(p.config)
 			if old, ok := st.Sources[p.config.Source]; ok && old != fp {
@@ -115,7 +116,7 @@ func (s *Server) routes() {
 	m := http.NewServeMux()
 	s.mux = m
 	m.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, r *http.Request) {
-		if e := s.Store.View(r.Context(), func(*State) error { return nil }); e != nil {
+		if e := s.Store.View(r.Context(), PartitionIAM, func(*State) error { return nil }); e != nil {
 			s.writeError(w, r, e)
 			return
 		}
@@ -237,27 +238,57 @@ func (s *Server) sourceEnabled(source string) bool {
 	}
 	return false
 }
-func (s *Server) authenticate(st *State, r *http.Request) (Principal, error) {
-	p := Principal{}
+// credentials are the single-row lookups resolved before the IAM snapshot is
+// loaded. Keeping them separate is what makes an authenticated read cost one
+// session lookup instead of a whole-document write.
+type authCredentials struct {
+	session     Session
+	sessionHash string
+	hasSession  bool
+	isKey       bool
+	keyHash     string
+}
+
+func (s *Server) readCredentials(r *http.Request) (authCredentials, error) {
+	c := authCredentials{}
 	cookie := s.cookie(r, "session")
 	auth := r.Header.Get("Authorization")
 	if len(r.Header.Values("Authorization")) > 1 {
-		return p, problem(400, "AMBIGUOUS_CREDENTIAL", "Use one credential")
+		return c, problem(400, "AMBIGUOUS_CREDENTIAL", "Use one credential")
 	}
 	if cookie != "" && auth != "" {
-		return p, problem(400, "AMBIGUOUS_CREDENTIAL", "Use one credential")
+		return c, problem(400, "AMBIGUOUS_CREDENTIAL", "Use one credential")
 	}
 	token := cookie
 	if auth != "" {
 		if !strings.HasPrefix(auth, "Bearer ") || strings.Count(auth, " ") != 1 {
-			return p, problem(401, "UNAUTHENTICATED", "Authentication required")
+			return c, problem(401, "UNAUTHENTICATED", "Authentication required")
 		}
 		token = strings.TrimPrefix(auth, "Bearer ")
 	}
-	if strings.HasPrefix(token, "krun_key_") {
-		hash := digest(token)
+	switch {
+	case strings.HasPrefix(token, "krun_key_"):
+		c.isKey = true
+		c.keyHash = digest(token)
+	case token != "":
+		session, ok, err := s.Store.sessionByHash(r.Context(), digest(token))
+		if err != nil {
+			return c, err
+		}
+		c.session, c.hasSession = session, ok
+		c.sessionHash = digest(token)
+	}
+	return c, nil
+}
+
+// authenticate resolves credentials against the loaded IAM state. It performs
+// no writes: refreshing last-seen is a separate throttled statement issued by
+// protected() only after the request succeeds.
+func (s *Server) authenticate(st *State, c authCredentials, r *http.Request) (Principal, error) {
+	p := Principal{}
+	if c.isKey {
 		for id, h := range st.KeyHashes {
-			if subtle.ConstantTimeCompare([]byte(hash), []byte(h)) != 1 {
+			if subtle.ConstantTimeCompare([]byte(c.keyHash), []byte(h)) != 1 {
 				continue
 			}
 			k, ok := st.Keys[id]
@@ -269,17 +300,16 @@ func (s *Server) authenticate(st *State, r *http.Request) (Principal, error) {
 			p.Key = &k
 			break
 		}
-	} else if token != "" {
-		hash := digest(token)
-		session, ok := st.Sessions[hash]
-		if ok && session.CLI == (auth != "") && now().Before(session.Absolute) && now().Sub(session.Seen) < 30*time.Minute {
+	} else if c.hasSession {
+		session := c.session
+		// A bearer token must never be satisfied by a cookie session, or the
+		// reverse: CLI sessions are only reachable with an Authorization header.
+		if session.CLI == (r.Header.Get("Authorization") != "") && now().Before(session.Absolute) && now().Sub(session.Seen) < 30*time.Minute {
 			u, exists := st.Users[session.User]
 			if exists && u.AuthVersion == session.AuthVersion {
 				p.User = u
 				p.Kind = "session"
-				p.SessionHash = hash
-				session.Seen = now()
-				st.Sessions[hash] = session
+				p.SessionHash = session.Hash
 				if session.CLI {
 					p.Kind = "cli_session"
 				}
@@ -295,8 +325,8 @@ func (s *Server) authenticate(st *State, r *http.Request) (Principal, error) {
 type endpoint func(*State, Principal, *http.Request) (any, int, error)
 
 // Shared credential and CSRF checks for handlers that use a state transaction.
-func (s *Server) protectedPrincipal(st *State, r *http.Request, sessionOnly bool) (Principal, error) {
-	principal, err := s.authenticate(st, r)
+func (s *Server) protectedPrincipal(st *State, c authCredentials, r *http.Request, sessionOnly bool) (Principal, error) {
+	principal, err := s.authenticate(st, c, r)
 	if err != nil {
 		return Principal{}, err
 	}
@@ -304,7 +334,7 @@ func (s *Server) protectedPrincipal(st *State, r *http.Request, sessionOnly bool
 		return Principal{}, forbidden()
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead && principal.Kind == "session" {
-		if !s.validCSRF(r, st.Sessions[principal.SessionHash].CSRF) {
+		if !c.hasSession || !s.validCSRF(r, c.session.CSRF) {
 			return Principal{}, problem(403, "CSRF_INVALID", "CSRF verification failed")
 		}
 	}
@@ -312,8 +342,20 @@ func (s *Server) protectedPrincipal(st *State, r *http.Request, sessionOnly bool
 }
 
 func (s *Server) protected(sessionOnly bool, fn endpoint) http.HandlerFunc {
+	return s.protectedWith(sessionOnly, PartitionIAM, PartitionIAM, fn)
+}
+
+// protectedWorkers serves the Workers API. Authorization reads IAM, the handler
+// reads and writes Workers rows, and only Workers rows are persisted — IAM and
+// Workers never share a transaction.
+func (s *Server) protectedWorkers(sessionOnly bool, fn endpoint) http.HandlerFunc {
+	return s.protectedWith(sessionOnly, PartitionAll, PartitionWorkers, fn)
+}
+
+func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, fn endpoint) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Read the bounded request outside the shared state transaction; slow clients must not hold the IAM lock.
+		// Read the bounded request outside the state transaction; slow clients
+		// must not hold a database transaction open.
 		if r.Body != nil && r.Method != "GET" && r.Method != "HEAD" {
 			raw, e := io.ReadAll(io.LimitReader(r.Body, (1<<20)+1))
 			if e != nil || len(raw) > 1<<20 {
@@ -322,27 +364,34 @@ func (s *Server) protected(sessionOnly bool, fn endpoint) http.HandlerFunc {
 			}
 			r.Body = io.NopCloser(bytes.NewReader(raw))
 		}
+		// A read must never write. Denials are still audited because audits are
+		// flushed independently of the state partitions.
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			persist = 0
+		}
+		c, e := s.readCredentials(r)
+		if e != nil {
+			s.writeError(w, r, e)
+			return
+		}
 		var out any
 		status := 200
 		var appErr error
-		err := s.Store.Update(r.Context(), func(st *State) error {
-			s.cleanup(st)
-			p, e := s.protectedPrincipal(st, r, sessionOnly)
+		err := s.Store.Mutate(r.Context(), load, persist, func(st *State) error {
+			p, e := s.protectedPrincipal(st, c, r, sessionOnly)
 			if e != nil {
 				appErr = e
 				return nil
 			}
-			raw, e := json.Marshal(st)
+			// Snapshot the loaded state so a rejected handler cannot leave a
+			// partial mutation behind while its denial audit still commits.
+			checkpoint, e := cloneState(st)
 			if e != nil {
 				return e
 			}
 			out, status, appErr = fn(st, p, r)
 			if appErr != nil {
-				restored := newState()
-				if e = json.Unmarshal(raw, restored); e != nil {
-					return e
-				}
-				*st = *restored
+				*st = *checkpoint
 				s.audit(st, p, r, r.Method+" "+r.Pattern, r.PathValue("org"), false)
 			}
 			return nil
@@ -354,7 +403,14 @@ func (s *Server) protected(sessionOnly bool, fn endpoint) http.HandlerFunc {
 			s.writeError(w, r, appErr)
 			return
 		}
-		if r.URL.Path == "/auth/logout" {
+		// Last-seen is best-effort and throttled; it must never turn a read into
+		// a failure, and it is skipped for API-key requests.
+		if c.hasSession {
+			if e := s.Store.touchSession(r.Context(), c.sessionHash); e != nil && r.Context().Err() == nil {
+				slog.Warn("session touch failed", "error", e)
+			}
+		}
+		if r.URL.Path == "/api/auth/logout" {
 			s.setCookie(w, "session", "", -1)
 		}
 		s.json(w, status, out)
@@ -414,42 +470,26 @@ func (s *Server) limited(r *http.Request) bool {
 	s.rates[host] = e
 	return e.Count > 120 || len(s.rates) > 10000
 }
-func (s *Server) cleanup(st *State) {
-	n := now()
-	for k, v := range st.Sessions {
-		if !n.Before(v.Absolute) || n.Sub(v.Seen) >= 30*time.Minute {
-			delete(st.Sessions, k)
-		}
-	}
-	for k, v := range st.Browsers {
-		if !n.Before(v.Expires) {
-			delete(st.Browsers, k)
-		}
-	}
-	for k, v := range st.Logins {
-		if !n.Before(v.Expires) {
-			delete(st.Logins, k)
-		}
-	}
-	for k, v := range st.EmailLogins {
-		if !n.Before(v.Expires) {
-			delete(st.EmailLogins, k)
-		}
-	}
-	for k, v := range st.Devices {
-		if !n.Before(v.Expires) {
-			delete(st.Devices, k)
-		}
-	}
-}
+// cleanup is gone from the request path: expired sessions, browsers and login
+// transactions are deleted by the background retention loop in retention.go.
 func (s *Server) me(st *State, p Principal, r *http.Request) (any, int, error) {
 	return map[string]any{"user": p.User, "credential_kind": p.Kind, "system_admin": isAdmin(st, p.User, ""), "revision": st.Revision, "workers_configured": s.Config.Workers != nil}, 200, nil
 }
+
+// logout deletes this session row and bumps the browser generation so a
+// concurrent login cannot be replayed onto the just-closed browser.
 func (s *Server) logout(st *State, p Principal, r *http.Request) (any, int, error) {
-	delete(st.Sessions, p.SessionHash)
-	if b, ok := st.Browsers[digest(s.cookie(r, "browser"))]; ok {
-		b.Generation++
-		st.Browsers[digest(s.cookie(r, "browser"))] = b
+	if e := s.Store.deleteSession(r.Context(), p.SessionHash); e != nil {
+		return nil, 0, e
+	}
+	browserHash := digest(s.cookie(r, "browser"))
+	if browser, ok, e := s.Store.browserFor(r.Context(), browserHash); e != nil {
+		return nil, 0, e
+	} else if ok {
+		browser.Generation++
+		if e = s.Store.upsertBrowser(r.Context(), browserHash, browser); e != nil {
+			return nil, 0, e
+		}
 	}
 	s.audit(st, p, r, "auth.logout", p.User.ID, true)
 	return nil, 204, nil
@@ -464,33 +504,37 @@ func (s *Server) providersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	s.json(w, 200, map[string]any{"providers": out, "development": s.Config.Development, "organization_self_service": s.Config.OrganizationSelfService})
 }
+// csrfHandler issues the token a browser needs before a mutating request. It
+// touches only the session or browser row involved.
 func (s *Server) csrfHandler(w http.ResponseWriter, r *http.Request) {
-	token := ""
+	sessionHash := digest(s.cookie(r, "session"))
+	if session, ok, e := s.Store.sessionByHash(r.Context(), sessionHash); e != nil {
+		s.writeError(w, r, e)
+		return
+	} else if ok && now().Before(session.Absolute) && now().Sub(session.Seen) < 30*time.Minute {
+		s.json(w, 200, map[string]string{"csrf_token": session.CSRF})
+		return
+	}
 	browserToken := ""
-	e := s.Store.Update(r.Context(), func(st *State) error {
-		if session, ok := st.Sessions[digest(s.cookie(r, "session"))]; ok && now().Before(session.Absolute) && now().Sub(session.Seen) < 30*time.Minute {
-			token = session.CSRF
-			return nil
-		}
-		browserHash := digest(s.cookie(r, "browser"))
-		b, ok := st.Browsers[browserHash]
-		if !ok || !now().Before(b.Expires) {
-			browserToken = randomToken()
-			browserHash = digest(browserToken)
-			b = Browser{CSRF: randomToken(), Expires: now().Add(15 * time.Minute)}
-			st.Browsers[browserHash] = b
-		}
-		token = b.CSRF
-		return nil
-	})
+	browserHash := digest(s.cookie(r, "browser"))
+	browser, ok, e := s.Store.browserFor(r.Context(), browserHash)
 	if e != nil {
 		s.writeError(w, r, e)
 		return
 	}
+	if !ok || !now().Before(browser.Expires) {
+		browserToken = randomToken()
+		browserHash = digest(browserToken)
+		browser = Browser{CSRF: randomToken(), Expires: now().Add(15 * time.Minute)}
+		if e = s.Store.upsertBrowser(r.Context(), browserHash, browser); e != nil {
+			s.writeError(w, r, e)
+			return
+		}
+	}
 	if browserToken != "" {
 		s.setCookie(w, "browser", browserToken, 900)
 	}
-	s.json(w, 200, map[string]string{"csrf_token": token})
+	s.json(w, 200, map[string]string{"csrf_token": browser.CSRF})
 }
 func Serve(ctx context.Context, c Config) error {
 	store, e := OpenStore(ctx, c.DB)
@@ -509,7 +553,9 @@ func Serve(ctx context.Context, c Config) error {
 	retentionDone := make(chan struct{})
 	go func() {
 		defer close(retentionDone)
-		store.retainAudits(retentionCtx, time.Minute)
+		// Session / login expiry and every per-build, per-release row is pruned
+		// here instead of on the request path.
+		store.retain(retentionCtx, time.Minute)
 	}()
 	defer func() { stopRetention(); <-retentionDone }()
 	server := &http.Server{Addr: c.Listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 25 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}

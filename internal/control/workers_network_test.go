@@ -143,7 +143,7 @@ func TestServiceDomainsUpdateAddsAndRemovesHosts(t *testing.T) {
 	if r.Code != 200 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	_ = store.Update(context.Background(), func(st *State) error {
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		ws := st.Workers.Services["svc-a"]
 		if len(ws.Domains) != 1 || ws.Domains[0] != "internal" {
 			t.Error("service domains:", ws.Domains)
@@ -203,17 +203,27 @@ func TestServiceDomainsReadReturnsCatalog(t *testing.T) {
 func TestWorkerConfigProjectionCoversEveryDomain(t *testing.T) {
 	st, _ := workerConfigFixture()
 	ws := st.Workers.Services["svc-a"]
-	prod := ws.Environments["production"]
-	prod.Hosts = []string{"w-prod.workers.test", "w-prod.workers-out.example.test"}
-	ws.Environments["production"] = prod
+	ws.Domains = []string{"internal", "external"}
 	st.Workers.Services["svc-a"] = ws
-	p := workerConfigFromState(st)
+	p := workerConfigFromState(st, []WorkerDomain{
+		{ID: "internal", Domain: "workers.test"},
+		{ID: "external", Domain: "workers-out.example.test"},
+	})
 	hosts := make([]string, 0, len(p.Routes))
 	for _, route := range p.Routes {
 		hosts = append(hosts, route.Host)
 	}
 	sort.Strings(hosts)
-	want := []string{"w-empty.workers.test", "w-prev.workers.test", "w-prod.workers-out.example.test", "w-prod.workers.test"}
+	slug := workerSlug("org-a", "svc-a")
+	// Every selected domain yields one host per environment, in host order.
+	want := []string{
+		hostFor(slug, "empty", "workers-out.example.test"),
+		hostFor(slug, "empty", "workers.test"),
+		hostFor(slug, "preview", "workers-out.example.test"),
+		hostFor(slug, "preview", "workers.test"),
+		hostFor(slug, "production", "workers-out.example.test"),
+		hostFor(slug, "production", "workers.test"),
+	}
 	if strings.Join(hosts, ",") != strings.Join(want, ",") {
 		t.Fatalf("projection hosts: %v", hosts)
 	}

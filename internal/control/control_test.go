@@ -155,7 +155,7 @@ func testServer(t *testing.T) (*Server, *Store) {
 		token := "krun_cli_" + u.ID
 		st.Sessions[digest(token)] = Session{User: u.ID, AuthVersion: 1, CLI: true, Created: now(), Seen: now(), Absolute: now().Add(time.Hour)}
 	}
-	if e = store.Update(context.Background(), func(state *State) error { *state = *st; return nil }); e != nil {
+	if e = store.Update(context.Background(), PartitionAll, func(state *State) error { *state = *st; return nil }); e != nil {
 		t.Fatal(e)
 	}
 	return s, store
@@ -184,7 +184,7 @@ func TestAPIValidationAndLastAdmin(t *testing.T) {
 			}
 		})
 	}
-	_ = store.Update(context.Background(), func(st *State) error {
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		if st.Users["admin"].Status != "active" || st.Assignments["admin"].ID == "" {
 			t.Error("failed operation committed changes")
 		}
@@ -215,11 +215,11 @@ func TestAPIKeyLifecycleAndImmediateUserRevocation(t *testing.T) {
 	if strings.Contains(w.Body.String(), issued.Key) {
 		t.Fatal("secret leaked in metadata")
 	}
-	_ = store.Update(context.Background(), func(st *State) error { delete(st.Assignments, "viewer"); return nil })
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error { delete(st.Assignments, "viewer"); return nil })
 	if request(s, "GET", "/api/v1/orgs/org-a/services/svc-a", issued.Key, "").Code != 404 {
 		t.Fatal("removed role remained active")
 	}
-	_ = store.Update(context.Background(), func(st *State) error { k := st.Keys[issued.ID]; k.Revoked = true; st.Keys[k.ID] = k; return nil })
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error { k := st.Keys[issued.ID]; k.Revoked = true; st.Keys[k.ID] = k; return nil })
 	if request(s, "GET", "/api/v1/me", issued.Key, "").Code != 401 {
 		t.Fatal("revoked key remained valid")
 	}
@@ -306,7 +306,7 @@ func TestLoginCSRFReplayLogoutAndStableIdentity(t *testing.T) {
 func TestSessionCSRFAndAmbiguousCredential(t *testing.T) {
 	s, store := testServer(t)
 	token := randomToken()
-	_ = store.Update(context.Background(), func(st *State) error {
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		st.Sessions[digest(token)] = Session{User: "admin", AuthVersion: 1, Seen: now(), Absolute: now().Add(time.Hour), CSRF: "csrf"}
 		return nil
 	})
@@ -342,7 +342,7 @@ func TestDeviceApprovalAndSingleConsumption(t *testing.T) {
 	if request(s, "POST", "/api/auth/cli/approve", "krun_cli_admin", fmt.Sprintf(`{"user_code":%q}`, device.UserCode)).Code != 403 {
 		t.Fatal("CLI may not approve another CLI")
 	}
-	_ = store.Update(context.Background(), func(st *State) error {
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		d := st.Devices[digest(device.DeviceCode)]
 		d.Approved = true
 		d.Token = "krun_cli_test"
@@ -386,7 +386,7 @@ func TestLoginGenerationAndSessionExpiration(t *testing.T) {
 	if good.Header().Get("Location") != "/" {
 		t.Fatal("current generation login failed")
 	}
-	_ = store.Update(context.Background(), func(st *State) error {
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		session := st.Sessions[digest("krun_cli_viewer")]
 		session.Absolute = now().Add(-time.Minute)
 		st.Sessions[session.Hash] = session
@@ -442,7 +442,7 @@ func TestInviteOnlyRequiresExactUnexpiredIdentity(t *testing.T) {
 	if !strings.Contains(login(), "REGISTRATION_DENIED") {
 		t.Fatal("uninvited user registered")
 	}
-	_ = store.Update(context.Background(), func(st *State) error { st.Invitations["local\x00developer"] = now().Add(-time.Minute); return nil })
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error { st.Invitations["local\x00developer"] = now().Add(-time.Minute); return nil })
 	if !strings.Contains(login(), "REGISTRATION_DENIED") {
 		t.Fatal("expired invitation accepted")
 	}
@@ -452,7 +452,7 @@ func TestInviteOnlyRequiresExactUnexpiredIdentity(t *testing.T) {
 	if login() != "/" {
 		t.Fatal("exact invitation rejected")
 	}
-	_ = store.Update(context.Background(), func(st *State) error {
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		if _, ok := st.Invitations["local\x00developer"]; ok {
 			t.Fatal("invitation not consumed")
 		}

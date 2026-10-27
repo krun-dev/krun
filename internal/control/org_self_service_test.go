@@ -30,7 +30,7 @@ func TestOrganizationSelfServiceCreate(t *testing.T) {
 				tc.principal.User = User{ID: "usr_self", Source: "local", Status: "active", AuthVersion: 1}
 			}
 			var status int
-			_ = store.Update(req.Context(), func(st *State) error {
+			_ = store.Update(req.Context(), PartitionAll, func(st *State) error {
 				if tc.principal.User.ID != "" {
 					st.Users[tc.principal.User.ID] = tc.principal.User
 				}

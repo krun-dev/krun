@@ -30,7 +30,7 @@ func TestPostgresSharedTransactions(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer b.Close()
-	if e = a.Update(ctx, func(st *State) error {
+	if e = a.Update(ctx, PartitionAll, func(st *State) error {
 		*st = *newState()
 		st.Users["pg-user"] = User{ID: "pg-user", Status: "active"}
 		return nil
@@ -54,13 +54,13 @@ func TestPostgresSharedTransactions(t *testing.T) {
 	if success != 1 {
 		t.Fatalf("expected one bootstrap commit, got %d", success)
 	}
-	if e = a.Update(ctx, func(st *State) error {
+	if e = a.Update(ctx, PartitionAll, func(st *State) error {
 		st.Users["pg-user"] = User{ID: "pg-user", Status: "disabled"}
 		return errors.New("rollback")
 	}); e == nil {
 		t.Fatal("expected transaction rollback")
 	}
-	if e = b.Update(ctx, func(st *State) error {
+	if e = b.Update(ctx, PartitionAll, func(st *State) error {
 		if st.Users["pg-user"].Status != "active" {
 			t.Error("rolled back write visible across replica")
 		}
@@ -73,6 +73,10 @@ func TestPostgresSharedTransactions(t *testing.T) {
 	}
 }
 
+// truncatedTests records which tests already started from a clean database, so
+// a test that deliberately reopens the store mid-run keeps its rows.
+var truncatedTests sync.Map
+
 func postgresTestStore(t *testing.T) *Store {
 	t.Helper()
 	dsn := os.Getenv("KRUN_TEST_POSTGRES_URL")
@@ -83,14 +87,49 @@ func postgresTestStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Cleanups run last-registered-first: Close is registered after the
+	// truncate, so the truncate sees a live pool.
+	t.Cleanup(func() { truncateControlTables(t, store) })
 	t.Cleanup(store.Close)
+	if _, seen := truncatedTests.LoadOrStore(t.Name(), true); !seen {
+		truncateControlTables(t, store)
+	}
 	return store
+}
+
+// truncateControlTables empties every control-plane table. Sessions, browsers
+// and login transactions are included because rate limits and expiry are
+// checked against them. A closed pool is not an error: tests may restart the
+// store themselves.
+func truncateControlTables(t *testing.T, store *Store) {
+	t.Helper()
+	if store.pool == nil || store.pool.Ping(context.Background()) != nil {
+		return
+	}
+	tables := []string{
+		"krun_sessions", "krun_browsers", "krun_login_states", "krun_email_logins",
+		"krun_device_codes", "krun_invitations", "krun_repository_connect_states",
+		"krun_repository_connections", "krun_api_key_hashes", "krun_api_keys",
+		"krun_assignments", "krun_group_members", "krun_groups", "krun_members",
+		"krun_org_sources", "krun_organizations", "krun_resources", "krun_users",
+		"krun_identity_providers", "krun_identity_sources",
+		"krun_worker_history", "krun_worker_idempotency", "krun_worker_operations",
+		"krun_worker_releases", "krun_worker_artifacts", "krun_worker_build_private",
+		"krun_worker_builds", "krun_worker_environments", "krun_worker_service_domains",
+		"krun_worker_services",
+	}
+	for _, table := range tables {
+		if _, err := store.pool.Exec(context.Background(), `DELETE FROM `+table); err != nil {
+			return
+		}
+	}
+	_, _ = store.pool.Exec(context.Background(), `DELETE FROM krun_meta WHERE key IN ('revision','bootstrapped')`)
 }
 
 func TestPostgresBrowserLoginSurvivesRestart(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
-	if err := store.Update(ctx, func(st *State) error { *st = *newState(); return nil }); err != nil {
+	if err := store.Update(ctx, PartitionAll, func(st *State) error { *st = *newState(); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	c := Config{Development: true, PublicURL: "http://127.0.0.1:8080", DB: "postgres://test-only/krun_test", Providers: []ProviderConfig{{ID: "local", Source: "pg-local", Type: "dev", Registration: "jit"}}}
@@ -98,7 +137,7 @@ func TestPostgresBrowserLoginSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	csrfResponse := browserRequest(s, "GET", "/auth/csrf", nil, nil)
+	csrfResponse := browserRequest(s, "GET", "/api/auth/csrf", nil, nil)
 	var csrf struct {
 		Token string `json:"csrf_token"`
 	}
@@ -106,7 +145,7 @@ func TestPostgresBrowserLoginSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookies := csrfResponse.Result().Cookies()
-	begin := browserRequest(s, "POST", "/auth/local/login", url.Values{"csrf_token": {csrf.Token}}, cookies)
+	begin := browserRequest(s, "POST", "/api/auth/local/login", url.Values{"csrf_token": {csrf.Token}}, cookies)
 	if begin.Code != 303 {
 		t.Fatal("login begin failed", begin.Code)
 	}
@@ -117,7 +156,7 @@ func TestPostgresBrowserLoginSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	complete := browserRequest(s, "GET", begin.Header().Get("Location"), nil, cookies)
-	if complete.Header().Get("Location") != "/console/" {
+	if complete.Header().Get("Location") != "/" {
 		t.Fatal("pending login lost across restart", complete.Header().Get("Location"))
 	}
 	cookies = append(cookies, complete.Result().Cookies()...)
@@ -127,17 +166,17 @@ func TestPostgresBrowserLoginSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if me := browserRequest(s, "GET", "/auth/me", nil, cookies); me.Code != 200 {
+	if me := browserRequest(s, "GET", "/api/auth/me", nil, cookies); me.Code != 200 {
 		t.Fatal("session lost across restart", me.Code)
 	}
-	csrfResponse = browserRequest(s, "GET", "/auth/csrf", nil, cookies)
+	csrfResponse = browserRequest(s, "GET", "/api/auth/csrf", nil, cookies)
 	if csrfResponse.Code != 200 || json.Unmarshal(csrfResponse.Body.Bytes(), &csrf) != nil {
 		t.Fatal("persisted CSRF cannot be read")
 	}
-	if logout := browserRequest(s, "POST", "/auth/logout", url.Values{"csrf_token": {csrf.Token}}, cookies); logout.Code != 204 {
+	if logout := browserRequest(s, "POST", "/api/auth/logout", url.Values{"csrf_token": {csrf.Token}}, cookies); logout.Code != 204 {
 		t.Fatal("logout failed after restart", logout.Code)
 	}
-	if me := browserRequest(s, "GET", "/auth/me", nil, cookies); me.Code != 401 {
+	if me := browserRequest(s, "GET", "/api/auth/me", nil, cookies); me.Code != 401 {
 		t.Fatal("logout did not revoke persisted session")
 	}
 }
@@ -147,7 +186,7 @@ func TestPostgresAuditRetentionPersists(t *testing.T) {
 	ctx := context.Background()
 	_, _ = store.pool.Exec(ctx, "DELETE FROM krun_audits")
 	// One expired, one fresh entry.
-	if err := store.Update(ctx, func(st *State) error {
+	if err := store.Update(ctx, PartitionAll, func(st *State) error {
 		store.recordAudit(Audit{ID: "old", Time: now().Add(-8 * 24 * time.Hour)})
 		store.recordAudit(Audit{ID: "new", Time: now()})
 		return nil
@@ -198,7 +237,7 @@ func TestPostgresReconnectsBeforeMutation(t *testing.T) {
 		t.Fatal("terminate pooled connection", err)
 	}
 	calls := 0
-	if err = store.Update(ctx, func(st *State) error { calls++; st.Revision++; return nil }); err != nil {
+	if err = store.Update(ctx, PartitionAll, func(st *State) error { calls++; st.Revision++; return nil }); err != nil {
 		t.Fatal("failed to replace terminated connection", err)
 	}
 	if calls != 1 {

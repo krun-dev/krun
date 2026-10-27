@@ -49,14 +49,14 @@ func TestUserWildcardKeysStayWithinCurrentPermissions(t *testing.T) {
 				t.Fatal("owner/admin cannot inspect key")
 			}
 			// Snapshot round trips must preserve nil deadlines and wildcard policies.
-			_ = store.Update(context.Background(), func(st *State) error {
+			_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 				st.Resources["future"] = Resource{ID: "future", Kind: "service", Organization: "org-a", Name: "future"}
 				return nil
 			})
 			if request(s, "GET", "/api/v1/orgs/org-a/services/future", issued.Key, "").Code != 200 {
 				t.Fatal("future resource not included in wildcard")
 			}
-			_ = store.Update(context.Background(), func(st *State) error { delete(st.Assignments, "viewer"); return nil })
+			_ = store.Update(context.Background(), PartitionAll, func(st *State) error { delete(st.Assignments, "viewer"); return nil })
 			if request(s, "GET", "/api/v1/orgs/org-a/services/svc-a", issued.Key, "").Code != 404 {
 				t.Fatal("revoked role remained usable through wildcard")
 			}
@@ -165,7 +165,7 @@ func TestKeyExpiryAndOwnerIsolation(t *testing.T) {
 			t.Fatal("personal key list leaked another owner")
 		}
 	}
-	_ = store.Update(context.Background(), func(st *State) error {
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		key := st.Keys[issued.ID]
 		past := now().Add(-time.Second)
 		key.Expires = &past

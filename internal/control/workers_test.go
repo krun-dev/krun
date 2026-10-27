@@ -18,7 +18,7 @@ func workerTestServer(t *testing.T) (*Server, *Store, string) {
 	s.Config.Workers = testWorkersConfig()
 	s.routes()
 	// A default preview so build/permission tests have a non-baseline target.
-	if e := store.Update(context.Background(), func(st *State) error {
+	if e := store.Update(context.Background(), PartitionAll, func(st *State) error {
 		ws := s.workerService(st, Target{ID: "svc-a", Organization: "org-a"})
 		ws.Environments["fix-demo"] = WorkerEnvironment{Name: "fix-demo", Enabled: true, Domains: []string{"internal"}, ConfigRevision: 1, Variables: map[string]string{}}
 		st.Workers.Services["svc-a"] = ws
@@ -57,7 +57,7 @@ func TestWorkerBuildPermissionScopeAndIdempotency(t *testing.T) {
 	if r := request(s, "GET", "/api/v1/orgs/org-b/services/svc-b/workers/builds/"+b.ID, "krun_cli_admin", ""); r.Code != 404 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	_ = store.Update(context.Background(), func(st *State) error {
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		if len(st.Workers.Builds) != 1 || len(st.Workers.BuildPrivate[b.ID].Files) != 1 {
 			t.Fatal("queue/source not persisted")
 		}
@@ -85,7 +85,7 @@ func seedWorkerBuild(t *testing.T, s *Server, store *Store, base string) WorkerB
 	}
 	var b WorkerBuild
 	_ = json.Unmarshal(r.Body.Bytes(), &b)
-	_ = store.Update(context.Background(), func(st *State) error {
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		b.State = "succeeded"
 		b.Artifact = "a"
 		st.Workers.Builds[b.ID] = b
@@ -116,7 +116,7 @@ func TestWorkerReleaseQueuesImmutableConfigurationAndRejectsInvalidTarget(t *tes
 	if r := request(s, "POST", base+"/environments/missing-preview/rollbacks", "krun_cli_admin", `{"release_id":"`+op.Release+`","expected_revision":0,"idempotency_key":"rollback-wrong-environment"}`); r.Code != 404 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	_ = store.Update(context.Background(), func(st *State) error {
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		env := st.Workers.Services["svc-a"].Environments["production"]
 		if env.Revision != 0 || env.Release != "" {
 			t.Fatal("enqueue committed a release")
@@ -132,7 +132,7 @@ func TestWorkerActorKeyRevocationIsRechecked(t *testing.T) {
 	s, store, base := workerTestServer(t)
 	b := seedWorkerBuild(t, s, store, base)
 	_ = b
-	_ = store.Update(context.Background(), func(st *State) error {
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		user := st.Users["admin"]
 		st.Keys["key"] = APIKey{ID: "key", Owner: user.ID, ScopeKind: "system", Policy: Policy{Version: 1, Statements: []Statement{{Effect: "allow", Actions: []string{"build.start"}, Resource: Selector{Kind: "service", Organization: "org-a", IDs: []string{"svc-a"}}}}}}
 		a := WorkerActor{User: user.ID, Key: "key", AuthVersion: user.AuthVersion}
@@ -155,7 +155,7 @@ func TestWorkerRollbackCanRecoverACommittedRelease(t *testing.T) {
 	first := request(s, "POST", base+"/environments/production/releases", "krun_cli_admin", `{"build_id":"`+b.ID+`","expected_revision":0,"idempotency_key":"first"}`)
 	var op WorkerOperation
 	_ = json.Unmarshal(first.Body.Bytes(), &op)
-	_ = store.Update(context.Background(), func(st *State) error {
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		ws := st.Workers.Services["svc-a"]
 		env := ws.Environments["production"]
 		env.Revision, env.Release, env.Confirmed = 2, op.Release, op.Release
@@ -172,7 +172,7 @@ func TestWorkerRollbackCanRecoverACommittedRelease(t *testing.T) {
 	if r := request(s, "POST", base+"/environments/production/rollbacks", "krun_cli_admin", `{"release_id":"`+op.Release+`","expected_revision":2,"idempotency_key":"recover"}`); r.Code != 202 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	_ = store.Update(context.Background(), func(st *State) error {
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		if st.Workers.Operations[op.ID].State != "committed" || st.Workers.Services["svc-a"].Environments["production"].Revision != 2 {
 			t.Fatal("rollback enqueue changed the active release before validation")
 		}
@@ -191,7 +191,7 @@ func TestCommittedReleaseDoesNotBlockNewPublish(t *testing.T) {
 	}
 	var op WorkerOperation
 	_ = json.Unmarshal(first.Body.Bytes(), &op)
-	_ = store.Update(context.Background(), func(st *State) error {
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		ws := st.Workers.Services["svc-a"]
 		env := ws.Environments["production"]
 		env.Revision, env.Release = 2, op.Release

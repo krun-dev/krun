@@ -13,7 +13,7 @@ func seedAuditPages(t *testing.T, store *Store) {
 	t.Helper()
 	at := now().Add(-time.Hour)
 	store.memoryAudits = nil
-	err := store.Update(context.Background(), func(st *State) error {
+	err := store.Update(context.Background(), PartitionAll, func(st *State) error {
 		for i := 0; i < 237; i++ {
 			// Equal times deliberately exercise the ID tie breaker.
 			store.recordAudit(Audit{ID: fmt.Sprintf("entry-%04d", i), Time: at.Add(time.Duration(i/3) * time.Second), Organization: "org-a", Actor: "admin", Action: "service.read", Resource: "svc-a", Allowed: true})
@@ -49,7 +49,7 @@ func TestAuditPaginationSnapshotAndScope(t *testing.T) {
 		t.Fatalf("bad first page %+v", first)
 	}
 	// Live traffic and pagination requests cannot shift the snapshot.
-	_ = store.Update(context.Background(), func(st *State) error {
+	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		store.recordAudit(Audit{ID: "new", Time: now(), Organization: "org-a"})
 		return nil
 	})

@@ -53,7 +53,7 @@ func (s *Server) workerRepositoryCallback(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var connection WorkerRepositoryConnection
-	e := s.Store.Update(r.Context(), func(st *State) error {
+	e := s.Store.Update(r.Context(), PartitionWorkers, func(st *State) error {
 		pending, ok := st.RepositoryConnectStates[in.State]
 		if !ok || now().After(pending.Expires) {
 			return problem(403, "WORKER_REPOSITORY_STATE_INVALID", "Connect request expired; try again")

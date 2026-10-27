@@ -94,14 +94,21 @@ func (in *workerInvokeRequest) validate() (*url.URL, error) {
 	return path, nil
 }
 
+// workerInvokeTarget resolves the upstream host for an invoke call. It reads
+// both partitions because authorization needs IAM while routing needs Workers,
+// and it writes nothing: a denial is audited separately.
 func (s *Server) workerInvokeTarget(r *http.Request) (string, string, error) {
+	c, e := s.readCredentials(r)
+	if e != nil {
+		return "", "", e
+	}
 	var host, gatewayID string
 	var appErr error
-	err := s.Store.Update(r.Context(), func(st *State) error {
-		s.cleanup(st)
-		principal, err := s.protectedPrincipal(st, r, false)
-		if err != nil {
-			appErr = err
+	var principal Principal
+	err := s.Store.View(r.Context(), PartitionAll, func(st *State) error {
+		principal, e = s.protectedPrincipal(st, c, r, false)
+		if e != nil {
+			appErr = e
 			return nil
 		}
 		env := r.PathValue("environment")
@@ -111,7 +118,6 @@ func (s *Server) workerInvokeTarget(r *http.Request) (string, string, error) {
 		}
 		target, err := s.workerTarget(st, r, env, "service.invoke", principal)
 		if err != nil {
-			// Commit the denied authorization audit rather than rolling it back.
 			appErr = err
 			return nil
 		}
@@ -122,17 +128,18 @@ func (s *Server) workerInvokeTarget(r *http.Request) (string, string, error) {
 			return nil
 		}
 		// Invoke through the first selected domain of the service. The domain's
-		// Gateway decides which instance to address.
-		for i, id := range current.Domains {
-			if i >= len(current.Hosts) {
-				break
-			}
+		// Gateway decides which instance to address. Hosts are derived, not
+		// stored, so they come from the catalog and the service selection.
+		slug := workerSlug(service.Organization, service.Service)
+		for _, id := range s.syncServiceDomains(service) {
 			d, ok := s.Config.Workers.domain(id)
 			if !ok {
 				continue
 			}
-			host, gatewayID = current.Hosts[i], d.Gateway
-			return nil
+			if candidate := hostFor(slug, env, d.Domain); candidate != "" {
+				host, gatewayID = candidate, d.Gateway
+				return nil
+			}
 		}
 		appErr = problem(409, "WORKER_NOT_PUBLISHED", "Environment has no routable domain")
 		return nil
@@ -140,7 +147,19 @@ func (s *Server) workerInvokeTarget(r *http.Request) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	return host, gatewayID, appErr
+	if appErr != nil {
+		// A denied invoke stays in the audit log even though the read path made
+		// no other change.
+		_ = s.Store.Update(r.Context(), PartitionIAM, func(st *State) error {
+			s.audit(st, principal, r, "service.invoke", r.PathValue("resource"), false)
+			return nil
+		})
+		return "", "", appErr
+	}
+	if c.hasSession {
+		_ = s.Store.touchSession(r.Context(), c.sessionHash)
+	}
+	return host, gatewayID, nil
 }
 
 // Keep network I/O outside Store.Update: a slow Worker must not hold the IAM lock.

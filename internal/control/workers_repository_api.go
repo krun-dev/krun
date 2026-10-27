@@ -94,9 +94,9 @@ func (s *Server) workerServiceList(st *State, p Principal, r *http.Request) (any
 			}
 			visible = true
 			if current, exists := service.Environments[env]; exists {
-				// Enriched for display only; the persisted row is not rewritten
+				// Hosts are derived for display; the persisted row is not rewritten
 				// from a read path.
-				s.syncEnvironmentHosts(&current, resource.Organization, resource.ID, service.Domains)
+				s.syncEnvironmentHosts(&current, resource.Organization, resource.ID, s.syncServiceDomains(service))
 				summary.Environments = append(summary.Environments, WorkerEnvironmentSummary{Name: env, Domains: current.Domains, Hosts: current.Hosts, Enabled: current.Enabled, Release: current.Release, Confirmed: current.Confirmed})
 			}
 		}
@@ -130,7 +130,7 @@ func (s *Server) workerRepositoryGet(st *State, p Principal, r *http.Request) (a
 	if err != nil {
 		return nil, 0, err
 	}
-	service := s.workerService(st, target)
+	service := s.workerServiceView(st, target)
 	return map[string]any{"source": service.Repository, "revision": service.RepositoryRevision}, 200, nil
 }
 
