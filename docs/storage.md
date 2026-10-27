@@ -1,33 +1,96 @@
 # 控制服务事务存储
 
-首版存储使用完整 `State` 快照。开发和生产统一使用 PostgreSQL；内存 Store 的构造入口仅存在于测试文件中。
+控制面按**一实体一行**存放在 PostgreSQL。`State` 不再是持久化文档，而是「本次请求可能碰到的行」的工作副本：`Update` 只加载相关分区，执行回调，然后只写回发生变化的行。
 
-可选 Workers 后端将构建 / 发布状态放入同一事务快照，归档内容放入独立 S3 存储；对象键、hash 和存储位置登记见 [Workers 制品与流程](workers-backend.md)。
+设计约束见 [AGENTS.md 第 9 节](../AGENTS.md)：不用外键、事务尽力而为、构建/发布状态最终一致、不留无界数据、热路径不写。完整方案见 [storage-redesign.md](storage-redesign.md)。
+
+## 分区
+
+IAM 与 Workers 是两套独立分区，**不共享事务**：
+
+| 分区 | 表 |
+| --- | --- |
+| IAM | `krun_users`、`krun_organizations`、`krun_org_sources`、`krun_members`、`krun_groups`、`krun_group_members`、`krun_assignments`、`krun_resources`、`krun_api_keys`、`krun_api_key_hashes`、`krun_invitations`、`krun_identity_sources`、`krun_identity_providers`、`krun_meta` |
+| Workers | `krun_worker_services`、`krun_worker_service_domains`、`krun_worker_environments`、`krun_worker_builds`、`krun_worker_build_private`、`krun_worker_artifacts`、`krun_worker_releases`、`krun_worker_operations`、`krun_worker_history`、`krun_worker_idempotency`、`krun_repository_connections`、`krun_repository_connect_states` |
+| 会话（不属于任何分区） | `krun_sessions`、`krun_browsers`、`krun_login_states`、`krun_email_logins`、`krun_device_codes` |
+| 旁路 | `krun_audits`、`worker_config_revisions`、`worker_runtime_acks` |
+
+DDL 在 `internal/control/schema.go`，全部 `IF NOT EXISTS`，启动时幂等执行。
+
+## 读路径
+
+- 认证：一次 `krun_sessions` 主键查 + 一次批量的 IAM 快照（14 条查询走在同一个 `pgx.Batch` 里，一次往返）。
+- `seen_at` 用**节流写**：`UPDATE ... WHERE seen_at < now() - interval '30 seconds'`，不是每请求都写。读请求本身不持久化任何状态。
+- 列表与详情按分区加载，`WorkerState.Revision` 这类只写不读的计数器已删除。
+
+## 写路径
+
+`Store.Update(ctx, partition, fn)` 的语义是「加载分区 → 执行 → 写差异」：
+
+- 只写真正变化的行；未变的行不会被重写，所以改一个用户不会重写所有构建。
+- 变化的判定用字段级比较（`sameBuild` / `sameOperation` / `sameEnvironment` 等），不是整行覆盖。
+- 回调返回错误则不落库。
+- 读请求传 `persist = 0`，跳过用于 diff 的前像克隆。
+
+## 并发
+
+不使用 advisory lock，也不做选主。
+
+构建与发布的状态迁移是**条件更新（CAS）**：
 
 ```sql
-CREATE TABLE IF NOT EXISTS krun_control_state (
-  id integer PRIMARY KEY CHECK (id = 1),
-  data jsonb NOT NULL
-);
-INSERT INTO krun_control_state (id, data)
-VALUES (1, '{}') ON CONFLICT DO NOTHING;
+UPDATE krun_worker_builds SET state='building', claimed_by=$2, claimed_at=now()
+ WHERE build_id=$1 AND state IN ('queued','fetching');          -- 0 行 = 别人先认领
 ```
 
-`Update` 读取该行并 `FOR UPDATE`，反序列化数据，执行有界本地逻辑，写入、提交。多个控制服务副本、bootstrap 与邀请命令使用同一锁；失败回滚。权限修改与审计提交在同一事务。API 请求体读取、OAuth token 交换、OIDC 验证与用户资料请求在共享锁外完成，避免网络操作阻塞 IAM。
+副本崩溃后，`claimed_at` 超过 60 秒的 `validating` 操作可被其他副本接管。所有下游副作用必须幂等，因为同一操作可能执行两次。
 
-登录事务先原子标记消费，再在锁外认证，最后验证 browser generation 并原子提交用户、会话、审计。上游中断不会再次兑换同一 code，迟到回调不能覆盖新登录或退出。不需要应用加密密钥。PKCE verifier / nonce、CSRF 与待领取 CLI 凭据直接保存；state、browser token、已领取 Session 与 API Key 的认证值保存 SHA-256 摘要。API Key 哈希单独存储，公开元数据 JSON 不包含它。
+发布提交要求环境行的 `release_revision` 仍等于操作校验时的值，否则操作失败而不是覆盖：
 
-数据库连接在 `db` 中直接填写，或者写 `db: ${KRUN_DATABASE_URL}` 从环境变量读取。所有服务端字符串字段共享环境引用规则，详见 README。未配置连接或必需变量为空时启动失败。没有文件存储回退。开发可用 `scripts/dev-postgres.sh` 原生启动本机 PG，不依赖 Docker。
+```sql
+UPDATE krun_worker_environments SET release_id=$4, release_revision=release_revision+1
+ WHERE service_id=$1 AND env_name=$2 AND release_revision=$3 AND enabled;
+```
 
-邮箱登录事务同样保存在 State 的 EmailLogins 中，包含验证码摘要、来源 / 浏览器绑定、代次、有效期、发送时间、失败次数和消费状态。发送邮件在数据库锁外执行；验证及消费在同一个 PG 事务中完成，输错计数会提交。过期事务由后续认证请求清理；不保存明文验证码或新增加密密钥。
+## 边缘收敛
 
-快照模式的限制：所有请求共享一把 PG 行锁，反序列化与持久化成本随总数据增加；组织 / 资源等列表当前无分页；审计已提供游标分页，并按最近 7 天滚动清理，没有长期归档。它保证首版正确性，不提供生产规模吞吐承诺。正式大规模上线前需要：
+不变：写入 `worker_config_revisions` → 快照进对象存储 → runtime 长轮询 `latest.json` + 增量 feed → 每 Pod 一个 ack。收敛只靠 revision 与 ack 观察，不阻塞提交。
 
-1. 将 users/sources、浏览器/事务/sessions、组织/成员/组/角色、Key/策略、资源和审计拆为关系表，并加入身份唯一键、外键和过期索引。
-2. 在目标行锁与事务 revision 下实现相同的授权及最后管理员不变量。
-3. 下推组织、资源选择器与环境条件，使用绑定主体和权限修订的分页游标。
-4. 审计按组织/日期索引、归档；Session last_seen 降低写热点。
+**Hosts 不再持久化。** 环境的主机名由域名目录 + 服务的域名选择现算，`normalizeService`、`reconcile` 的 HTTPRoute 生成、`workerConfigFromState` 共用同一套推导，因此三者不会漂移。
 
-已实现 PostgreSQL 集成测试验证跨 Store 实例串行 bootstrap、失败回滚和审计原子性。替换存储时需保留这些测试及权限验收用例。
+## 认证数据
 
-审计保留期为 7 天，所有提交事务都会删除过期条目，服务还每分钟执行一次空闲清理。分页虽然在 API 层限制返回数量，当前仍读取和排序完整快照中的保留审计，尚未下推到 PostgreSQL 的独立审计表 / 索引。
+登录事务先原子消费（`UPDATE ... WHERE consumed=false`），再在锁外认证，最后写入用户与会话。会话与 `auth_version` 不再同一事务：半写只会导致这次登录需要重来，不会放行已撤销的身份。不需要应用加密密钥；PKCE verifier / nonce、CSRF 与待领取 CLI 凭据直接保存，state、browser token、Session 与 API Key 的认证值保存 SHA-256 摘要。
+
+## 数据保留
+
+后台每分钟执行一次（`internal/control/retention.go`），取代原先挂在每个请求上的 `cleanup`：
+
+| 表 | 保留 |
+| --- | --- |
+| `krun_sessions` | 30 分钟未活动或超过 8 小时绝对上限 |
+| `krun_browsers` / `krun_login_states` / `krun_email_logins` / `krun_device_codes` / `krun_repository_connect_states` / `krun_invitations` | 过期即删 |
+| `krun_audits` | 7 天 |
+| `krun_worker_builds` | 每服务最近 100 条终态；日志 7 天后清空 |
+| `krun_worker_operations` | 终态保留 30 天 |
+| `krun_worker_artifacts` | 无 release 引用且超过 30 天 |
+| `krun_worker_idempotency` | 7 天 |
+| `krun_worker_history` | 每 (service, env) 最近 50 条 |
+| `worker_config_revisions` | 512 条 |
+
+## 迁移
+
+`OpenStore` 在启动时执行 `importLegacySnapshot`：
+
+1. 若 `krun_control_state` 存在且 `krun_users` 为空，则在一个事务内把整份旧快照写入新表。
+2. 成功后把旧表改名为 `krun_control_state_legacy`（保留以便回滚与对账），不会再次读取。
+3. 导入失败则整体回滚并**拒绝启动**，旧数据不受影响。
+
+回滚方式：回退二进制并把 legacy 表改回原名。没有双写。
+
+## 已知限制
+
+- 组织 / 资源列表仍在内存中过滤，没有分页下推。
+- `ensureAdmin`（至少保留一个系统管理员）是「先写、再查、不满足就写回」的补偿，并发降级可能短暂出现零管理员，需要人工 `krun-server bootstrap` 恢复。
+- 授权每次请求加载完整 IAM 快照（约 0.2 ms），未按主体裁剪。
+- 数据库集成测试需要 `KRUN_TEST_POSTGRES_URL`，未提供时跳过。
