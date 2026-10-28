@@ -568,7 +568,7 @@ function WorkerDetail({
           role="alert"
           className="rounded-md border border-destructive/20 p-3 text-sm text-destructive"
         >
-          {error} · {t("保留上次数据，正在重新连接。")}
+          {error}
         </p>
       ) : null}
       <div className="flex items-center justify-between">

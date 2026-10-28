@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "npm --prefix .. run build",
-    "test": "node --experimental-strip-types --test src/lib/worker-polling.test.mjs"
+    "test": "node --experimental-strip-types --test src/lib/*.test.mjs"
   },
   "devDependencies": {
     "vite": "^6.0.7"

@@ -389,7 +389,6 @@
   "下一次发布使用的变量": "Variables for the next release",
   "不可用": "Unavailable",
   "保存配置": "Save configuration",
-  "保留上次数据，正在重新连接。": "Keeping the last data while reconnecting.",
   "先发布到此环境，再发送请求。": "Publish to this environment before sending a request.",
   "入口文件": "Entrypoint",
   "创建 Worker": "Create Worker",

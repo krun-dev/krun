@@ -1,12 +1,20 @@
 import { t, locale } from "./i18n.ts";
+import { notifyAuthRequired } from "./auth-required.ts";
 export class APIError extends Error {
+  status: number;
+  code: string;
+  requestID?: string;
+
   constructor(
-    public status: number,
-    public code: string,
+    status: number,
+    code: string,
     message: string,
-    public requestID?: string,
+    requestID?: string,
   ) {
     super(message);
+    this.status = status;
+    this.code = code;
+    this.requestID = requestID;
   }
 }
 export async function api<T>(
@@ -32,6 +40,7 @@ export async function api<T>(
       signal,
       headers: { "Accept-Language": locale() },
     });
+    notifyAuthRequired(response.status);
     if (!response.ok)
       throw new APIError(
         response.status,
@@ -47,6 +56,7 @@ export async function api<T>(
     signal,
     body: input === undefined ? undefined : JSON.stringify(input),
   });
+  notifyAuthRequired(response.status);
   if (response.status === 204) return undefined as T;
   const raw = await response.text();
   let data;

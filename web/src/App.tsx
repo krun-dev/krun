@@ -48,6 +48,7 @@ import {
   type Organization,
   type Provider,
 } from "@/lib/api";
+import { AUTH_REQUIRED_EVENT } from "@/lib/auth-required";
 import { cn } from "@/lib/utils";
 import {
   Empty,
@@ -194,6 +195,19 @@ export default function App() {
   );
   const notify = useCallback((message: string) => setNotice(message), []);
   const reload = useCallback(() => setRefresh((x) => x + 1), []);
+  useEffect(() => {
+    const requireLogin = () => {
+      setMe(null);
+      setOrgs([]);
+      setOrgCatalog([]);
+      setMenu(false);
+      setOrgDialog(false);
+      setSaving(false);
+      setNotice("");
+    };
+    window.addEventListener(AUTH_REQUIRED_EVENT, requireLogin);
+    return () => window.removeEventListener(AUTH_REQUIRED_EVENT, requireLogin);
+  }, []);
   useEffect(() => {
     if (!me) return;
     const url = new URL(location.href);
