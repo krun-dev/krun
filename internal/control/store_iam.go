@@ -187,6 +187,13 @@ func itoa(n int) string {
 	return string(digits)
 }
 
+func boolValue(v bool) string {
+	if v {
+		return "1"
+	}
+	return "0"
+}
+
 func execRevisionCAS(ctx context.Context, tx pgx.Tx, message, query string, args ...any) error {
 	tag, err := tx.Exec(ctx, query, args...)
 	if err != nil {

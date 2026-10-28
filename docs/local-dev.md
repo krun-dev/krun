@@ -33,13 +33,13 @@
 - `builder_mode: local`：builder 在本机以 `node workers/builder/build-worker.mjs` 运行，不创建 Kubernetes Job。
 - `gateways` / `domains`：网关实例与域名清单。每个域名绑定一个网关，并带一个只用于展示的 `label`；服务从中选择要用哪些域名。
 - 网关的 `base`（如 `http://127.0.0.1:38080`）：控制台 invoke 经 SSH 隧道打到对应的集群网关实例。
-- `runtime_management_base: http://127.0.0.1:38083`：候选验证和运行时管理走隧道。
+- `runtime_pools[].runtime_management_base: http://127.0.0.1:38083`：候选验证和运行时管理走隧道。
 - `s3_endpoint` 和 `s3_builder_endpoint` 指向开发机上的 MinIO（通常是 `http://127.0.0.1:9000`）；本地 builder 使用同一地址。
 - `s3_runtime_endpoint` 是 runtime 下载制品和静态文件所见的地址。local-first 应设为
   `http://<minio-host>:9000`；该开发机地址由 `dev-runtime-config.sh` 同时加入 workerd
   `restrictPeers` allowlist 和 NetworkPolicy。不能使用 runtime 自己的 `127.0.0.1`，也
   不能使用 `static-assets` Service DNS（workerd 会在 kube-proxy 转发前拒绝其 ClusterIP）。
-- `config_base_url` 使用集群可达的开发机地址（`http://<minio-host>:9000/krun-artifacts/config`）；runtime 不使用控制面的 loopback 地址。
+- `config_base_url` 使用集群可达的开发机地址（`http://<minio-host>:9000/<bucket>/config`）；runtime 不使用控制面的 loopback 地址。`KRUN_DEV_S3_BUCKET` 必须与 runtime 配置一致。
 
 ## 本地变量（gitignored）
 

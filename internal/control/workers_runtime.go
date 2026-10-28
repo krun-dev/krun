@@ -151,7 +151,7 @@ func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {
 		}
 		allowed := false
 		for _, d := range st.Workers.Releases {
-			if d.Artifact == a.ID && d.Pool == pool.ID {
+			if d.Artifact == a.ID && workerServiceAvailableInPool(st.Workers, d.Service, pool.ID) {
 				if _, ok := st.Resources[d.Service]; ok {
 					allowed = true
 				}
@@ -261,7 +261,7 @@ func (w *workersController) releaseAssets(ctx context.Context, releaseID, pool s
 	// st.Resources is in the IAM partition; without it every release looks dead.
 	e := w.server.Store.View(ctx, PartitionAll, func(st *State) error {
 		rel, ok := st.Workers.Releases[releaseID]
-		if !ok || rel.Pool != pool || st.Resources[rel.Service].ID == "" {
+		if !ok || !workerServiceAvailableInPool(st.Workers, rel.Service, pool) || st.Resources[rel.Service].ID == "" {
 			return notFound()
 		}
 		art, ok := st.Workers.Artifacts[rel.Artifact]

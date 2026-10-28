@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -18,14 +19,16 @@ type WorkersConfig struct {
 	BuilderPullPolicy   string                     `json:"builder_pull_policy"`
 	// BuilderMode selects the build executor: "kubernetes" creates a Job;
 	// "local" runs workers/builder/build-worker.mjs on the control-plane host.
-	BuilderMode    string `json:"builder_mode"`
-	BuilderScript  string `json:"builder_script"`
-	RuntimeService string `json:"runtime_service"`
+	BuilderMode   string `json:"builder_mode"`
+	BuilderScript string `json:"builder_script"`
 	// RuntimePools is infrastructure-only. Organization APIs expose only the
-	// public/private access primitives derived from domains; pool ids and
-	// services never leave the system scope. Empty preserves the legacy single
-	// runtime and is normalized into one default pool during validation.
+	// deployment-defined network profiles; access modes, pool ids and services
+	// never leave the system scope.
 	RuntimePools []WorkerRuntimePool `json:"runtime_pools"`
+	// NetworkProfiles are the deployment-defined product choices shown to
+	// organization users. Profiles describe intent; pool ids, Gateway names and
+	// enforcement details remain infrastructure-only.
+	NetworkProfiles []WorkerNetworkProfile `json:"network_profiles"`
 	// Kubernetes connection settings are regular application configuration.
 	// They intentionally live here instead of being read from hidden process
 	// environment variables so every runtime input passes through LoadConfig.
@@ -35,26 +38,23 @@ type WorkersConfig struct {
 	// Gateways and Domains are the routing catalog. Neither carries a network
 	// classification: a domain is just a suffix plus which Gateway instance
 	// serves it. Label is display text and never participates in routing.
-	Gateways        []WorkerGateway `json:"gateways"`
-	Domains         []WorkerDomain  `json:"domains"`
-	RuntimeToken    string          `json:"runtime_token"`
-	ManagementToken string          `json:"management_token"`
+	Gateways []WorkerGateway `json:"gateways"`
+	Domains  []WorkerDomain  `json:"domains"`
 	// SecretsKeys is a versioned ring of base64-encoded 32-byte AES keys used
 	// only by the control plane. Keep old versions while retained Releases
 	// reference them; new writes use SecretsActiveKey.
-	SecretsKeys           map[string]string `json:"secrets_keys"`
-	SecretsActiveKey      string            `json:"secrets_active_key"`
-	RuntimeManagementBase string            `json:"runtime_management_base"`
-	S3Endpoint            string            `json:"s3_endpoint"`
-	S3BuilderEndpoint     string            `json:"s3_builder_endpoint"`
-	S3RuntimeEndpoint     string            `json:"s3_runtime_endpoint"`
-	S3Bucket              string            `json:"s3_bucket"`
-	S3LocationID          string            `json:"s3_location_id"`
-	S3AccessKey           string            `json:"s3_access_key"`
-	S3SecretKey           string            `json:"s3_secret_key"`
-	PreviewLimit          int               `json:"preview_limit"`
-	StaticService         string            `json:"static_service"`
-	StaticServicePort     int               `json:"static_service_port"`
+	SecretsKeys       map[string]string `json:"secrets_keys"`
+	SecretsActiveKey  string            `json:"secrets_active_key"`
+	S3Endpoint        string            `json:"s3_endpoint"`
+	S3BuilderEndpoint string            `json:"s3_builder_endpoint"`
+	S3RuntimeEndpoint string            `json:"s3_runtime_endpoint"`
+	S3Bucket          string            `json:"s3_bucket"`
+	S3LocationID      string            `json:"s3_location_id"`
+	S3AccessKey       string            `json:"s3_access_key"`
+	S3SecretKey       string            `json:"s3_secret_key"`
+	PreviewLimit      int               `json:"preview_limit"`
+	StaticService     string            `json:"static_service"`
+	StaticServicePort int               `json:"static_service_port"`
 	// ConfigBaseURL is the runtime-readable origin of config/latest.json and
 	// config/snapshots/*. It must be a private or cluster-internal endpoint.
 	ConfigBaseURL string `json:"config_base_url"`
@@ -64,13 +64,37 @@ type WorkersConfig struct {
 }
 
 type WorkerRuntimePool struct {
-	ID                    string   `json:"id"`
-	Access                []string `json:"access"`
-	RuntimeService        string   `json:"runtime_service"`
-	RuntimeManagementBase string   `json:"runtime_management_base"`
-	RuntimeToken          string   `json:"runtime_token"`
-	ManagementToken       string   `json:"management_token"`
-	Default               bool     `json:"default"`
+	ID                    string            `json:"id"`
+	Access                []string          `json:"access"`
+	Labels                map[string]string `json:"labels"`
+	PrivateEgress         string            `json:"private_egress"`
+	PublicEgress          string            `json:"public_egress"`
+	RuntimeService        string            `json:"runtime_service"`
+	RuntimeManagementBase string            `json:"runtime_management_base"`
+	RuntimeToken          string            `json:"runtime_token"`
+	ManagementToken       string            `json:"management_token"`
+	Default               bool              `json:"default"`
+}
+
+type WorkerNetworkRequirements struct {
+	Ingress       []string `json:"ingress"`
+	PrivateEgress string   `json:"private_egress"`
+	PublicEgress  string   `json:"public_egress"`
+}
+
+// WorkerNetworkProfile is a configurable product-facing bundle. It deliberately
+// contains selectors and requirements instead of a pool id, so changing the
+// infrastructure layout does not leak into organization APIs or saved intent.
+type WorkerNetworkProfile struct {
+	ID             string                    `json:"id"`
+	Name           string                    `json:"name"`
+	Description    string                    `json:"description"`
+	DomainSelector map[string]string         `json:"domain_selector"`
+	PoolSelector   map[string]string         `json:"pool_selector"`
+	Requirements   WorkerNetworkRequirements `json:"requirements"`
+	Approval       string                    `json:"approval"`
+	Visibility     string                    `json:"visibility"`
+	Default        bool                      `json:"default"`
 }
 
 // WorkerGateway is one Gateway instance the control plane writes routes to.
@@ -87,18 +111,20 @@ type WorkerGateway struct {
 }
 
 // WorkerDomain is one browser-facing suffix users can attach to a service.
-// Access is the portable public/private product primitive. Label is an
-// operator note; Gateway remains infrastructure-only and is never returned to
-// organization users.
+// Access, Labels and Gateway are infrastructure metadata used to resolve a
+// Network Profile. Only the filtered domain id/name/display label is returned
+// to organization users.
 type WorkerDomain struct {
 	ID      string `json:"id"`
 	Domain  string `json:"domain"`
 	Label   string `json:"label"`
 	Gateway string `json:"gateway"`
-	// Access is the only product-facing network classification. It is deliberately
-	// limited to portable primitives so an open-source deployment can expose only
-	// public without inheriting an operator's internal pool names.
+	// Access is a stable infrastructure primitive used by profile requirements.
+	// It is deliberately not returned to organization APIs.
 	Access string `json:"access"`
+	// Labels are deployment metadata used by Network Profile selectors. They
+	// are not returned to organization APIs.
+	Labels map[string]string `json:"labels"`
 	// Default selects this domain for newly created environments.
 	Default bool `json:"default"`
 	// StaticDomain overrides the static-asset host served through this domain's
@@ -137,9 +163,6 @@ func (c *WorkersConfig) validate() error {
 	}
 	if c.S3LocationID == "" {
 		c.S3LocationID = "primary"
-	}
-	if c.RuntimeService == "" {
-		c.RuntimeService = "runtime-default"
 	}
 	if c.KubernetesAPI == "" {
 		c.KubernetesAPI = "https://kubernetes.default.svc"
@@ -180,26 +203,13 @@ func (c *WorkersConfig) validate() error {
 			return fmt.Errorf("invalid Workers S3 runtime endpoint")
 		}
 	} else {
-		// Existing deployments used the builder-visible endpoint for runtime
-		// downloads as well. Keep that default while allowing local-first to
-		// give an off-host runtime a distinct, reachable origin.
 		c.S3RuntimeEndpoint = c.S3BuilderEndpoint
 	}
 	if (c.BuilderMode != "local" && c.BuilderImage == "") || c.S3AccessKey == "" || c.S3SecretKey == "" {
 		return fmt.Errorf("Workers image and credentials required")
 	}
-	if len(c.RuntimePools) == 0 && (len(c.RuntimeToken) < 24 || len(c.ManagementToken) < 24) {
-		return fmt.Errorf("Workers runtime credentials required")
-	}
 	if err := c.validateSecretKeys(); err != nil {
 		return err
-	}
-	if c.RuntimeManagementBase != "" {
-		u, e := url.Parse(c.RuntimeManagementBase)
-		if e != nil || u.Host == "" || u.Path != "" && u.Path != "/" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
-			return fmt.Errorf("invalid Workers runtime management base")
-		}
-		c.RuntimeManagementBase = strings.TrimSuffix(c.RuntimeManagementBase, "/")
 	}
 	if c.PreviewLimit == 0 {
 		c.PreviewLimit = 32
@@ -230,6 +240,9 @@ func (c *WorkersConfig) validate() error {
 	if err := c.validateRuntimePools(dns); err != nil {
 		return err
 	}
+	if err := c.validateNetworkProfiles(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -255,11 +268,10 @@ func normalizeWorkerAccess(values []string) ([]string, error) {
 
 func (c *WorkersConfig) validateRuntimePools(dns *regexp.Regexp) error {
 	if len(c.RuntimePools) == 0 {
-		_, err := normalizeWorkerAccess(c.legacyRuntimePool().Access)
-		return err
+		return fmt.Errorf("Workers runtime_pools required")
 	}
 	seenIDs, seenServices := map[string]bool{}, map[string]bool{}
-	seenRuntimeTokens, seenManagementTokens, seenAccess := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	seenRuntimeTokens, seenManagementTokens := map[string]bool{}, map[string]bool{}
 	domainAccess := map[string]bool{}
 	for _, domain := range c.Domains {
 		domainAccess[domain.Access] = true
@@ -279,11 +291,12 @@ func (c *WorkersConfig) validateRuntimePools(dns *regexp.Regexp) error {
 			return err
 		}
 		pool.Access = access
-		accessKey := strings.Join(access, "+")
-		if seenAccess[accessKey] {
-			return fmt.Errorf("duplicate Workers runtime pool access combination")
+		if err := normalizeWorkerEgress(pool); err != nil {
+			return fmt.Errorf("Workers runtime pool %s: %w", pool.ID, err)
 		}
-		seenAccess[accessKey] = true
+		if err := validateWorkerLabels(pool.Labels); err != nil {
+			return fmt.Errorf("Workers runtime pool %s labels: %w", pool.ID, err)
+		}
 		for _, value := range access {
 			if !domainAccess[value] {
 				return fmt.Errorf("Workers runtime pool access has no configured domain")
@@ -314,23 +327,131 @@ func (c *WorkersConfig) validateRuntimePools(dns *regexp.Regexp) error {
 	}
 	defaultsDomains := c.defaultDomains()
 	defaultPool := c.defaultRuntimePool()
-	matched, ok := c.poolForDomains(defaultsDomains)
-	if !ok || matched.ID != defaultPool.ID {
-		return fmt.Errorf("Workers default domains must match the default runtime pool access")
+	defaultAccessRaw := []string{}
+	for _, id := range defaultsDomains {
+		if domain, ok := c.domain(id); ok {
+			defaultAccessRaw = append(defaultAccessRaw, domain.Access)
+		}
+	}
+	defaultAccess, _ := normalizeWorkerAccess(defaultAccessRaw)
+	if !workerAccessContains(defaultPool.Access, defaultAccess) {
+		return fmt.Errorf("Workers default domains must be supported by the default runtime pool")
 	}
 	return nil
 }
 
-func sameWorkerAccess(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
+func normalizeWorkerEgress(pool *WorkerRuntimePool) error {
+	if pool.PrivateEgress == "" {
+		pool.PrivateEgress = "deny"
+		if runtimePoolHasAccess(*pool, "private") {
+			pool.PrivateEgress = "direct"
+		}
 	}
-	for i := range left {
-		if left[i] != right[i] {
+	if pool.PublicEgress == "" {
+		pool.PublicEgress = "deny"
+		if runtimePoolHasAccess(*pool, "public") {
+			pool.PublicEgress = "direct"
+		}
+	}
+	if pool.PrivateEgress != "deny" && pool.PrivateEgress != "direct" {
+		return fmt.Errorf("private_egress must be deny or direct")
+	}
+	if pool.PublicEgress != "deny" && pool.PublicEgress != "direct" && pool.PublicEgress != "connect-proxy" {
+		return fmt.Errorf("public_egress must be deny, direct or connect-proxy")
+	}
+	return nil
+}
+
+func validateWorkerLabels(labels map[string]string) error {
+	if len(labels) > 32 {
+		return fmt.Errorf("at most 32 labels are allowed")
+	}
+	for key, value := range labels {
+		if key == "" || value == "" || len(key) > 64 || len(value) > 128 {
+			return fmt.Errorf("labels require non-empty keys and values within limits")
+		}
+	}
+	return nil
+}
+
+func labelsMatch(labels, selector map[string]string) bool {
+	for key, value := range selector {
+		if labels[key] != value {
 			return false
 		}
 	}
 	return true
+}
+
+func (c *WorkersConfig) validateNetworkProfiles() error {
+	if len(c.NetworkProfiles) == 0 {
+		return fmt.Errorf("Workers network_profiles required")
+	}
+	seen := map[string]bool{}
+	defaults := 0
+	for i := range c.NetworkProfiles {
+		profile := &c.NetworkProfiles[i]
+		if !slug.MatchString(profile.ID) || seen[profile.ID] {
+			return fmt.Errorf("invalid or duplicate Workers network profile id")
+		}
+		seen[profile.ID] = true
+		if profile.Name == "" {
+			profile.Name = profile.ID
+		}
+		access, err := normalizeWorkerAccess(profile.Requirements.Ingress)
+		if err != nil {
+			return fmt.Errorf("Workers network profile %s: %w", profile.ID, err)
+		}
+		profile.Requirements.Ingress = access
+		if profile.Requirements.PrivateEgress == "" {
+			profile.Requirements.PrivateEgress = "deny"
+		}
+		if profile.Requirements.PublicEgress == "" {
+			profile.Requirements.PublicEgress = "deny"
+		}
+		probe := WorkerRuntimePool{Access: access, PrivateEgress: profile.Requirements.PrivateEgress, PublicEgress: profile.Requirements.PublicEgress}
+		if err := normalizeWorkerEgress(&probe); err != nil || probe.PrivateEgress != profile.Requirements.PrivateEgress || probe.PublicEgress != profile.Requirements.PublicEgress {
+			return fmt.Errorf("invalid Workers network profile egress for %s", profile.ID)
+		}
+		if err := validateWorkerLabels(profile.DomainSelector); err != nil {
+			return fmt.Errorf("Workers network profile %s domain selector: %w", profile.ID, err)
+		}
+		if err := validateWorkerLabels(profile.PoolSelector); err != nil {
+			return fmt.Errorf("Workers network profile %s pool selector: %w", profile.ID, err)
+		}
+		if profile.Approval == "" {
+			profile.Approval = "none"
+		}
+		if profile.Approval != "none" && profile.Approval != "required" {
+			return fmt.Errorf("Workers network profile approval must be none or required")
+		}
+		if profile.Visibility == "" {
+			profile.Visibility = "public"
+		}
+		if profile.Visibility != "public" && profile.Visibility != "granted-only" && profile.Visibility != "assigned-only" {
+			return fmt.Errorf("invalid Workers network profile visibility")
+		}
+		if len(c.domainsForProfile(*profile)) == 0 {
+			return fmt.Errorf("Workers network profile %s selects no domains", profile.ID)
+		}
+		if len(c.poolsForProfile(profile.ID)) == 0 {
+			return fmt.Errorf("Workers network profile %s must resolve to at least one runtime pool", profile.ID)
+		}
+		if profile.Default {
+			defaults++
+			if profile.Approval != "none" || profile.Visibility != "public" {
+				return fmt.Errorf("Workers default network profile must be public and require no approval")
+			}
+		}
+	}
+	if defaults == 0 && len(c.NetworkProfiles) == 1 {
+		c.NetworkProfiles[0].Default = true
+		defaults = 1
+	}
+	if defaults != 1 {
+		return fmt.Errorf("Workers network profiles require exactly one default")
+	}
+	return nil
 }
 
 func workerAccessContains(available, requested []string) bool {
@@ -373,59 +494,136 @@ func (c *WorkersConfig) defaultRuntimePool() WorkerRuntimePool {
 			return pool
 		}
 	}
-	return c.legacyRuntimePool()
+	if len(c.RuntimePools) > 0 {
+		return c.RuntimePools[0]
+	}
+	return WorkerRuntimePool{}
 }
 
 func (c *WorkersConfig) configuredRuntimePools() []WorkerRuntimePool {
-	if len(c.RuntimePools) > 0 {
-		return c.RuntimePools
-	}
-	return []WorkerRuntimePool{c.legacyRuntimePool()}
+	return c.RuntimePools
 }
 
-func (c *WorkersConfig) legacyRuntimePool() WorkerRuntimePool {
-	accessRaw := make([]string, 0, len(c.Domains))
-	for _, domain := range c.Domains {
-		accessRaw = append(accessRaw, domain.Access)
-	}
-	access, _ := normalizeWorkerAccess(accessRaw)
-	service := c.RuntimeService
-	if service == "" {
-		service = "runtime-default"
-	}
-	return WorkerRuntimePool{
-		ID: "default", Access: access, RuntimeService: service,
-		RuntimeManagementBase: c.RuntimeManagementBase, RuntimeToken: c.RuntimeToken,
-		ManagementToken: c.ManagementToken, Default: true,
-	}
+func (c *WorkersConfig) configuredNetworkProfiles() []WorkerNetworkProfile {
+	return c.NetworkProfiles
 }
 
-func (c *WorkersConfig) poolForDomains(domainIDs []string) (WorkerRuntimePool, bool) {
-	accessRaw := []string{}
-	for _, id := range domainIDs {
-		if domain, ok := c.domain(id); ok {
-			accessRaw = append(accessRaw, domain.Access)
+func (c *WorkersConfig) networkProfile(id string) (WorkerNetworkProfile, bool) {
+	for _, profile := range c.configuredNetworkProfiles() {
+		if profile.ID == id {
+			return profile, true
 		}
 	}
-	access, err := normalizeWorkerAccess(accessRaw)
-	if err != nil {
+	return WorkerNetworkProfile{}, false
+}
+
+func (c *WorkersConfig) defaultNetworkProfile() WorkerNetworkProfile {
+	for _, profile := range c.configuredNetworkProfiles() {
+		if profile.Default {
+			return profile
+		}
+	}
+	if len(c.NetworkProfiles) > 0 {
+		return c.NetworkProfiles[0]
+	}
+	return WorkerNetworkProfile{}
+}
+
+// normalizeServiceNetwork resolves saved product intent into its allowed
+// domain set. Physical placement is a separate durable entity. Keep this
+// independent from HTTP/API state so every projection uses the same defaults.
+func (c *WorkersConfig) normalizeServiceNetwork(ws WorkerService) WorkerService {
+	profile, ok := c.networkProfile(ws.NetworkProfile)
+	if !ok {
+		profile = c.defaultNetworkProfile()
+		ws.NetworkProfile = profile.ID
+	}
+	eligible := map[string]bool{}
+	for _, domain := range c.domainsForProfile(profile) {
+		eligible[domain.ID] = true
+	}
+	selected := make([]string, 0, len(ws.Domains))
+	for _, id := range ws.Domains {
+		if eligible[id] {
+			selected = append(selected, id)
+		}
+	}
+	if len(selected) == 0 {
+		selected = c.defaultDomainsForProfile(profile)
+	}
+	ws.Domains = selected
+	return ws
+}
+
+func (c *WorkersConfig) domainsForProfile(profile WorkerNetworkProfile) []WorkerDomain {
+	out := []WorkerDomain{}
+	for _, domain := range c.Domains {
+		if !contains(profile.Requirements.Ingress, domain.Access) || !labelsMatch(domain.Labels, profile.DomainSelector) {
+			continue
+		}
+		out = append(out, domain)
+	}
+	return out
+}
+
+func (c *WorkersConfig) defaultDomainsForProfile(profile WorkerNetworkProfile) []string {
+	eligible := c.domainsForProfile(profile)
+	out := []string{}
+	for _, domain := range eligible {
+		if domain.Default {
+			out = append(out, domain.ID)
+		}
+	}
+	if len(out) == 0 && len(eligible) > 0 {
+		out = append(out, eligible[0].ID)
+	}
+	return out
+}
+
+func (c *WorkersConfig) poolsForProfile(profileID string) []WorkerRuntimePool {
+	profile, ok := c.networkProfile(profileID)
+	if !ok {
+		return nil
+	}
+	matched := []WorkerRuntimePool{}
+	for _, pool := range c.configuredRuntimePools() {
+		if !workerAccessContains(pool.Access, profile.Requirements.Ingress) ||
+			pool.PrivateEgress != profile.Requirements.PrivateEgress ||
+			pool.PublicEgress != profile.Requirements.PublicEgress ||
+			!labelsMatch(pool.Labels, profile.PoolSelector) {
+			continue
+		}
+		matched = append(matched, pool)
+	}
+	sort.Slice(matched, func(i, j int) bool { return matched[i].ID < matched[j].ID })
+	return matched
+}
+
+// selectPoolForService uses rendezvous hashing so adding or removing a pool
+// only moves the services whose winner changes. The result is persisted as a
+// placement; this function is also useful for repairing a missing placement.
+func (c *WorkersConfig) selectPoolForService(profileID, serviceID string) (WorkerRuntimePool, bool) {
+	pools := c.poolsForProfile(profileID)
+	if len(pools) == 0 {
 		return WorkerRuntimePool{}, false
 	}
-	for _, pool := range c.configuredRuntimePools() {
-		if sameWorkerAccess(pool.Access, access) {
-			return pool, true
+	best, bestScore := pools[0], ""
+	for _, pool := range pools {
+		score := bytesDigest([]byte(profileID + "\x00" + serviceID + "\x00" + pool.ID))
+		if score > bestScore {
+			best, bestScore = pool, score
 		}
 	}
-	// The legacy single runtime historically served every configured domain.
-	// Preserve that behavior for any non-empty subset while explicit pools use
-	// exact combinations to avoid ambiguous placement.
-	if len(c.RuntimePools) == 0 {
-		pool := c.legacyRuntimePool()
-		if workerAccessContains(pool.Access, access) {
-			return pool, true
+	return best, true
+}
+
+func (c *WorkersConfig) poolAllowedForProfile(profileID, poolID string) bool {
+	for _, pool := range c.poolsForProfile(profileID) {
+		if pool.ID == poolID {
+			return true
 		}
 	}
-	return WorkerRuntimePool{}, false
+	return false
 }
 
 func (c *WorkersConfig) validateSecretKeys() error {
@@ -513,6 +711,9 @@ func (c *WorkersConfig) validateCatalog(dns *regexp.Regexp) error {
 		}
 		if d.Access != "public" && d.Access != "private" {
 			return fmt.Errorf("Workers domain %s access must be public or private", d.ID)
+		}
+		if err := validateWorkerLabels(d.Labels); err != nil {
+			return fmt.Errorf("Workers domain %s labels: %w", d.ID, err)
 		}
 		if d.StaticDomain == "" {
 			d.StaticDomain = "static." + d.Domain
@@ -703,15 +904,53 @@ type WorkerService struct {
 	PreviewRevision int    `json:"preview_revision"`
 	Service         string `json:"service_id"`
 	Organization    string `json:"organization_id"`
-	// Pool is an infrastructure assignment. It is intentionally absent from
-	// organization JSON; users express only public/private access through
-	// domain selection and the control plane resolves that intent to a pool.
-	Pool string `json:"-"`
+	// NetworkProfile is the stable product intent selected for the service.
+	NetworkProfile string `json:"network_profile"`
 	// Domains is the service-level domain selection. Every environment of the
 	// service is served on every selected domain, so adding a domain adds one
 	// host per environment without touching per-environment configuration.
 	Domains      []string                     `json:"domains"`
 	Environments map[string]WorkerEnvironment `json:"environments"`
+}
+
+// WorkerPlacement is the infrastructure assignment for one service. It is a
+// separate entity because a service may temporarily have more than one
+// placement during a platform-managed migration. Organization APIs never
+// expose pool IDs.
+type WorkerPlacement struct {
+	Service        string    `json:"service_id"`
+	Organization   string    `json:"organization_id"`
+	NetworkProfile string    `json:"network_profile"`
+	Pool           string    `json:"pool"`
+	Role           string    `json:"role"`
+	State          string    `json:"state"`
+	Revision       int       `json:"revision"`
+	Created        time.Time `json:"created_at"`
+	Updated        time.Time `json:"updated_at"`
+}
+
+func workerPlacementKey(service, pool string) string { return service + "\x00" + pool }
+
+func activeWorkerPlacement(state *WorkerState, service string) (WorkerPlacement, bool) {
+	if state == nil {
+		return WorkerPlacement{}, false
+	}
+	for _, placement := range state.Placements {
+		if placement.Service == service && placement.Role == "primary" && placement.State == "active" {
+			return placement, true
+		}
+	}
+	return WorkerPlacement{}, false
+}
+
+func workerServiceAvailableInPool(state *WorkerState, service, pool string) bool {
+	for _, placement := range state.Placements {
+		if placement.Service == service && placement.Pool == pool &&
+			(placement.State == "preparing" || placement.State == "ready" || placement.State == "active") {
+			return true
+		}
+	}
+	return false
 }
 
 // syncEnvironmentHosts recomputes an environment's Hosts from the service's
@@ -798,10 +1037,7 @@ type WorkerRelease struct {
 	// the authenticated runtime endpoint.
 	SecretDigest   string            `json:"secret_digest,omitempty"`
 	SecretVersions map[string]string `json:"-"`
-	// Pool is an infrastructure placement detail. Internal config projections
-	// retain it, while organization-facing handlers clear it before encoding.
-	Pool    string    `json:"pool,omitempty"`
-	Created time.Time `json:"created_at"`
+	Created        time.Time         `json:"created_at"`
 }
 
 // WorkerSecretVersion is immutable metadata. Ciphertext is intentionally not
@@ -862,6 +1098,7 @@ type WorkerAck struct {
 type WorkerState struct {
 	Revision         int
 	Services         map[string]WorkerService
+	Placements       map[string]WorkerPlacement
 	Builds           map[string]WorkerBuild
 	BuildPrivate     map[string]WorkerBuildPrivate
 	Artifacts        map[string]WorkerArtifact
@@ -874,7 +1111,7 @@ type WorkerState struct {
 }
 
 func newWorkerState() *WorkerState {
-	return &WorkerState{Revision: 1, Services: map[string]WorkerService{}, Builds: map[string]WorkerBuild{}, BuildPrivate: map[string]WorkerBuildPrivate{}, Artifacts: map[string]WorkerArtifact{}, Releases: map[string]WorkerRelease{}, Operations: map[string]WorkerOperation{}, OperationPrivate: map[string]WorkerOperationPrivate{}, Histories: map[string][]WorkerHistory{}, Idempotency: map[string]WorkerIdempotency{}, SecretVersions: map[string]WorkerSecretVersion{}}
+	return &WorkerState{Revision: 1, Services: map[string]WorkerService{}, Placements: map[string]WorkerPlacement{}, Builds: map[string]WorkerBuild{}, BuildPrivate: map[string]WorkerBuildPrivate{}, Artifacts: map[string]WorkerArtifact{}, Releases: map[string]WorkerRelease{}, Operations: map[string]WorkerOperation{}, OperationPrivate: map[string]WorkerOperationPrivate{}, Histories: map[string][]WorkerHistory{}, Idempotency: map[string]WorkerIdempotency{}, SecretVersions: map[string]WorkerSecretVersion{}}
 }
 
 // A service has one durable baseline ("production") plus any number of

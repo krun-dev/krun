@@ -113,7 +113,7 @@ func TestWorkerOverviewAggregatesPollingState(t *testing.T) {
 	s, store, base := workerTestServer(t)
 	build := seedWorkerBuild(t, s, store, base)
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
-		release := WorkerRelease{ID: "rel-overview", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: build.Artifact, Pool: "default", Created: now()}
+		release := WorkerRelease{ID: "rel-overview", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: build.Artifact, Created: now()}
 		st.Workers.Releases[release.ID] = release
 		service := st.Workers.Services["svc-a"]
 		env := service.Environments["production"]
@@ -452,6 +452,15 @@ func testWorkersConfig() *WorkersConfig {
 	return &WorkersConfig{
 		Namespace:   "workers-mvp",
 		BuilderMode: "local",
+		RuntimePools: []WorkerRuntimePool{{
+			ID: "default", Access: []string{"private"}, PrivateEgress: "direct", PublicEgress: "deny",
+			RuntimeService: "runtime-default", RuntimeToken: strings.Repeat("r", 24),
+			ManagementToken: strings.Repeat("m", 24), Default: true,
+		}},
+		NetworkProfiles: []WorkerNetworkProfile{{
+			ID: "default", Name: "Default", Default: true, Approval: "none", Visibility: "public",
+			Requirements: WorkerNetworkRequirements{Ingress: []string{"private"}, PrivateEgress: "direct", PublicEgress: "deny"},
+		}},
 
 		Gateways: []WorkerGateway{
 			{ID: "internal", Name: "workers-mvp", Namespace: "kgateway-system", Section: "private"},

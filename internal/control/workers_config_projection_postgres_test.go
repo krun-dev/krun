@@ -13,7 +13,7 @@ func TestPostgresConfigRevisionsStoreNormalizedEntitiesAndOps(t *testing.T) {
 	first := workerConfigProjection{
 		Routes: []workerConfigRoute{{Host: "old.workers.test", Path: "/", Enabled: true, Release: "rel-old"}},
 		Releases: map[string]WorkerRelease{
-			"rel-old": {ID: "rel-old", Service: "svc", Organization: "org", Environment: "production", Artifact: "art-old", Pool: "default"},
+			"rel-old": {ID: "rel-old", Service: "svc", Organization: "org", Environment: "production", Artifact: "art-old"},
 		},
 	}
 	firstDigest, firstPayload, err := workerConfigDigest(first)
@@ -28,7 +28,7 @@ func TestPostgresConfigRevisionsStoreNormalizedEntitiesAndOps(t *testing.T) {
 	second := workerConfigProjection{
 		Routes: []workerConfigRoute{{Host: "new.workers.test", Path: "/", Enabled: true, Release: "rel-new"}},
 		Releases: map[string]WorkerRelease{
-			"rel-new": {ID: "rel-new", Service: "svc", Organization: "org", Environment: "production", Artifact: "art-new", Pool: "default"},
+			"rel-new": {ID: "rel-new", Service: "svc", Organization: "org", Environment: "production", Artifact: "art-new"},
 		},
 	}
 	secondDigest, secondPayload, err := workerConfigDigest(second)
@@ -104,10 +104,12 @@ func TestPostgresWorkerConfigProjectionUsesCompactReadModel(t *testing.T) {
 	}
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Artifacts["art"] = WorkerArtifact{ID: "art", Organization: "org", State: "finalized"}
-		st.Workers.Releases["rel"] = WorkerRelease{ID: "rel", Service: "svc", Organization: "org", Environment: "production", Artifact: "art", Pool: "default", Variables: map[string]string{"A": "B"}}
+		st.Workers.Releases["rel"] = WorkerRelease{ID: "rel", Service: "svc", Organization: "org", Environment: "production", Artifact: "art", Variables: map[string]string{"A": "B"}}
 		st.Workers.Services["svc"] = WorkerService{Service: "svc", Organization: "org", Domains: []string{"internal"}, Environments: map[string]WorkerEnvironment{
 			"production": {Name: "production", Enabled: true, Release: "rel", ConfigRevision: 1, Variables: map[string]string{}},
 		}}
+		placed := now()
+		st.Workers.Placements[workerPlacementKey("svc", "default")] = WorkerPlacement{Service: "svc", Organization: "org", NetworkProfile: "default", Pool: "default", Role: "primary", State: "active", Revision: 1, Created: placed, Updated: placed}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -119,7 +121,7 @@ func TestPostgresWorkerConfigProjectionUsesCompactReadModel(t *testing.T) {
 		VALUES ('broken-op','publish','org','svc','production','failed','{}'::jsonb,now())`); err != nil {
 		t.Fatal(err)
 	}
-	projection, generation, err := store.WorkerConfigProjection(ctx, []WorkerDomain{{ID: "internal", Domain: "workers.test"}})
+	projection, generation, err := store.WorkerConfigProjection(ctx, workerProjectionConfig([]WorkerDomain{{ID: "internal", Domain: "workers.test"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +129,7 @@ func TestPostgresWorkerConfigProjectionUsesCompactReadModel(t *testing.T) {
 		t.Fatalf("generation=%d projection=%+v", generation, projection)
 	}
 	routing, routingGeneration, err := store.WorkerRoutingTopology(ctx)
-	if err != nil || routingGeneration != generation || !routing["svc"].Environments["production"].Enabled {
+	if err != nil || routingGeneration != generation || !routing["svc"].Service.Environments["production"].Enabled {
 		t.Fatalf("routing generation=%d topology=%+v err=%v", routingGeneration, routing, err)
 	}
 	// Make the specialized projection unreadable without advancing the durable
@@ -151,49 +153,6 @@ func TestPostgresWorkerConfigProjectionUsesCompactReadModel(t *testing.T) {
 	var revisions int
 	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM worker_config_revisions`).Scan(&revisions); err != nil || revisions != 0 {
 		t.Fatalf("generation no-op wrote %d revisions: %v", revisions, err)
-	}
-}
-
-func TestPostgresNormalizedConfigMigrationSeedsLegacyHead(t *testing.T) {
-	store := postgresTestStore(t)
-	ctx := context.Background()
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `
-		DROP TABLE worker_config_ops;
-		DROP TABLE worker_config_routes;
-		DROP TABLE worker_config_releases;
-		DROP TABLE worker_config_revisions;
-		CREATE TABLE worker_config_revisions (
-			config_revision bigint PRIMARY KEY,
-			digest text NOT NULL,
-			payload jsonb NOT NULL,
-			ops jsonb NOT NULL,
-			created_at timestamptz NOT NULL DEFAULT now()
-		);
-		INSERT INTO worker_config_revisions (config_revision,digest,payload,ops) VALUES
-		(7,'legacy',
-		 '{"routes":[{"host":"legacy.workers.test","enabled":true,"release":"rel-legacy"}],"releases":{"rel-legacy":{"id":"rel-legacy","artifact_id":"art-legacy","pool":"default"}}}',
-		 '[{"type":"route_upsert","host":"legacy.workers.test","route":{"host":"legacy.workers.test","enabled":true,"release":"rel-legacy"}}]')`); err != nil {
-		t.Fatal(err)
-	}
-	if err = migrateNormalizedWorkerConfig(ctx, tx); err != nil {
-		t.Fatal(err)
-	}
-	var routes, releases, ops, legacyColumns int
-	if err = tx.QueryRow(ctx, `SELECT
-		(SELECT count(*) FROM worker_config_routes),
-		(SELECT count(*) FROM worker_config_releases),
-		(SELECT count(*) FROM worker_config_ops),
-		(SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema()
-		 AND table_name='worker_config_revisions' AND column_name IN ('payload','ops'))`).Scan(&routes, &releases, &ops, &legacyColumns); err != nil {
-		t.Fatal(err)
-	}
-	if routes != 1 || releases != 1 || ops != 1 || legacyColumns != 0 {
-		t.Fatalf("routes=%d releases=%d ops=%d legacyColumns=%d", routes, releases, ops, legacyColumns)
 	}
 }
 
@@ -249,10 +208,12 @@ func TestPostgresTopologyGenerationCoversEveryProjectionInput(t *testing.T) {
 	}
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Artifacts["art"] = WorkerArtifact{ID: "art", Organization: "org", State: "finalized"}
-		st.Workers.Releases["rel-1"] = WorkerRelease{ID: "rel-1", Service: "svc", Organization: "org", Environment: "production", Artifact: "art", Pool: "default", Variables: map[string]string{}, Created: created}
+		st.Workers.Releases["rel-1"] = WorkerRelease{ID: "rel-1", Service: "svc", Organization: "org", Environment: "production", Artifact: "art", Variables: map[string]string{}, Created: created}
 		st.Workers.Services["svc"] = WorkerService{Service: "svc", Organization: "org", Domains: []string{"internal"}, Environments: map[string]WorkerEnvironment{
 			"production": {Name: "production", Enabled: true, Release: "rel-1", ConfigRevision: 1, Variables: map[string]string{}},
 		}}
+		placed := now()
+		st.Workers.Placements[workerPlacementKey("svc", "default")] = WorkerPlacement{Service: "svc", Organization: "org", NetworkProfile: "default", Pool: "default", Role: "primary", State: "active", Revision: 1, Created: placed, Updated: placed}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -313,13 +274,13 @@ func TestPostgresTopologyGenerationCoversEveryProjectionInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	afterUnreferenced.Workers.Releases["rel-2"] = WorkerRelease{ID: "rel-2", Service: "svc", Organization: "org", Environment: "production", Artifact: "art", Pool: "default", Variables: map[string]string{}, Created: created}
+	afterUnreferenced.Workers.Releases["rel-2"] = WorkerRelease{ID: "rel-2", Service: "svc", Organization: "org", Environment: "production", Artifact: "art", Variables: map[string]string{}, Created: created}
 	afterUnreferenced.Workers.Operations["op"] = WorkerOperation{ID: "op", Kind: "publish", Service: "svc", Organization: "org", Environment: "production", State: "validating", Release: "rel-2", ExpectedRevision: 0, Steps: []WorkerStep{{Name: "artifact"}, {Name: "candidate"}, {Name: "commit"}, {Name: "synchronize"}}}
 	if workerEdgeTopologyChanged(beforeUnreferenced, afterUnreferenced) {
 		t.Fatal("unreferenced release was classified as edge topology")
 	}
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
-		st.Workers.Releases["rel-2"] = WorkerRelease{ID: "rel-2", Service: "svc", Organization: "org", Environment: "production", Artifact: "art", Pool: "default", Variables: map[string]string{}, Created: created}
+		st.Workers.Releases["rel-2"] = WorkerRelease{ID: "rel-2", Service: "svc", Organization: "org", Environment: "production", Artifact: "art", Variables: map[string]string{}, Created: created}
 		st.Workers.Operations["op"] = WorkerOperation{ID: "op", Kind: "publish", Service: "svc", Organization: "org", Environment: "production", State: "validating", Release: "rel-2", ExpectedRevision: 0, Steps: []WorkerStep{{Name: "artifact"}, {Name: "candidate"}, {Name: "commit"}, {Name: "synchronize"}}}
 		return nil
 	}); err != nil {

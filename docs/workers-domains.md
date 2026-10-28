@@ -1,19 +1,24 @@
 # Workers 域名接入设计
 
-状态：**内外网拆分已实现**（P1 的一部分）。实现位置：`internal/control/workers_model.go`（host 推导与 scope 归类）、`workers_kubernetes.go`（按 scope 编排 HTTPRoute）、`deploy/workers-kind/manifests.py`、`deploy/workers-dev/networkpolicy.yaml.tmpl`、`workers/runtime`。
+状态：**多域名目录与多 Gateway 路由已实现**。实现位置：`internal/control/workers_model.go`
+（host 推导、Network Profile 过滤）、`workers_kubernetes.go`（按 Gateway 编排 HTTPRoute）、
+`deploy/workers-kind/manifests.py`、`workers/runtime`。
 
 多 runtime pool、pool 允许绑定的域名、独立出口网络和跨池迁移的详细设计见
 [Workers 资源池与网络策略设计](workers-pools.md)。本文只负责域名命名、入口 Gateway
 与路由模型；资源池是独立的调度和安全边界。
 
-已落地的是「两个网络面」这件事本身：
+已落地的模型：
 
-- 每个环境同时持有 `host`（私有）与 `public_host`（公网，可选），由 `WorkersConfig` 的 `domain` / `public_domain` 推导。
-- 两个 scope 各有一个 Gateway 实例（`gateway_name` + `public_gateway_name`），各有一组 HTTPRoute（`workers-<digest>` 与 `workers-<digest>-public`）。
-- 静态资产同样按 scope 拆：`static.public.*` 走公网实例，`static.internal.*` 走私有实例。
-- 环境默认 `private`；切到 `public` 是显式动作，且未配置 `public_domain` 时直接拒绝。
+- `workers.domains[]` 是任意数量的受管后缀；每条记录绑定一个 Gateway，并带只在部署侧
+  使用的 `access` 和 labels。
+- 服务选择一组 domain id；每个环境在每个所选后缀下各有一个 host。
+- Network Profile 先过滤服务可见的域名集合，再隐藏地解析 runtime pool；组织 API 不返回
+  access、domain labels、Gateway 或 pool。
+- HTTPRoute 按 `(service, Gateway)` 分组；静态资产也按每条 domain 的 Gateway 下发。
 
-尚未实现：域名列表（多后缀叠加）、按域名审批、dataplane/workers-router 模式、自定义域名。本文其余部分描述这些目标形态；与现状的差异见文末「现状与迁移」。
+尚未实现：按单个域名审批、dataplane/workers-router 模式、自定义域名。本文相关章节是
+目标设计；与现状的差异见文末「现状与迁移」。
 
 ## 1. 目标与非目标
 
@@ -60,26 +65,31 @@
 
 ### 3.1 Domain（主域名）
 
-平台在配置中维护域名列表。每个域名是一个受管 DNS 后缀，带网络 scope 与审批开关：
+平台在配置中维护域名列表。每个域名是一个受管 DNS 后缀，带部署侧匹配 labels 和
+Gateway 绑定：
 
 ```yaml
 workers:
   domains:
-    - suffix: workers.kanyun.run
-      scope: public          # 公网 DNS 解析，指向公网入口
-      default: true          # 新建服务默认选用
-      approval: false        # 选用免审批（默认）
-    - suffix: workers.kanyun.com
-      scope: public
-      approval: true         # 选用需管理员审批
-    - suffix: workers.internal.kanyun.run
-      scope: private         # 仅内网解析，指向内网入口
+    - id: edge
+      domain: workers.kanyun.run
+      access: public
+      labels: {exposure: external}
+      gateway: external
       default: true
+    - id: corp
+      domain: workers.internal.kanyun.run
+      access: private
+      labels: {exposure: internal}
+      gateway: internal
 ```
 
-- `scope` 决定该域名下的 host 挂到哪个 Gateway listener（public / private section）以及路由编排分组（第 5 节）。内外网的网络隔离本身靠 DNS + LB 实现（公网后缀公网解析、内网后缀仅内网解析），不靠代码。
-- `default: true` 的域名是新建服务默认选用的集合（可多个）。建议实践中内网域名设 default、公网域名不设：让「上公网」始终是显式动作（或经审批），而不是建服务就默认挂上。
-- `approval` 控制选用该域名是否需要审批（第 3.3 节）。
+- `gateway` 决定该域名下的 host 挂到哪个 Gateway 实例；内外网隔离本身仍靠独立
+  Gateway 数据面、DNS 和 LB 落地，不靠展示名称。
+- `access` 与 labels 只供 Network Profile 匹配，组织域名目录不会返回这些字段。
+- `default: true` 表示：如果它属于当前 Profile 的可用域名集合，则新服务或切换 Profile
+  时默认绑定它；可以有多个默认域名。
+- 当前审批在 Profile 级；单独域名的审批状态仍是后续目标（第 3.3 节）。
 - 域名下线：从配置移除后缀后，对应 host 随快照与路由消失，不迁移存量数据（host 由 `(slug, env, suffix)` 推导）。
 - kind / 开发环境单域名：列表只放一个 `workers.test`（scope private），自然退化。
 
@@ -122,31 +132,29 @@ WorkerService:
 
 ## 4. 配置与数据模型变更
 
-`WorkersConfig`（`workers_model.go`）：
+`WorkersConfig`（`workers_model.go`）当前结构：
 
 ```text
-- Domain string                 → 删除（由 Domains 列表取代）
-+ Domains []WorkerDomain        // {Suffix, Scope, Default, Approval}
-- GatewayName / GatewayNamespace → 拆为 PublicGateway / PrivateGateway（各含 name + namespace + sectionName，
-                                   // 缺省一组兼容 kind 单实例：只配 private）
-+ RoutingMode string            // "gateway"（默认）| "dataplane"
-+ RouterService string          // dataplane 模式的 router service 名，默认 "workers-router"
+Gateways []WorkerGateway        // {ID, Name, Namespace, Section}
+Domains  []WorkerDomain         // {ID, Domain, Access, Labels, Gateway, Default}
+NetworkProfiles []WorkerNetworkProfile
 ```
 
-validate：Domains 非空、scope ∈ {public, private}、后缀 DNS 合法、default 唯一或空（为空时取列表第一个）；存在 public 域名时 PublicGateway 必填，存在 private 域名时 PrivateGateway 必填。
+validate：Domains 非空、access ∈ {public, private}、后缀 DNS 合法、Gateway 引用存在；
+Network Profile 必须选择到至少一个 domain 并唯一解析到一个 runtime pool。`RoutingMode` 与
+`RouterService` 仍是 dataplane 阶段的目标字段，当前未加入配置。
 
 服务模型（`WorkerService`）：
 
 ```text
-+ Slug            string
-+ Domains         []string
-+ DomainApprovals map[string]DomainApproval
-- WorkerEnvironment.Host string → Hosts []string（推导生成；兼容读旧单值）
+NetworkProfile string           // 产品意图
+Pool           string           // 隐藏 placement
+Domains        []string         // 当前 Profile 内选择的 domain ids
+WorkerEnvironment.Hosts []string // 推导生成
 ```
 
-`WorkerEnvironment.Visibility` 字段不再使用（现状恒 `private`，可顺手移除）。
-
-`WorkerRelease.Pool` 已存在（现恒 `default`）；`runtimeMembers` 的 `pool=default` selector（`workers_kubernetes.go:145`）参数化，多池为两种模式共同前置。
+`DomainApprovals` 尚未实现；当前审批粒度是 Network Profile。`WorkerRelease.Pool` 与
+`runtimeMembers(ctx, pool)` 已支持多池。
 
 ## 5. 路由
 
@@ -263,7 +271,8 @@ workers:
 - Pod 内入口 Worker 的 host → 环境 Release 查找逻辑不变。
 
 多池改造：`runtimeMembers(ctx, pool)` selector 已参数化；服务与 Release 的 pool 仅是控制面
-内部字段，不出现在组织 API。用户通过域名的 `access: public | private` 表达网络意图。
+内部字段，不出现在组织 API。用户选择部署方定义的 Network Profile；Profile 才在部署侧
+用 `access`、egress requirements 和 labels 解析 pool 与可用域名。
 
 ## 7. 安全不变量
 
@@ -283,23 +292,26 @@ workers:
 
 现状（已核实）：
 
-- **网络面拆分已实现**。`WorkersConfig` 有 `domain`/`public_domain` 与 `gateway_name`/`public_gateway_name` 两组配置；`hostFor` 统一推导 host（`workers_model.go`），`syncEnvironmentHosts` 在每个写路径重算 `Host` / `PublicHost` / `ExternalHost`。
-- 每个 scope 一条 HTTPRoute：私有 `workers-<digest>`、公网 `workers-<digest>-public`，各自 `parentRef` 到自己的 Gateway 实例与 listener；scope 无 host 时删除该条路由（prune 已补）。
-- 静态资产两条共享路由按 scope 分挂（`workers-static-pub` → 公网实例，`workers-static-int` → 私有实例），默认后缀不会重合。
-- 配置投影与 runtime 快照同时包含两套 host，runtime 仍只按 Host 匹配。
-- `Visibility` 参与路由：`private`（默认）不生成公网 host；`public` 需配置 `public_domain`，否则 PATCH 返回 `PUBLIC_SCOPE_UNAVAILABLE`。
-- 剩余缺口：域名仍是单一 public/private 后缀对（没有多后缀列表）、无审批、无分片、无 dataplane 模式。
+- **域名列表与多 Gateway 已实现**。`WorkersConfig.domains[]` 维护任意数量后缀，
+  `hostFor` 统一推导 host，`syncEnvironmentHosts` 为每个环境重算 domains/hosts。
+- 每个 `(service, Gateway)` 一条 HTTPRoute；无 host 的旧路由会被 prune。静态资产按 domain
+  分组挂到对应 Gateway。
+- Network Profile API/UI 已实现；服务域名目录按当前 Profile 过滤，并隐藏 access、labels、
+  Gateway 与 pool。Profile 切换仅允许在首次发布前直接完成。
+- 配置投影与 runtime 快照按 pool 过滤，runtime 仍只按 Host 匹配。
+- 剩余缺口：Profile 审批工作流、后台无损迁池、单域名审批、路由分片、dataplane 模式。
 
 迁移阶段：
 
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
-| P1 | scope 拆分的 host 模型（`hostFor` + `Host` / `PublicHost`） | ✅ 已完成 |
-| P2 | gateway 驱动改造：scope 拆组、双 Gateway 实例、prune | ✅ 已完成（分片未做） |
-| P3 | 审批 + 多域名列表 | 未开始 |
+| P1 | 统一 host 模型与多域名列表 | ✅ 已完成 |
+| P2 | Gateway 驱动改造：按实例拆组、prune | ✅ 已完成（分片未做） |
+| P3 | Network Profile + 服务域名过滤 | ✅ 已完成（审批工作流未做） |
 | P4（预留口子） | dataplane 模式 + workers-router | 未开始 |
 
-P1–P2 已落地；P3 是下一步；P4 在需要自有数据面能力（限流 / 灰度 / 自定义域名）时启用。
+P1–P3 的基础模型已落地；下一步是审批工作流和后台无损迁池。P4 在需要自有数据面能力
+（限流 / 灰度 / 自定义域名）时启用。
 
 ## 10. 开放问题
 

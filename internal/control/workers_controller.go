@@ -55,7 +55,7 @@ type workersController struct {
 	// topology change, so idle reconcile cycles need only read one meta row.
 	configTopologyGeneration  int64
 	configTopologyLoaded      bool
-	routingTopology           map[string]WorkerService
+	routingTopology           map[string]workerRoutingService
 	routingTopologyGeneration int64
 	routingTopologyLoaded     bool
 	lastGC                    time.Time
@@ -252,18 +252,21 @@ func (w *workersController) reconcile(ctx context.Context) error {
 	for name := range desiredStatic {
 		desiredRoutes[name] = true
 	}
-	for _, service := range topology {
-		pool, ok := w.config.runtimePool(service.Pool)
+	for _, routing := range topology {
+		service := w.config.normalizeServiceNetwork(routing.Service)
+		if !w.config.poolAllowedForProfile(service.NetworkProfile, routing.Pool) {
+			failures = append(failures, fmt.Errorf("worker service %s placement %q is incompatible with network profile %q", service.Service, routing.Pool, service.NetworkProfile))
+			routesReady[service.Service] = false
+			continue
+		}
+		pool, ok := w.config.runtimePool(routing.Pool)
 		if !ok {
-			failures = append(failures, fmt.Errorf("worker service %s references unknown runtime pool %q", service.Service, service.Pool))
+			failures = append(failures, fmt.Errorf("worker service %s references unknown runtime pool %q", service.Service, routing.Pool))
 			routesReady[service.Service] = false
 			continue
 		}
 		hostsByGateway := map[string][]string{}
 		selectedDomains := service.Domains
-		if len(selectedDomains) == 0 {
-			selectedDomains = w.config.defaultDomains()
-		}
 		for _, env := range service.Environments {
 			if !env.Enabled {
 				continue
@@ -512,8 +515,9 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 	if !ok {
 		return w.failOperation(ctx, op.ID, "Release unavailable")
 	}
-	pool, ok := w.config.runtimePool(release.Pool)
-	if !ok {
+	placement, placed := activeWorkerPlacement(&state, release.Service)
+	pool, ok := w.config.runtimePool(placement.Pool)
+	if !placed || !ok {
 		return w.failOperation(ctx, op.ID, "Runtime pool unavailable")
 	}
 	artifact, ok := state.Artifacts[release.Artifact]

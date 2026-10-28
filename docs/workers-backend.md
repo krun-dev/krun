@@ -30,14 +30,14 @@ sequenceDiagram
     A->>W: 在单个 serving 成员上验证候选 Release（冷加载 + RPC）
     A->>A: CAS 提交 Release，Operation committed
     A->>A: 生成 config revision（routes + releases 的不可变投影）
-    A->>S: 写 config/snapshots/{rev}.json.gz 与 config/latest.json
+    A->>S: 按 pool 写 config/pools/{pool}/snapshots/{rev}.json.gz 与 latest.json
     W->>A: 增量长轮询 /config/changes?since=...
     A-->>W: ops batch（release_put / route_upsert / route_delete）
     W->>A: ack 已应用的 config revision
     A->>A: 当前所有 serving 成员已 ack -> Operation available（可观测性）
 ```
 
-构建和发布都异步处理。Build、源码、Operation、Release、历史、幂等记录和执行者身份都按实体持久化在 PostgreSQL 的 `krun_worker_*` 表中；`krun_control_state` 只作为迁移期遗留数据源。边缘配置的当前发布头按 route / release 分行保存在 `worker_config_routes` 与 `worker_config_releases`，`worker_config_revisions` 只保存 revision 元数据，增量则是一条 op 一行的 `worker_config_ops`。runtime ack 存在独立的 `worker_runtime_acks`（每个 Pod 一行）。未完成的 Build / Operation 行就是持久化工作队列；控制服务重启后扫描恢复。多个控制服务通过行级 CAS 与超时租约竞争不同工作，配置发布通过 `worker_config_head` CAS 线性推进，不做 advisory-lock 选主。此版没有引入 Redis 或外部消息队列。
+构建和发布都异步处理。Build、源码、Operation、Release、历史、幂等记录和执行者身份都按实体持久化在 PostgreSQL 的 `krun_worker_*` 表中。边缘配置的当前发布头按 route / release 分行保存在 `worker_config_routes` 与 `worker_config_releases`，`worker_config_revisions` 只保存 revision 元数据，增量则是一条 op 一行的 `worker_config_ops`。runtime ack 存在独立的 `worker_runtime_acks`（每个 Pod 一行）。未完成的 Build / Operation 行就是持久化工作队列；控制服务重启后扫描恢复。多个控制服务通过行级 CAS 与超时租约竞争不同工作，配置发布通过 `worker_config_head` CAS 线性推进，不做 advisory-lock 选主。此版没有引入 Redis 或外部消息队列。
 
 Kubernetes、S3 和 runtime HTTP 请求均在 IAM 状态事务外进行。执行者的用户状态、AuthVersion、API Key 和当前权限会在执行及提交前重新检查。
 
@@ -117,7 +117,7 @@ Host 默认形如 `w-{组织与服务 hash 前16位}-{environment}.workers.test`
 
 入口 Worker 不再每 500ms 轮询完整快照，而是“不可变快照 + 增量 ops + 内存视图”：
 
-1. **bootstrap**：启动时读取 `{config_base_url}/latest.json` → `{config_base_url}/{latest.snapshot}`（对象键是 `config/snapshots/{rev}.json.gz`），校验 SHA-256 与 revision；对象存储不可达时回退到控制面 `GET /api/internal/workers/config/snapshot`。
+1. **bootstrap**：每个 runtime pool 启动时读取 `{config_base_url}/pools/{pool}/latest.json` → 对应的 `snapshots/{rev}.json.gz`，校验 SHA-256 与 revision；对象存储不可达时回退到控制面 `GET /api/internal/workers/config/snapshot`。
 2. **增量**：`GET /api/internal/workers/config/changes?since={rev}&wait=5s`，返回 `{from,to,ops}`；无变化返回 204；落后超过保留窗口返回 409，重新 bootstrap。
 3. **应用**：ops 只有 `release_put` / `route_upsert` / `route_delete`，在内存 Map 副本上应用后原子替换视图；不落盘、不落本地 DB。
 4. **ack**：每个 Pod 应用新 revision 后上报 `{pod_uid, pool, revision}`，并每 5 秒心跳；ack 写入独立的 `worker_runtime_acks`，不参与 IAM 快照。

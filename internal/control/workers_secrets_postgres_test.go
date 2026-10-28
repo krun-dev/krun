@@ -20,7 +20,7 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 		ID: "rel-secret-postgres", Organization: "org-secret", Service: "svc-secret", Environment: "production",
 		Artifact: "art-secret-postgres", ArchiveDigest: "archive", ModuleDigest: "module",
 		ConfigRevision: 2, Variables: map[string]string{}, SecretDigest: workerSecretsDigest(refs),
-		SecretVersions: refs, Pool: "default", Created: now(),
+		SecretVersions: refs, Created: now(),
 	}
 	if err = store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.SecretVersions[encrypted.Version.ID] = encrypted.Version
@@ -31,6 +31,8 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 				"production": {Name: "production", Enabled: true, ConfigRevision: 2, Variables: map[string]string{}, SecretNames: []string{"API_TOKEN"}, SecretVersions: refs},
 			},
 		}
+		placed := now()
+		st.Workers.Placements[workerPlacementKey(release.Service, "default")] = WorkerPlacement{Service: release.Service, Organization: release.Organization, NetworkProfile: "default", Pool: "default", Role: "primary", State: "active", Revision: 1, Created: placed, Updated: placed}
 		st.Workers.Artifacts[release.Artifact] = WorkerArtifact{ID: release.Artifact, Organization: release.Organization, State: "finalized", Created: now()}
 		st.Workers.Releases[release.ID] = release
 		return nil

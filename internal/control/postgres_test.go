@@ -6,11 +6,13 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // KRUN_TEST_POSTGRES_URL must point at an isolated disposable test database.
@@ -97,6 +99,62 @@ func postgresTestStore(t *testing.T) *Store {
 	return store
 }
 
+func TestPostgresUsesSingleSchemaBaseline(t *testing.T) {
+	dsn := os.Getenv("KRUN_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("set KRUN_TEST_POSTGRES_URL for PostgreSQL integration")
+	}
+	ctx := context.Background()
+	admin, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	schema := "krun_baseline_" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	identifier := pgx.Identifier{schema}.Sanitize()
+	if _, err = admin.Exec(ctx, `CREATE SCHEMA `+identifier); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = admin.Exec(context.Background(), `DROP SCHEMA `+identifier+` CASCADE`) }()
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := u.Query()
+	query.Set("search_path", schema)
+	u.RawQuery = query.Encode()
+	store, err := OpenStore(ctx, u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var migrationLedger, legacyState, legacyArchive bool
+	if err := store.pool.QueryRow(ctx, `SELECT
+		to_regclass(current_schema() || '.krun_schema_migrations') IS NOT NULL,
+		to_regclass(current_schema() || '.krun_control_state') IS NOT NULL,
+		to_regclass(current_schema() || '.krun_control_state_legacy') IS NOT NULL`).Scan(
+		&migrationLedger, &legacyState, &legacyArchive); err != nil {
+		t.Fatal(err)
+	}
+	if migrationLedger || legacyState || legacyArchive {
+		t.Fatalf("compatibility tables exist: migrations=%t state=%t archive=%t", migrationLedger, legacyState, legacyArchive)
+	}
+	var poolColumns, placementTables int
+	if err := store.pool.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM information_schema.columns
+		 WHERE table_schema=current_schema()
+		   AND table_name IN ('krun_worker_services','krun_worker_releases')
+		   AND column_name='pool'),
+		(SELECT count(*) FROM information_schema.tables
+		 WHERE table_schema=current_schema() AND table_name='krun_worker_service_placements')`).Scan(
+		&poolColumns, &placementTables); err != nil {
+		t.Fatal(err)
+	}
+	if poolColumns != 0 || placementTables != 1 {
+		t.Fatalf("baseline model: pool columns=%d placement tables=%d", poolColumns, placementTables)
+	}
+}
+
 // truncateControlTables empties every control-plane table. Sessions, browsers
 // and login transactions are included because rate limits and expiry are
 // checked against them. A closed pool is not an error: tests may restart the
@@ -116,6 +174,7 @@ func truncateControlTables(t *testing.T, store *Store) {
 		"krun_org_sources", "krun_organizations", "krun_resources", "krun_users",
 		"krun_identity_providers", "krun_identity_sources",
 		"krun_worker_history", "krun_worker_idempotency", "krun_worker_operations",
+		"krun_worker_service_placements",
 		"krun_worker_release_secrets", "krun_worker_releases", "krun_worker_environment_secrets",
 		"krun_worker_secret_versions", "krun_worker_artifacts", "krun_worker_build_private",
 		"krun_worker_source_uploads",

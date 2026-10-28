@@ -79,16 +79,11 @@ func OpenStore(ctx context.Context, dsn string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = applyStoreMigrations(ctx, pool); err != nil {
+	if err = initializeStoreSchema(ctx, pool); err != nil {
 		pool.Close()
 		return nil, err
 	}
-	s := &Store{pool: pool}
-	if err = s.importLegacySnapshot(ctx); err != nil {
-		pool.Close()
-		return nil, err
-	}
-	return s, nil
+	return &Store{pool: pool}, nil
 }
 
 func (s *Store) Close() {
@@ -474,7 +469,6 @@ func cloneState(src *State) (*State, error) {
 		if !ok {
 			continue
 		}
-		target.Pool = source.Pool
 		for name, sourceEnv := range source.Environments {
 			targetEnv, ok := target.Environments[name]
 			if !ok {

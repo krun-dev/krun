@@ -51,15 +51,15 @@ func TestParseRealCloudflareTemplateConfig(t *testing.T) {
 // budget or fail the build, while the resolved entrypoint and assets still work.
 func TestRepositoryWithRealWorldNoiseFiles(t *testing.T) {
 	archive := repositoryTestArchive(t, map[string]string{
-		"repo/worker/wrangler.jsonc":                 `{"main":"src/index.ts","assets":{"directory":"./public"}}`,
-		"repo/worker/src/index.ts":                   "export default {fetch(){return new Response('ok')}}",
-		"repo/worker/src/helper.ts":                  "export const x = 1;",
-		"repo/worker/public/index.html":              "<!doctype html><title>ok</title>",
-		"repo/worker/worker-configuration.d.ts":      "declare const X: string;\n" + strings.Repeat("// types\n", 20000),
-		"repo/worker/package-lock.json":              strings.Repeat("{}", 40000),
-		"repo/worker/preview.png":                    "\x89PNG\r\n\x1a\n",
-		"repo/worker/README.md":                      strings.Repeat("# docs\n", 5000),
-		"repo/worker/vitest.config.mts":              "export default {};",
+		"repo/worker/wrangler.jsonc":            `{"main":"src/index.ts","assets":{"directory":"./public"}}`,
+		"repo/worker/src/index.ts":              "export default {fetch(){return new Response('ok')}}",
+		"repo/worker/src/helper.ts":             "export const x = 1;",
+		"repo/worker/public/index.html":         "<!doctype html><title>ok</title>",
+		"repo/worker/worker-configuration.d.ts": "declare const X: string;\n" + strings.Repeat("// types\n", 20000),
+		"repo/worker/package-lock.json":         strings.Repeat("{}", 40000),
+		"repo/worker/preview.png":               "\x89PNG\r\n\x1a\n",
+		"repo/worker/README.md":                 strings.Repeat("# docs\n", 5000),
+		"repo/worker/vitest.config.mts":         "export default {};",
 	})
 	files, _, err := extractRepositorySource(archive, "worker", "")
 	if err != nil {

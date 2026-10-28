@@ -349,7 +349,7 @@ func (s *Server) workerSecretChange(st *State, p Principal, r *http.Request, del
 		Artifact: active.Artifact, ArchiveDigest: active.ArchiveDigest, ModuleDigest: active.ModuleDigest,
 		ConfigRevision: current.ConfigRevision, Variables: cloneStringsMap(current.Variables),
 		SecretDigest: workerSecretsDigest(versions), SecretVersions: cloneStringsMap(versions),
-		Pool: active.Pool, Created: now(),
+		Created: now(),
 	}
 	identity := release
 	identity.Created = time.Time{}
@@ -389,7 +389,7 @@ func (s *Store) encryptedReleaseSecrets(ctx context.Context, releaseID, runtimeP
 			return "", nil, errors.New("store is not initialized")
 		}
 		release, ok := s.memory.Workers.Releases[releaseID]
-		if !ok || release.Pool != runtimePool {
+		if !ok || !workerServiceAvailableInPool(s.memory.Workers, release.Service, runtimePool) {
 			return "", nil, notFound()
 		}
 		out := make([]encryptedWorkerSecret, 0, len(release.SecretVersions))
@@ -403,15 +403,17 @@ func (s *Store) encryptedReleaseSecrets(ctx context.Context, releaseID, runtimeP
 		sort.Slice(out, func(i, j int) bool { return out[i].Version.Name < out[j].Version.Name })
 		return release.SecretDigest, out, nil
 	}
-	var digest, pool string
-	if err := s.pool.QueryRow(ctx, `SELECT secret_digest, pool FROM krun_worker_releases WHERE release_id=$1`, releaseID).Scan(&digest, &pool); err != nil {
+	var digest string
+	if err := s.pool.QueryRow(ctx, `SELECT release.secret_digest
+		FROM krun_worker_releases release
+		JOIN krun_worker_service_placements placement ON placement.service_id=release.service_id
+			AND placement.org_id=release.org_id AND placement.pool_id=$2
+			AND placement.state IN ('preparing','ready','active')
+		WHERE release.release_id=$1`, releaseID, runtimePool).Scan(&digest); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", nil, notFound()
 		}
 		return "", nil, err
-	}
-	if pool != runtimePool {
-		return "", nil, forbidden()
 	}
 	rows, err := s.pool.Query(ctx, `SELECT v.secret_version_id, v.org_id, v.service_id, v.env_name,
 		v.name, v.value_digest, v.key_version, v.created_by, v.created_at, v.ciphertext, v.nonce

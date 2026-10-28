@@ -18,23 +18,29 @@ import (
 // domains whose labels are purely descriptive.
 func catalogConfig() *WorkersConfig {
 	return &WorkersConfig{
-		Namespace:       "workers-mvp",
-		BuilderMode:     "local",
-		BuilderScript:   "workers/builder/build-worker.mjs",
-		RuntimeService:  "runtime-default",
-		RuntimeToken:    strings.Repeat("r", 24),
-		ManagementToken: strings.Repeat("m", 24),
-		S3Endpoint:      "http://127.0.0.1:9000",
-		S3Bucket:        "krun-artifacts",
-		S3AccessKey:     "access",
-		S3SecretKey:     "secret",
+		Namespace:     "workers-mvp",
+		BuilderMode:   "local",
+		BuilderScript: "workers/builder/build-worker.mjs",
+		RuntimePools: []WorkerRuntimePool{{
+			ID: "default", Access: []string{"public", "private"}, PrivateEgress: "direct", PublicEgress: "direct",
+			RuntimeService: "runtime-default", RuntimeToken: strings.Repeat("r", 24),
+			ManagementToken: strings.Repeat("m", 24), Default: true,
+		}},
+		NetworkProfiles: []WorkerNetworkProfile{{
+			ID: "default", Name: "Default", Default: true, Approval: "none", Visibility: "public",
+			Requirements: WorkerNetworkRequirements{Ingress: []string{"public", "private"}, PrivateEgress: "direct", PublicEgress: "direct"},
+		}},
+		S3Endpoint:  "http://127.0.0.1:9000",
+		S3Bucket:    "krun-artifacts",
+		S3AccessKey: "access",
+		S3SecretKey: "secret",
 		Gateways: []WorkerGateway{
 			{ID: "internal", Name: "workers-mvp", Namespace: "kgateway-system", Section: "private", Base: "http://127.0.0.1:38080"},
 			{ID: "external", Name: "workers-public", Namespace: "kgateway-system", Section: "public", Base: "http://127.0.0.1:38081"},
 		},
 		Domains: []WorkerDomain{
-			{ID: "internal", Domain: "workers.test", Label: "内网", Access: "private", Gateway: "internal", Default: true},
-			{ID: "external", Domain: "workers-out.example.test", Label: "公网", Access: "public", Gateway: "external"},
+			{ID: "internal", Domain: "workers.test", Label: "办公网络", Access: "private", Gateway: "internal", Labels: map[string]string{"exposure": "internal"}, Default: true},
+			{ID: "external", Domain: "workers-out.example.test", Label: "互联网", Access: "public", Gateway: "external", Labels: map[string]string{"exposure": "external"}},
 		},
 	}
 }
@@ -66,13 +72,17 @@ func TestCatalogValidationAndDefaults(t *testing.T) {
 func multiPoolCatalogConfig() *WorkersConfig {
 	c := catalogConfig()
 	c.RuntimePools = []WorkerRuntimePool{
-		{ID: "private-a", Access: []string{"private"}, RuntimeService: "runtime-private", RuntimeToken: strings.Repeat("p", 24), ManagementToken: strings.Repeat("q", 24), Default: true},
-		{ID: "public-b", Access: []string{"public"}, RuntimeService: "runtime-public", RuntimeToken: strings.Repeat("u", 24), ManagementToken: strings.Repeat("v", 24)},
+		{ID: "private-a", Access: []string{"private"}, Labels: map[string]string{"zone": "internal"}, RuntimeService: "runtime-private", RuntimeToken: strings.Repeat("p", 24), ManagementToken: strings.Repeat("q", 24), Default: true},
+		{ID: "public-b", Access: []string{"public"}, Labels: map[string]string{"zone": "external"}, RuntimeService: "runtime-public", RuntimeToken: strings.Repeat("u", 24), ManagementToken: strings.Repeat("v", 24)},
+	}
+	c.NetworkProfiles = []WorkerNetworkProfile{
+		{ID: "internal-service", Name: "Internal service", Description: "Reachable from the deployment's internal network.", DomainSelector: map[string]string{"exposure": "internal"}, PoolSelector: map[string]string{"zone": "internal"}, Requirements: WorkerNetworkRequirements{Ingress: []string{"private"}, PrivateEgress: "direct", PublicEgress: "deny"}, Default: true},
+		{ID: "external-service", Name: "External service", Description: "Reachable through the deployment's external entry.", DomainSelector: map[string]string{"exposure": "external"}, PoolSelector: map[string]string{"zone": "external"}, Requirements: WorkerNetworkRequirements{Ingress: []string{"public"}, PrivateEgress: "deny", PublicEgress: "direct"}},
 	}
 	return c
 }
 
-func TestRuntimePoolsExposeOnlyPortableNetworkOptions(t *testing.T) {
+func TestRuntimePoolsExposeOnlyProductNetworkProfiles(t *testing.T) {
 	c := multiPoolCatalogConfig()
 	if err := c.validate(); err != nil {
 		t.Fatal(err)
@@ -81,24 +91,31 @@ func TestRuntimePoolsExposeOnlyPortableNetworkOptions(t *testing.T) {
 	s.Config.Workers = c
 	s.routes()
 
-	options := request(s, http.MethodGet, "/api/v1/orgs/org-a/workers/network-options", "krun_cli_admin", "")
-	if options.Code != http.StatusOK || strings.Contains(options.Body.String(), "private-a") || strings.Contains(options.Body.String(), "runtime-private") {
-		t.Fatalf("internal placement leaked through network options: %d %s", options.Code, options.Body.String())
+	profiles := request(s, http.MethodGet, "/api/v1/orgs/org-a/workers/network-profiles", "krun_cli_admin", "")
+	if profiles.Code != http.StatusOK || strings.Contains(profiles.Body.String(), "private-a") || strings.Contains(profiles.Body.String(), "runtime-private") || strings.Contains(profiles.Body.String(), "private_egress") || strings.Contains(profiles.Body.String(), "pool_selector") {
+		t.Fatalf("internal placement leaked through network profiles: %d %s", profiles.Code, profiles.Body.String())
 	}
 	var response struct {
-		Items []WorkerNetworkOptionView `json:"items"`
+		Items []WorkerNetworkProfileView `json:"items"`
 	}
-	if err := json.Unmarshal(options.Body.Bytes(), &response); err != nil || len(response.Items) != 2 || response.Items[0].ID != "private" || response.Items[1].ID != "public" {
-		t.Fatalf("portable options: %+v err=%v", response.Items, err)
+	if err := json.Unmarshal(profiles.Body.Bytes(), &response); err != nil || len(response.Items) != 2 || response.Items[0].ID != "internal-service" || response.Items[1].ID != "external-service" {
+		t.Fatalf("product profiles: %+v err=%v", response.Items, err)
 	}
 
-	changed := request(s, http.MethodPut, base+"/domains", "krun_cli_admin", `{"domains":["external"],"expected_revision":0}`)
-	if changed.Code != http.StatusOK || strings.Contains(changed.Body.String(), "public-b") {
-		t.Fatalf("public selection: %d %s", changed.Code, changed.Body.String())
+	if rejected := request(s, http.MethodPut, base+"/domains", "krun_cli_admin", `{"domains":["external"],"expected_revision":0}`); rejected.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("domain outside current profile accepted: %d %s", rejected.Code, rejected.Body.String())
+	}
+	changed := request(s, http.MethodPut, base+"/network-profile", "krun_cli_admin", `{"network_profile":"external-service","expected_revision":0}`)
+	if changed.Code != http.StatusOK || strings.Contains(changed.Body.String(), "public-b") || strings.Contains(changed.Body.String(), `"access"`) || strings.Contains(changed.Body.String(), "internal") {
+		t.Fatalf("external profile selection: %d %s", changed.Code, changed.Body.String())
 	}
 	if err := store.View(context.Background(), PartitionWorkers, func(st *State) error {
-		if got := st.Workers.Services["svc-a"].Pool; got != "public-b" {
+		placement, ok := activeWorkerPlacement(st.Workers, "svc-a")
+		if got := placement.Pool; !ok || got != "public-b" {
 			t.Fatalf("hidden pool assignment=%q", got)
+		}
+		if got := st.Workers.Services["svc-a"].NetworkProfile; got != "external-service" {
+			t.Fatalf("saved network profile=%q", got)
 		}
 		return nil
 	}); err != nil {
@@ -110,12 +127,63 @@ func TestRuntimePoolsExposeOnlyPortableNetworkOptions(t *testing.T) {
 	}
 }
 
-func TestRuntimePoolsRejectAmbiguousAccessCombination(t *testing.T) {
+func TestRuntimePoolsAllowMultiplePlacementsPerProfile(t *testing.T) {
 	c := multiPoolCatalogConfig()
-	c.RuntimePools = append(c.RuntimePools, WorkerRuntimePool{ID: "public-c", Access: []string{"public"}, RuntimeService: "runtime-public-2", RuntimeToken: strings.Repeat("x", 24), ManagementToken: strings.Repeat("y", 24)})
-	if err := c.validate(); err == nil || !strings.Contains(err.Error(), "access combination") {
-		t.Fatalf("ambiguous runtime pools accepted: %v", err)
+	c.RuntimePools = append(c.RuntimePools, WorkerRuntimePool{ID: "public-c", Access: []string{"public"}, Labels: map[string]string{"zone": "external"}, RuntimeService: "runtime-public-2", RuntimeToken: strings.Repeat("x", 24), ManagementToken: strings.Repeat("y", 24)})
+	if err := c.validate(); err != nil {
+		t.Fatalf("multiple compatible runtime pools rejected: %v", err)
 	}
+	first, ok := c.selectPoolForService("external-service", "service-a")
+	second, okAgain := c.selectPoolForService("external-service", "service-a")
+	if !ok || !okAgain || first.ID != second.ID || (first.ID != "public-b" && first.ID != "public-c") {
+		t.Fatalf("unstable profile placement: first=%+v second=%+v", first, second)
+	}
+}
+
+func TestNetworkProfileApprovalAndPublishedPlacementLock(t *testing.T) {
+	t.Run("approval", func(t *testing.T) {
+		c := multiPoolCatalogConfig()
+		c.NetworkProfiles[1].Approval = "required"
+		if err := c.validate(); err != nil {
+			t.Fatal(err)
+		}
+		s, _, base := workerTestServer(t)
+		s.Config.Workers = c
+		s.routes()
+
+		profiles := request(s, http.MethodGet, "/api/v1/orgs/org-a/workers/network-profiles", "krun_cli_admin", "")
+		if profiles.Code != http.StatusOK || !strings.Contains(profiles.Body.String(), `"approval_required":true`) {
+			t.Fatalf("approval metadata missing: %d %s", profiles.Code, profiles.Body.String())
+		}
+		changed := request(s, http.MethodPut, base+"/network-profile", "krun_cli_admin", `{"network_profile":"external-service","expected_revision":0}`)
+		if changed.Code != http.StatusForbidden || !strings.Contains(changed.Body.String(), "NETWORK_PROFILE_APPROVAL_REQUIRED") {
+			t.Fatalf("approval-gated profile selected directly: %d %s", changed.Code, changed.Body.String())
+		}
+	})
+
+	t.Run("published", func(t *testing.T) {
+		c := multiPoolCatalogConfig()
+		if err := c.validate(); err != nil {
+			t.Fatal(err)
+		}
+		s, store, base := workerTestServer(t)
+		s.Config.Workers = c
+		s.routes()
+		if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
+			service := s.workerService(st, Target{ID: "svc-a", Organization: "org-a"})
+			env := service.Environments[workerBaseline]
+			env.Release = "release-existing"
+			service.Environments[workerBaseline] = env
+			st.Workers.Services[service.Service] = service
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		changed := request(s, http.MethodPut, base+"/network-profile", "krun_cli_admin", `{"network_profile":"external-service","expected_revision":0}`)
+		if changed.Code != http.StatusConflict || !strings.Contains(changed.Body.String(), "WORKER_NETWORK_REASSIGNMENT_REQUIRED") {
+			t.Fatalf("published placement changed without migration: %d %s", changed.Code, changed.Body.String())
+		}
+	})
 }
 
 func TestCatalogRejectsBrokenReferences(t *testing.T) {
@@ -315,10 +383,10 @@ func TestWorkerConfigProjectionCoversEveryDomain(t *testing.T) {
 	ws := st.Workers.Services["svc-a"]
 	ws.Domains = []string{"internal", "external"}
 	st.Workers.Services["svc-a"] = ws
-	p := workerConfigFromState(st, []WorkerDomain{
-		{ID: "internal", Domain: "workers.test"},
-		{ID: "external", Domain: "workers-out.example.test"},
-	})
+	p := workerConfigFromState(st, workerProjectionConfig([]WorkerDomain{
+		{ID: "internal", Domain: "workers.test", Access: "private"},
+		{ID: "external", Domain: "workers-out.example.test", Access: "public"},
+	}))
 	hosts := make([]string, 0, len(p.Routes))
 	for _, route := range p.Routes {
 		hosts = append(hosts, route.Host)
@@ -336,6 +404,24 @@ func TestWorkerConfigProjectionCoversEveryDomain(t *testing.T) {
 	}
 	if strings.Join(hosts, ",") != strings.Join(want, ",") {
 		t.Fatalf("projection hosts: %v", hosts)
+	}
+}
+
+func TestWorkerConfigProjectionRequiresDurablePlacement(t *testing.T) {
+	st, _ := workerConfigFixture()
+	service := st.Workers.Services["svc-a"]
+	service.NetworkProfile = "default"
+	service.Domains = []string{"external"}
+	st.Workers.Services[service.Service] = service
+	st.Workers.Placements = map[string]WorkerPlacement{}
+	config := multiPoolCatalogConfig()
+	if err := config.validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	projection := workerConfigFromState(st, config)
+	if len(projection.Routes) != 0 || len(projection.Releases) != 0 {
+		t.Fatalf("service without placement entered runtime projection: %+v", projection)
 	}
 }
 
@@ -554,7 +640,8 @@ func TestProcessOperationStopsAfterCommitCASConflict(t *testing.T) {
 	c := testWorkersConfig()
 	c.S3Endpoint, c.S3BuilderEndpoint = s3Server.URL, s3Server.URL
 	c.S3Bucket, c.S3AccessKey, c.S3SecretKey, c.S3LocationID = "artifacts", "access", "secret", "test"
-	c.RuntimeService, c.RuntimeManagementBase, c.ManagementToken = "runtime-default", apiServer.URL, strings.Repeat("m", 24)
+	c.RuntimePools[0].RuntimeManagementBase = apiServer.URL
+	c.RuntimePools[0].ManagementToken = strings.Repeat("m", 24)
 	s.Config.Workers = c
 	s3, err := newWorkerS3(c)
 	if err != nil {
@@ -565,7 +652,7 @@ func TestProcessOperationStopsAfterCommitCASConflict(t *testing.T) {
 		kube: &workerKubernetes{base: apiServer.URL, namespace: c.Namespace, client: apiServer.Client()},
 		http: apiServer.Client(), assetCache: map[string]workerCachedAssets{}, replica: "test",
 	}
-	release := WorkerRelease{ID: "rel-cas", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-cas", ArchiveDigest: code.ArchiveDigest, ModuleDigest: code.Digest, Pool: "default"}
+	release := WorkerRelease{ID: "rel-cas", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-cas", ArchiveDigest: code.ArchiveDigest, ModuleDigest: code.Digest}
 	artifact := WorkerArtifact{ID: "art-cas", Organization: "org-a", State: "finalized", ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, Size: len(raw), ObjectKey: "v1/org-a/archive.tar.gz", StorageLocation: "test", Bucket: "artifacts", Created: now()}
 	op := WorkerOperation{ID: "op-cas", Kind: "publish", Service: "svc-a", Organization: "org-a", Environment: "production", State: "validating", Release: release.ID, ExpectedRevision: 99, Created: now()}
 	state := WorkerState{
@@ -593,13 +680,13 @@ func TestEnsureRoutesPrunesGatewayWithoutHosts(t *testing.T) {
 		t.Fatal(err)
 	}
 	k := &workerKubernetes{base: srv.URL, namespace: "workers-mvp", client: srv.Client()}
-	if _, err := k.ensureRoutes(context.Background(), c, "workers-abc", c.RuntimeService, map[string][]string{
+	if _, err := k.ensureRoutes(context.Background(), c, "workers-abc", c.RuntimePools[0].RuntimeService, map[string][]string{
 		"internal": {"w-1-production.workers.test"},
 		"external": {"w-1-production.workers-out.example.test"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := k.ensureRoutes(context.Background(), c, "workers-abc", c.RuntimeService, map[string][]string{
+	if _, err := k.ensureRoutes(context.Background(), c, "workers-abc", c.RuntimePools[0].RuntimeService, map[string][]string{
 		"internal": {"w-1-production.workers.test"},
 	}); err != nil {
 		t.Fatal(err)
@@ -670,8 +757,11 @@ func TestDomainCatalogAPIExposesLabels(t *testing.T) {
 		t.Fatalf("domains: %+v", list.Items)
 	}
 	for _, d := range list.Items {
-		if d.Label == "" || d.Access == "" {
+		if d.Label == "" {
 			t.Fatalf("domain entry incomplete: %+v", d)
 		}
+	}
+	if strings.Contains(r.Body.String(), `"access"`) || strings.Contains(r.Body.String(), `"gateway"`) || strings.Contains(r.Body.String(), `"static_domain"`) {
+		t.Fatalf("infrastructure classification leaked: %s", r.Body.String())
 	}
 }

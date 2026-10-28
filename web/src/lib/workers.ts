@@ -25,6 +25,7 @@ export type RepositoryProvider = {
 };
 export type WorkerServiceSummary = Resource & {
   repository_source?: RepositorySource;
+  network_profile: WorkerNetworkProfile;
   environments: Pick<
     Environment,
     "name" | "enabled" | "release_id" | "confirmed_release_id" | "domains" | "hosts"
@@ -61,14 +62,20 @@ export type WorkerDomain = {
   id: string;
   domain: string;
   label: string;
-  access: "public" | "private";
-  static_domain: string;
   default: boolean;
 };
-export type WorkerNetworkOption = {
+export type WorkerNetworkProfile = {
   id: string;
-  access: ("public" | "private")[];
+  name: string;
+  description: string;
+  approval_required: boolean;
   default: boolean;
+};
+export type WorkerRouting = {
+  selected: string[];
+  catalog: WorkerDomain[];
+  revision: number;
+  network_profile: WorkerNetworkProfile;
 };
 export type Release = {
   id: string;

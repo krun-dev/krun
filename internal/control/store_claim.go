@@ -672,6 +672,7 @@ func (s *Store) pendingWork(ctx context.Context, limit int) (WorkerState, error)
 		Histories:        map[string][]WorkerHistory{},
 		Idempotency:      map[string]WorkerIdempotency{},
 		Services:         map[string]WorkerService{},
+		Placements:       map[string]WorkerPlacement{},
 		SecretVersions:   map[string]WorkerSecretVersion{},
 	}
 	if s.pool == nil {
@@ -735,7 +736,7 @@ func (s *Store) pendingWork(ctx context.Context, limit int) (WorkerState, error)
 			}
 		}
 		if len(releaseIDs) > 0 {
-			rows, err = s.pool.Query(ctx, `SELECT release_id, org_id, service_id, env_name, artifact_id, archive_digest, module_digest, config_revision, variables, secret_digest, pool, created_at
+			rows, err = s.pool.Query(ctx, `SELECT release_id, org_id, service_id, env_name, artifact_id, archive_digest, module_digest, config_revision, variables, secret_digest, created_at
 				FROM krun_worker_releases WHERE release_id = ANY($1)`, releaseIDs)
 			if err != nil {
 				return state, err
@@ -745,6 +746,31 @@ func (s *Store) pendingWork(ctx context.Context, limit int) (WorkerState, error)
 				return state, err
 			}
 			rows.Close()
+			serviceIDs := []string{}
+			for _, release := range state.Releases {
+				serviceIDs = append(serviceIDs, release.Service)
+			}
+			if len(serviceIDs) > 0 {
+				rows, err = s.pool.Query(ctx, `SELECT service_id, pool_id, org_id, network_profile, role, state, revision, created_at, updated_at
+					FROM krun_worker_service_placements WHERE service_id = ANY($1)`, serviceIDs)
+				if err != nil {
+					return state, err
+				}
+				for rows.Next() {
+					var placement WorkerPlacement
+					if err = rows.Scan(&placement.Service, &placement.Pool, &placement.Organization, &placement.NetworkProfile,
+						&placement.Role, &placement.State, &placement.Revision, &placement.Created, &placement.Updated); err != nil {
+						rows.Close()
+						return state, err
+					}
+					state.Placements[workerPlacementKey(placement.Service, placement.Pool)] = placement
+				}
+				if err = rows.Err(); err != nil {
+					rows.Close()
+					return state, err
+				}
+				rows.Close()
+			}
 		}
 		artifactIDs := []string{}
 		for _, release := range state.Releases {
@@ -790,7 +816,7 @@ func readReleaseRows(rows pgx.Rows, state *WorkerState) error {
 	for rows.Next() {
 		var r WorkerRelease
 		var variables []byte
-		if err := rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.ArchiveDigest, &r.ModuleDigest, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Pool, &r.Created); err != nil {
+		if err := rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.ArchiveDigest, &r.ModuleDigest, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created); err != nil {
 			return err
 		}
 		r.Variables = map[string]string{}

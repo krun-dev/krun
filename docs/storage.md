@@ -79,17 +79,11 @@ UPDATE krun_worker_environments SET release_id=$4, release_revision=release_revi
 | `krun_worker_secret_versions` | 无环境或 Release 引用后保留 30 天 |
 | `worker_config_revisions` | 512 条 |
 
-## 迁移
+## Schema 基线
 
-`OpenStore` 在启动时执行 `importLegacySnapshot`：
-
-1. 若 `krun_control_state` 存在且 `krun_users` 为空，则在一个事务内把整份旧快照写入新表。
-2. 成功后把旧表改名为 `krun_control_state_legacy`（保留以便回滚与对账），不会再次读取。
-3. 导入失败则整体回滚并**拒绝启动**，旧数据不受影响。
-
-回滚方式：回退二进制并把 legacy 表改回原名。没有双写。若回滚版本产生了新写入，
-再次升级会检测到 `legacy_imported=1` 与固定名 legacy 表同时存在并拒绝启动；必须先
-人工对账/迁移这些回滚期写入，绝不会静默删除后继续启动。
+项目尚未发布，`OpenStore` 直接在一个事务中创建 `schema.go` 定义的唯一基线。当前没有
+版本迁移表、旧快照导入器、双写或兼容读取路径；模型变化后开发和测试数据库直接重建。
+正式发布前如需演练升级，再从届时冻结的首个生产 schema 开始建立迁移账本。
 
 ## 已知限制
 

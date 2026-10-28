@@ -54,12 +54,11 @@ type workerConfigRevision struct {
 }
 
 const (
-	workerConfigOpsRetain   = 512
-	workerConfigLatestKey   = "config/latest.json"
-	workerConfigSnapshotDir = "config/snapshots/"
+	workerConfigOpsRetain = 512
+	workerConfigPoolsDir  = "config/pools/"
 )
 
-func workerPoolConfigPrefix(pool string) string { return "config/pools/" + pool + "/" }
+func workerPoolConfigPrefix(pool string) string { return workerConfigPoolsDir + pool + "/" }
 func workerPoolConfigLatestKey(pool string) string {
 	return workerPoolConfigPrefix(pool) + "latest.json"
 }
@@ -67,12 +66,8 @@ func workerPoolConfigSnapshotKey(pool string, revision int64) string {
 	return workerPoolConfigPrefix(pool) + "snapshots/" + strconv.FormatInt(revision, 10) + ".json.gz"
 }
 
-func workerConfigSnapshotKey(revision int64) string {
-	return workerConfigSnapshotDir + strconv.FormatInt(revision, 10) + ".json.gz"
-}
-
 // The pointer stores a path relative to config_base_url (which already ends in
-// /config), while the object key includes that prefix for bucket layout.
+// /config/pools/<pool>), while the object key includes that prefix for bucket layout.
 func workerConfigSnapshotRel(revision int64) string {
 	return "snapshots/" + strconv.FormatInt(revision, 10) + ".json.gz"
 }
@@ -84,7 +79,7 @@ func workerConfigSnapshotRel(revision int64) string {
 // Hosts are not stored, so they are derived here from the configured domain
 // catalog and the service's selection. This is the same derivation the
 // HTTPRoute reconciler and the API use, which keeps the three from drifting.
-func workerConfigFromState(st *State, domains []WorkerDomain) workerConfigProjection {
+func workerConfigFromState(st *State, config *WorkersConfig) workerConfigProjection {
 	out := workerConfigProjection{Routes: []workerConfigRoute{}, Releases: map[string]WorkerRelease{}}
 	if st == nil || st.Workers == nil {
 		return out
@@ -97,11 +92,13 @@ func workerConfigFromState(st *State, domains []WorkerDomain) workerConfigProjec
 		if _, ok := st.Organizations[ws.Organization]; !ok {
 			continue
 		}
-		hosts := serviceHostPatterns(ws, domains)
-		pool := ws.Pool
-		if pool == "" {
-			pool = "default"
+		ws = config.normalizeServiceNetwork(ws)
+		hosts := serviceHostPatterns(ws, config.Domains)
+		placement, placed := activeWorkerPlacement(st.Workers, id)
+		if !placed || placement.NetworkProfile != ws.NetworkProfile || !config.poolAllowedForProfile(ws.NetworkProfile, placement.Pool) {
+			continue
 		}
+		pool := placement.Pool
 		for name, env := range ws.Environments {
 			// The map key is authoritative: Environment.Name is a denormalised
 			// copy that older rows may not carry.
@@ -118,7 +115,7 @@ func workerConfigFromState(st *State, domains []WorkerDomain) workerConfigProjec
 			if env.Release == "" {
 				continue
 			}
-			if release, ok := st.Workers.Releases[env.Release]; ok && release.Pool == pool && release.Service == id && release.Organization == ws.Organization {
+			if release, ok := st.Workers.Releases[env.Release]; ok && release.Service == id && release.Organization == ws.Organization {
 				out.Releases[release.ID] = release
 			}
 		}
@@ -129,13 +126,17 @@ func workerConfigFromState(st *State, domains []WorkerDomain) workerConfigProjec
 
 func workerConfigForPool(in workerConfigProjection, pool string) workerConfigProjection {
 	out := workerConfigProjection{Routes: []workerConfigRoute{}, Releases: map[string]WorkerRelease{}}
+	needed := map[string]bool{}
 	for _, route := range in.Routes {
 		if route.Pool == pool {
 			out.Routes = append(out.Routes, route)
+			if route.Release != "" {
+				needed[route.Release] = true
+			}
 		}
 	}
 	for id, release := range in.Releases {
-		if release.Pool == pool {
+		if needed[id] {
 			out.Releases[id] = release
 		}
 	}
@@ -222,7 +223,16 @@ func diffWorkerConfig(prev *workerConfigProjection, next workerConfigProjection)
 		nextRoutes[route.Host] = route
 	}
 	changedRoutes := []workerConfigRoute{}
-	neededReleases := map[string]WorkerRelease{}
+	type pooledRelease struct {
+		pool    string
+		release WorkerRelease
+	}
+	neededReleases := map[string]pooledRelease{}
+	addRelease := func(pool, id string) {
+		if release, ok := next.Releases[id]; ok {
+			neededReleases[pool+"\x00"+id] = pooledRelease{pool: pool, release: release}
+		}
+	}
 	for _, route := range next.Routes {
 		old, ok := prevRoutes[route.Host]
 		if ok && sameWorkerConfigRoute(old, route) {
@@ -230,14 +240,16 @@ func diffWorkerConfig(prev *workerConfigProjection, next workerConfigProjection)
 		}
 		changedRoutes = append(changedRoutes, route)
 		if route.Release != "" {
-			if release, ok := next.Releases[route.Release]; ok {
-				neededReleases[release.ID] = release
-			}
+			addRelease(route.Pool, route.Release)
 		}
 	}
 	for id, release := range next.Releases {
 		if old, ok := prevReleases[id]; !ok || !reflect.DeepEqual(old, release) {
-			neededReleases[id] = release
+			for _, route := range next.Routes {
+				if route.Release == id {
+					addRelease(route.Pool, id)
+				}
+			}
 		}
 	}
 	deleted := []string{}
@@ -247,16 +259,17 @@ func diffWorkerConfig(prev *workerConfigProjection, next workerConfigProjection)
 		}
 	}
 	sort.Strings(deleted)
-	releaseIDs := make([]string, 0, len(neededReleases))
-	for id := range neededReleases {
-		releaseIDs = append(releaseIDs, id)
+	releaseKeys := make([]string, 0, len(neededReleases))
+	for key := range neededReleases {
+		releaseKeys = append(releaseKeys, key)
 	}
-	sort.Strings(releaseIDs)
+	sort.Strings(releaseKeys)
 	sort.Slice(changedRoutes, func(i, j int) bool { return changedRoutes[i].Host < changedRoutes[j].Host })
-	ops := make([]workerConfigOp, 0, len(releaseIDs)+len(changedRoutes)+len(deleted))
-	for _, id := range releaseIDs {
-		release := neededReleases[id]
-		ops = append(ops, workerConfigOp{Type: "release_put", Pool: release.Pool, Release: &release})
+	ops := make([]workerConfigOp, 0, len(releaseKeys)+len(changedRoutes)+len(deleted))
+	for _, key := range releaseKeys {
+		item := neededReleases[key]
+		release := item.release
+		ops = append(ops, workerConfigOp{Type: "release_put", Pool: item.pool, Release: &release})
 	}
 	for i := range changedRoutes {
 		route := changedRoutes[i]
@@ -312,7 +325,7 @@ func (w *workersController) publishConfig(ctx context.Context) (int64, error) {
 			return w.configRevision, nil
 		}
 	}
-	next, topologyGeneration, err := w.server.Store.WorkerConfigProjection(ctx, w.config.Domains)
+	next, topologyGeneration, err := w.server.Store.WorkerConfigProjection(ctx, w.config)
 	if err != nil {
 		return 0, err
 	}
@@ -405,7 +418,7 @@ func (w *workersController) publishConfig(ctx context.Context) (int64, error) {
 			w.configTopologyLoaded = topologyGeneration >= 0
 			return latest.Revision, nil
 		}
-		next, topologyGeneration, err = w.server.Store.WorkerConfigProjection(ctx, w.config.Domains)
+		next, topologyGeneration, err = w.server.Store.WorkerConfigProjection(ctx, w.config)
 		if err != nil {
 			return 0, err
 		}
@@ -486,21 +499,6 @@ func (w *workersController) writeConfigRevision(ctx context.Context, revision in
 		latest := workerConfigLatest{ConfigRevision: revision, Snapshot: workerConfigSnapshotRel(revision), SHA256: bytesDigest(raw), OpsFloor: w.configFloor, GeneratedAt: now().UTC().Format(time.RFC3339)}
 		if err := w.writeConfigLatest(ctx, workerPoolConfigLatestKey(pool.ID), latest); err != nil {
 			return err
-		}
-		// Preserve the legacy /config origin for the default runtime while new
-		// deployments move to /config/pools/<pool>.
-		if pool.Default {
-			legacyKey := workerConfigSnapshotKey(revision)
-			if w.s3 != nil {
-				if err := w.putImmutable(ctx, legacyKey, raw); err != nil {
-					return err
-				}
-			} else if err := w.putBytes(ctx, legacyKey, raw, minio.PutObjectOptions{ContentType: "application/gzip", CacheControl: "no-store"}); err != nil {
-				return err
-			}
-			if err := w.writeConfigLatest(ctx, workerConfigLatestKey, latest); err != nil {
-				return err
-			}
 		}
 	}
 	return nil

@@ -27,7 +27,7 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	}
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/services", protect(false, s.workerServiceList))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/domains", protect(false, s.workerDomains))
-	m.HandleFunc("GET /api/v1/orgs/{org}/workers/network-options", protect(false, s.workerNetworkOptions))
+	m.HandleFunc("GET /api/v1/orgs/{org}/workers/network-profiles", protect(false, s.workerNetworkProfiles))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/repository-providers", protect(false, s.workerRepositoryProviders))
 	m.HandleFunc("POST /api/v1/orgs/{org}/workers/repository/{provider}/connect", protect(true, s.workerRepositoryConnect))
 	m.HandleFunc("DELETE /api/v1/orgs/{org}/workers/repository/{provider}/disconnect", protect(true, s.workerRepositoryDisconnect))
@@ -35,6 +35,7 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/v1/workers/repository/{provider}/callback", s.workerRepositoryCallback)
 	m.HandleFunc("GET "+base+"/domains", protect(false, s.workerServiceDomains))
 	m.HandleFunc("PUT "+base+"/domains", protect(false, s.workerServiceDomainsUpdate))
+	m.HandleFunc("PUT "+base+"/network-profile", protect(false, s.workerServiceNetworkProfileUpdate))
 	m.HandleFunc("GET "+base+"/repository", protect(false, s.workerRepositoryGet))
 	m.HandleFunc("PUT "+base+"/repository", protect(false, s.workerRepositoryUpdate))
 	m.HandleFunc("POST "+base+"/builds", protect(false, s.workerBuildCreate))
@@ -109,7 +110,35 @@ func (s *Server) workerService(st *State, t Target) WorkerService {
 	ws.Organization = t.Organization
 	ws = s.normalizeService(ws)
 	st.Workers.Services[t.ID] = ws
+	s.ensureWorkerPlacement(st, ws)
 	return ws
+}
+
+func (s *Server) ensureWorkerPlacement(st *State, ws WorkerService) WorkerPlacement {
+	if placement, ok := activeWorkerPlacement(st.Workers, ws.Service); ok &&
+		placement.NetworkProfile == ws.NetworkProfile && s.Config.Workers.poolAllowedForProfile(ws.NetworkProfile, placement.Pool) {
+		return placement
+	}
+	pool, ok := s.Config.Workers.selectPoolForService(ws.NetworkProfile, ws.Service)
+	if !ok {
+		return WorkerPlacement{}
+	}
+	return s.replaceWorkerPlacement(st, ws, pool.ID)
+}
+
+func (s *Server) replaceWorkerPlacement(st *State, ws WorkerService, pool string) WorkerPlacement {
+	for key, placement := range st.Workers.Placements {
+		if placement.Service == ws.Service && placement.Role == "primary" {
+			delete(st.Workers.Placements, key)
+		}
+	}
+	timestamp := now()
+	placement := WorkerPlacement{
+		Service: ws.Service, Organization: ws.Organization, NetworkProfile: ws.NetworkProfile,
+		Pool: pool, Role: "primary", State: "active", Revision: 1, Created: timestamp, Updated: timestamp,
+	}
+	st.Workers.Placements[workerPlacementKey(ws.Service, pool)] = placement
+	return placement
 }
 
 // workerServiceView is the read-only form of workerService: it applies the same
@@ -141,19 +170,7 @@ func (s *Server) workerServiceView(st *State, t Target) WorkerService {
 // persisted: routing, the edge projection and API responses all compute them
 // here, so they cannot drift apart.
 func (s *Server) normalizeService(ws WorkerService) WorkerService {
-	if len(ws.Domains) == 0 {
-		// Services created before the selection moved to the service level, or
-		// whose catalog entries were all removed, fall back to the defaults so a
-		// half-migrated row never ends up unroutable.
-		ws.Domains = s.Config.Workers.defaultDomains()
-	}
-	if _, ok := s.Config.Workers.runtimePool(ws.Pool); !ok {
-		if pool, matched := s.Config.Workers.poolForDomains(ws.Domains); matched {
-			ws.Pool = pool.ID
-		} else {
-			ws.Pool = s.Config.Workers.defaultRuntimePool().ID
-		}
-	}
+	ws = s.Config.Workers.normalizeServiceNetwork(ws)
 	if ws.Environments == nil {
 		ws.Environments = map[string]WorkerEnvironment{}
 	}
@@ -446,7 +463,6 @@ type workerOverviewEnvironment struct {
 }
 
 func publicWorkerRelease(release WorkerRelease) WorkerRelease {
-	release.Pool = ""
 	return release
 }
 
@@ -550,8 +566,10 @@ func (s *Server) workerServiceDomains(st *State, p Principal, r *http.Request) (
 		return nil, 0, e
 	}
 	ws := s.workerServiceView(st, t)
+	profile, _ := s.Config.Workers.networkProfile(ws.NetworkProfile)
 	return map[string]any{
-		"selected": s.syncServiceDomains(ws), "catalog": s.domainCatalog(), "revision": ws.DomainsRevision,
+		"selected": s.syncServiceDomains(ws), "catalog": s.domainCatalogForProfile(profile), "revision": ws.DomainsRevision,
+		"network_profile": WorkerNetworkProfileView{ID: profile.ID, Name: profile.Name, Description: profile.Description, ApprovalRequired: profile.Approval == "required", Default: profile.Default},
 	}, 200, nil
 }
 
@@ -572,41 +590,88 @@ func (s *Server) workerServiceDomainsUpdate(st *State, p Principal, r *http.Requ
 	if len(in.Domains) == 0 {
 		return nil, 0, problem(422, "DOMAINS_INVALID", "Select at least one domain")
 	}
+	ws := s.workerService(st, t)
+	profile, ok := s.Config.Workers.networkProfile(ws.NetworkProfile)
+	if !ok {
+		return nil, 0, problem(409, "WORKER_NETWORK_PROFILE_INVALID", "The service network profile is no longer available")
+	}
+	allowed := map[string]bool{}
+	for _, domain := range s.Config.Workers.domainsForProfile(profile) {
+		allowed[domain.ID] = true
+	}
 	seen := map[string]bool{}
 	for _, id := range in.Domains {
-		if _, ok := s.Config.Workers.domain(id); !ok {
-			return nil, 0, problem(422, "DOMAINS_INVALID", "Unknown domain: "+id)
+		if !allowed[id] {
+			return nil, 0, problem(422, "DOMAINS_INVALID", "Domain is not allowed by the selected network profile: "+id)
 		}
 		if seen[id] {
 			return nil, 0, problem(422, "DOMAINS_INVALID", "Duplicate domain: "+id)
 		}
 		seen[id] = true
 	}
-	targetPool, ok := s.Config.Workers.poolForDomains(in.Domains)
-	if !ok {
-		return nil, 0, problem(422, "WORKER_NETWORK_ACCESS_UNAVAILABLE", "This deployment does not provide a runtime for the selected public/private access combination")
-	}
-	ws := s.workerService(st, t)
 	if in.ExpectedRevision == nil {
 		return nil, 0, problem(422, "DOMAINS_INVALID", "expected_revision is required")
 	}
 	if *in.ExpectedRevision != ws.DomainsRevision {
 		return nil, 0, problem(409, "REVISION_CONFLICT", "Domain configuration changed")
 	}
-	if ws.Pool != targetPool.ID {
-		for _, env := range ws.Environments {
-			if env.Release != "" {
-				return nil, 0, problem(409, "WORKER_NETWORK_REASSIGNMENT_REQUIRED", "Published Workers require a platform-managed runtime reassignment before changing this network combination")
-			}
-		}
-		ws.Pool = targetPool.ID
-	}
 	ws.Domains = append([]string(nil), in.Domains...)
 	ws.DomainsRevision++
 	selected := s.syncServiceHosts(&ws)
 	st.Workers.Services[t.ID] = ws
 	s.audit(st, p, r, "workers.domains.update", t.ID, true)
-	return map[string]any{"selected": selected, "catalog": s.domainCatalog(), "revision": ws.DomainsRevision}, 200, nil
+	return map[string]any{"selected": selected, "catalog": s.domainCatalogForProfile(profile), "revision": ws.DomainsRevision}, 200, nil
+}
+
+func (s *Server) workerServiceNetworkProfileUpdate(st *State, p Principal, r *http.Request) (any, int, error) {
+	t, err := s.workerTarget(st, r, workerBaseline, "service.update", p)
+	if err != nil {
+		return nil, 0, err
+	}
+	var in struct {
+		Profile          string `json:"network_profile"`
+		ExpectedRevision *int   `json:"expected_revision"`
+	}
+	if err = body(r, &in); err != nil {
+		return nil, 0, err
+	}
+	if in.ExpectedRevision == nil {
+		return nil, 0, problem(422, "NETWORK_PROFILE_INVALID", "expected_revision is required")
+	}
+	profile, ok := s.Config.Workers.networkProfile(in.Profile)
+	if !ok || profile.Visibility != "public" {
+		return nil, 0, problem(404, "NETWORK_PROFILE_NOT_FOUND", "Network profile not found")
+	}
+	if profile.Approval == "required" {
+		return nil, 0, problem(403, "NETWORK_PROFILE_APPROVAL_REQUIRED", "This network profile requires platform approval")
+	}
+	pool, ok := s.Config.Workers.selectPoolForService(profile.ID, t.ID)
+	if !ok {
+		return nil, 0, problem(409, "NETWORK_PROFILE_UNAVAILABLE", "The selected network profile has no available runtime placement")
+	}
+	ws := s.workerService(st, t)
+	if ws.DomainsRevision != *in.ExpectedRevision {
+		return nil, 0, problem(409, "REVISION_CONFLICT", "Network configuration changed")
+	}
+	if ws.NetworkProfile == profile.ID {
+		return s.workerServiceDomains(st, p, r)
+	}
+	for _, env := range ws.Environments {
+		if env.Release != "" {
+			return nil, 0, problem(409, "WORKER_NETWORK_REASSIGNMENT_REQUIRED", "Published Workers require a platform-managed runtime reassignment before changing network profile")
+		}
+	}
+	ws.NetworkProfile = profile.ID
+	ws.Domains = s.Config.Workers.defaultDomainsForProfile(profile)
+	ws.DomainsRevision++
+	selected := s.syncServiceHosts(&ws)
+	st.Workers.Services[t.ID] = ws
+	s.replaceWorkerPlacement(st, ws, pool.ID)
+	s.audit(st, p, r, "workers.network-profile.update", t.ID, true)
+	return map[string]any{
+		"selected": selected, "catalog": s.domainCatalogForProfile(profile), "revision": ws.DomainsRevision,
+		"network_profile": WorkerNetworkProfileView{ID: profile.ID, Name: profile.Name, Description: profile.Description, ApprovalRequired: false, Default: profile.Default},
+	}, 200, nil
 }
 func workerBusy(st *State, service, env string) bool {
 	for _, op := range st.Workers.Operations {
@@ -804,7 +869,7 @@ func (s *Server) workerReleaseCreate(st *State, p Principal, r *http.Request, ki
 		if !ok || a.State != "finalized" {
 			return nil, 0, problem(409, "ARTIFACT_UNAVAILABLE", "Artifact unavailable")
 		}
-		release = WorkerRelease{Service: t.ID, Organization: t.Organization, Environment: env, Artifact: a.ID, ArchiveDigest: a.ArchiveDigest, ModuleDigest: a.ModuleDigest, ConfigRevision: current.ConfigRevision, Variables: current.Variables, SecretDigest: workerSecretsDigest(current.SecretVersions), SecretVersions: cloneStringsMap(current.SecretVersions), Pool: ws.Pool}
+		release = WorkerRelease{Service: t.ID, Organization: t.Organization, Environment: env, Artifact: a.ID, ArchiveDigest: a.ArchiveDigest, ModuleDigest: a.ModuleDigest, ConfigRevision: current.ConfigRevision, Variables: current.Variables, SecretDigest: workerSecretsDigest(current.SecretVersions), SecretVersions: cloneStringsMap(current.SecretVersions)}
 		raw, _ := json.Marshal(release)
 		release.ID = "rel_" + bytesDigest(raw)
 		release.Created = now()
@@ -828,9 +893,6 @@ func (s *Server) workerReleaseCreate(st *State, p Principal, r *http.Request, ki
 		}
 		if !historical {
 			return nil, 0, problem(409, "ROLLBACK_NOT_PUBLISHED", "Rollback target must be a successfully published release")
-		}
-		if d.Pool != ws.Pool {
-			return nil, 0, problem(409, "WORKER_RELEASE_POOL_MISMATCH", "Rollback target is not placed in the service's current runtime pool")
 		}
 		release = d
 	}

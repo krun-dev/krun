@@ -5,7 +5,7 @@ import { errorMessage, t } from "@/lib/i18n";
 import {
   type Environment,
   type WorkerDomain,
-  type WorkerNetworkOption,
+  type WorkerNetworkProfile,
 } from "@/lib/workers";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -26,7 +26,8 @@ import { workerURL } from "./shared";
 export function ServiceDomains({
   base,
   domains,
-  networkOptions,
+  networkProfiles,
+  currentProfile,
   environments,
   revision,
   active,
@@ -35,7 +36,8 @@ export function ServiceDomains({
 }: {
   base: string;
   domains: WorkerDomain[];
-  networkOptions: WorkerNetworkOption[];
+  networkProfiles: WorkerNetworkProfile[];
+  currentProfile?: WorkerNetworkProfile;
   environments: Environment[];
   revision: number;
   active: boolean;
@@ -47,10 +49,8 @@ export function ServiceDomains({
   const [binding, setBinding] = useState(false);
   const [busy, setBusy] = useState(false);
   const [remove, setRemove] = useState<WorkerDomain | null>(null);
-  const accessLabel = (access: WorkerDomain["access"]) =>
-    access === "private" ? t("内网") : t("公网");
   const describe = (d: WorkerDomain) =>
-    d.label ? `${d.domain}（${d.label}）` : d.domain;
+    d.label ? `*.${d.domain}（${d.label}）` : `*.${d.domain}`;
 
   async function persist(next: string[]) {
     setBusy(true);
@@ -81,81 +81,80 @@ export function ServiceDomains({
     await persist(bound.filter((id) => id !== d.id));
   }
 
-  async function selectNetwork(option: WorkerNetworkOption) {
-    const allowed = new Set(option.access);
-    const next = bound.filter((id) => {
-      const access = domains.find((domain) => domain.id === id)?.access;
-      return access ? allowed.has(access) : false;
-    });
-    for (const access of option.access) {
-      if (next.some((id) => domains.find((domain) => domain.id === id)?.access === access)) {
-        continue;
-      }
-      const candidates = domains.filter((domain) => domain.access === access);
-      const selected = candidates.find((domain) => domain.default) || candidates[0];
-      if (selected) next.push(selected.id);
+  async function selectProfile(profile: WorkerNetworkProfile) {
+    if (profile.id === currentProfile?.id) return;
+    setBusy(true);
+    try {
+      await api(base + "/network-profile", "PUT", {
+        network_profile: profile.id,
+        expected_revision: revision,
+      });
+      reload();
+    } catch (e) {
+      notify(errorMessage(e));
+      reload();
+    } finally {
+      setBusy(false);
     }
-    await persist(next);
   }
 
-  const selectedAccess = (["public", "private"] as const).filter((access) =>
-    domains.some(
-      (domain) => domain.access === access && bound.includes(domain.id),
-    ),
-  );
-  const selectedNetwork = selectedAccess.join("+");
   const placementLocked = environments.some((environment) => environment.release_id);
-  // Domain aliases are an advanced choice inside the selected access classes;
-  // changing access itself is only done by the network cards above.
-  const unbound = domains.filter(
-    (domain) =>
-      !bound.includes(domain.id) && selectedAccess.includes(domain.access),
-  );
+  const profiles =
+    currentProfile && !networkProfiles.some((profile) => profile.id === currentProfile.id)
+      ? [currentProfile, ...networkProfiles]
+      : networkProfiles;
+  // The backend only returns domains allowed by the current profile. This
+  // component deliberately does not infer or expose the underlying pool or
+  // domain classification.
+  const unbound = domains.filter((domain) => !bound.includes(domain.id));
 
   return (
     <>
-      {networkOptions.length > 1 ? (
+      {profiles.length > 1 ? (
         <Card className="py-0 shadow-none">
           <CardContent className="grid gap-4 p-5">
             <div>
-              <h3 className="font-medium">{t("网络访问")}</h3>
+              <h3 className="font-medium">{t("服务网络")}</h3>
               <p className="mt-1 text-xs text-muted-foreground">
-                {t("选择用户从公网、内网或两者访问这个 Worker。运行资源由平台自动安排。")}
+                {t("选择这个 Worker 使用的网络策略。具体资源池和基础设施由平台管理。")}
               </p>
             </div>
             <div className="grid gap-2 sm:grid-cols-3">
-              {networkOptions.map((option) => {
-                const selected = selectedNetwork === option.id;
+              {profiles.map((profile) => {
+                const selected = currentProfile?.id === profile.id;
                 return (
                   <button
-                    key={option.id}
+                    key={profile.id}
                     type="button"
                     aria-pressed={selected}
-                    disabled={busy || placementLocked}
+                    disabled={busy || placementLocked || profile.approval_required}
                     className={`rounded-md border p-3 text-left transition-colors ${
                       selected
                         ? "border-primary bg-primary/5"
                         : "bg-secondary/20 hover:border-primary/40"
                     } disabled:opacity-50`}
-                    onClick={() => void selectNetwork(option)}
+                    onClick={() => void selectProfile(profile)}
                   >
-                    <span className="block text-sm font-medium">
-                      {option.access.map(accessLabel).join(" + ")}
+                    <span className="flex items-center justify-between gap-2 text-sm font-medium">
+                      {profile.name}
+                      {profile.approval_required ? (
+                        <Badge variant="outline" className="text-[10px]">
+                          {t("需要平台审批")}
+                        </Badge>
+                      ) : null}
                     </span>
-                    <span className="mt-1 block text-xs text-muted-foreground">
-                      {option.access.length > 1
-                        ? t("同时通过公网和内网入口访问。")
-                        : option.access[0] === "private"
-                          ? t("通过部署方配置的内网入口访问。")
-                          : t("通过部署方配置的公网入口访问。")}
-                    </span>
+                    {profile.description ? (
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        {profile.description}
+                      </span>
+                    ) : null}
                   </button>
                 );
               })}
             </div>
             {placementLocked ? (
               <p className="text-xs text-muted-foreground">
-                {t("首次发布后网络访问方式由平台固定；如需调整请联系平台管理员。")}
+                {t("首次发布后服务网络由平台固定；如需调整请联系平台管理员。")}
               </p>
             ) : null}
           </CardContent>
@@ -166,9 +165,9 @@ export function ServiceDomains({
           <CardContent className="grid gap-4 p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="font-medium">{t("访问域名")}</h3>
+                <h3 className="font-medium">{t("访问域名后缀")}</h3>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {t("每个环境会在每个已绑定域名下各有一个访问地址。")}
+                  {t("这里展示的是地址后缀，不是可直接访问的地址。平台会为每个环境生成独立子域名，实际地址见下方。")}
                 </p>
               </div>
             </div>
@@ -182,11 +181,8 @@ export function ServiceDomains({
                     className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-secondary/20 px-3 py-2"
                   >
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
-                      <Badge variant="secondary" className="shrink-0 text-[10px]">
-                        {accessLabel(d.access)}
-                      </Badge>
                       <code className="min-w-0 break-all rounded bg-background px-2 py-1 font-mono text-[11px]">
-                        {d.domain}
+                        *.{d.domain}
                       </code>
                       {d.label ? (
                         <span className="text-[11px] text-muted-foreground">
@@ -197,10 +193,15 @@ export function ServiceDomains({
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={busy}
+                      disabled={busy || bound.length <= 1}
+                      title={
+                        bound.length <= 1
+                          ? t("至少需要保留一个域名后缀。如需替换，请先添加另一个后缀。")
+                          : undefined
+                      }
                       onClick={() => setRemove(d)}
                     >
-                      {t("解绑")}
+                      {bound.length <= 1 ? t("必须保留") : t("解绑")}
                     </Button>
                   </div>
                 );
@@ -215,9 +216,14 @@ export function ServiceDomains({
                   onClick={() => setBinding(true)}
                 >
                   <Plus size={14} />
-                  {t("绑定域名")}
+                  {t("添加域名后缀")}
                 </Button>
               </div>
+            ) : null}
+            {bound.length <= 1 ? (
+              <p className="text-xs text-muted-foreground">
+                {t("至少需要保留一个域名后缀。如需替换，请先添加另一个后缀。")}
+              </p>
             ) : null}
             {active ? (
               <p className="text-xs text-muted-foreground">
@@ -268,7 +274,7 @@ export function ServiceDomains({
                             variant="secondary"
                             className="shrink-0 text-[10px]"
                           >
-                            {d ? accessLabel(d.access) : t("域名")}
+                            {d?.label || t("域名")}
                           </Badge>
                           <a
                             href={workerURL(host)}
@@ -292,9 +298,9 @@ export function ServiceDomains({
       <Dialog open={binding} onOpenChange={(v) => !busy && setBinding(v)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t("绑定域名")}</DialogTitle>
+            <DialogTitle>{t("添加域名后缀")}</DialogTitle>
             <DialogDescription>
-              {t("从平台已配置的域名中选择；绑定后每个环境各多一个访问地址。")}
+              {t("选择一个地址后缀。添加后，平台会在该后缀下为每个环境生成独立的访问地址。")}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-1.5">
@@ -319,9 +325,9 @@ export function ServiceDomains({
       <Dialog open={!!remove} onOpenChange={(v) => !v && !busy && setRemove(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t("解绑域名")}</DialogTitle>
+            <DialogTitle>{t("解绑域名后缀")}</DialogTitle>
             <DialogDescription>
-              {t("解绑后该域名下所有环境的地址立即失效。已发布的版本不受影响。")}
+              {t("解绑后，该后缀下生成的所有环境访问地址会立即失效。已发布的版本不受影响。")}
             </DialogDescription>
           </DialogHeader>
           {remove ? (

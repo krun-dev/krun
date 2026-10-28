@@ -649,8 +649,12 @@ func (w *workersController) collectWorkerObjects(ctx context.Context) error {
 	if err != nil {
 		failures = append(failures, err)
 	} else if floor > 0 {
-		if err := w.removeWorkerObjects(ctx, workerConfigSnapshotDir, func(key string, _ time.Time) bool {
-			name := strings.TrimSuffix(strings.TrimPrefix(key, workerConfigSnapshotDir), ".json.gz")
+		if err := w.removeWorkerObjects(ctx, workerConfigPoolsDir, func(key string, _ time.Time) bool {
+			_, name, found := strings.Cut(key, "/snapshots/")
+			if !found {
+				return false
+			}
+			name = strings.TrimSuffix(name, ".json.gz")
 			revision, parseErr := strconv.ParseInt(name, 10, 64)
 			return parseErr == nil && revision < floor
 		}); err != nil {

@@ -569,7 +569,7 @@ func TestPostgresRetentionPrunesBuildsAndSessions(t *testing.T) {
 			st.Workers.BuildPrivate[id] = WorkerBuildPrivate{Actor: WorkerActor{User: "u"}, Log: "log"}
 		}
 		st.Workers.Artifacts["art-old"] = WorkerArtifact{ID: "art-old", Organization: "o", State: "finalized", ArchiveDigest: "archive-old", ObjectKey: "v1/o/old.tar.gz", StorageLocation: "test", Bucket: "test", Created: old}
-		st.Workers.Releases["rel-old"] = WorkerRelease{ID: "rel-old", Organization: "o", Service: "s", Environment: "production", Artifact: "art-old", Pool: "default", Created: old}
+		st.Workers.Releases["rel-old"] = WorkerRelease{ID: "rel-old", Organization: "o", Service: "s", Environment: "production", Artifact: "art-old", Created: old}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -696,7 +696,7 @@ func TestPostgresPendingWorkIncludesBuildActor(t *testing.T) {
 		st.Workers.Services["s1"] = WorkerService{Service: "s1", Organization: "o1", Domains: []string{"internal"}, Environments: map[string]WorkerEnvironment{"production": {Name: "production", Enabled: true, ConfigRevision: 1}}}
 		st.Workers.Builds["b1"] = WorkerBuild{ID: "b1", Organization: "o1", Service: "s1", Environment: "production", State: "queued", Created: now()}
 		st.Workers.BuildPrivate["b1"] = WorkerBuildPrivate{Actor: WorkerActor{User: "u1", AuthVersion: 3}, Files: map[string]string{"index.js": "x"}}
-		st.Workers.Releases["r1"] = WorkerRelease{ID: "r1", Organization: "o1", Service: "s1", Environment: "production", Artifact: "a1", Pool: "default"}
+		st.Workers.Releases["r1"] = WorkerRelease{ID: "r1", Organization: "o1", Service: "s1", Environment: "production", Artifact: "a1"}
 		st.Workers.Artifacts["a1"] = WorkerArtifact{ID: "a1", Organization: "o1", State: "finalized"}
 		st.Workers.Operations["op1"] = WorkerOperation{ID: "op1", Kind: "publish", Organization: "o1", Service: "s1", Environment: "production", State: "queued", Release: "r1", Created: now()}
 		st.Workers.OperationPrivate["op1"] = WorkerOperationPrivate{Actor: WorkerActor{User: "u1", AuthVersion: 3}}

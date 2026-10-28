@@ -145,7 +145,6 @@ workers:
   kubernetes_ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
   builder_image: krun-worker-builder:20261013
   builder_pull_policy: IfNotPresent
-  runtime_service: runtime-default
   # 网关实例清单。路由按域名所属的 gateway 分组下发：一个实例的路由表里只会有
   # 绑定到它的域名，别的域名即使伪造 Host 也匹配不到。base 仅用于本地调试（SSH
   # 隧道），生产留空即走 <name>.<namespace>.svc:8080。
@@ -155,23 +154,51 @@ workers:
       namespace: kgateway-system
       section: public
       base: ""
-  # 域名清单，数量不限。access 是产品层唯一暴露的 portable primitive；只有
-  # public 时控制台不会额外展示网络选择器。内部部署可以再增加 access: private
-  # 的域名与独立 Gateway，但业务用户不会看到 Gateway 或 runtime pool 名称。
-  # label 只是部署方备注，不参与路由和安全判断。
+  # 域名清单，数量不限。access、labels、gateway 都是部署侧的匹配和路由元数据，
+  # 不会返回给组织用户。label 是允许展示的域名备注。
   # default: true 的域名会被新建环境默认选中。
   domains:
     - id: public
       domain: workers.example.com
       label: 默认公网入口
       access: public
+      labels:
+        exposure: external
       gateway: external
       default: true
       # 静态资产域名，留空则取 static.<domain>。
       static_domain: static.workers.example.com
+  # 资源池是部署侧的物理执行单元，组织用户看不到。一个网络档案可以匹配多个
+  # pool；控制面使用稳定哈希选出 placement，并持久化选择结果。
+  runtime_pools:
+    - id: public-a
+      access: [public]
+      labels:
+        zone: external
+      private_egress: deny
+      public_egress: direct
+      runtime_service: runtime-default
+      runtime_token: ${KRUN_RUNTIME_TOKEN:-replace-with-a-24-plus-character-token}
+      management_token: ${KRUN_MANAGEMENT_TOKEN:-replace-with-a-24-plus-character-token}
+      default: true
+  # 组织用户只看到这里配置的产品档案名称和描述，不会看到 pool、access、selector
+  # 或 Gateway。单一档案时控制台不显示选择器。
+  network_profiles:
+    - id: standard
+      name: 标准网络
+      description: 通过部署方提供的受管入口访问。
+      domain_selector:
+        exposure: external
+      pool_selector:
+        zone: external
+      requirements:
+        ingress: [public]
+        private_egress: deny
+        public_egress: direct
+      approval: none
+      visibility: public
+      default: true
   preview_limit: 32
-  runtime_token: ${KRUN_RUNTIME_TOKEN:-replace-with-a-24-plus-character-token}
-  management_token: ${KRUN_MANAGEMENT_TOKEN:-replace-with-a-24-plus-character-token}
   # Worker Secret 使用 AES-256-GCM 加密后入库。active key 只用于新写入；
   # retained Release 仍引用旧版本时不要删除旧 key。生产值应由 KMS/密钥系统
   # 注入环境变量，示例默认值只是可加载占位符，禁止用于真实环境。

@@ -1,10 +1,16 @@
 package control
 
-import "time"
+import (
+	"context"
+	"errors"
+	"time"
 
-// storeSchema is the normalized control-plane schema. It replaces the single
-// krun_control_state jsonb document. Every statement is idempotent so startup
-// can apply it repeatedly.
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// storeSchema is the only supported control-plane schema. The project has not
+// shipped yet, so startup creates this baseline directly; there is deliberately
+// no migration ledger or compatibility import path.
 //
 // No foreign keys: reference integrity comes from write-path validation,
 // explicit cascade deletes in the same statement batch, and reconciliation
@@ -14,6 +20,34 @@ CREATE TABLE IF NOT EXISTS krun_meta (
 	key   text PRIMARY KEY,
 	value text NOT NULL
 );
+
+CREATE SEQUENCE IF NOT EXISTS krun_revision_seq;
+INSERT INTO krun_meta (key, value) VALUES
+	('revision','0'),
+	('bootstrapped','0'),
+	('worker_config_head','0'),
+	('worker_topology_generation','0')
+ON CONFLICT (key) DO NOTHING;
+SELECT setval(
+	'krun_revision_seq',
+	GREATEST((SELECT value::bigint FROM krun_meta WHERE key='revision'), 1),
+	(SELECT value::bigint > 0 FROM krun_meta WHERE key='revision')
+);
+
+CREATE TABLE IF NOT EXISTS krun_audits (
+	id              text PRIMARY KEY,
+	time            timestamptz NOT NULL,
+	actor           text NOT NULL DEFAULT '',
+	credential      text NOT NULL DEFAULT '',
+	key_id          text NOT NULL DEFAULT '',
+	action          text NOT NULL DEFAULT '',
+	resource        text NOT NULL DEFAULT '',
+	organization_id text NOT NULL DEFAULT '',
+	allowed         boolean NOT NULL DEFAULT false,
+	request_id      text NOT NULL DEFAULT '',
+	revision        integer NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS krun_audits_time ON krun_audits (time DESC);
 
 CREATE TABLE IF NOT EXISTS krun_identity_sources (
 	source      text PRIMARY KEY,
@@ -43,6 +77,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS krun_users_identity ON krun_users (source, sub
 CREATE TABLE IF NOT EXISTS krun_organizations (
 	org_id     text PRIMARY KEY,
 	name       text NOT NULL,
+	revision   integer NOT NULL DEFAULT 1,
 	created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -188,6 +223,15 @@ CREATE TABLE IF NOT EXISTS krun_email_send_locks (
 );
 CREATE INDEX IF NOT EXISTS krun_email_send_locks_age ON krun_email_send_locks (touched_at);
 
+CREATE TABLE IF NOT EXISTS krun_rate_limits (
+	scope        text NOT NULL,
+	key_hash     text NOT NULL,
+	window_start timestamptz NOT NULL,
+	count        integer NOT NULL CHECK (count > 0),
+	PRIMARY KEY (scope, key_hash, window_start)
+);
+CREATE INDEX IF NOT EXISTS krun_rate_limits_window ON krun_rate_limits (window_start);
+
 CREATE TABLE IF NOT EXISTS krun_device_codes (
 	code_hash  text PRIMARY KEY,
 	user_code  text NOT NULL,
@@ -227,7 +271,7 @@ CREATE INDEX IF NOT EXISTS krun_repository_connect_states_expiry ON krun_reposit
 CREATE TABLE IF NOT EXISTS krun_worker_services (
 	service_id          text PRIMARY KEY,
 	org_id              text NOT NULL,
-	pool                text NOT NULL DEFAULT 'default',
+	network_profile     text NOT NULL DEFAULT 'default',
 	repository          jsonb,
 	repository_revision integer NOT NULL DEFAULT 0,
 	domains_revision    integer NOT NULL DEFAULT 0,
@@ -236,6 +280,24 @@ CREATE TABLE IF NOT EXISTS krun_worker_services (
 	updated_at          timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS krun_worker_services_org ON krun_worker_services (org_id);
+
+CREATE TABLE IF NOT EXISTS krun_worker_service_placements (
+	service_id      text NOT NULL,
+	pool_id         text NOT NULL,
+	org_id          text NOT NULL,
+	network_profile text NOT NULL,
+	role            text NOT NULL CHECK (role IN ('primary','candidate')),
+	state           text NOT NULL CHECK (state IN ('preparing','ready','active','draining','failed')),
+	revision        integer NOT NULL DEFAULT 1 CHECK (revision > 0),
+	created_at      timestamptz NOT NULL DEFAULT now(),
+	updated_at      timestamptz NOT NULL DEFAULT now(),
+	PRIMARY KEY (service_id, pool_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS krun_worker_service_placements_primary
+	ON krun_worker_service_placements (service_id)
+	WHERE role='primary' AND state IN ('preparing','ready','active');
+CREATE INDEX IF NOT EXISTS krun_worker_service_placements_pool
+	ON krun_worker_service_placements (pool_id, state);
 
 CREATE TABLE IF NOT EXISTS krun_worker_service_domains (
 	service_id text NOT NULL,
@@ -357,7 +419,6 @@ CREATE TABLE IF NOT EXISTS krun_worker_releases (
 	config_revision integer NOT NULL DEFAULT 0,
 	variables       jsonb NOT NULL DEFAULT '{}'::jsonb,
 	secret_digest   text NOT NULL DEFAULT '',
-	pool            text NOT NULL DEFAULT 'default',
 	created_at      timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS krun_worker_releases_service ON krun_worker_releases (service_id, env_name, created_at DESC);
@@ -415,11 +476,85 @@ CREATE TABLE IF NOT EXISTS krun_worker_idempotency (
 	created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS krun_worker_idempotency_age ON krun_worker_idempotency (created_at);
+
+CREATE TABLE IF NOT EXISTS worker_config_revisions (
+	config_revision bigint PRIMARY KEY,
+	digest          text NOT NULL,
+	created_at      timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS worker_config_routes (
+	host       text PRIMARY KEY,
+	pool       text NOT NULL,
+	path       text NOT NULL DEFAULT '',
+	enabled    boolean NOT NULL,
+	release_id text NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS worker_config_releases (
+	release_id text NOT NULL,
+	pool       text NOT NULL,
+	payload    jsonb NOT NULL CHECK (jsonb_typeof(payload) = 'object'),
+	PRIMARY KEY (release_id, pool)
+);
+
+CREATE TABLE IF NOT EXISTS worker_config_ops (
+	config_revision bigint NOT NULL,
+	ordinal         integer NOT NULL CHECK (ordinal >= 0),
+	pool            text NOT NULL,
+	op_type         text NOT NULL CHECK (op_type IN ('release_put','route_upsert','route_delete')),
+	host            text NOT NULL DEFAULT '',
+	release_id      text NOT NULL DEFAULT '',
+	payload         jsonb CHECK (payload IS NULL OR jsonb_typeof(payload) = 'object'),
+	PRIMARY KEY (config_revision, ordinal),
+	CHECK (
+		(op_type='release_put' AND host='' AND release_id<>'' AND payload IS NOT NULL AND payload->>'id'=release_id)
+		OR (op_type='route_upsert' AND host<>'' AND payload IS NOT NULL AND payload->>'host'=host AND COALESCE(payload->>'release','')=release_id)
+		OR (op_type='route_delete' AND host<>'' AND release_id='' AND payload IS NULL)
+	)
+);
+
+CREATE TABLE IF NOT EXISTS worker_runtime_acks (
+	pod_uid    text PRIMARY KEY,
+	pool       text NOT NULL,
+	revision   bigint NOT NULL,
+	updated_at timestamptz NOT NULL
+);
 `
 
-// storeSchemaVersion mirrors the newest successfully applicable migration.
-// The ledger, not this diagnostic value, is authoritative.
-const storeSchemaVersion = "16"
+func initializeStoreSchema(ctx context.Context, pool *pgxpool.Pool) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(context.Background())
+	if _, err = tx.Exec(ctx, storeSchema); err != nil {
+		return err
+	}
+	var incompatible bool
+	if err = tx.QueryRow(ctx, `SELECT
+		to_regclass(current_schema() || '.krun_schema_migrations') IS NOT NULL
+		OR to_regclass(current_schema() || '.krun_control_state') IS NOT NULL
+		OR to_regclass(current_schema() || '.krun_control_state_legacy') IS NOT NULL
+		OR EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema=current_schema()
+			  AND table_name IN ('krun_worker_services','krun_worker_releases')
+			  AND column_name='pool'
+		)
+		OR EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema=current_schema()
+			  AND table_name='worker_config_revisions'
+			  AND column_name IN ('payload','ops')
+		)`).Scan(&incompatible); err != nil {
+		return err
+	}
+	if incompatible {
+		return errors.New("unsupported pre-release database schema; recreate the database")
+	}
+	return tx.Commit(ctx)
+}
 
 // Retained row limits. Every table that grows per request, per build or per
 // release has a bound here and a matching DELETE in retention.go.

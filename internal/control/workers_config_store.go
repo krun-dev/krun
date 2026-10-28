@@ -154,7 +154,9 @@ func (s *Store) LatestConfigRevision(ctx context.Context) (workerConfigRevision,
 					)) ORDER BY host) FROM worker_config_routes
 				), '[]'::jsonb),
 				'releases', COALESCE((
-					SELECT jsonb_object_agg(release_id, payload ORDER BY release_id) FROM worker_config_releases
+					SELECT jsonb_object_agg(release_id, payload ORDER BY release_id)
+					FROM (SELECT DISTINCT ON (release_id) release_id, payload
+						FROM worker_config_releases ORDER BY release_id, pool) releases
 				), '{}'::jsonb)
 			)
 			FROM worker_config_revisions revision ORDER BY revision.config_revision DESC LIMIT 1`).Scan(&out.Revision, &out.Digest, &ops, &out.Created, &payload)

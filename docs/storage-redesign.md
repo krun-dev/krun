@@ -1,9 +1,8 @@
 # 控制面存储重构方案（评审稿）
 
 状态：**已实现**（见 [storage.md](storage.md) 的实际表结构与约束）。本文保留为设计与取舍记录。
-前置结论：现行 `krun_control_state` 单行 jsonb 快照是首版有意取舍（见 `docs/storage.md`），
-真正的问题不是「选了快照」，而是**热路径和追加型数据也挂在同一个 39 KB 文档上**。
-本方案把它拆成关系表，并把一致性目标降到与业务重要性匹配的水平。
+本方案使用关系表作为唯一存储基线，并把一致性目标降到与业务重要性匹配的水平。
+项目尚未发布，不保留早期整文档快照的导入或兼容读取路径。
 
 ---
 
@@ -43,7 +42,7 @@
 CREATE TABLE IF NOT EXISTS krun_meta (
   key   text PRIMARY KEY,
   value text NOT NULL
-);                                  -- schema_version / bootstrapped / revision_seq cursor
+);                                  -- bootstrapped / revision / config head
 
 CREATE SEQUENCE IF NOT EXISTS krun_revision_seq;   -- 全局单调修订号，取代 State.Revision
 
@@ -603,23 +602,11 @@ SELECT ... FROM krun_worker_builds     WHERE state NOT IN (terminal) ORDER BY cr
 
 ---
 
-## 7. 迁移与回填
+## 7. Schema 基线
 
-1. 启动时执行幂等 DDL，`krun_meta.schema_version` 记录版本。
-2. 若 `krun_control_state` 存在且新表为空，则在一个事务内一次性导入：
-   - `Sources` → `krun_identity_sources` + `krun_identity_providers`（按 `provider:` / `namespace:` 前缀拆解）
-   - `Users` / `Organizations` / `Members` / `Groups` / `Assignments` / `Resources` / `Keys` / `KeyHashes`
-   - `Sessions` / `Browsers` / `Logins` / `EmailLogins` / `Devices` / `Invitations`
-   - `RepositoryConnections` / `RepositoryConnectStates`
-   - `Workers.*` 全部子 map
-   - `Histories` 的 `service/env` 复合键拆成两列
-3. 导入成功后把旧表改名：`ALTER TABLE krun_control_state RENAME TO krun_control_state_legacy`
-   （不删，留作回滚与对账）。
-4. 导入失败则整体回滚，服务**拒绝启动**（fail closed），旧数据完好。
-5. 回滚方式：把二进制回退一个版本 + 把 legacy 表改回原名。不做双写。若回滚期
-   产生新写入，再次升级必须 fail closed，先人工对账/迁移，不能丢弃固定名表。
-
-导入脚本建议放 `internal/control/migrate.go`，用现有 `pgx`，不引入迁移框架。
+启动时在一个事务中执行 `internal/control/schema.go` 的幂等 DDL。当前只支持这一套基线，
+没有 schema version、migration ledger、旧快照导入器或双写。模型变化后开发环境和测试
+数据库直接重建；第一个生产版本冻结后，再以该版本作为迁移起点。
 
 ---
 
@@ -631,7 +618,6 @@ SELECT ... FROM krun_worker_builds     WHERE state NOT IN (terminal) ORDER BY cr
 - `internal/control/store_iac.go`：用户 / 组织 / 成员 / 组 / 分配 / 资源 / key
 - `internal/control/store_auth.go`：会话 / 浏览器 / 登录事务 / 设备码 / AuthzView
 - `internal/control/store_workers.go`：服务 / 环境 / 构建 / 制品 / 发布 / 操作 / 历史 / 幂等
-- `internal/control/migrate.go`：快照导入
 - `internal/control/retention.go`：后台清理
 
 ### 改写
@@ -678,26 +664,15 @@ SELECT ... FROM krun_worker_builds     WHERE state NOT IN (terminal) ORDER BY cr
 2. 同一构建被两个副本并发认领，只有一个 `claimed_by` 写入成功。
 3. 会话 `seen` 节流：1 秒内 100 次认证请求只产生 1 次 UPDATE。
 4. 删除组织后没有残留成员 / 分配（显式级联生效）。
-5. 快照导入：一份含全部子结构的旧快照导入后，各表行数与内容与快照一致。
+5. 全新数据库只执行基线即可完成启动，且不存在 migration / legacy 表。
 6. 零管理员窗口：并发降级两人，最终状态必须是「至少一个管理员」或明确报错。
 
 ---
 
-## 10. 分步实施顺序
+## 10. 实施顺序
 
-每步可独立提交、独立回滚，前一步不阻塞后一步。
-
-| 步骤 | 内容 | 风险 |
-| --- | --- | --- |
-| 1 | schema + 幂等 DDL + `AuthzView` + 导入器（此时仍读旧表） | 低，纯新增 |
-| 2 | **会话 / 登录事务 / 身份源**切到表（收益最大） | 中，登录链路必须回归 |
-| 3 | IAM（组织 / 成员 / 组 / 分配 / 资源 / key）切表 | 中，授权用例必须全绿 |
-| 4 | Workers 切表 + CAS 认领 + 租约，去掉 advisory lock | 中，e2e 必跑 |
-| 5 | 删除 `State` 持久化路径，legacy 表改名归档 | 低 |
-| 6 | 保留期清理上线 | 低 |
-
-步骤 2–4 期间，未迁移的域仍读写 `krun_control_state`，Store 按域路由。
-这会引入一段双源期，需要明确：**同一域不允许一半在表、一半在文档**。
+schema 基线、IAM/Workers 分表、CAS 认领与租约、保留期清理作为同一套实现交付，不存在
+双源期。任何模型调整都先修改基线并重建开发数据库，再跑完整 PostgreSQL 与 E2E 测试。
 
 ---
 
@@ -746,14 +721,11 @@ SELECT ... FROM krun_worker_builds     WHERE state NOT IN (terminal) ORDER BY cr
 1. reconcile 仍是每秒轮询。改成「变更触发 + 30 秒兜底」需要跨副本广播，`SignalConfig` 目前是进程内的，要新增 `LISTEN/NOTIFY` 或用 revision 表做触发源。
 2. 组织 / 资源列表未分页下推。
 3. `ensureAdmin` 的补偿语义（并发降级可能短暂零管理员）。
-4. `krun_control_state_legacy` 保留着，确认无回滚需求后可删除。
 
 ## 14. 需要评审决定的点
 
 1. **测试是否彻底放弃内存 Store、改为必须 PG**？（影响本地方便程度与 CI 时长）
 2. **第 3 档补偿语义是否接受**：并发降级可能短暂出现零管理员，需要人工 bootstrap 恢复。
-3. **双源过渡期**（步骤 2–4）是否可接受，还是希望一次性切完（一次性提交更大、更冒险）。
-4. `krun_worker_environments` 不再持久化 hosts，改为现算 —— 是否同意？
+3. `krun_worker_environments` 不再持久化 hosts，改为现算 —— 是否同意？
    这会让「控制台看到的 host」与「边缘投影里的 host」只能来自同一个函数，消除漂移，
    但配置目录变更后旧数据不再有可对照的历史快照。
-5. 旧表改名归档是否保留，还是导入成功后直接删除。

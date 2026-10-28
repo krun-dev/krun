@@ -32,16 +32,19 @@ func replacePublishedWorkerConfig(ctx context.Context, tx pgx.Tx, payload []byte
 		return err
 	}
 	if _, err := tx.Exec(ctx, `WITH incoming AS MATERIALIZED (
-			SELECT item.key AS release_id, COALESCE(NULLIF(item.value->>'pool',''),'default') AS pool, item.value AS payload
-			FROM jsonb_each(COALESCE($1::jsonb->'releases','{}'::jsonb)) AS item
+			SELECT DISTINCT item.key AS release_id,
+				COALESCE(NULLIF(route->>'pool',''),'default') AS pool, item.value AS payload
+			FROM jsonb_array_elements(COALESCE($1::jsonb->'routes','[]'::jsonb)) AS route
+			JOIN jsonb_each(COALESCE($1::jsonb->'releases','{}'::jsonb)) AS item
+				ON item.key=route->>'release'
 		), upserted AS (
 			INSERT INTO worker_config_releases (release_id, pool, payload)
 			SELECT release_id, pool, payload FROM incoming
-			ON CONFLICT (release_id) DO UPDATE SET pool=excluded.pool, payload=excluded.payload
-			RETURNING release_id
+			ON CONFLICT (release_id, pool) DO UPDATE SET payload=excluded.payload
+			RETURNING release_id, pool
 		)
 		DELETE FROM worker_config_releases current
-		WHERE NOT EXISTS (SELECT 1 FROM incoming WHERE incoming.release_id=current.release_id)`, raw); err != nil {
+		WHERE NOT EXISTS (SELECT 1 FROM incoming WHERE incoming.release_id=current.release_id AND incoming.pool=current.pool)`, raw); err != nil {
 		return err
 	}
 	return nil
@@ -63,11 +66,11 @@ func (s *Store) WorkerTopologyGeneration(ctx context.Context) (int64, error) {
 // routing. It deliberately does not load users, builds, artifacts, operations,
 // history or idempotency rows. The repeatable-read transaction couples the
 // returned generation to the exact projection it describes.
-func (s *Store) WorkerConfigProjection(ctx context.Context, domains []WorkerDomain) (workerConfigProjection, int64, error) {
+func (s *Store) WorkerConfigProjection(ctx context.Context, config *WorkersConfig) (workerConfigProjection, int64, error) {
 	if s.pool == nil {
 		var projection workerConfigProjection
 		err := s.View(ctx, PartitionAll, func(st *State) error {
-			projection = workerConfigFromState(st, domains)
+			projection = workerConfigFromState(st, config)
 			return nil
 		})
 		return projection, -1, err
@@ -83,7 +86,7 @@ func (s *Store) WorkerConfigProjection(ctx context.Context, domains []WorkerDoma
 		return workerConfigProjection{}, 0, err
 	}
 	st := newState()
-	rows, err := tx.Query(ctx, `SELECT s.service_id, s.org_id, s.pool
+	rows, err := tx.Query(ctx, `SELECT s.service_id, s.org_id, s.network_profile
 		FROM krun_worker_services s
 		JOIN krun_resources r ON r.resource_id=s.service_id AND r.kind='service' AND r.org_id=s.org_id
 		JOIN krun_organizations o ON o.org_id=s.org_id
@@ -92,14 +95,39 @@ func (s *Store) WorkerConfigProjection(ctx context.Context, domains []WorkerDoma
 		return workerConfigProjection{}, 0, err
 	}
 	for rows.Next() {
-		var service, organization, pool string
-		if err = rows.Scan(&service, &organization, &pool); err != nil {
+		var service, organization, profile string
+		if err = rows.Scan(&service, &organization, &profile); err != nil {
 			rows.Close()
 			return workerConfigProjection{}, 0, err
 		}
 		st.Organizations[organization] = Organization{ID: organization}
 		st.Resources[service] = Resource{ID: service, Kind: "service", Organization: organization}
-		st.Workers.Services[service] = WorkerService{Service: service, Organization: organization, Pool: pool, Environments: map[string]WorkerEnvironment{}}
+		st.Workers.Services[service] = WorkerService{Service: service, Organization: organization, NetworkProfile: profile, Environments: map[string]WorkerEnvironment{}}
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return workerConfigProjection{}, 0, err
+	}
+	rows.Close()
+
+	rows, err = tx.Query(ctx, `SELECT p.service_id, p.pool_id, p.org_id, p.network_profile,
+		p.role, p.state, p.revision, p.created_at, p.updated_at
+		FROM krun_worker_service_placements p
+		JOIN krun_worker_services s ON s.service_id=p.service_id AND s.org_id=p.org_id
+		JOIN krun_resources r ON r.resource_id=s.service_id AND r.kind='service' AND r.org_id=s.org_id
+		JOIN krun_organizations o ON o.org_id=s.org_id
+		ORDER BY p.service_id, p.pool_id`)
+	if err != nil {
+		return workerConfigProjection{}, 0, err
+	}
+	for rows.Next() {
+		var placement WorkerPlacement
+		if err = rows.Scan(&placement.Service, &placement.Pool, &placement.Organization, &placement.NetworkProfile,
+			&placement.Role, &placement.State, &placement.Revision, &placement.Created, &placement.Updated); err != nil {
+			rows.Close()
+			return workerConfigProjection{}, 0, err
+		}
+		st.Workers.Placements[workerPlacementKey(placement.Service, placement.Pool)] = placement
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()
@@ -164,7 +192,7 @@ func (s *Store) WorkerConfigProjection(ctx context.Context, domains []WorkerDoma
 
 	rows, err = tx.Query(ctx, `SELECT rel.release_id, rel.org_id, rel.service_id, rel.env_name,
 		rel.artifact_id, rel.archive_digest, rel.module_digest, rel.config_revision,
-		rel.variables, rel.secret_digest, rel.pool, rel.created_at
+		rel.variables, rel.secret_digest, rel.created_at
 		FROM krun_worker_releases rel
 		JOIN krun_worker_environments e ON e.release_id=rel.release_id
 			AND e.service_id=rel.service_id AND e.env_name=rel.env_name
@@ -183,21 +211,28 @@ func (s *Store) WorkerConfigProjection(ctx context.Context, domains []WorkerDoma
 	if err = tx.Commit(ctx); err != nil {
 		return workerConfigProjection{}, 0, err
 	}
-	return workerConfigFromState(st, domains), generation, nil
+	return workerConfigFromState(st, config), generation, nil
 }
 
 // WorkerRoutingTopology is the HTTPRoute reconciler's compact read model. It
 // excludes releases as well as all build/operation/IAM detail; organization and
 // resource joins in the queries filter out deleted services without loading
 // either catalogue into Go.
-func (s *Store) WorkerRoutingTopology(ctx context.Context) (map[string]WorkerService, int64, error) {
+type workerRoutingService struct {
+	Service WorkerService
+	Pool    string
+}
+
+func (s *Store) WorkerRoutingTopology(ctx context.Context) (map[string]workerRoutingService, int64, error) {
 	if s.pool == nil {
-		services := map[string]WorkerService{}
+		services := map[string]workerRoutingService{}
 		err := s.View(ctx, PartitionAll, func(st *State) error {
 			for id, service := range st.Workers.Services {
 				resource, live := st.Resources[id]
 				if live && resource.Kind == "service" && resource.Organization == service.Organization {
-					services[id] = service
+					if placement, ok := activeWorkerPlacement(st.Workers, id); ok {
+						services[id] = workerRoutingService{Service: service, Pool: placement.Pool}
+					}
 				}
 			}
 			return nil
@@ -213,9 +248,11 @@ func (s *Store) WorkerRoutingTopology(ctx context.Context) (map[string]WorkerSer
 	if err = tx.QueryRow(ctx, `SELECT COALESCE((SELECT value::bigint FROM krun_meta WHERE key='worker_topology_generation'),0)`).Scan(&generation); err != nil {
 		return nil, 0, err
 	}
-	services := map[string]WorkerService{}
-	rows, err := tx.Query(ctx, `SELECT s.service_id, s.org_id, s.pool
+	services := map[string]workerRoutingService{}
+	rows, err := tx.Query(ctx, `SELECT s.service_id, s.org_id, s.network_profile, p.pool_id
 		FROM krun_worker_services s
+		JOIN krun_worker_service_placements p ON p.service_id=s.service_id AND p.org_id=s.org_id
+			AND p.role='primary' AND p.state='active'
 		JOIN krun_resources r ON r.resource_id=s.service_id AND r.kind='service' AND r.org_id=s.org_id
 		JOIN krun_organizations o ON o.org_id=s.org_id
 		ORDER BY s.service_id`)
@@ -223,12 +260,12 @@ func (s *Store) WorkerRoutingTopology(ctx context.Context) (map[string]WorkerSer
 		return nil, 0, err
 	}
 	for rows.Next() {
-		var service, organization, pool string
-		if err = rows.Scan(&service, &organization, &pool); err != nil {
+		var service, organization, profile, pool string
+		if err = rows.Scan(&service, &organization, &profile, &pool); err != nil {
 			rows.Close()
 			return nil, 0, err
 		}
-		services[service] = WorkerService{Service: service, Organization: organization, Pool: pool, Environments: map[string]WorkerEnvironment{}}
+		services[service] = workerRoutingService{Service: WorkerService{Service: service, Organization: organization, NetworkProfile: profile, Environments: map[string]WorkerEnvironment{}}, Pool: pool}
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()
@@ -252,7 +289,7 @@ func (s *Store) WorkerRoutingTopology(ctx context.Context) (map[string]WorkerSer
 		}
 		item, ok := services[service]
 		if ok {
-			item.Domains = append(item.Domains, domain)
+			item.Service.Domains = append(item.Service.Domains, domain)
 			services[service] = item
 		}
 	}
@@ -279,7 +316,7 @@ func (s *Store) WorkerRoutingTopology(ctx context.Context) (map[string]WorkerSer
 		}
 		item, ok := services[service]
 		if ok {
-			item.Environments[name] = WorkerEnvironment{Name: name, Enabled: enabled, Release: release}
+			item.Service.Environments[name] = WorkerEnvironment{Name: name, Enabled: enabled, Release: release}
 			services[service] = item
 		}
 	}

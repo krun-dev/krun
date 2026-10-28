@@ -98,35 +98,3 @@ func TestPostgresBuildFinishDecrementsLimitOnce(t *testing.T) {
 		t.Fatalf("repeated terminal transition decremented counter to %d", counter)
 	}
 }
-
-func TestPostgresActiveBuildMigrationBackfillsExistingRows(t *testing.T) {
-	store := postgresTestStore(t)
-	ctx := context.Background()
-	if _, err := store.pool.Exec(ctx, `INSERT INTO krun_worker_services
-		(service_id, org_id, active_build_count) VALUES ('svc-upgrade','org-upgrade',0);
-		INSERT INTO krun_worker_builds (build_id, org_id, service_id, env_name, state)
-		VALUES
-			('upgrade-a','org-upgrade','svc-upgrade','production','queued'),
-			('upgrade-b','org-upgrade','svc-upgrade','production','building'),
-			('upgrade-done','org-upgrade','svc-upgrade','production','succeeded')`); err != nil {
-		t.Fatal(err)
-	}
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = migrateWorkerActiveBuildCount(ctx, tx); err != nil {
-		_ = tx.Rollback(ctx)
-		t.Fatal(err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-	var counter int
-	if err = store.pool.QueryRow(ctx, `SELECT active_build_count FROM krun_worker_services WHERE service_id='svc-upgrade'`).Scan(&counter); err != nil {
-		t.Fatal(err)
-	}
-	if counter != 2 {
-		t.Fatalf("backfilled active_build_count=%d want 2", counter)
-	}
-}

@@ -335,14 +335,15 @@ func (s *Store) loadWorkers(ctx context.Context, st *State) error {
 		st.Workers = newWorkerState()
 	}
 	batch := &pgx.Batch{}
-	batch.Queue(`SELECT service_id, org_id, pool, repository, repository_revision, domains_revision, preview_revision FROM krun_worker_services`)
+	batch.Queue(`SELECT service_id, org_id, network_profile, repository, repository_revision, domains_revision, preview_revision FROM krun_worker_services`)
+	batch.Queue(`SELECT service_id, pool_id, org_id, network_profile, role, state, revision, created_at, updated_at FROM krun_worker_service_placements`)
 	batch.Queue(`SELECT service_id, domain_id FROM krun_worker_service_domains ORDER BY service_id, ordinal`)
 	batch.Queue(`SELECT service_id, env_name, enabled, config_revision, variables, release_revision, release_id, confirmed_release_id FROM krun_worker_environments`)
 	batch.Queue(`SELECT secret_version_id, org_id, service_id, env_name, name, value_digest, key_version, created_by, created_at FROM krun_worker_secret_versions`)
 	batch.Queue(`SELECT service_id, env_name, name, secret_version_id FROM krun_worker_environment_secrets`)
 	batch.Queue(`SELECT build_id, org_id, service_id, env_name, state, entrypoint, source_digest, profile, job, artifact_id, error, repository, assets, created_at, finished_at, claimed_by, claimed_at FROM krun_worker_builds`)
 	batch.Queue(`SELECT artifact_id, org_id, state, archive_digest, manifest_digest, module_digest, size_bytes, object_key, storage_location, bucket, created_at FROM krun_worker_artifacts`)
-	batch.Queue(`SELECT release_id, org_id, service_id, env_name, artifact_id, archive_digest, module_digest, config_revision, variables, secret_digest, pool, created_at FROM krun_worker_releases`)
+	batch.Queue(`SELECT release_id, org_id, service_id, env_name, artifact_id, archive_digest, module_digest, config_revision, variables, secret_digest, created_at FROM krun_worker_releases`)
 	batch.Queue(`SELECT release_id, name, secret_version_id FROM krun_worker_release_secrets`)
 	batch.Queue(`SELECT operation_id, kind, org_id, service_id, env_name, state, build_id, release_id, expected_revision, config_revision, edge_revision, release_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at FROM krun_worker_operations`)
 	batch.Queue(`SELECT service_id, env_name, revision, release_id, operation_id, kind, created_at FROM krun_worker_history ORDER BY created_at DESC`)
@@ -352,7 +353,7 @@ func (s *Store) loadWorkers(ctx context.Context, st *State) error {
 	defer results.Close()
 
 	for _, read := range []func(pgx.BatchResults, *State) error{
-		readWorkerServices, readWorkerDomains, readWorkerEnvironments,
+		readWorkerServices, readWorkerPlacements, readWorkerDomains, readWorkerEnvironments,
 		readWorkerSecretVersions, readWorkerEnvironmentSecrets,
 		readWorkerBuilds, readWorkerArtifacts,
 		readWorkerReleases, readWorkerReleaseSecrets, readWorkerOperations, readWorkerHistory,
@@ -373,14 +374,14 @@ func readWorkerServices(results pgx.BatchResults, st *State) error {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id, org, pool string
+		var id, org, profile string
 		var repository []byte
 		var repositoryRevision, domainsRevision, previewRevision int
-		if err = rows.Scan(&id, &org, &pool, &repository, &repositoryRevision, &domainsRevision, &previewRevision); err != nil {
+		if err = rows.Scan(&id, &org, &profile, &repository, &repositoryRevision, &domainsRevision, &previewRevision); err != nil {
 			return err
 		}
 		svc := WorkerService{
-			Service: id, Organization: org, Pool: pool, RepositoryRevision: repositoryRevision,
+			Service: id, Organization: org, NetworkProfile: profile, RepositoryRevision: repositoryRevision,
 			DomainsRevision: domainsRevision, PreviewRevision: previewRevision,
 			Domains: []string{}, Environments: map[string]WorkerEnvironment{},
 		}
@@ -392,6 +393,23 @@ func readWorkerServices(results pgx.BatchResults, st *State) error {
 			svc.Repository = &src
 		}
 		ws.Services[id] = svc
+	}
+	return rows.Err()
+}
+
+func readWorkerPlacements(results pgx.BatchResults, st *State) error {
+	rows, err := results.Query()
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var placement WorkerPlacement
+		if err = rows.Scan(&placement.Service, &placement.Pool, &placement.Organization, &placement.NetworkProfile,
+			&placement.Role, &placement.State, &placement.Revision, &placement.Created, &placement.Updated); err != nil {
+			return err
+		}
+		st.Workers.Placements[workerPlacementKey(placement.Service, placement.Pool)] = placement
 	}
 	return rows.Err()
 }
@@ -553,7 +571,7 @@ func readWorkerReleases(results pgx.BatchResults, st *State) error {
 	for rows.Next() {
 		var r WorkerRelease
 		var variables []byte
-		if err = rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.ArchiveDigest, &r.ModuleDigest, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Pool, &r.Created); err != nil {
+		if err = rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.ArchiveDigest, &r.ModuleDigest, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created); err != nil {
 			return err
 		}
 		r.Variables = map[string]string{}

@@ -474,59 +474,6 @@ func TestMemoryRateLimit(t *testing.T) {
 	}
 }
 
-func TestStoreMigrationsAreSequential(t *testing.T) {
-	for i, migration := range storeMigrations {
-		if migration.version != i+1 {
-			t.Fatalf("migration index %d has version %d", i, migration.version)
-		}
-		if migration.name == "" {
-			t.Fatalf("migration %d has no stable name", migration.version)
-		}
-	}
-	if got := itoa(storeMigrations[len(storeMigrations)-1].version); got != storeSchemaVersion {
-		t.Fatalf("latest migration=%s schema version=%s", got, storeSchemaVersion)
-	}
-}
-
-func TestPostgresMigrationLedgerMatchesSchemaVersion(t *testing.T) {
-	store := postgresTestStore(t)
-	ctx := context.Background()
-	rows, err := store.pool.Query(ctx, `SELECT version, name FROM krun_schema_migrations ORDER BY version`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	index := 0
-	for rows.Next() {
-		if index >= len(storeMigrations) {
-			t.Fatal("migration ledger contains an unsupported future version")
-		}
-		var version int
-		var name string
-		if err = rows.Scan(&version, &name); err != nil {
-			t.Fatal(err)
-		}
-		want := storeMigrations[index]
-		if version != want.version || name != want.name {
-			t.Fatalf("ledger entry %d=(%d,%q), want (%d,%q)", index, version, name, want.version, want.name)
-		}
-		index++
-	}
-	if err = rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if index != len(storeMigrations) {
-		t.Fatalf("ledger has %d migrations, want %d", index, len(storeMigrations))
-	}
-	var version string
-	if err = store.pool.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='schema_version'`).Scan(&version); err != nil {
-		t.Fatal(err)
-	}
-	if version != storeSchemaVersion {
-		t.Fatalf("schema_version=%q, want %q", version, storeSchemaVersion)
-	}
-}
-
 func TestPostgresRepositoryConnectStateConsumedOnce(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()

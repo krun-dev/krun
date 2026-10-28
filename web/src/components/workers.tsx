@@ -19,7 +19,8 @@ import {
   type Operation,
   type RepositoryBinding,
   type WorkerDomain,
-  type WorkerNetworkOption,
+  type WorkerNetworkProfile,
+  type WorkerRouting,
 } from "@/lib/workers";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -81,29 +82,26 @@ export function WorkersPage({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
-  const [domains, setDomains] = useState<WorkerDomain[]>([]);
-  const [networkOptions, setNetworkOptions] = useState<WorkerNetworkOption[]>([]);
+  const [networkProfiles, setNetworkProfiles] = useState<WorkerNetworkProfile[]>([]);
+  const [networkProfile, setNetworkProfile] = useState("");
   useEffect(() => {
     if (system) return;
     const c = new AbortController();
-    // The catalog is platform configuration; it rarely changes but the labels
-    // and available suffixes drive the environment picker.
-    void Promise.all([
-      api<List<WorkerDomain>>(base + "/workers/domains", "GET", undefined, c.signal),
-      api<List<WorkerNetworkOption>>(
-        base + "/workers/network-options",
-        "GET",
-        undefined,
-        c.signal,
-      ),
-    ])
-      .then(([domainResult, optionResult]) => {
-        setDomains(domainResult.items);
-        setNetworkOptions(optionResult.items);
+    void api<List<WorkerNetworkProfile>>(
+      base + "/workers/network-profiles",
+      "GET",
+      undefined,
+      c.signal,
+    )
+      .then((result) => {
+        setNetworkProfiles(result.items);
+        setNetworkProfile(
+          (current) =>
+            current || result.items.find((profile) => profile.default)?.id || result.items[0]?.id || "",
+        );
       })
       .catch(() => {
-        setDomains([]);
-        setNetworkOptions([]);
+        setNetworkProfiles([]);
       });
     return () => c.abort();
   }, [base, system]);
@@ -161,7 +159,16 @@ export function WorkersPage({
         title={t("Workers")}
         description={t("构建代码，选择环境发布，并查看实际运行结果。")}
         action={
-          <Button onClick={() => setCreate(true)}>
+          <Button
+            onClick={() => {
+              setNetworkProfile(
+                networkProfiles.find((profile) => profile.default)?.id ||
+                  networkProfiles[0]?.id ||
+                  "",
+              );
+              setCreate(true);
+            }}
+          >
             <Plus size={16} />
             {t("创建 Worker")}
           </Button>
@@ -194,8 +201,7 @@ export function WorkersPage({
             base={base + "/services/" + selected.id + "/workers"}
             organizationBase={base}
             service={selected}
-            domains={domains}
-            networkOptions={networkOptions}
+            networkProfiles={networkProfiles}
             notify={notify}
           />
         </>
@@ -224,6 +230,11 @@ export function WorkersPage({
                       <p className="mt-1 font-mono text-xs text-muted-foreground">
                         {item.id}
                       </p>
+                      {item.network_profile?.name ? (
+                        <Badge variant="outline" className="mt-2">
+                          {item.network_profile.name}
+                        </Badge>
+                      ) : null}
                     </TableCell>
                     <TableCell>
                       {item.repository_source ? (
@@ -302,6 +313,14 @@ export function WorkersPage({
                 const r = await api<Resource>(base + "/services", "POST", {
                   name,
                 });
+                await api(
+                  base + "/services/" + r.id + "/workers/network-profile",
+                  "PUT",
+                  {
+                    network_profile: networkProfile,
+                    expected_revision: 0,
+                  },
+                );
                 openService(r.id);
                 setRevision((v) => v + 1);
                 setCreate(false);
@@ -322,7 +341,41 @@ export function WorkersPage({
                 maxLength={128}
               />
             </Field>
-            <Button type="submit" disabled={busy}>
+            {networkProfiles.length > 1 ? (
+              <Field label={t("网络环境")}>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {networkProfiles.map((profile) => (
+                    <button
+                      key={profile.id}
+                      type="button"
+                      disabled={profile.approval_required}
+                      aria-pressed={networkProfile === profile.id}
+                      onClick={() => setNetworkProfile(profile.id)}
+                      className={cn(
+                        "rounded-lg border p-3 text-left transition-colors",
+                        networkProfile === profile.id
+                          ? "border-primary bg-primary/5 ring-1 ring-primary/15"
+                          : "hover:border-primary/40",
+                        profile.approval_required && "cursor-not-allowed opacity-55",
+                      )}
+                    >
+                      <span className="text-sm font-medium">{profile.name}</span>
+                      {profile.description ? (
+                        <span className="mt-1 block text-xs text-muted-foreground">
+                          {profile.description}
+                        </span>
+                      ) : null}
+                      {profile.approval_required ? (
+                        <span className="mt-2 block text-xs text-muted-foreground">
+                          {t("需要平台审批")}
+                        </span>
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+            ) : null}
+            <Button type="submit" disabled={busy || !networkProfile}>
               {t("创建 Worker")}
             </Button>
           </form>
@@ -336,25 +389,29 @@ function WorkerDetail({
   base,
   organizationBase,
   service,
-  domains,
-  networkOptions,
+  networkProfiles,
   notify,
 }: {
   base: string;
   organizationBase: string;
-  service: Resource;
-  domains: WorkerDomain[];
-  networkOptions: WorkerNetworkOption[];
+  service: WorkerServiceSummary;
+  networkProfiles: WorkerNetworkProfile[];
   notify: (s: string) => void;
 }) {
   const [revision, setRevision] = useState(0);
   const [binding, setBinding] = useState<RepositoryBinding | null>(null);
+  const [routing, setRouting] = useState<WorkerRouting | null>(null);
   const reload = useCallback(() => setRevision((v) => v + 1), []);
   useEffect(() => {
     const controller = new AbortController();
-    void api<RepositoryBinding>(base + "/repository", "GET", undefined, controller.signal)
-      .then(setBinding)
-      .catch(() => {});
+    void Promise.allSettled([
+      api<RepositoryBinding>(base + "/repository", "GET", undefined, controller.signal),
+      api<WorkerRouting>(base + "/domains", "GET", undefined, controller.signal),
+    ])
+      .then(([repository, network]) => {
+        if (repository.status === "fulfilled") setBinding(repository.value);
+        if (network.status === "fulfilled") setRouting(network.value);
+      });
     return () => controller.abort();
   }, [base, revision]);
   const { data, error } = useWorkerData(base, revision);
@@ -384,6 +441,7 @@ function WorkerDetail({
   const env =
     data?.environments.find((e) => e.name === environment) ||
     data?.environments[0];
+  const domains: WorkerDomain[] = routing?.catalog || [];
   const operations =
     acceptedOperation &&
     !data?.operations.some((o) => o.id === acceptedOperation.id)
@@ -485,7 +543,12 @@ function WorkerDetail({
     <div className="grid gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-medium">{service.name}</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-xl font-medium">{service.name}</h2>
+            {routing?.network_profile.name ? (
+              <Badge variant="outline">{routing.network_profile.name}</Badge>
+            ) : null}
+          </div>
           <code className="text-xs text-muted-foreground">{service.id}</code>
         </div>
         <div className="flex gap-2">
@@ -798,9 +861,10 @@ function WorkerDetail({
             <ServiceDomains
               base={base}
               domains={domains}
-                networkOptions={networkOptions}
+              networkProfiles={networkProfiles}
+              currentProfile={routing?.network_profile}
               environments={data.environments}
-              revision={data.domainsRevision}
+              revision={routing?.revision ?? data.domainsRevision}
               active={active}
               reload={reload}
               notify={notify}

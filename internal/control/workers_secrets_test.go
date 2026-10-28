@@ -27,7 +27,7 @@ func seedPublishedWorker(t *testing.T, store *Store) WorkerRelease {
 	release := WorkerRelease{
 		ID: "rel_secret_base", Organization: "org-a", Service: "svc-a", Environment: "production",
 		Artifact: "art_secret", ArchiveDigest: strings.Repeat("a", 64), ModuleDigest: strings.Repeat("b", 64),
-		ConfigRevision: 1, Variables: map[string]string{"PLAIN": "visible"}, Pool: "default", Created: now(),
+		ConfigRevision: 1, Variables: map[string]string{"PLAIN": "visible"}, Created: now(),
 		SecretVersions: map[string]string{},
 	}
 	err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
@@ -163,7 +163,7 @@ func TestWorkerSecretPutCreatesAndDeploysImmutableRelease(t *testing.T) {
 	}
 	authorized := httptest.NewRecorder()
 	authorizedRequest := httptest.NewRequest(http.MethodGet, "/api/internal/workers/releases/"+release.ID+"/secrets", nil)
-	authorizedRequest.Header.Set("Authorization", "Bearer "+server.Config.Workers.RuntimeToken)
+	authorizedRequest.Header.Set("Authorization", "Bearer "+server.Config.Workers.defaultRuntimePool().RuntimeToken)
 	authorizedRequest.Header.Set("X-Runtime-Pool", "default")
 	server.serveInternal(authorized, authorizedRequest)
 	if authorized.Code != http.StatusOK || !strings.Contains(authorized.Body.String(), "secret-value-never-return") || !strings.Contains(authorized.Body.String(), release.SecretDigest) {

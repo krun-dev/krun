@@ -1,23 +1,27 @@
 # Workers 资源池与网络策略设计
 
-状态：**M1 已实现；M2–M4 为后续演进设计**。
+状态：**M1.1 已实现；M2–M4 为后续演进设计**。
 
 本文定义 krun Workers 的多资源池模型。资源池不是单纯的 Kubernetes
 调度标签，而是 Worker 的完整安全边界：它同时决定 runtime 成员、入口域名、
 出站网络、允许的 binding 类型、配置分发范围和发布确认范围。
 
-当前 M1 已实现配置中的多个 runtime pool、服务隐藏分配、按 pool 的 Kubernetes 成员
+当前 M1.1 已实现配置中的多个 runtime pool、独立的服务 placement、按 pool 的 Kubernetes 成员
 发现和 HTTPRoute backend、按 pool 过滤的 snapshot/changes，以及 Artifact、Secret、
-Assets 内部接口隔离。组织 API/UI 只暴露 `public` / `private` 网络意图；单一公网部署不
-显示选择器。M1 仍使用全局 revision CAS，并为每个 pool 写独立过滤快照；runtime ACK
-按 Pod UID 有界覆盖写，用于控制面无法直连 Pod 时观察收敛。
+Assets 内部接口隔离。组织 API/UI 暴露的是部署方定义的 **Network Profile**，而不是
+`public/private`、pool 或 Gateway。Profile 用不可见的 ingress/egress 要求与 label
+selector 解析到一个或多个兼容 pool，并过滤该服务可见、可绑定的域名。控制面使用
+Rendezvous Hash 为新服务稳定选择一个 pool，并把结果写入独立 placement 行。M1.1 仍使用全局 revision
+CAS，并为每个 pool 写独立过滤快照；runtime ACK 按 Pod UID 有界覆盖写，用于控制面无法
+直连 Pod 时观察收敛。
 
 M2–M4 再实现本文后半部分的 pool policy 数据库资源、独立 per-pool revision head、
-Release placement、后台无损迁池、CONNECT proxy/NetworkPolicy 生成和 system 管理页面。
+细粒度 Release placement、后台无损迁池、CONNECT proxy/NetworkPolicy 生成和 system 管理页面。
 这些目标模型不应被误解为当前已经可用的接口。
 
-当前实现中的 `WorkerRelease.pool` 是 M1 的运行授权边界。等 M3 引入独立 placement 后，
-才将 Release 本体恢复为 pool-neutral，并迁移该字段的语义。
+`WorkerService` 与 `WorkerRelease` 都不保存 pool 字段。当前运行授权边界是
+`krun_worker_service_placements`；Release 本体始终 pool-neutral。同一个 Profile 可以承载在
+多个物理池上，物理池增减不会改变组织侧 API。
 
 域名的命名、Gateway 拆分与静态资源路由见
 [Workers 域名接入设计](workers-domains.md)；构建、Release、配置 revision 与 runtime
@@ -36,9 +40,9 @@ Release placement、后台无损迁池、CONNECT proxy/NetworkPolicy 生成和 s
 
 核心决策：
 
-1. **资源池是服务级属性**。第一阶段一个服务的 production 和所有 preview
-   环境使用同一个资源池；环境级覆盖不在本期范围内。
-2. **业务侧不能选择或迁移资源池**。服务有且只有一个权威 pool；不可变 Release
+1. **资源池 placement 是服务级实体**。第一阶段一个服务的 production 和所有 preview
+   环境使用同一个 active placement；环境级覆盖不在本期范围内。
+2. **业务侧不能选择或迁移资源池**。服务正常态有且只有一个 active primary placement；不可变 Release
    本身不绑定 pool，同一个 Release 可以在迁移窗口内同时具有源、目标 pool placement。更换 pool
    只能由平台系统管理员通过后台重分配操作完成。`pool_migration` 只是控制面内部
    operation kind，不是业务产品概念。
@@ -64,7 +68,7 @@ Release placement、后台无损迁池、CONNECT proxy/NetworkPolicy 生成和 s
 
 ### 2.1 目标
 
-1. 服务明确绑定一个权威资源池；Release 与 pool placement 分离，placement 可审计地
+1. 服务的网络意图与物理 placement 分离；Release 与 pool placement 分离，placement 可审计地
    记录承载 pool 和当时的 policy revision/fingerprint。
 2. 不同 pool 使用不同 runtime Deployment / Service、配置视图、runtime 身份和
    NetworkPolicy。
@@ -91,7 +95,7 @@ Release placement、后台无损迁池、CONNECT proxy/NetworkPolicy 生成和 s
 
 ```text
                          控制面
-        service.pool ── one Deployment per pool ── active policy revision
+   service.network_profile ── service placement ── one Deployment per pool
               │                    │
               │                    ├── config/pools/<pool>/...
               │                    └── HTTPRoute backend=runtime-<pool>
@@ -135,8 +139,8 @@ Release placement、后台无损迁池、CONNECT proxy/NetworkPolicy 生成和 s
 DNS / LB
   -> domain 绑定的 Gateway 实例
   -> HTTPRoute 精确 Host 匹配
-  -> backendRef: runtime-<service.pool>:8081
-  -> 该 Service 的 selector: role=krun-runtime,pool=<service.pool>
+  -> backendRef: runtime-<placement.pool_id>:8081
+  -> 该 Service 的 selector: role=krun-runtime,pool=<placement.pool_id>
   -> 该 pool 唯一 Deployment 的 Ready Pods
   -> runtime 用 Host 在本 pool config revision 中选择 environment / Release
 ```
@@ -154,7 +158,7 @@ pool/domain labels 和 selector 只在创建、域名变更、policy activate、
 
 维持现有「每个 `(service, Gateway instance)` 一组 HTTPRoute」的模型：一个服务的所有
 启用环境 Host 按 domain 所属 Gateway 分组。不同 Gateway 上的路由可以有不同 hostname，
-但它们的 backend 都由同一个 `service.pool` 解析：
+但它们的 backend 都由同一个 `服务 active placement` 解析：
 
 ```yaml
 spec:
@@ -172,7 +176,7 @@ spec:
 
 `runtime-pool-7f34a1` 由稳定 pool ID 派生，不含名称、能力、label 或 policy revision，
 避免重命名和 policy rollout 改变入口地址。HTTPRoute 必须带受 controller 管理的
-service/pool 标识；reconcile 每次都从数据库中的 `service.pool` 重新计算 backend，不能
+service/pool 标识；reconcile 每次都从数据库中的 `服务 active placement` 重新计算 backend，不能
 信任对象上次残留的 annotation。
 
 Gateway 实例负责入口网络面的隔离，pool Service 负责把流量交给正确 Deployment；两者
@@ -181,7 +185,7 @@ Gateway 实例负责入口网络面的隔离，pool Service 负责把流量交�
 
 ### 3.3 哪些变更会修改入口路由
 
-- **普通发布、回滚、Secret 发布**：service.pool 不变，HTTPRoute backend 不变；只推进
+- **普通发布、回滚、Secret 发布**：服务 active placement 不变，HTTPRoute backend 不变；只推进
   对应 pool 的 config revision，runtime 在 Pod 内切换 Release。
 - **启停环境或修改域名**：更新 HTTPRoute hostnames 和 pool 内 route 投影，backend
   仍指向当前 pool。
@@ -189,7 +193,7 @@ Gateway 实例负责入口网络面的隔离，pool Service 负责把流量交�
 - **平台后台迁池**：先把 Release 和 Host 投影预热到目标 pool，并确认目标 Ready Pod
   都已应用目标 revision，再把
   该服务全部 HTTPRoute 的 backendRef 改到目标 pool Service；确认
-  `Accepted=True`、`ResolvedRefs=True` 和主动健康探测后，才 CAS 提交 service.pool，
+  `Accepted=True`、`ResolvedRefs=True` 和主动健康探测后，才 CAS 提交 服务 active placement，
   最后清理源 pool 投影。
 
 Gateway API 不能让多个 HTTPRoute 对象做跨对象原子提交。服务同时挂多个 Gateway 时，
@@ -198,40 +202,45 @@ Gateway API 不能让多个 HTTPRoute 对象做跨对象原子提交。服务同
 backend。若将来要求跨 Gateway 严格单点原子切流，应启用单一 workers-router，并通过
 一份 CAS 路由快照切换，而不是假设 Kubernetes API 能提供跨 HTTPRoute 事务。
 
-### 3.4 开源产品只暴露网络意图
+### 3.4 开源产品只暴露 Network Profile
 
-组织用户永远不选择 pool，也看不到 pool ID、Deployment、Gateway、proxy 或 policy
-revision。开源 API/UI 只暴露两个跨部署可理解的 primitive：
+组织用户永远不选择 pool，也看不到 pool ID、Deployment、Gateway、proxy、domain
+selector、`public/private` 原语或 policy revision。部署方在主配置里声明少量产品化的
+Network Profile，例如开源部署可以只配置“标准网络”，内部部署可以配置“对外服务”、
+“内部服务”和一个需审批的“混合网络”。名称和描述完全由部署方决定，不进入协议逻辑。
+
+Profile 本身保存用户意图；控制面用它的要求解析基础设施：
 
 ```text
-public   用户通过部署方配置的公网入口访问
-private  用户通过部署方配置的内网入口访问
+service.network_profile
+  -> profile.requirements + profile.pool_selector
+  -> 唯一 runtime pool（隐藏的 服务 active placement）
+  -> profile.requirements + profile.domain_selector
+  -> 该服务唯一可见的域名目录
 ```
 
-`WorkerDomain.access` 必须是 `public | private`；Gateway 绑定只保留在平台配置和 system
-API，不返回组织域名目录。服务当前的用户网络意图由所选域名的 access 集合表达，控制面
-再用该集合、bindings 与 domain selectors 选择兼容 pool。普通用户不能指定或推断被选中
-的 pool。
+这里仍保留两个底层 ingress 原语 `public | private`，因为它们是控制面校验能力是否兼容的
+稳定枚举，但不会通过组织 API 返回。域名的 `access`、`labels`、Gateway 绑定和 pool 的
+labels/egress mode 都只存在于部署配置与 system 范围。
 
-UI 必须按部署能力退化，而不是写死三个套餐：
+UI 按 Profile 数量退化：
 
-- 只有一种 access 时不显示“网络访问”选择器，直接使用部署默认域名；典型开源公网
-  部署因此只看到访问地址，不会被迫理解内网或 pool。
-- 同时配置 public/private 时才显示两个可组合选项；启用某项会绑定该 access 的默认
-  domain，关闭会解绑该 access 的全部域名。
-- 同一种 access 有多个域名时可以继续显示高级“访问域名”管理，但不能显示 Gateway
-  或 pool 名称。
-- label 是部署方备注；不能用“办公网”“特权池”等内部文案作为协议值或安全判断。
+- 只有一个公开 Profile 时不显示“服务网络”选择器，典型开源安装不会出现内部产品概念；
+- 多个公开 Profile 时展示部署方配置的名称和描述，不展示它匹配到的 pool 和域名标签；
+- `approval: required` 的 Profile 可以展示为“需要平台审批”，当前 M1 禁止业务侧直接选择；
+- `granted-only` / `assigned-only` Profile 不进入普通组织目录，为后续授权和后台分配预留；
+- 服务域名 API 只返回当前 Profile 允许的域名，响应不含 access、selector、Gateway 或 pool；
+- 首次发布前可以切换无需审批的公开 Profile；首次发布后只能由平台后台做安全迁移，避免
+  业务侧在没有双池预热和切流的情况下直接改变 placement。
 
-M1 已让域名目录和静态资产前缀使用显式 access，完成自适应 UI，并让控制面按 access
-组合映射到配置中的 runtime pool。后续 scheduler/policy/placement 继续复用同一组织
-API，不再修改用户概念。
+域名 label 只是允许展示的自由备注；pool/domain label map 只做精确 selector 匹配，
+代码不得从名称、描述、ID 或展示 label 推断能力。
 
 ## 4. 配置模型
 
-M1 在主 `Config` 中声明 runtime pool，这是部署者管理的基础设施映射，不是组织产品
-资源。M2 引入 policy 后，pool 元数据与策略才迁到 system scope API/页面并持久化到
-数据库；组织侧始终只看到 public/private。
+M1 在主 `Config` 中同时声明 runtime pool、domain 和 Network Profile。前两者是部署者
+管理的基础设施，Profile 是组织侧唯一可见的产品投影。M2 引入 policy 后，pool 元数据
+与策略可迁到 system scope API/页面并持久化到数据库；组织侧 Profile API 不需要改变。
 
 基础设施仍只能从 `LoadConfig` 进入，例如：
 
@@ -240,12 +249,18 @@ workers:
   runtime_pools:
     - id: pool-amber
       access: [private]
+      labels: {zone: internal}
+      private_egress: direct
+      public_egress: deny
       runtime_service: runtime-private
       runtime_token: ${KRUN_PRIVATE_RUNTIME_TOKEN}
       management_token: ${KRUN_PRIVATE_MANAGEMENT_TOKEN}
       default: true
     - id: pool-birch
       access: [public]
+      labels: {zone: external}
+      private_egress: deny
+      public_egress: connect-proxy
       runtime_service: runtime-public
       runtime_token: ${KRUN_PUBLIC_RUNTIME_TOKEN}
       management_token: ${KRUN_PUBLIC_MANAGEMENT_TOKEN}
@@ -255,22 +270,57 @@ workers:
       domain: workers.internal.example.com
       label: 企业内网
       access: private
+      labels: {exposure: internal}
       gateway: internal
     - id: edge-zone
       domain: workers.example.com
       label: 互联网
       access: public
+      labels: {exposure: external}
       gateway: external
+
+  network_profiles:
+    - id: internal-service
+      name: 内部服务
+      description: 使用部署方提供的内部网络。
+      domain_selector: {exposure: internal}
+      pool_selector: {zone: internal}
+      requirements:
+        ingress: [private]
+        private_egress: direct
+        public_egress: deny
+      approval: none
+      visibility: public
+      default: true
+
+    - id: external-service
+      name: 对外服务
+      description: 使用部署方提供的互联网入口。
+      domain_selector: {exposure: external}
+      pool_selector: {zone: external}
+      requirements:
+        ingress: [public]
+        private_egress: deny
+        public_egress: connect-proxy
+      approval: none
+      visibility: public
 ```
 
 每个 M1 pool 的 `access` 是规范化集合，允许 `[public]`、`[private]` 或
-`[public, private]`。同一组合只能有一个 pool，避免业务意图解析歧义；必须且只能有一个
-default，且默认域名的 access 集合必须与它相同。每个 pool 使用不同 runtime token 与
-management token。runtime Deployment 设置 `RUNTIME_POOL=<id>`，其 `CONFIG_BASE` 指向
-`.../config/pools/<id>`。
+`[public, private]`；它描述可承载的入口原语。`private_egress` 为 `deny | direct`，
+`public_egress` 为 `deny | direct | connect-proxy`。本轮只实现声明、校验与 placement
+匹配，CONNECT proxy 和 NetworkPolicy 强制仍属于后续里程碑，不能因为配置值存在就宣称
+网络隔离已经生效。每个 pool 使用不同 runtime token 与 management token。runtime
+Deployment 设置 `RUNTIME_POOL=<id>`，其 `CONFIG_BASE` 指向 `.../config/pools/<id>`。
 
-未配置 `runtime_pools` 时自动归一为兼容的 `default` 单池，access 为当前域名目录中出现
-的全部类型；这保证开源默认公网安装无需理解或配置 pool。
+每个 Profile 必须至少选择一个域名，并通过 ingress/egress 要求与 `pool_selector` 匹配
+至少一个 pool；零匹配会使配置加载失败，多匹配则由控制面使用稳定的一致性选择算法决定
+初始 placement。`domain_selector` 和 `pool_selector` 都是 labels 的精确子集匹配。必须且
+只能有一个无需审批、公开的默认 Profile。
+
+`runtime_pools` 与 `network_profiles` 都是必填配置，不提供旧版单 runtime 字段的兼容
+归一。开源的纯公网安装只需声明一个 pool 和一个 Profile；单一 Profile 时 UI 不出现
+选择器，因此不会把内部部署的产品概念强加给开源用户。
 
 页面不能提交 Service 名、selector、token、Namespace 或 NetworkPolicy YAML，只能引用
 配置中存在的 proxy/domain id。controller 为每个 pool 生成一套且仅一套 runtime
@@ -479,9 +529,22 @@ CREATE TABLE krun_worker_pool_policy_bindings (
   PRIMARY KEY (pool_id, policy_revision, binding_type)
 );
 
-ALTER TABLE krun_worker_services
-  ADD COLUMN pool text NOT NULL DEFAULT 'default',
-  ADD COLUMN pool_revision integer NOT NULL DEFAULT 0;
+CREATE TABLE krun_worker_service_placements (
+  service_id       text        NOT NULL,
+  pool_id          text        NOT NULL,
+  org_id           text        NOT NULL,
+  network_profile  text        NOT NULL,
+  role             text        NOT NULL, -- primary | candidate
+  state            text        NOT NULL, -- preparing | ready | active | draining | failed
+  revision         integer     NOT NULL,
+  created_at       timestamptz NOT NULL,
+  updated_at       timestamptz NOT NULL,
+  PRIMARY KEY (service_id, pool_id)
+);
+
+CREATE UNIQUE INDEX krun_worker_service_placements_primary
+  ON krun_worker_service_placements (service_id)
+  WHERE role='primary' AND state IN ('preparing','ready','active');
 
 CREATE TABLE krun_worker_release_placements (
   pool_id             text        NOT NULL,
@@ -518,12 +581,11 @@ binding 声明和资产配置，是与 pool 无关的不可变业务版本；pla
 当前获准加载该 Release。`policy_revision/fingerprint` 是创建 placement 时的审计和
 preflight 依据，运行期能力始终使用 pool 当前 active policy。
 
-现有 `krun_worker_releases.pool` 在迁移阶段只解释为 `created_in_pool` 来源审计，不能用于
-内部 API 授权，也不能参与 Release ID；完成 placement 回填后将其显式重命名或删除，
-不能让同一字段同时具有“来源”和“当前可运行位置”两种语义。
+`krun_worker_services.pool` 与 `krun_worker_releases.pool` 已删除。内部 API 以认证 runtime pool
+是否存在该服务的有效 placement 授权；pool 不参与 Release ID。
 
-placement state 为 `warming | active | draining`。普通发布在 service.pool 创建 active
-placement；迁池先在目标创建带 operation_id 和 expires_at 的 warming placement，切流
+当前 service placement state 为 `preparing | ready | active | draining | failed`。普通发布
+复用服务 active placement；迁池先在目标创建 candidate placement，切流
 提交后转 active，源 placement 转 draining 并在源投影清理、Pod revision 收敛后删除。失败或
 超时的 warming placement 最多保留 24 小时；后台 cleanup 使用有界批次删除，避免临时
 placement 无界增长。不能删除仍被当前 route 或进行中 operation 引用的 placement。
@@ -534,14 +596,13 @@ domains、bindings 明细一起删除。删除前用对账查询再次验证无�
 删除使用不超过 5 条显式语句的小事务，不使用外键或网络调用。审计记录按平台统一
 审计保留期保存 fingerprint、actor 和 request id，不依赖永久保留 policy 行。
 
-不在 environment 行重复存 pool：environment 始终继承 service.pool；正常态每个当前
-Release 必须具有 service.pool 的 active placement。`pool_revision` 只作为服务分配
-CAS，不代表 policy revision。
+不在 service、environment 或 Release 行重复存 pool：environment 始终继承服务 active
+placement。placement 自己的 `revision` 是分配 CAS，不代表 policy revision。
 
 pool migration 是服务级操作，会为每个已有活动 Release 的环境生成一条 migration
 item。表中一行只记录该环境正在复用的同一 release_id，不把多环境映射塞进 operation
 的 JSON 文档，也不使用外键。没有活动 Release 的环境无需 item，但迁移提交后同样继承
-新的 service.pool。目标 policy revision 和 fingerprint 固定在 operation 与目标
+新的 服务 active placement。目标 policy revision 和 fingerprint 固定在 operation 与目标
 placement；服务随后跟随该 pool 的整体策略更新。
 
 ### 5.2 配置分发
@@ -606,9 +667,9 @@ pool 应代表安全/资源边界，而不是为每个服务创建一个 pool。
 
 普通发布不接受客户端提供的 `pool` 或 `pool_policy_revision`：
 
-1. 读取 service.pool 和该 pool 当前 active policy。
+1. 读取 服务 active placement 和该 pool 当前 active policy。
 2. 校验服务当前 domains 和 bindings 仍被 active policy 允许。
-3. 创建 pool-neutral 的不可变 Release，并在 service.pool 创建 active placement，记录
+3. 创建 pool-neutral 的不可变 Release，并在 服务 active placement 创建 active placement，记录
    当时观察到的 policy revision/fingerprint。
 4. 只在该 pool Deployment 的候选 Pod 验证。
 5. 只推进该 pool 的 config revision。
@@ -620,7 +681,7 @@ pool 应代表安全/资源边界，而不是为每个服务创建一个 pool。
 ### 6.2 Secret 与普通配置
 
 Secret PUT / DELETE 继续复用当前 Artifact 并自动创建 pool-neutral Release，再在
-service.pool 创建 placement。普通变量在下一次发布时采用同样流程。
+服务 active placement 创建 placement。普通变量在下一次发布时采用同样流程。
 
 Secret 内部查询必须校验：
 
@@ -636,7 +697,7 @@ exists placement(
 
 ### 6.3 回滚
 
-普通 rollback 可以选择该服务任意不可变历史 Release，但必须先用当前 service.pool 的
+普通 rollback 可以选择该服务任意不可变历史 Release，但必须先用当前 服务 active placement 的
 active policy 重新校验其 domains、bindings 和 Secret 引用。兼容时为该 Release 创建或
 恢复当前 pool placement，再推进 route；不兼容时返回：
 
@@ -647,7 +708,7 @@ active policy 重新校验其 domains、bindings 和 Secret 引用。兼容时�
 }
 ```
 
-rollback 不能创建其他 pool placement，也不能改变 service.pool；跨池恢复仍必须由系统
+rollback 不能创建其他 pool placement，也不能改变 服务 active placement；跨池恢复仍必须由系统
 管理员执行后台重分配。这样“回滚代码”不会意外变成“改变网络安全域”。
 
 ### 6.4 后台 Pool 重分配
@@ -676,7 +737,7 @@ Content-Type: application/json
   placement；不复制 Artifact、变量、Secret versions 或业务 Release。
 - enabled、disabled 和 preview 环境都创建目标 placement，避免迁移后重新启用环境时
   缺少目标池授权。
-- 尚未发布的环境没有 Release，只随 service.pool 一起迁移。
+- 尚未发布的环境没有 Release，只随 服务 active placement 一起迁移。
 - 第一阶段不允许重分配请求为单个环境替换代码。需要恢复旧池历史版本时，先显式迁回
   该 pool，再通过普通 rollback 选择历史 Release；两个安全动作不能合并隐藏。
 
@@ -689,7 +750,7 @@ Content-Type: application/json
 | `candidate` | 在目标池单成员逐一冷加载验证 | 旧池继续服务 |
 | `warm` | 向目标池发布临时 route + release 投影并查询所有目标 Ready Pod revision | 旧池继续服务 |
 | `switch` | HTTPRoute backend 切到 `runtime-<target>` 并等 Accepted/ResolvedRefs | 失败保持或恢复旧 backend |
-| `commit` | CAS 更新 service.pool；目标 placement 转 active，源 placement 转 draining | 恢复任务可继续提交 |
+| `commit` | CAS 更新 服务 active placement；目标 placement 转 active，源 placement 转 draining | 恢复任务可继续提交 |
 | `prune` | 从源池配置移除 host/release，确认源 Ready Pod 已应用删除 revision | 已切流，不回滚提交 |
 
 目标池预热 route 在 Gateway 切换前不可从该 Gateway 到达，但 runtime 已能按 Host 找到
@@ -718,7 +779,7 @@ Artifact、Secret 和 assets 内部 API 必须拒绝。只有目标 pool 已收�
 预装进 Pod。本期不做全成员 prewarm。
 
 warm 阶段的目标池投影来自未完成的 `pool_migration` operation 及其 migration items，
-而不是提前修改 service.pool。这样源池的权威路由保持不变，目标池只得到本次迁移
+而不是提前修改 服务 active placement。这样源池的权威路由保持不变，目标池只得到本次迁移
 所需的临时副本。prune 完成后删除 migration items。
 
 `switch` 与 `commit` 之间发生崩溃时，operation 的持久化步骤负责恢复；不把 Gateway
@@ -779,7 +840,7 @@ rollout 期间 pool 标记为 `updating`：现有流量继续，但禁止向该 
 
 ```text
 domain exists
-AND domain.id IN active_policy(service.pool).resolved_domain_ids
+AND domain.id IN active_policy(服务 active placement).resolved_domain_ids
 AND caller has domain binding permission
 AND domain approval (if any) is approved
 ```
@@ -799,10 +860,10 @@ AND domain approval (if any) is approved
 2. 域名 PUT API 做权威准入校验；
 3. config projection 和 HTTPRoute reconcile 再做防御性校验，非法组合不进入数据面。
 
-HTTPRoute backend 不再使用全局 `RuntimeService`，而是由 service.pool 解析：
+HTTPRoute backend 不再使用全局 `RuntimeService`，而是由 服务 active placement 解析：
 
 ```text
-(gateway, service.pool) → 该 pool 唯一的 runtime Service
+(gateway, 服务 active placement) → 该 pool 唯一的 runtime Service
 ```
 
 同一服务的多个域名可以挂不同 Gateway，但必须全部被 pool 当前 policy 允许。Gateway
@@ -1039,7 +1100,7 @@ binding.type IN pool.allowed_bindings
 
 ### 11.1 权限边界
 
-资源池不是组织侧可配置资源，不新增 `service.pool.migrate`，也不允许通过组织角色、
+资源池不是组织侧可配置资源，不新增 `service.placement.migrate`，也不允许通过组织角色、
 用户组或组织 API Key 获得修改能力。业务侧发布、回滚、Secret 和域名 API 都不接受
 `pool` 或 `target_pool` 字段。
 
@@ -1149,7 +1210,7 @@ policy 只能引用它们的安全 id。controller 负责把 policy 编译成数
 正式审批暂不实现。未来如果“私网直连 + 代理公网”等高风险组合需要申请、审批、
 有效期或自动回收，审批按有效 capability 判断而不是按 pool 名称判断。审批完成后
 仍调用同一个后台重分配 operation，并在 `policy` 步骤验证批准记录；不能让审批直接
-改数据库中的 `service.pool`。是否允许业务用户发起申请另行决定，不影响本期“只有
+改数据库中的 `服务 active placement`。是否允许业务用户发起申请另行决定，不影响本期“只有
 平台后台能修改”的边界。
 
 ## 12. 故障语义
@@ -1157,7 +1218,7 @@ policy 只能引用它们的安全 id。controller 负责把 policy 编译成数
 | 故障 | 预期行为 |
 | --- | --- |
 | 目标 pool 无 Ready 成员 | 发布/迁移保持等待或失败，旧池不受影响 |
-| 目标 pool candidate 失败 | 迁移 failed，不修改 Gateway 和 service.pool |
+| 目标 pool candidate 失败 | 迁移 failed，不修改 Gateway 和 服务 active placement |
 | policy activation candidate 失败 | draft 保留失败信息，active policy 指针不变 |
 | policy rollout 失败 | 同一 Deployment 回滚旧 Pod template/NetworkPolicy，active policy 不变 |
 | CONNECT proxy 不可用 | 所有 policy revision 引用该 proxy 的公网访问失败；其 private 能力不受影响 |
@@ -1170,20 +1231,16 @@ policy 只能引用它们的安全 id。controller 负责把 policy 编译成数
 
 ## 13. 迁移与实施阶段
 
-### M0：文档与兼容基线
+### M1.1：配置目录、Network Profile 与服务 Placement（已实现）
 
-- 明确 pool 元数据和 policy 都由 system scope 资源管理，主配置不创建任何权限预设；
-  业务侧不提供 pool 选择器。
-- 升级后先保留 legacy `default` 的只读数据面，但禁止创建新 Worker 服务；系统管理员
-  在后台创建第一个 pool、定义与现状匹配的 policy revision 并设为 default。
-- 为当前活动的 legacy Release 回填该 pool 的 active placement，再切换 service.pool；
-  不复制业务 Release。历史 Release 保持不可变，只作历史记录，按需在 rollback 时创建
-  当前 pool placement。
-- 所有活动环境完成切换且没有未完成 operation 后删除 legacy 兼容分支。
-- 更新现有文档中“单 pool”的边界描述。
-- 为所有写死 `default` 的位置增加测试清单。
+- 主配置维护 runtime pools、域名 labels 和 Network Profiles；业务 API 不提供 pool 选择器。
+- 一个 Profile 可匹配多个 pool；新服务用 Rendezvous Hash 稳定选择初始 pool。
+- `krun_worker_service_placements` 一实体一行；Service 与 Release 均不保存 pool。
+- 配置投影、HTTPRoute backend 和 runtime 内部 API 都从 placement 解析 pool。
+- 创建 Worker 时 UI 选择 Network Profile；只有部署配置了多个公开 Profile 时才显示选择器。
+- 本项目尚未发布，不保留旧 `service.pool` / `release.pool` API 或数据库兼容分支。
 
-### M1：Pool 资源与准入
+### M2：Pool 资源与准入（后续）
 
 - 主配置增加 runtime template 和 egress proxy 目录，不增加 pool 权限套餐。
 - pool、tags、policy revisions、policy labels、domain selectors、resolved domains、
@@ -1191,9 +1248,8 @@ policy 只能引用它们的安全 id。controller 负责把 policy 编译成数
 - 主配置 domain labels / pool_selector 的加载校验和 selector drift 检测。
 - abandoned draft、superseded policy 和 operation 的 retention/cleanup。
 - active policy 不可变、唯一 default、proxy/domain 引用和 policy fingerprint 校验。
-- `krun_worker_services.pool`；service 不保存 policy revision。
 - Release placement 的 policy 审计字段，以及 operation 的目标 policy revision/fingerprint。
-- `krun_worker_services.pool_revision` 与 migration items。
+- service placement 的迁移 operation 与 migration items。
 - 服务创建时读取数据库中的 default pool；其 Deployment 或 active policy 不 Ready 时
   明确拒绝。
 - 域名写 API 增加 pool 校验。
@@ -1256,14 +1312,14 @@ policy 只能引用它们的安全 id。controller 负责把 policy 编译成数
 - policy labels 与 domain labels 双向精确匹配；任一 selector 不满足都不能绑定。
 - tags 永远不参与 selector；修改 domain labels / pool_selector 不自动改变 active policy
   的 resolved domains，只产生 drift，新 policy revision activate 后才得到新快照。
-- 服务只持久化权威 pool；Release 不绑定 pool，placement 准确记录 pool 与创建时
-  policy revision/fingerprint。
+- 服务只持久化 Network Profile 与独立 placement；Release 不绑定 pool。未来 Release
+  placement 再准确记录 pool 与创建时 policy revision/fingerprint。
 - 请求体伪造 pool 不生效。
 - domain × pool 不兼容时 API 返回 `WORKER_DOMAIN_POOL_NOT_ALLOWED`。
 - Secret 查询和 snapshot 使用错误 pool 身份返回 403/404；伪造 `/ready` 中的 pool、
   pod_uid 或 observed policy revision 不能通过 Kubernetes 成员与身份交叉校验。
 - per-pool config revision CAS 并发推进互不阻塞。
-- 普通 rollback 只允许在当前 service.pool 创建 placement，不兼容当前 policy 时拒绝。
+- 普通 rollback 只允许在当前 服务 active placement 创建 placement，不兼容当前 policy 时拒绝。
 - migration 重试和控制面重启后可恢复。
 - 删除仍被 policy 引用的 proxy/domain 能被 preflight 发现。
 - policy activation 只更新该 pool 的同一个 Deployment；失败时整体回滚，active
@@ -1306,7 +1362,7 @@ system_admin 通过真实平台 API 创建三个不表达能力的 pool：`e2e-a
 12. 同一个 Artifact 和 release_id 可以在三个 fixture pool 建 placement，但 Secret 只由
     具有有效 placement 的认证 pool 获取；删除 placement 后立即拒绝新获取。
 13. pool migration 在目标 candidate / warm 失败时旧服务持续可用。
-14. migration 成功后 Gateway、service.pool、目标 active placement 和 Pod observed revision
+14. migration 成功后 Gateway、服务 active placement、目标 active placement 和 Pod observed revision
     全部指向目标池；
     源 draining placement 在配置收敛后删除，Release ID 不变。
 15. migration 在 switch 前后分别重启控制面，最终状态仍收敛。
@@ -1345,7 +1401,7 @@ system_admin 通过真实平台 API 创建三个不表达能力的 pool：`e2e-a
 7. 一个 pool 的故障、config revision 收敛或 policy rollout 不阻塞其他 pool。
 8. 每个 pool 始终只有一个 Kubernetes Deployment；active policy 不可原地修改，
    权限扩大或收紧必须创建 revision 并执行全池 rollout。
-9. 组织角色、业务 API 和普通发布永远不能修改 service.pool；只有 system scope 的
+9. 组织角色、业务 API 和普通发布永远不能修改 服务 active placement；只有 system scope 的
    平台后台操作可以改变它。
 10. 已生效策略的安全语义由 revision + fingerprint 固定，不能热改数据库静默扩权；
     需要并存不同策略时必须创建另一个 pool/Deployment。

@@ -3,13 +3,13 @@ package control
 import (
 	"net/http"
 	"sort"
-	"strings"
 )
 
 type workerServiceSummary struct {
 	Resource
-	Repository   *WorkerRepositorySource    `json:"repository_source,omitempty"`
-	Environments []WorkerEnvironmentSummary `json:"environments"`
+	Repository     *WorkerRepositorySource    `json:"repository_source,omitempty"`
+	NetworkProfile WorkerNetworkProfileView   `json:"network_profile"`
+	Environments   []WorkerEnvironmentSummary `json:"environments"`
 }
 
 type WorkerEnvironmentSummary struct {
@@ -22,24 +22,24 @@ type WorkerEnvironmentSummary struct {
 }
 
 // WorkerDomainView is the client-facing domain catalog entry. It deliberately
-// omits Gateway and pool identifiers: organization users choose only the
-// portable public/private access primitive.
+// omits access classes, selectors, Gateway and pool identifiers: organization
+// users only see domains made available by their selected network profile.
 type WorkerDomainView struct {
-	ID           string `json:"id"`
-	Domain       string `json:"domain"`
-	Label        string `json:"label"`
-	Access       string `json:"access"`
-	StaticDomain string `json:"static_domain"`
-	Default      bool   `json:"default"`
+	ID      string `json:"id"`
+	Domain  string `json:"domain"`
+	Label   string `json:"label"`
+	Default bool   `json:"default"`
 }
 
-type WorkerNetworkOptionView struct {
-	ID      string   `json:"id"`
-	Access  []string `json:"access"`
-	Default bool     `json:"default"`
+type WorkerNetworkProfileView struct {
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	Description      string `json:"description"`
+	ApprovalRequired bool   `json:"approval_required"`
+	Default          bool   `json:"default"`
 }
 
-func (s *Server) workerNetworkOptions(st *State, p Principal, r *http.Request) (any, int, error) {
+func (s *Server) workerNetworkProfiles(st *State, p Principal, r *http.Request) (any, int, error) {
 	target, err := s.orgTarget(st, r)
 	if err != nil {
 		return nil, 0, err
@@ -47,45 +47,12 @@ func (s *Server) workerNetworkOptions(st *State, p Principal, r *http.Request) (
 	if err := s.require(st, p, r, "service.list", target); err != nil {
 		return nil, 0, err
 	}
-	seen := map[string]bool{}
-	out := []WorkerNetworkOptionView{}
-	pools := s.Config.Workers.configuredRuntimePools()
-	if len(s.Config.Workers.RuntimePools) == 0 {
-		available := pools[0].Access
-		defaultAccessRaw := []string{}
-		for _, id := range s.Config.Workers.defaultDomains() {
-			if domain, ok := s.Config.Workers.domain(id); ok {
-				defaultAccessRaw = append(defaultAccessRaw, domain.Access)
-			}
-		}
-		defaultAccess, _ := normalizeWorkerAccess(defaultAccessRaw)
-		pools = nil
-		for _, access := range available {
-			pools = append(pools, WorkerRuntimePool{Access: []string{access}, Default: sameWorkerAccess([]string{access}, defaultAccess)})
-		}
-		if len(available) > 1 {
-			pools = append(pools, WorkerRuntimePool{Access: append([]string(nil), available...), Default: sameWorkerAccess(available, defaultAccess)})
-		}
-	}
-	for _, pool := range pools {
-		id := strings.Join(pool.Access, "+")
-		if seen[id] {
+	out := []WorkerNetworkProfileView{}
+	for _, profile := range s.Config.Workers.configuredNetworkProfiles() {
+		if profile.Visibility != "public" {
 			continue
 		}
-		available := true
-		for _, access := range pool.Access {
-			found := false
-			for _, domain := range s.Config.Workers.Domains {
-				if domain.Access == access {
-					found = true
-				}
-			}
-			available = available && found
-		}
-		if available {
-			seen[id] = true
-			out = append(out, WorkerNetworkOptionView{ID: id, Access: append([]string(nil), pool.Access...), Default: pool.Default})
-		}
+		out = append(out, WorkerNetworkProfileView{ID: profile.ID, Name: profile.Name, Description: profile.Description, ApprovalRequired: profile.Approval == "required", Default: profile.Default})
 	}
 	return items(out)
 }
@@ -94,7 +61,21 @@ func (s *Server) workerNetworkOptions(st *State, p Principal, r *http.Request) (
 func (s *Server) domainCatalog() []WorkerDomainView {
 	out := make([]WorkerDomainView, 0, len(s.Config.Workers.Domains))
 	for _, d := range s.Config.Workers.Domains {
-		out = append(out, WorkerDomainView{ID: d.ID, Domain: d.Domain, Label: d.Label, Access: d.Access, StaticDomain: d.StaticDomain, Default: d.Default})
+		out = append(out, WorkerDomainView{ID: d.ID, Domain: d.Domain, Label: d.Label, Default: d.Default})
+	}
+	return out
+}
+
+func (s *Server) domainCatalogForProfile(profile WorkerNetworkProfile) []WorkerDomainView {
+	allowed := map[string]bool{}
+	for _, domain := range s.Config.Workers.domainsForProfile(profile) {
+		allowed[domain.ID] = true
+	}
+	out := []WorkerDomainView{}
+	for _, domain := range s.domainCatalog() {
+		if allowed[domain.ID] {
+			out = append(out, domain)
+		}
 	}
 	return out
 }
@@ -108,7 +89,20 @@ func (s *Server) workerDomains(st *State, p Principal, r *http.Request) (any, in
 	if err := s.require(st, p, r, "service.list", target); err != nil {
 		return nil, 0, err
 	}
-	return items(s.domainCatalog())
+	seen := map[string]bool{}
+	out := []WorkerDomainView{}
+	for _, profile := range s.Config.Workers.configuredNetworkProfiles() {
+		if profile.Visibility != "public" {
+			continue
+		}
+		for _, domain := range s.domainCatalogForProfile(profile) {
+			if !seen[domain.ID] {
+				seen[domain.ID] = true
+				out = append(out, domain)
+			}
+		}
+	}
+	return items(out)
 }
 
 func (s *Server) workerServiceList(st *State, p Principal, r *http.Request) (any, int, error) {
@@ -125,7 +119,10 @@ func (s *Server) workerServiceList(st *State, p Principal, r *http.Request) (any
 			continue
 		}
 		summary := workerServiceSummary{Resource: resource, Environments: []WorkerEnvironmentSummary{}}
-		service := st.Workers.Services[resource.ID]
+		service := s.Config.Workers.normalizeServiceNetwork(st.Workers.Services[resource.ID])
+		if profile, ok := s.Config.Workers.networkProfile(service.NetworkProfile); ok {
+			summary.NetworkProfile = WorkerNetworkProfileView{ID: profile.ID, Name: profile.Name, Description: profile.Description, ApprovalRequired: profile.Approval == "required", Default: profile.Default}
+		}
 		names := make([]string, 0, len(service.Environments)+1)
 		if _, exists := service.Environments[workerBaseline]; !exists {
 			names = append(names, workerBaseline)

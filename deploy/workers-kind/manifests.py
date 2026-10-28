@@ -41,7 +41,15 @@ workers:
   builder_pull_policy: Never
   s3_location_id: primary
   clone_directory: /workdir
-  runtime_service: runtime-default
+  runtime_pools:
+    - id: default
+      access: [public, private]
+      private_egress: direct
+      public_egress: direct
+      runtime_service: runtime-default
+      runtime_token: ${KRUN_RUNTIME_TOKEN}
+      management_token: ${KRUN_MANAGEMENT_TOKEN}
+      default: true
   gateways:
     - id: internal
       name: workers-mvp
@@ -56,6 +64,8 @@ workers:
       domain: workers.test
       label: 内网
       access: private
+      labels:
+        exposure: internal
       gateway: internal
       default: true
       static_domain: static.workers.test
@@ -63,12 +73,36 @@ workers:
       domain: public.workers.test
       label: 公网
       access: public
+      labels:
+        exposure: external
       gateway: external
       static_domain: static.public.workers.test
+  network_profiles:
+    - id: internal-service
+      name: 内网服务
+      description: kind 环境的内部入口。
+      domain_selector:
+        exposure: internal
+      requirements:
+        ingress: [private]
+        private_egress: direct
+        public_egress: direct
+      approval: none
+      visibility: public
+      default: true
+    - id: external-service
+      name: 公网服务
+      description: kind 环境的外部入口。
+      domain_selector:
+        exposure: external
+      requirements:
+        ingress: [public]
+        private_egress: direct
+        public_egress: direct
+      approval: none
+      visibility: public
   static_service: static-assets
   static_service_port: 9000
-  runtime_token: ${KRUN_RUNTIME_TOKEN}
-  management_token: ${KRUN_MANAGEMENT_TOKEN}
   secrets_active_key: v1
   secrets_keys:
     v1: ${KRUN_WORKERS_SECRETS_KEY}
@@ -121,7 +155,7 @@ const config :W.Config = (
    (name="RUNTIME_TOKEN",text=embed "/secrets/KRUN_RUNTIME_TOKEN"),
    (name="MANAGEMENT_TOKEN",text=embed "/secrets/KRUN_MANAGEMENT_TOKEN"),
    (name="RUNTIME_POOL",text="default"),
-   (name="CONFIG_BASE",text="http://minio:9000/krun-artifacts/config"),
+   (name="CONFIG_BASE",text="http://minio:9000/krun-artifacts/config/pools/default"),
    (name="ASSETS_CACHE_MAX",text="67108864")
   ],globalOutbound="storage")),
   (name="platform",external=(address="backend:9001",http=())),
