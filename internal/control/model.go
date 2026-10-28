@@ -159,6 +159,10 @@ type State struct {
 	// transaction as the user/JIT mutation and login audit. It is intentionally
 	// absent from JSON snapshots.
 	pendingLogin *pendingLoginCommit
+	// pendingWorkerSecrets is a request-local write command. Ciphertext never
+	// enters the generic WorkerState snapshot; persistWorkers consumes it in
+	// the same transaction as the environment, Release and Operation rows.
+	pendingWorkerSecrets map[string]encryptedWorkerSecret
 }
 
 type pendingLoginCommit struct {

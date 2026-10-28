@@ -2,6 +2,10 @@
 
 状态：**内外网拆分已实现**（P1 的一部分）。实现位置：`internal/control/workers_model.go`（host 推导与 scope 归类）、`workers_kubernetes.go`（按 scope 编排 HTTPRoute）、`deploy/workers-kind/manifests.py`、`deploy/workers-dev/networkpolicy.yaml.tmpl`、`workers/runtime`。
 
+多 runtime pool、pool 允许绑定的域名、独立出口网络和跨池迁移的详细设计见
+[Workers 资源池与网络策略设计](workers-pools.md)。本文只负责域名命名、入口 Gateway
+与路由模型；资源池是独立的调度和安全边界。
+
 已落地的是「两个网络面」这件事本身：
 
 - 每个环境同时持有 `host`（私有）与 `public_host`（公网，可选），由 `WorkersConfig` 的 `domain` / `public_domain` 推导。
@@ -258,7 +262,8 @@ workers:
 - runtime 侧只有内存视图：bootstrap 从对象存储拉不可变快照，之后用 `/config/changes` 增量 apply；不落盘、不落本地 DB。控制面不可用时保留最后一份视图继续服务。
 - Pod 内入口 Worker 的 host → 环境 Release 查找逻辑不变。
 
-多池前置改造：`runtimeMembers(ctx, pool)` selector 参数化；`WorkerRelease.Pool` 在服务 / 发布 API 层可选。
+多池改造：`runtimeMembers(ctx, pool)` selector 已参数化；服务与 Release 的 pool 仅是控制面
+内部字段，不出现在组织 API。用户通过域名的 `access: public | private` 表达网络意图。
 
 ## 7. 安全不变量
 

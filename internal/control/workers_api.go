@@ -27,6 +27,7 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	}
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/services", protect(false, s.workerServiceList))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/domains", protect(false, s.workerDomains))
+	m.HandleFunc("GET /api/v1/orgs/{org}/workers/network-options", protect(false, s.workerNetworkOptions))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/repository-providers", protect(false, s.workerRepositoryProviders))
 	m.HandleFunc("POST /api/v1/orgs/{org}/workers/repository/{provider}/connect", protect(true, s.workerRepositoryConnect))
 	m.HandleFunc("DELETE /api/v1/orgs/{org}/workers/repository/{provider}/disconnect", protect(true, s.workerRepositoryDisconnect))
@@ -47,6 +48,9 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST "+base+"/environments", protect(false, s.workerEnvironmentCreate))
 	m.HandleFunc("DELETE "+base+"/environments/{environment}", protect(false, s.workerEnvironmentDelete))
 	m.HandleFunc("PATCH "+base+"/environments/{environment}", protect(false, s.workerEnvironmentUpdate))
+	m.HandleFunc("GET "+base+"/environments/{environment}/secrets", protect(false, s.workerSecretList))
+	m.HandleFunc("PUT "+base+"/environments/{environment}/secrets/{secret}", protect(false, s.workerSecretPut))
+	m.HandleFunc("DELETE "+base+"/environments/{environment}/secrets/{secret}", protect(false, s.workerSecretDelete))
 	m.HandleFunc("POST "+base+"/environments/{environment}/releases", protect(false, s.workerPublish))
 	m.HandleFunc("POST "+base+"/environments/{environment}/rollbacks", protect(false, s.workerRollback))
 	m.HandleFunc("GET "+base+"/environments/{environment}/history", protect(false, s.workerReleaseHistory))
@@ -143,6 +147,13 @@ func (s *Server) normalizeService(ws WorkerService) WorkerService {
 		// half-migrated row never ends up unroutable.
 		ws.Domains = s.Config.Workers.defaultDomains()
 	}
+	if _, ok := s.Config.Workers.runtimePool(ws.Pool); !ok {
+		if pool, matched := s.Config.Workers.poolForDomains(ws.Domains); matched {
+			ws.Pool = pool.ID
+		} else {
+			ws.Pool = s.Config.Workers.defaultRuntimePool().ID
+		}
+	}
 	if ws.Environments == nil {
 		ws.Environments = map[string]WorkerEnvironment{}
 	}
@@ -159,8 +170,16 @@ func (s *Server) normalizeService(ws WorkerService) WorkerService {
 	if baseline.Variables == nil {
 		baseline.Variables = map[string]string{}
 	}
+	if baseline.SecretVersions == nil {
+		baseline.SecretVersions = map[string]string{}
+	}
+	baseline.SecretNames = workerSecretNames(baseline.SecretVersions)
 	ws.Environments[workerBaseline] = baseline
 	for name, env := range ws.Environments {
+		if env.SecretVersions == nil {
+			env.SecretVersions = map[string]string{}
+		}
+		env.SecretNames = workerSecretNames(env.SecretVersions)
 		s.syncEnvironmentHosts(&env, ws.Organization, ws.Service, ws.Domains)
 		ws.Environments[name] = env
 	}
@@ -426,6 +445,11 @@ type workerOverviewEnvironment struct {
 	ConfirmedRelease *WorkerRelease    `json:"confirmed_release,omitempty"`
 }
 
+func publicWorkerRelease(release WorkerRelease) WorkerRelease {
+	release.Pool = ""
+	return release
+}
+
 // workerOverview is the console polling read model. It deliberately contains
 // only public Workers fields and applies the same per-environment permissions
 // as the individual collection endpoints.
@@ -475,12 +499,12 @@ func (s *Server) workerOverview(st *State, p Principal, r *http.Request) (any, i
 				releaseIDs[history.Release] = true
 			}
 			if release, ok := st.Workers.Releases[env.Release]; ok {
-				value := release
+				value := publicWorkerRelease(release)
 				entry.CurrentRelease = &value
 				releaseIDs[release.ID] = true
 			}
 			if release, ok := st.Workers.Releases[env.Confirmed]; ok {
-				value := release
+				value := publicWorkerRelease(release)
 				entry.ConfirmedRelease = &value
 				releaseIDs[release.ID] = true
 			}
@@ -509,7 +533,7 @@ func (s *Server) workerOverview(st *State, p Principal, r *http.Request) (any, i
 	releases := map[string]WorkerRelease{}
 	for id := range releaseIDs {
 		if release, ok := st.Workers.Releases[id]; ok && release.Service == t.ID && release.Organization == t.Organization && versionVisible[release.Environment] {
-			releases[id] = release
+			releases[id] = publicWorkerRelease(release)
 		}
 	}
 	return map[string]any{
@@ -558,12 +582,24 @@ func (s *Server) workerServiceDomainsUpdate(st *State, p Principal, r *http.Requ
 		}
 		seen[id] = true
 	}
+	targetPool, ok := s.Config.Workers.poolForDomains(in.Domains)
+	if !ok {
+		return nil, 0, problem(422, "WORKER_NETWORK_ACCESS_UNAVAILABLE", "This deployment does not provide a runtime for the selected public/private access combination")
+	}
 	ws := s.workerService(st, t)
 	if in.ExpectedRevision == nil {
 		return nil, 0, problem(422, "DOMAINS_INVALID", "expected_revision is required")
 	}
 	if *in.ExpectedRevision != ws.DomainsRevision {
 		return nil, 0, problem(409, "REVISION_CONFLICT", "Domain configuration changed")
+	}
+	if ws.Pool != targetPool.ID {
+		for _, env := range ws.Environments {
+			if env.Release != "" {
+				return nil, 0, problem(409, "WORKER_NETWORK_REASSIGNMENT_REQUIRED", "Published Workers require a platform-managed runtime reassignment before changing this network combination")
+			}
+		}
+		ws.Pool = targetPool.ID
 	}
 	ws.Domains = append([]string(nil), in.Domains...)
 	ws.DomainsRevision++
@@ -615,7 +651,7 @@ func (s *Server) workerEnvironmentCreate(st *State, p Principal, r *http.Request
 	if previews >= limit {
 		return nil, 0, problem(409, "ENVIRONMENT_LIMIT", "Too many preview environments")
 	}
-	env := WorkerEnvironment{Name: in.Name, Enabled: true, ConfigRevision: 1, Variables: map[string]string{}}
+	env := WorkerEnvironment{Name: in.Name, Enabled: true, ConfigRevision: 1, Variables: map[string]string{}, SecretVersions: map[string]string{}}
 	s.syncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains)
 	ws.Environments[in.Name] = env
 	ws.PreviewRevision++
@@ -675,6 +711,13 @@ func (s *Server) workerEnvironmentUpdate(st *State, p Principal, r *http.Request
 	}
 	if in.Variables != nil && !workerVariablesValid(in.Variables) {
 		return nil, 0, problem(422, "WORKER_VARIABLES_INVALID", "Use up to 32 non-reserved uppercase variables, at most 16 KiB")
+	}
+	if in.Variables != nil {
+		for name := range in.Variables {
+			if _, exists := current.SecretVersions[name]; exists {
+				return nil, 0, problem(409, "WORKER_BINDING_CONFLICT", "A Secret already uses this binding name")
+			}
+		}
 	}
 	if in.Enabled != nil {
 		if env == workerBaseline && !*in.Enabled {
@@ -761,7 +804,7 @@ func (s *Server) workerReleaseCreate(st *State, p Principal, r *http.Request, ki
 		if !ok || a.State != "finalized" {
 			return nil, 0, problem(409, "ARTIFACT_UNAVAILABLE", "Artifact unavailable")
 		}
-		release = WorkerRelease{Service: t.ID, Organization: t.Organization, Environment: env, Artifact: a.ID, ArchiveDigest: a.ArchiveDigest, ModuleDigest: a.ModuleDigest, ConfigRevision: current.ConfigRevision, Variables: current.Variables, Pool: "default"}
+		release = WorkerRelease{Service: t.ID, Organization: t.Organization, Environment: env, Artifact: a.ID, ArchiveDigest: a.ArchiveDigest, ModuleDigest: a.ModuleDigest, ConfigRevision: current.ConfigRevision, Variables: current.Variables, SecretDigest: workerSecretsDigest(current.SecretVersions), SecretVersions: cloneStringsMap(current.SecretVersions), Pool: ws.Pool}
 		raw, _ := json.Marshal(release)
 		release.ID = "rel_" + bytesDigest(raw)
 		release.Created = now()
@@ -785,6 +828,9 @@ func (s *Server) workerReleaseCreate(st *State, p Principal, r *http.Request, ki
 		}
 		if !historical {
 			return nil, 0, problem(409, "ROLLBACK_NOT_PUBLISHED", "Rollback target must be a successfully published release")
+		}
+		if d.Pool != ws.Pool {
+			return nil, 0, problem(409, "WORKER_RELEASE_POOL_MISMATCH", "Rollback target is not placed in the service's current runtime pool")
 		}
 		release = d
 	}
@@ -920,5 +966,5 @@ func (s *Server) workerReleaseGet(st *State, p Principal, r *http.Request) (any,
 		return nil, 0, notFound()
 	}
 	_, e := s.workerTarget(st, r, d.Environment, "service.version.read", p)
-	return d, 200, e
+	return publicWorkerRelease(d), 200, e
 }

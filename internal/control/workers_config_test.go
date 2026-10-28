@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"sort"
 	"strings"
@@ -318,8 +319,8 @@ func TestWorkerRuntimeConfigChanges(t *testing.T) {
 	s.Config.Workers = func() *WorkersConfig { c := testWorkersConfig(); c.RuntimeToken = token; return c }()
 	s.routes()
 	ctx := context.Background()
-	payload, _ := json.Marshal(workerConfigProjection{Routes: []workerConfigRoute{{Host: "w.workers.test", Enabled: true, Release: "rel-1"}}, Releases: map[string]WorkerRelease{}})
-	ops, _ := json.Marshal([]workerConfigOp{{Type: "route_upsert", Host: "w.workers.test"}})
+	payload, _ := json.Marshal(workerConfigProjection{Routes: []workerConfigRoute{{Host: "w.workers.test", Enabled: true, Release: "rel-1", Pool: "default"}}, Releases: map[string]WorkerRelease{}})
+	ops, _ := json.Marshal([]workerConfigOp{{Type: "route_upsert", Pool: "default", Host: "w.workers.test"}})
 	if _, _, err := store.AppendConfigRevision(ctx, "d1", payload, ops, 512); err != nil {
 		t.Fatal(err)
 	}
@@ -352,5 +353,59 @@ func TestWorkerRuntimeConfigChanges(t *testing.T) {
 	s.serveInternal(snapshot, req)
 	if snapshot.Code != 200 || !strings.Contains(snapshot.Body.String(), `"config_revision":2`) {
 		t.Fatalf("snapshot: %d %s", snapshot.Code, snapshot.Body.String())
+	}
+}
+
+func TestMultiPoolRuntimeConfigIsolation(t *testing.T) {
+	s, store := testServer(t)
+	c := testWorkersConfig()
+	c.RuntimePools = []WorkerRuntimePool{
+		{ID: "private-a", Access: []string{"private"}, RuntimeService: "runtime-private", RuntimeToken: strings.Repeat("p", 24), ManagementToken: strings.Repeat("q", 24), Default: true},
+		{ID: "public-b", Access: []string{"public"}, RuntimeService: "runtime-public", RuntimeToken: strings.Repeat("u", 24), ManagementToken: strings.Repeat("v", 24)},
+	}
+	s.Config.Workers = c
+	s.routes()
+	ctx := context.Background()
+	projection := workerConfigProjection{
+		Routes: []workerConfigRoute{
+			{Host: "private.workers.test", Enabled: true, Release: "rel-private", Pool: "private-a"},
+			{Host: "public.workers.test", Enabled: true, Release: "rel-public", Pool: "public-b"},
+		},
+		Releases: map[string]WorkerRelease{
+			"rel-private": {ID: "rel-private", Pool: "private-a"},
+			"rel-public":  {ID: "rel-public", Pool: "public-b"},
+		},
+	}
+	payload, _ := json.Marshal(projection)
+	if _, _, err := store.AppendConfigRevision(ctx, "d1", payload, []byte(`[]`), 512); err != nil {
+		t.Fatal(err)
+	}
+	ops, _ := json.Marshal([]workerConfigOp{
+		{Type: "route_upsert", Pool: "private-a", Host: "private.workers.test", Route: &projection.Routes[0]},
+		{Type: "route_upsert", Pool: "public-b", Host: "public.workers.test", Route: &projection.Routes[1]},
+	})
+	if _, _, err := store.AppendConfigRevision(ctx, "d2", payload, ops, 512); err != nil {
+		t.Fatal(err)
+	}
+
+	requestPool := func(pool, token, path string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "/api/internal/workers/config"+path, nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("X-Runtime-Pool", pool)
+		w := httptest.NewRecorder()
+		s.serveInternal(w, r)
+		return w
+	}
+	privateSnapshot := requestPool("private-a", strings.Repeat("p", 24), "/snapshot")
+	if privateSnapshot.Code != http.StatusOK || !strings.Contains(privateSnapshot.Body.String(), "private.workers.test") || strings.Contains(privateSnapshot.Body.String(), "public.workers.test") {
+		t.Fatalf("private snapshot isolation: %d %s", privateSnapshot.Code, privateSnapshot.Body.String())
+	}
+	privateChanges := requestPool("private-a", strings.Repeat("p", 24), "/changes?since=1&wait=1s")
+	if privateChanges.Code != http.StatusOK || !strings.Contains(privateChanges.Body.String(), "private.workers.test") || strings.Contains(privateChanges.Body.String(), "public.workers.test") {
+		t.Fatalf("private changes isolation: %d %s", privateChanges.Code, privateChanges.Body.String())
+	}
+	wrongCredential := requestPool("private-a", strings.Repeat("u", 24), "/snapshot")
+	if wrongCredential.Code != http.StatusForbidden {
+		t.Fatalf("cross-pool credential accepted: %d %s", wrongCredential.Code, wrongCredential.Body.String())
 	}
 }

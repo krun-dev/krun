@@ -33,8 +33,8 @@ func catalogConfig() *WorkersConfig {
 			{ID: "external", Name: "workers-public", Namespace: "kgateway-system", Section: "public", Base: "http://127.0.0.1:38081"},
 		},
 		Domains: []WorkerDomain{
-			{ID: "internal", Domain: "workers.test", Label: "内网", Gateway: "internal", Default: true},
-			{ID: "external", Domain: "workers-out.example.test", Label: "公网", Gateway: "external"},
+			{ID: "internal", Domain: "workers.test", Label: "内网", Access: "private", Gateway: "internal", Default: true},
+			{ID: "external", Domain: "workers-out.example.test", Label: "公网", Access: "public", Gateway: "external"},
 		},
 	}
 }
@@ -63,6 +63,61 @@ func TestCatalogValidationAndDefaults(t *testing.T) {
 	}
 }
 
+func multiPoolCatalogConfig() *WorkersConfig {
+	c := catalogConfig()
+	c.RuntimePools = []WorkerRuntimePool{
+		{ID: "private-a", Access: []string{"private"}, RuntimeService: "runtime-private", RuntimeToken: strings.Repeat("p", 24), ManagementToken: strings.Repeat("q", 24), Default: true},
+		{ID: "public-b", Access: []string{"public"}, RuntimeService: "runtime-public", RuntimeToken: strings.Repeat("u", 24), ManagementToken: strings.Repeat("v", 24)},
+	}
+	return c
+}
+
+func TestRuntimePoolsExposeOnlyPortableNetworkOptions(t *testing.T) {
+	c := multiPoolCatalogConfig()
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	s, store, base := workerTestServer(t)
+	s.Config.Workers = c
+	s.routes()
+
+	options := request(s, http.MethodGet, "/api/v1/orgs/org-a/workers/network-options", "krun_cli_admin", "")
+	if options.Code != http.StatusOK || strings.Contains(options.Body.String(), "private-a") || strings.Contains(options.Body.String(), "runtime-private") {
+		t.Fatalf("internal placement leaked through network options: %d %s", options.Code, options.Body.String())
+	}
+	var response struct {
+		Items []WorkerNetworkOptionView `json:"items"`
+	}
+	if err := json.Unmarshal(options.Body.Bytes(), &response); err != nil || len(response.Items) != 2 || response.Items[0].ID != "private" || response.Items[1].ID != "public" {
+		t.Fatalf("portable options: %+v err=%v", response.Items, err)
+	}
+
+	changed := request(s, http.MethodPut, base+"/domains", "krun_cli_admin", `{"domains":["external"],"expected_revision":0}`)
+	if changed.Code != http.StatusOK || strings.Contains(changed.Body.String(), "public-b") {
+		t.Fatalf("public selection: %d %s", changed.Code, changed.Body.String())
+	}
+	if err := store.View(context.Background(), PartitionWorkers, func(st *State) error {
+		if got := st.Workers.Services["svc-a"].Pool; got != "public-b" {
+			t.Fatalf("hidden pool assignment=%q", got)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	unsupported := request(s, http.MethodPut, base+"/domains", "krun_cli_admin", `{"domains":["internal","external"],"expected_revision":1}`)
+	if unsupported.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unsupported combination accepted: %d %s", unsupported.Code, unsupported.Body.String())
+	}
+}
+
+func TestRuntimePoolsRejectAmbiguousAccessCombination(t *testing.T) {
+	c := multiPoolCatalogConfig()
+	c.RuntimePools = append(c.RuntimePools, WorkerRuntimePool{ID: "public-c", Access: []string{"public"}, RuntimeService: "runtime-public-2", RuntimeToken: strings.Repeat("x", 24), ManagementToken: strings.Repeat("y", 24)})
+	if err := c.validate(); err == nil || !strings.Contains(err.Error(), "access combination") {
+		t.Fatalf("ambiguous runtime pools accepted: %v", err)
+	}
+}
+
 func TestCatalogRejectsBrokenReferences(t *testing.T) {
 	c := catalogConfig()
 	c.Domains[1].Gateway = "missing"
@@ -73,6 +128,11 @@ func TestCatalogRejectsBrokenReferences(t *testing.T) {
 	c.Domains[1].Domain = c.Domains[0].Domain
 	if err := c.validate(); err == nil {
 		t.Fatal("duplicate domain accepted")
+	}
+	c = catalogConfig()
+	c.Domains[1].Access = "partner"
+	if err := c.validate(); err == nil {
+		t.Fatal("unknown portable access class accepted")
 	}
 	c = catalogConfig()
 	c.Gateways = nil
@@ -374,14 +434,15 @@ func TestEnsureRoutesGroupsHostsByGateway(t *testing.T) {
 		t.Fatal(err)
 	}
 	k := &workerKubernetes{base: srv.URL, namespace: "workers-mvp", client: srv.Client()}
+	runtimeService := "runtime-private"
 	hosts := map[string][]string{
 		"internal": {"w-1-production.workers.test"},
 		"external": {"w-1-production.workers-out.example.test"},
 	}
-	if ready, err := k.ensureRoutes(context.Background(), c, "workers-abc", hosts); err != nil || ready {
+	if ready, err := k.ensureRoutes(context.Background(), c, "workers-abc", runtimeService, hosts); err != nil || ready {
 		t.Fatalf("creation pass: %v ready=%v", err, ready)
 	}
-	if ready, err := k.ensureRoutes(context.Background(), c, "workers-abc", hosts); err != nil || !ready {
+	if ready, err := k.ensureRoutes(context.Background(), c, "workers-abc", runtimeService, hosts); err != nil || !ready {
 		t.Fatalf("ensureRoutes: %v ready=%v", err, ready)
 	}
 	// The first catalog Gateway keeps the base name; later ones are suffixed.
@@ -400,6 +461,13 @@ func TestEnsureRoutesGroupsHostsByGateway(t *testing.T) {
 	}
 	if ep["name"] != "workers-public" || ep["sectionName"] != "public" {
 		t.Fatalf("external route attached to %v", ep)
+	}
+	for route, spec := range map[string]map[string]any{"internal": internal, "external": external} {
+		rules := spec["rules"].([]any)
+		backend := rules[0].(map[string]any)["backendRefs"].([]any)[0].(map[string]any)
+		if backend["name"] != runtimeService {
+			t.Fatalf("%s route backend=%v", route, backend)
+		}
 	}
 	for _, raw := range external["hostnames"].([]any) {
 		if strings.HasSuffix(raw.(string), "."+c.Domains[0].Domain) {
@@ -525,13 +593,13 @@ func TestEnsureRoutesPrunesGatewayWithoutHosts(t *testing.T) {
 		t.Fatal(err)
 	}
 	k := &workerKubernetes{base: srv.URL, namespace: "workers-mvp", client: srv.Client()}
-	if _, err := k.ensureRoutes(context.Background(), c, "workers-abc", map[string][]string{
+	if _, err := k.ensureRoutes(context.Background(), c, "workers-abc", c.RuntimeService, map[string][]string{
 		"internal": {"w-1-production.workers.test"},
 		"external": {"w-1-production.workers-out.example.test"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := k.ensureRoutes(context.Background(), c, "workers-abc", map[string][]string{
+	if _, err := k.ensureRoutes(context.Background(), c, "workers-abc", c.RuntimeService, map[string][]string{
 		"internal": {"w-1-production.workers.test"},
 	}); err != nil {
 		t.Fatal(err)
@@ -602,7 +670,7 @@ func TestDomainCatalogAPIExposesLabels(t *testing.T) {
 		t.Fatalf("domains: %+v", list.Items)
 	}
 	for _, d := range list.Items {
-		if d.Label == "" || d.Gateway == "" {
+		if d.Label == "" || d.Access == "" {
 			t.Fatalf("domain entry incomplete: %+v", d)
 		}
 	}

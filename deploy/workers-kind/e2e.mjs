@@ -202,6 +202,26 @@ await check('full-stack page, API, SPA, HTML, and cache behavior work through ru
  assert.equal(cached.status,304);
  return {release:assetRelease.release_id,etag,root:root.status,api:health.status,echo:echoResult.status,spa:navigate.status,redirect:redirect.status,missing:missing.status};
 });
+await check('Secret put and delete create configuration-only Releases and deploy immediately',async()=>{
+ const before=(await api(base+'/environments')).items.find(e=>e.name==='production');
+ const secretValue='kind-secret-'+randomUUID();
+ const queued=await api(base+'/environments/production/secrets/VERIFICATION_SECRET','PUT',{value:secretValue,expected_revision:before.release_revision,idempotency_key:randomUUID()},202);
+ const deployed=await poll(base+'/operations/'+queued.id,['available']);
+ const secretRelease=await api(base+'/releases/'+deployed.release_id);
+ assert.equal(secretRelease.artifact_id,assetBuild.artifact_id);
+ const withSecret=await invoke(hostProd,'/api/health');
+ assert.equal(withSecret.status,200);assert.equal(withSecret.body.secret_configured,true);assert.equal(withSecret.body.release_id,deployed.release_id);
+ const listed=await api(base+'/environments/production/secrets');
+ assert.deepEqual(listed.items.map(item=>item.name),['VERIFICATION_SECRET']);
+ assert(!JSON.stringify(listed).includes(secretValue));
+ const current=(await api(base+'/environments')).items.find(e=>e.name==='production');
+ const removing=await api(base+'/environments/production/secrets/VERIFICATION_SECRET','DELETE',{expected_revision:current.release_revision,idempotency_key:randomUUID()},202);
+ const removed=await poll(base+'/operations/'+removing.id,['available']);
+ const withoutSecret=await invoke(hostProd,'/api/health');
+ assert.equal(withoutSecret.body.secret_configured,false);assert.equal(withoutSecret.body.release_id,removed.release_id);
+ const deleteRelease=await api(base+'/releases/'+removed.release_id);assert.equal(deleteRelease.artifact_id,assetBuild.artifact_id);
+ return {put_release:deployed.release_id,delete_release:removed.release_id,artifact:assetBuild.artifact_id,value_exposed:false};
+});
 await check('static domain serves pub/ directly and v1/ stays private',async()=>{
  const path='/'+org.id+'/'+service.id+'/'+assetArtifact.archive_sha256+'/index.html';
  let static200;for(let i=0;i<20;i++){static200=await invoke('static.workers.test',path);if(static200.status===200)break;await sleep(500);}

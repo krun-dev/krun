@@ -16,14 +16,15 @@ func replacePublishedWorkerConfig(ctx context.Context, tx pgx.Tx, payload []byte
 	raw := string(payload)
 	if _, err := tx.Exec(ctx, `WITH incoming AS MATERIALIZED (
 			SELECT route->>'host' AS host,
+				COALESCE(NULLIF(route->>'pool',''),'default') AS pool,
 				COALESCE(route->>'path','') AS path,
 				COALESCE((route->>'enabled')::boolean,false) AS enabled,
 				COALESCE(route->>'release','') AS release_id
 			FROM jsonb_array_elements(COALESCE($1::jsonb->'routes','[]'::jsonb)) AS route
 		), upserted AS (
-			INSERT INTO worker_config_routes (host, path, enabled, release_id)
-			SELECT host, path, enabled, release_id FROM incoming
-			ON CONFLICT (host) DO UPDATE SET path=excluded.path, enabled=excluded.enabled, release_id=excluded.release_id
+			INSERT INTO worker_config_routes (host, pool, path, enabled, release_id)
+			SELECT host, pool, path, enabled, release_id FROM incoming
+			ON CONFLICT (host) DO UPDATE SET pool=excluded.pool, path=excluded.path, enabled=excluded.enabled, release_id=excluded.release_id
 			RETURNING host
 		)
 		DELETE FROM worker_config_routes current
@@ -31,12 +32,12 @@ func replacePublishedWorkerConfig(ctx context.Context, tx pgx.Tx, payload []byte
 		return err
 	}
 	if _, err := tx.Exec(ctx, `WITH incoming AS MATERIALIZED (
-			SELECT item.key AS release_id, item.value AS payload
+			SELECT item.key AS release_id, COALESCE(NULLIF(item.value->>'pool',''),'default') AS pool, item.value AS payload
 			FROM jsonb_each(COALESCE($1::jsonb->'releases','{}'::jsonb)) AS item
 		), upserted AS (
-			INSERT INTO worker_config_releases (release_id, payload)
-			SELECT release_id, payload FROM incoming
-			ON CONFLICT (release_id) DO UPDATE SET payload=excluded.payload
+			INSERT INTO worker_config_releases (release_id, pool, payload)
+			SELECT release_id, pool, payload FROM incoming
+			ON CONFLICT (release_id) DO UPDATE SET pool=excluded.pool, payload=excluded.payload
 			RETURNING release_id
 		)
 		DELETE FROM worker_config_releases current
@@ -82,7 +83,7 @@ func (s *Store) WorkerConfigProjection(ctx context.Context, domains []WorkerDoma
 		return workerConfigProjection{}, 0, err
 	}
 	st := newState()
-	rows, err := tx.Query(ctx, `SELECT s.service_id, s.org_id
+	rows, err := tx.Query(ctx, `SELECT s.service_id, s.org_id, s.pool
 		FROM krun_worker_services s
 		JOIN krun_resources r ON r.resource_id=s.service_id AND r.kind='service' AND r.org_id=s.org_id
 		JOIN krun_organizations o ON o.org_id=s.org_id
@@ -91,14 +92,14 @@ func (s *Store) WorkerConfigProjection(ctx context.Context, domains []WorkerDoma
 		return workerConfigProjection{}, 0, err
 	}
 	for rows.Next() {
-		var service, organization string
-		if err = rows.Scan(&service, &organization); err != nil {
+		var service, organization, pool string
+		if err = rows.Scan(&service, &organization, &pool); err != nil {
 			rows.Close()
 			return workerConfigProjection{}, 0, err
 		}
 		st.Organizations[organization] = Organization{ID: organization}
 		st.Resources[service] = Resource{ID: service, Kind: "service", Organization: organization}
-		st.Workers.Services[service] = WorkerService{Service: service, Organization: organization, Environments: map[string]WorkerEnvironment{}}
+		st.Workers.Services[service] = WorkerService{Service: service, Organization: organization, Pool: pool, Environments: map[string]WorkerEnvironment{}}
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()
@@ -163,14 +164,13 @@ func (s *Store) WorkerConfigProjection(ctx context.Context, domains []WorkerDoma
 
 	rows, err = tx.Query(ctx, `SELECT rel.release_id, rel.org_id, rel.service_id, rel.env_name,
 		rel.artifact_id, rel.archive_digest, rel.module_digest, rel.config_revision,
-		rel.variables, rel.pool, rel.created_at
+		rel.variables, rel.secret_digest, rel.pool, rel.created_at
 		FROM krun_worker_releases rel
 		JOIN krun_worker_environments e ON e.release_id=rel.release_id
 			AND e.service_id=rel.service_id AND e.env_name=rel.env_name
 		JOIN krun_worker_services s ON s.service_id=e.service_id AND s.org_id=rel.org_id
 		JOIN krun_resources r ON r.resource_id=s.service_id AND r.kind='service' AND r.org_id=s.org_id
 		JOIN krun_organizations o ON o.org_id=s.org_id
-		WHERE rel.pool='default'
 		ORDER BY rel.release_id`)
 	if err != nil {
 		return workerConfigProjection{}, 0, err
@@ -214,7 +214,7 @@ func (s *Store) WorkerRoutingTopology(ctx context.Context) (map[string]WorkerSer
 		return nil, 0, err
 	}
 	services := map[string]WorkerService{}
-	rows, err := tx.Query(ctx, `SELECT s.service_id, s.org_id
+	rows, err := tx.Query(ctx, `SELECT s.service_id, s.org_id, s.pool
 		FROM krun_worker_services s
 		JOIN krun_resources r ON r.resource_id=s.service_id AND r.kind='service' AND r.org_id=s.org_id
 		JOIN krun_organizations o ON o.org_id=s.org_id
@@ -223,12 +223,12 @@ func (s *Store) WorkerRoutingTopology(ctx context.Context) (map[string]WorkerSer
 		return nil, 0, err
 	}
 	for rows.Next() {
-		var service, organization string
-		if err = rows.Scan(&service, &organization); err != nil {
+		var service, organization, pool string
+		if err = rows.Scan(&service, &organization, &pool); err != nil {
 			rows.Close()
 			return nil, 0, err
 		}
-		services[service] = WorkerService{Service: service, Organization: organization, Environments: map[string]WorkerEnvironment{}}
+		services[service] = WorkerService{Service: service, Organization: organization, Pool: pool, Environments: map[string]WorkerEnvironment{}}
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()

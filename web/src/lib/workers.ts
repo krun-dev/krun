@@ -50,6 +50,7 @@ export type Environment = {
   hosts: string[];
   configuration_revision: number;
   variables: Record<string, string>;
+  secret_names: string[];
   release_revision: number;
   release_id?: string;
   confirmed_release_id?: string;
@@ -60,8 +61,13 @@ export type WorkerDomain = {
   id: string;
   domain: string;
   label: string;
-  gateway: string;
+  access: "public" | "private";
   static_domain: string;
+  default: boolean;
+};
+export type WorkerNetworkOption = {
+  id: string;
+  access: ("public" | "private")[];
   default: boolean;
 };
 export type Release = {

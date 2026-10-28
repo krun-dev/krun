@@ -19,7 +19,7 @@ func publishedWorkerInvokeServer(t *testing.T) (*Server, *Store, string, string)
 	t.Helper()
 	s, store, base := workerTestServer(t)
 	s.Config.Workers.Gateways = []WorkerGateway{{ID: "internal", Name: "workers-gateway", Namespace: "gateway-system", Section: "private"}}
-	s.Config.Workers.Domains = []WorkerDomain{{ID: "internal", Domain: "workers.test", Label: "内网", Gateway: "internal", Default: true}}
+	s.Config.Workers.Domains = []WorkerDomain{{ID: "internal", Domain: "workers.test", Label: "内网", Access: "private", Gateway: "internal", Default: true}}
 	var host string
 	if err := store.Update(context.Background(), PartitionAll, func(st *State) error {
 		service := s.workerService(st, Target{ID: "svc-a", Organization: "org-a"})

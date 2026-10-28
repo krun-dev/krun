@@ -19,4 +19,6 @@ providers:
   # 接入真实 SSO 时参考 config/example.yaml；Workers 与认证配置同文件，完整 workers: 段见 config/example.yaml。
   # local-first 的 s3_endpoint / s3_builder_endpoint 通常使用本机 127.0.0.1；
   # s3_runtime_endpoint 必须改成集群可达且已加入 workerd allowlist 的开发机 MinIO 地址。
+  # Secrets 还需在同一 workers: 段配置 secrets_active_key 与 secrets_keys；
+  # 真实 key 只放 .data/dev.yaml 或由其中的环境变量占位符展开。
   # 省略 workers: 段时服务仍可启动，Workers 接口返回 WORKERS_NOT_CONFIGURED，控制台显示“Workers 未配置”。

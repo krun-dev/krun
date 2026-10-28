@@ -7,6 +7,7 @@
 - `wrangler.jsonc` 把 `/api/*` 交给 Worker，其余请求交给静态资产；
 - 未命中的浏览器导航使用 `index.html` 做 SPA fallback；
 - `about.html` 用来验证 HTML 路径规范化；带 hash 的 CSS、JS、SVG 用来验证 immutable 缓存。
+- `/api/health` 只报告 `VERIFICATION_SECRET` 是否已注入，从不回显 Secret 值。
 
 前端和 API 始终同源，不需要 CORS，也不读取运行期后端地址。
 
@@ -42,5 +43,6 @@ builder、MinIO、Release、配置分发、kgateway 和 workerd 发布。验收�
 3. `/dashboard` 的浏览器导航回落到 `index.html`；
 4. ETag/304、带 hash 资产的 immutable cache、HTML 307 规范化；
 5. 静态域可匿名读取 `pub/`，但不能匿名读取含业务代码的 `v1/` 归档。
+6. Secret 新增和删除各自自动发布新 Release，复用同一个 Artifact，且公开 API 不泄漏值。
 
 完整独立环境运行方式见 [`deploy/workers-kind/README.md`](../../deploy/workers-kind/README.md)。

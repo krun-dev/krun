@@ -218,14 +218,14 @@ func (w *workersController) reconcile(ctx context.Context) error {
 	}
 	// One shared static route per domain; it does not scale with services.
 	// Each route lives on the Gateway instance that domain is bound to. Assets
-	// are written to both the public and internal object prefixes, so the first
-	// domain serves pub/ and later ones serve int/; that keeps the existing
-	// bucket layout working while every domain gets its own origin.
+	// are written to both the public and internal object prefixes. The explicit
+	// portable access class, rather than catalog order or a private pool name,
+	// chooses which prefix a domain serves.
 	desiredStatic := map[string]bool{}
-	for i, d := range w.config.Domains {
+	for _, d := range w.config.Domains {
 		desiredStatic["workers-static-"+d.ID] = true
 		prefix := "int"
-		if i == 0 {
+		if d.Access == "public" {
 			prefix = "pub"
 		}
 		if e := w.kube.ensureStaticRoute(ctx, w.config, d.ID, prefix); e != nil {
@@ -253,6 +253,12 @@ func (w *workersController) reconcile(ctx context.Context) error {
 		desiredRoutes[name] = true
 	}
 	for _, service := range topology {
+		pool, ok := w.config.runtimePool(service.Pool)
+		if !ok {
+			failures = append(failures, fmt.Errorf("worker service %s references unknown runtime pool %q", service.Service, service.Pool))
+			routesReady[service.Service] = false
+			continue
+		}
 		hostsByGateway := map[string][]string{}
 		selectedDomains := service.Domains
 		if len(selectedDomains) == 0 {
@@ -284,7 +290,7 @@ func (w *workersController) reconcile(ctx context.Context) error {
 			}
 			desiredRoutes[name] = true
 		}
-		ready, routeError := w.kube.ensureRoutes(ctx, w.config, baseName, hostsByGateway)
+		ready, routeError := w.kube.ensureRoutes(ctx, w.config, baseName, pool.RuntimeService, hostsByGateway)
 		routesReady[service.Service] = ready && routeError == nil
 		if routeError != nil {
 			failures = append(failures, routeError)
@@ -468,18 +474,18 @@ func (w *workersController) failOperation(ctx context.Context, id, message strin
 func (w *workersController) noteOperation(ctx context.Context, id, message string) error {
 	return w.server.Store.noteOperationMessage(ctx, id, message)
 }
-func (w *workersController) management(ctx context.Context, pod workerPod, path string, payload any) (map[string]any, int, error) {
+func (w *workersController) management(ctx context.Context, pool WorkerRuntimePool, pod workerPod, path string, payload any) (map[string]any, int, error) {
 	raw, _ := json.Marshal(payload)
 	// Control planes outside the cluster reach runtimes through a fixed proxy base instead of Pod IPs.
 	base := "http://" + net.JoinHostPort(pod.IP, "8083")
-	if w.config.RuntimeManagementBase != "" {
-		base = w.config.RuntimeManagementBase
+	if pool.RuntimeManagementBase != "" {
+		base = pool.RuntimeManagementBase
 	}
 	req, e := http.NewRequestWithContext(ctx, "POST", base+path, bytes.NewReader(raw))
 	if e != nil {
 		return nil, 0, e
 	}
-	req.Header.Set("Authorization", "Bearer "+w.config.ManagementToken)
+	req.Header.Set("Authorization", "Bearer "+pool.ManagementToken)
 	req.Header.Set("Content-Type", "application/json")
 	resp, e := w.http.Do(req)
 	if e != nil {
@@ -506,6 +512,10 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 	if !ok {
 		return w.failOperation(ctx, op.ID, "Release unavailable")
 	}
+	pool, ok := w.config.runtimePool(release.Pool)
+	if !ok {
+		return w.failOperation(ctx, op.ID, "Runtime pool unavailable")
+	}
 	artifact, ok := state.Artifacts[release.Artifact]
 	if !ok {
 		return w.failOperation(ctx, op.ID, "Artifact unavailable")
@@ -530,7 +540,7 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 			}
 		}
 		actor := state.OperationPrivate[op.ID].Actor
-		auth, e := w.authorizeActor(ctx, actor, op.Service, op.Environment, "service."+op.Kind)
+		auth, e := w.authorizeActor(ctx, actor, op.Service, op.Environment, workerOperationAction(op.Kind))
 		if e != nil {
 			return e
 		}
@@ -538,7 +548,7 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 			return w.failOperation(ctx, op.ID, "Release permission revoked")
 		}
 	}
-	pods, e := w.kube.runtimeMembers(ctx, w.config.RuntimeService)
+	pods, e := w.kube.runtimeMembers(ctx, pool.ID, pool.RuntimeService)
 	if e != nil {
 		return e
 	}
@@ -560,7 +570,7 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 		if e != nil {
 			return w.noteOperation(ctx, op.ID, "Artifact URL unavailable")
 		}
-		result, status, e := w.management(ctx, candidate, "/validate", map[string]any{"release": release, "artifact": map[string]any{"download_url": signed, "size": artifact.Size, "archive_sha256": artifact.ArchiveDigest}})
+		result, status, e := w.management(ctx, pool, candidate, "/validate", map[string]any{"release": release, "artifact": map[string]any{"download_url": signed, "size": artifact.Size, "archive_sha256": artifact.ArchiveDigest}})
 		if e != nil {
 			return w.noteOperation(ctx, op.ID, "Runtime validation temporarily unavailable")
 		}
@@ -574,13 +584,13 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 		// listed. Behind a proxied runtime_management_base the response may
 		// come from any healthy member, so only release identity applies.
 		uidMatches := result["pod_uid"] == candidate.UID
-		if w.config.RuntimeManagementBase != "" {
+		if pool.RuntimeManagementBase != "" {
 			uidMatches = true
 		}
 		if !uidMatches || result["release_id"] != release.ID || result["archive_sha256"] != release.ArchiveDigest {
 			return w.failOperation(ctx, op.ID, fmt.Sprintf("Candidate identity mismatch (pod %s uid %s vs %s, release %s vs %s, archive %s vs %s)", candidate.Name, candidate.UID, result["pod_uid"], release.ID, result["release_id"], release.ArchiveDigest, result["archive_sha256"]))
 		}
-		after, e := w.kube.runtimeMembers(ctx, w.config.RuntimeService)
+		after, e := w.kube.runtimeMembers(ctx, pool.ID, pool.RuntimeService)
 		if e != nil {
 			return e
 		}
@@ -590,7 +600,7 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 		// Re-authorize immediately before commit: a permission revoked during
 		// validation must stop the release.
 		actor := state.OperationPrivate[op.ID].Actor
-		auth, e := w.authorizeActor(ctx, actor, op.Service, op.Environment, "service."+op.Kind)
+		auth, e := w.authorizeActor(ctx, actor, op.Service, op.Environment, workerOperationAction(op.Kind))
 		if e != nil {
 			return e
 		}
@@ -622,7 +632,7 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 			return nil
 		}
 	}
-	pods, e = w.kube.runtimeMembers(ctx, w.config.RuntimeService)
+	pods, e = w.kube.runtimeMembers(ctx, pool.ID, pool.RuntimeService)
 	if e != nil {
 		return e
 	}
@@ -633,7 +643,7 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 	if e != nil {
 		return e
 	}
-	after, e := w.kube.runtimeMembers(ctx, w.config.RuntimeService)
+	after, e := w.kube.runtimeMembers(ctx, pool.ID, pool.RuntimeService)
 	if e != nil {
 		return e
 	}
@@ -644,7 +654,7 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 	// the commit above is already durable and visible.
 	for _, pod := range pods {
 		ack, ok := acks[pod.UID]
-		if !ok || ack.Pool != "default" || ack.Revision < int(revision) || now().Sub(ack.Time) > 10*time.Second {
+		if !ok || ack.Pool != pool.ID || ack.Revision < int(revision) || now().Sub(ack.Time) > 10*time.Second {
 			return nil
 		}
 	}

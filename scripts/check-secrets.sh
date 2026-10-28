@@ -33,6 +33,11 @@ if [[ -f .data/dev.yaml ]]; then
     value="$(sed -n "s/^[[:space:]]*${key}:[[:space:]]*//p" .data/dev.yaml | head -1 | sed 's/^"//; s/"$//')"
     check_value "$key" "$value"
   done
+  secrets_active_key="$(sed -n 's/^[[:space:]]*secrets_active_key:[[:space:]]*//p' .data/dev.yaml | head -1 | sed 's/^"//; s/"$//')"
+  if [[ -n "$secrets_active_key" ]]; then
+    worker_secrets_key="$(sed -n "s/^[[:space:]]*${secrets_active_key}:[[:space:]]*//p" .data/dev.yaml | head -1 | sed 's/^"//; s/"$//')"
+    check_value "worker secrets encryption key" "$worker_secrets_key"
+  fi
   db="$(sed -n 's/^db:[[:space:]]*//p' .data/dev.yaml | head -1 | sed 's/^"//; s/"$//')"
   password="$(printf '%s' "$db" | sed -n 's#.*://[^:]*:\([^@]*\)@.*#\1#p')"
   check_value "database password" "$password"

@@ -171,14 +171,51 @@ const queuedRelease = await api(base + "/environments/production/releases", "POS
   idempotency_key: randomUUID(),
 }, 202);
 const operation = await poll(base + "/operations/" + queuedRelease.id, ["available"]);
-const current = (await api(base + "/environments")).items.find((item) => item.name === "production");
+let current = (await api(base + "/environments")).items.find((item) => item.name === "production");
 const host = current.display_hosts?.internal ?? current.hosts?.[0] ?? current.host;
 assert(host, "production host is missing");
+
+const initialSecrets = await api(base + "/environments/production/secrets");
+if (initialSecrets.items.some((item) => item.name === "VERIFICATION_SECRET")) {
+  const queuedCleanup = await api(base + "/environments/production/secrets/VERIFICATION_SECRET", "DELETE", {
+    expected_revision: current.release_revision,
+    idempotency_key: randomUUID(),
+  }, 202);
+  await poll(base + "/operations/" + queuedCleanup.id, ["available"]);
+  current = (await api(base + "/environments")).items.find((item) => item.name === "production");
+}
 
 const root = await gatewayRequest(host, "/");
 assert.equal(root.status, 200); assert(root.text.includes('data-app="krun-workers-fullstack"'));
 const health = await gatewayRequest(host, "/api/health");
 assert.equal(health.status, 200); assert.equal(health.body.service, "krun-workers-fullstack");
+assert.equal(health.body.secret_configured, false);
+const secretValue = "local-secret-" + randomUUID();
+const queuedSecret = await api(base + "/environments/production/secrets/VERIFICATION_SECRET", "PUT", {
+  value: secretValue,
+  expected_revision: current.release_revision,
+  idempotency_key: randomUUID(),
+}, 202);
+const secretOperation = await poll(base + "/operations/" + queuedSecret.id, ["available"]);
+const secretRelease = await api(base + "/releases/" + secretOperation.release_id);
+assert.equal(secretRelease.artifact_id, artifact.id);
+const secretHealth = await gatewayRequest(host, "/api/health");
+assert.equal(secretHealth.body.secret_configured, true);
+assert.equal(secretHealth.body.release_id, secretOperation.release_id);
+const secretList = await api(base + "/environments/production/secrets");
+assert(secretList.items.some((item) => item.name === "VERIFICATION_SECRET"));
+assert(!JSON.stringify(secretList).includes(secretValue));
+const secretEnvironment = (await api(base + "/environments")).items.find((item) => item.name === "production");
+const queuedDelete = await api(base + "/environments/production/secrets/VERIFICATION_SECRET", "DELETE", {
+  expected_revision: secretEnvironment.release_revision,
+  idempotency_key: randomUUID(),
+}, 202);
+const deleteOperation = await poll(base + "/operations/" + queuedDelete.id, ["available"]);
+const deleteRelease = await api(base + "/releases/" + deleteOperation.release_id);
+assert.equal(deleteRelease.artifact_id, artifact.id);
+const deletedHealth = await gatewayRequest(host, "/api/health");
+assert.equal(deletedHealth.body.secret_configured, false);
+assert.equal(deletedHealth.body.release_id, deleteOperation.release_id);
 const echo = await gatewayRequest(host, "/api/echo", {
   method: "POST",
   headers: { "content-type": "application/json" },
@@ -216,7 +253,7 @@ console.log(JSON.stringify({
   build: build.id,
   artifact: artifact.id,
   operation: operation.id,
-  release: operation.release_id,
+  release: deleteOperation.release_id,
   host,
   checks: {
     root: root.status,
@@ -228,5 +265,8 @@ console.log(JSON.stringify({
     static_domain: staticPage.status,
     static_cors: staticPage.headers["access-control-allow-origin"],
     private_archive: privateArchive.status,
+    secret_put_release: secretOperation.release_id,
+    secret_delete_release: deleteOperation.release_id,
+    secret_value_exposed: false,
   },
 }, null, 2));

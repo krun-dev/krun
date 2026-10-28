@@ -227,6 +227,7 @@ CREATE INDEX IF NOT EXISTS krun_repository_connect_states_expiry ON krun_reposit
 CREATE TABLE IF NOT EXISTS krun_worker_services (
 	service_id          text PRIMARY KEY,
 	org_id              text NOT NULL,
+	pool                text NOT NULL DEFAULT 'default',
 	repository          jsonb,
 	repository_revision integer NOT NULL DEFAULT 0,
 	domains_revision    integer NOT NULL DEFAULT 0,
@@ -254,6 +255,32 @@ CREATE TABLE IF NOT EXISTS krun_worker_environments (
 	confirmed_release_id text NOT NULL DEFAULT '',
 	updated_at           timestamptz NOT NULL DEFAULT now(),
 	PRIMARY KEY (service_id, env_name)
+);
+
+CREATE TABLE IF NOT EXISTS krun_worker_secret_versions (
+	secret_version_id text PRIMARY KEY,
+	org_id            text NOT NULL,
+	service_id        text NOT NULL,
+	env_name          text NOT NULL,
+	name              text NOT NULL,
+	ciphertext        bytea NOT NULL,
+	nonce             bytea NOT NULL,
+	key_version       text NOT NULL,
+	value_digest      text NOT NULL,
+	created_by        text NOT NULL,
+	created_at        timestamptz NOT NULL DEFAULT now(),
+	CHECK (octet_length(ciphertext) > 16),
+	CHECK (octet_length(nonce) = 12)
+);
+CREATE INDEX IF NOT EXISTS krun_worker_secret_versions_scope
+	ON krun_worker_secret_versions (service_id, env_name, name, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS krun_worker_environment_secrets (
+	service_id       text NOT NULL,
+	env_name         text NOT NULL,
+	name             text NOT NULL,
+	secret_version_id text NOT NULL,
+	PRIMARY KEY (service_id, env_name, name)
 );
 
 CREATE TABLE IF NOT EXISTS krun_worker_builds (
@@ -329,10 +356,18 @@ CREATE TABLE IF NOT EXISTS krun_worker_releases (
 	module_digest   text NOT NULL DEFAULT '',
 	config_revision integer NOT NULL DEFAULT 0,
 	variables       jsonb NOT NULL DEFAULT '{}'::jsonb,
+	secret_digest   text NOT NULL DEFAULT '',
 	pool            text NOT NULL DEFAULT 'default',
 	created_at      timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS krun_worker_releases_service ON krun_worker_releases (service_id, env_name, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS krun_worker_release_secrets (
+	release_id        text NOT NULL,
+	name              text NOT NULL,
+	secret_version_id text NOT NULL,
+	PRIMARY KEY (release_id, name)
+);
 
 CREATE TABLE IF NOT EXISTS krun_worker_operations (
 	operation_id       text PRIMARY KEY,
@@ -384,7 +419,7 @@ CREATE INDEX IF NOT EXISTS krun_worker_idempotency_age ON krun_worker_idempotenc
 
 // storeSchemaVersion mirrors the newest successfully applicable migration.
 // The ledger, not this diagnostic value, is authoritative.
-const storeSchemaVersion = "14"
+const storeSchemaVersion = "16"
 
 // Retained row limits. Every table that grows per request, per build or per
 // release has a bound here and a matching DELETE in retention.go.

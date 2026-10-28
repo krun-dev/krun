@@ -11,7 +11,7 @@ IAM 与 Workers 是两套独立分区，**不共享事务**：
 | 分区 | 表 |
 | --- | --- |
 | IAM | `krun_users`、`krun_organizations`、`krun_org_sources`、`krun_members`、`krun_groups`、`krun_group_members`、`krun_assignments`、`krun_resources`、`krun_api_keys`、`krun_api_key_hashes`、`krun_invitations`、`krun_identity_sources`、`krun_identity_providers`、`krun_meta` |
-| Workers | `krun_worker_services`、`krun_worker_service_domains`、`krun_worker_environments`、`krun_worker_builds`、`krun_worker_build_private`、`krun_worker_artifacts`、`krun_worker_releases`、`krun_worker_operations`、`krun_worker_history`、`krun_worker_idempotency`、`krun_repository_connections`、`krun_repository_connect_states` |
+| Workers | `krun_worker_services`、`krun_worker_service_domains`、`krun_worker_environments`、`krun_worker_secret_versions`、`krun_worker_environment_secrets`、`krun_worker_builds`、`krun_worker_build_private`、`krun_worker_artifacts`、`krun_worker_releases`、`krun_worker_release_secrets`、`krun_worker_operations`、`krun_worker_history`、`krun_worker_idempotency`、`krun_repository_connections`、`krun_repository_connect_states` |
 | 会话（不属于任何分区） | `krun_sessions`、`krun_browsers`、`krun_login_states`、`krun_email_logins`、`krun_device_codes` |
 | 旁路 | `krun_audits`、`worker_config_revisions`、`worker_runtime_acks` |
 
@@ -76,6 +76,7 @@ UPDATE krun_worker_environments SET release_id=$4, release_revision=release_revi
 | `krun_worker_artifacts` | 无 release 引用且超过 30 天 |
 | `krun_worker_idempotency` | 7 天 |
 | `krun_worker_history` | 每 (service, env) 最近 50 条 |
+| `krun_worker_secret_versions` | 无环境或 Release 引用后保留 30 天 |
 | `worker_config_revisions` | 512 条 |
 
 ## 迁移

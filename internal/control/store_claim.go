@@ -672,6 +672,7 @@ func (s *Store) pendingWork(ctx context.Context, limit int) (WorkerState, error)
 		Histories:        map[string][]WorkerHistory{},
 		Idempotency:      map[string]WorkerIdempotency{},
 		Services:         map[string]WorkerService{},
+		SecretVersions:   map[string]WorkerSecretVersion{},
 	}
 	if s.pool == nil {
 		return state, nil
@@ -734,7 +735,7 @@ func (s *Store) pendingWork(ctx context.Context, limit int) (WorkerState, error)
 			}
 		}
 		if len(releaseIDs) > 0 {
-			rows, err = s.pool.Query(ctx, `SELECT release_id, org_id, service_id, env_name, artifact_id, archive_digest, module_digest, config_revision, variables, pool, created_at
+			rows, err = s.pool.Query(ctx, `SELECT release_id, org_id, service_id, env_name, artifact_id, archive_digest, module_digest, config_revision, variables, secret_digest, pool, created_at
 				FROM krun_worker_releases WHERE release_id = ANY($1)`, releaseIDs)
 			if err != nil {
 				return state, err
@@ -789,7 +790,7 @@ func readReleaseRows(rows pgx.Rows, state *WorkerState) error {
 	for rows.Next() {
 		var r WorkerRelease
 		var variables []byte
-		if err := rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.ArchiveDigest, &r.ModuleDigest, &r.ConfigRevision, &variables, &r.Pool, &r.Created); err != nil {
+		if err := rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.ArchiveDigest, &r.ModuleDigest, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Pool, &r.Created); err != nil {
 			return err
 		}
 		r.Variables = map[string]string{}

@@ -19,6 +19,7 @@ import {
   type Operation,
   type RepositoryBinding,
   type WorkerDomain,
+  type WorkerNetworkOption,
 } from "@/lib/workers";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -81,14 +82,29 @@ export function WorkersPage({
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
   const [domains, setDomains] = useState<WorkerDomain[]>([]);
+  const [networkOptions, setNetworkOptions] = useState<WorkerNetworkOption[]>([]);
   useEffect(() => {
     if (system) return;
     const c = new AbortController();
     // The catalog is platform configuration; it rarely changes but the labels
     // and available suffixes drive the environment picker.
-    void api<List<WorkerDomain>>(base + "/workers/domains", "GET", undefined, c.signal)
-      .then((r) => setDomains(r.items))
-      .catch(() => setDomains([]));
+    void Promise.all([
+      api<List<WorkerDomain>>(base + "/workers/domains", "GET", undefined, c.signal),
+      api<List<WorkerNetworkOption>>(
+        base + "/workers/network-options",
+        "GET",
+        undefined,
+        c.signal,
+      ),
+    ])
+      .then(([domainResult, optionResult]) => {
+        setDomains(domainResult.items);
+        setNetworkOptions(optionResult.items);
+      })
+      .catch(() => {
+        setDomains([]);
+        setNetworkOptions([]);
+      });
     return () => c.abort();
   }, [base, system]);
   useEffect(() => {
@@ -179,6 +195,7 @@ export function WorkersPage({
             organizationBase={base}
             service={selected}
             domains={domains}
+            networkOptions={networkOptions}
             notify={notify}
           />
         </>
@@ -320,12 +337,14 @@ function WorkerDetail({
   organizationBase,
   service,
   domains,
+  networkOptions,
   notify,
 }: {
   base: string;
   organizationBase: string;
   service: Resource;
   domains: WorkerDomain[];
+  networkOptions: WorkerNetworkOption[];
   notify: (s: string) => void;
 }) {
   const [revision, setRevision] = useState(0);
@@ -779,6 +798,7 @@ function WorkerDetail({
             <ServiceDomains
               base={base}
               domains={domains}
+                networkOptions={networkOptions}
               environments={data.environments}
               revision={data.domainsRevision}
               active={active}

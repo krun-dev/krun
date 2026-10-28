@@ -143,6 +143,7 @@ func (s *Server) routes() {
 		s.internalMux.HandleFunc("GET /api/internal/workers/config/changes", s.workerRuntimeConfigChanges)
 		s.internalMux.HandleFunc("GET /api/internal/workers/releases/{release}/assets", s.workerRuntimeReleaseAssets)
 		s.internalMux.HandleFunc("GET /api/internal/workers/releases/{release}/assets/{path...}", s.workerRuntimeReleaseAssetURL)
+		s.internalMux.HandleFunc("GET /api/internal/workers/releases/{release}/secrets", s.workerRuntimeReleaseSecrets)
 		s.internalMux.HandleFunc("GET /api/internal/workers/artifacts/{artifact}", s.workerRuntimeArtifact)
 		s.internalMux.HandleFunc("POST /api/internal/workers/ack", s.workerRuntimeAck)
 	}

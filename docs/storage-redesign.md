@@ -360,15 +360,45 @@ CREATE TABLE IF NOT EXISTS krun_worker_releases (
   module_digest  text NOT NULL DEFAULT '',
   config_revision integer NOT NULL DEFAULT 0,
   variables      jsonb NOT NULL DEFAULT '{}'::jsonb,
+  secret_digest  text NOT NULL DEFAULT '',
   pool           text NOT NULL DEFAULT 'default',
   created_at     timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS krun_worker_releases_service
   ON krun_worker_releases (service_id, env_name, created_at DESC);
 
+-- Secret 值按不可变版本加密保存。环境表和 Release 表分别固定 name → version；
+-- 不使用外键，写入路径校验作用域，保留任务清理孤儿行。
+CREATE TABLE IF NOT EXISTS krun_worker_secret_versions (
+  secret_version_id text PRIMARY KEY,
+  org_id             text NOT NULL,
+  service_id         text NOT NULL,
+  env_name           text NOT NULL,
+  name               text NOT NULL,
+  ciphertext         bytea NOT NULL,
+  nonce              bytea NOT NULL,
+  key_version        text NOT NULL,
+  value_digest       text NOT NULL,
+  created_by         text NOT NULL,
+  created_at         timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS krun_worker_environment_secrets (
+  service_id         text NOT NULL,
+  env_name           text NOT NULL,
+  name               text NOT NULL,
+  secret_version_id  text NOT NULL,
+  PRIMARY KEY (service_id, env_name, name)
+);
+CREATE TABLE IF NOT EXISTS krun_worker_release_secrets (
+  release_id         text NOT NULL,
+  name               text NOT NULL,
+  secret_version_id  text NOT NULL,
+  PRIMARY KEY (release_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS krun_worker_operations (
   operation_id      text PRIMARY KEY,
-  kind              text NOT NULL,        -- publish | rollback
+  kind              text NOT NULL,        -- publish | rollback | secret
   org_id            text NOT NULL,
   service_id        text NOT NULL,
   env_name          text NOT NULL,

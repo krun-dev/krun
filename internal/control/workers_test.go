@@ -371,9 +371,9 @@ func TestWorkerRoutesReportUnconfiguredInsteadOfMissing(t *testing.T) {
 
 func TestWorkerRuntimeChannelRequiresCredentialAndPool(t *testing.T) {
 	s, _, _ := workerTestServer(t)
-	s.Config.Workers.RuntimeToken = strings.Repeat("a", 32)
+	token := s.Config.Workers.defaultRuntimePool().RuntimeToken
 	r := httptest.NewRequest("GET", "/api/internal/workers/config/snapshot", nil)
-	r.Header.Set("Authorization", "Bearer "+s.Config.Workers.RuntimeToken)
+	r.Header.Set("Authorization", "Bearer "+token)
 	if s.workerRuntimeAllowed(r) {
 		t.Fatal("missing pool accepted")
 	}
@@ -390,6 +390,18 @@ func TestWorkerRuntimeChannelRequiresCredentialAndPool(t *testing.T) {
 	}
 	if r := request(s, http.MethodGet, "/internal/workers/config/snapshot", "", ""); r.Code != 404 {
 		t.Fatal("root-level internal path must stay unreachable:", r.Code)
+	}
+}
+
+func TestWorkerReleaseAPIHidesRuntimePool(t *testing.T) {
+	s, store, base := workerTestServer(t)
+	release := seedPublishedWorker(t, store)
+	response := request(s, http.MethodGet, base+"/releases/"+release.ID, "krun_cli_admin", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("release: %d %s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), `"pool"`) || strings.Contains(response.Body.String(), "runtime-default") {
+		t.Fatalf("runtime placement leaked: %s", response.Body.String())
 	}
 }
 
@@ -445,7 +457,7 @@ func testWorkersConfig() *WorkersConfig {
 			{ID: "internal", Name: "workers-mvp", Namespace: "kgateway-system", Section: "private"},
 		},
 		Domains: []WorkerDomain{
-			{ID: "internal", Domain: "workers.test", Label: "内网", Gateway: "internal", Default: true},
+			{ID: "internal", Domain: "workers.test", Label: "内网", Access: "private", Gateway: "internal", Default: true},
 		},
 	}
 }

@@ -75,6 +75,9 @@ func (s *Store) retainExpired(ctx context.Context) error {
 		{`DELETE FROM krun_worker_builds b WHERE NOT EXISTS (
 			SELECT 1 FROM krun_resources r WHERE r.resource_id=b.service_id AND r.kind='service'
 		)`, nil},
+		{`DELETE FROM krun_worker_environment_secrets binding WHERE NOT EXISTS (
+			SELECT 1 FROM krun_resources r WHERE r.resource_id=binding.service_id AND r.kind='service'
+		)`, nil},
 		{`DELETE FROM krun_worker_environments e WHERE NOT EXISTS (
 			SELECT 1 FROM krun_resources r WHERE r.resource_id=e.service_id AND r.kind='service'
 		)`, nil},
@@ -83,6 +86,9 @@ func (s *Store) retainExpired(ctx context.Context) error {
 		)`, nil},
 		{`DELETE FROM krun_worker_releases rel WHERE NOT EXISTS (
 			SELECT 1 FROM krun_resources r WHERE r.resource_id=rel.service_id AND r.kind='service'
+		)`, nil},
+		{`DELETE FROM krun_worker_release_secrets binding WHERE NOT EXISTS (
+			SELECT 1 FROM krun_worker_releases rel WHERE rel.release_id=binding.release_id
 		)`, nil},
 		{`DELETE FROM krun_worker_services s WHERE NOT EXISTS (
 			SELECT 1 FROM krun_resources r WHERE r.resource_id=s.service_id AND r.kind='service'
@@ -117,6 +123,15 @@ func (s *Store) retainExpired(ctx context.Context) error {
 			AND NOT EXISTS (SELECT 1 FROM krun_worker_environments e WHERE e.release_id=rel.release_id OR e.confirmed_release_id=rel.release_id)
 			AND NOT EXISTS (SELECT 1 FROM krun_worker_history h WHERE h.release_id=rel.release_id)
 			AND NOT EXISTS (SELECT 1 FROM krun_worker_operations o WHERE o.release_id=rel.release_id)`, []any{at.Add(-workerArtifactRetain)}},
+		{`DELETE FROM krun_worker_release_secrets binding WHERE NOT EXISTS (
+			SELECT 1 FROM krun_worker_releases rel WHERE rel.release_id=binding.release_id
+		)`, nil},
+		// Secret versions are immutable and may outlive a rotation so retained
+		// Releases can still roll back. Once neither an environment nor a Release
+		// references a version, keep it for the normal artifact retention window.
+		{`DELETE FROM krun_worker_secret_versions secret WHERE secret.created_at <= $1
+			AND NOT EXISTS (SELECT 1 FROM krun_worker_environment_secrets binding WHERE binding.secret_version_id=secret.secret_version_id)
+			AND NOT EXISTS (SELECT 1 FROM krun_worker_release_secrets binding WHERE binding.secret_version_id=secret.secret_version_id)`, []any{at.Add(-workerArtifactRetain)}},
 	}
 	for _, statement := range statements {
 		if _, err := s.pool.Exec(ctx, statement.sql, statement.args...); err != nil {

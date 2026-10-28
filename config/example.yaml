@@ -150,35 +150,34 @@ workers:
   # 绑定到它的域名，别的域名即使伪造 Host 也匹配不到。base 仅用于本地调试（SSH
   # 隧道），生产留空即走 <name>.<namespace>.svc:8080。
   gateways:
-    - id: internal
-      name: workers-mvp
-      namespace: kgateway-system
-      section: private
-      base: ""
     - id: external
       name: workers-public
       namespace: kgateway-system
       section: public
       base: ""
-  # 域名清单，数量不限。label 只是给人看的备注（公网/内网/办公网…），
-  # 不参与任何路由判断；真正决定走哪个入口的是 gateway。
+  # 域名清单，数量不限。access 是产品层唯一暴露的 portable primitive；只有
+  # public 时控制台不会额外展示网络选择器。内部部署可以再增加 access: private
+  # 的域名与独立 Gateway，但业务用户不会看到 Gateway 或 runtime pool 名称。
+  # label 只是部署方备注，不参与路由和安全判断。
   # default: true 的域名会被新建环境默认选中。
   domains:
-    - id: internal
-      domain: workers.test
-      label: 内网
-      gateway: internal
+    - id: public
+      domain: workers.example.com
+      label: 默认公网入口
+      access: public
+      gateway: external
       default: true
       # 静态资产域名，留空则取 static.<domain>。
-      static_domain: static.workers.test
-    - id: external
-      domain: workers-out.example.com
-      label: 公网
-      gateway: external
-      static_domain: static.workers-out.example.com
+      static_domain: static.workers.example.com
   preview_limit: 32
   runtime_token: ${KRUN_RUNTIME_TOKEN:-replace-with-a-24-plus-character-token}
   management_token: ${KRUN_MANAGEMENT_TOKEN:-replace-with-a-24-plus-character-token}
+  # Worker Secret 使用 AES-256-GCM 加密后入库。active key 只用于新写入；
+  # retained Release 仍引用旧版本时不要删除旧 key。生产值应由 KMS/密钥系统
+  # 注入环境变量，示例默认值只是可加载占位符，禁止用于真实环境。
+  secrets_active_key: v1
+  secrets_keys:
+    v1: ${KRUN_WORKERS_SECRETS_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
   s3_endpoint: https://s3.example.com
   # 可省略；分别用于 builder 上传和 runtime 下载时看到的同一个桶地址。
   s3_builder_endpoint: https://s3.builder.internal.example.com

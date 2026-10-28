@@ -59,7 +59,7 @@ func workerEdgeTopologyChanged(before, after *State) bool {
 	referenced := map[string]bool{}
 	for id, current := range aw.Services {
 		previous, ok := bw.Services[id]
-		if !ok || current.Service != previous.Service || current.Organization != previous.Organization || !sameStrings(current.Domains, previous.Domains) || len(current.Environments) != len(previous.Environments) {
+		if !ok || current.Service != previous.Service || current.Organization != previous.Organization || current.Pool != previous.Pool || !sameStrings(current.Domains, previous.Domains) || len(current.Environments) != len(previous.Environments) {
 			return true
 		}
 		for name, env := range current.Environments {
@@ -99,6 +99,9 @@ func writeWorkersDiff(ctx context.Context, tx pgx.Tx, before, after *State) erro
 	if err := writeIdempotency(ctx, tx, bw, aw); err != nil {
 		return err
 	}
+	if err := writeWorkerSecretVersions(ctx, tx, bw, aw, after.pendingWorkerSecrets); err != nil {
+		return err
+	}
 	if err := writeServices(ctx, tx, bw, aw); err != nil {
 		return err
 	}
@@ -124,6 +127,7 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 		old, existed := bw.Services[id]
 		repositoryChanged := !existed || old.RepositoryRevision != svc.RepositoryRevision || !reflect.DeepEqual(old.Repository, svc.Repository)
 		domainsChanged := existed && old.DomainsRevision != svc.DomainsRevision
+		poolChanged := existed && old.Pool != svc.Pool
 		previewSetChanged := !existed && previewCount(svc.Environments) > 0 || existed && !samePreviewSet(old.Environments, svc.Environments)
 		if repositoryChanged {
 			var repository []byte
@@ -136,9 +140,9 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 			}
 			if !existed {
 				tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_services
-					(service_id, org_id, repository, repository_revision, domains_revision, preview_revision)
-					VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (service_id) DO NOTHING`, id, svc.Organization,
-					repository, svc.RepositoryRevision, svc.DomainsRevision, svc.PreviewRevision)
+					(service_id, org_id, pool, repository, repository_revision, domains_revision, preview_revision)
+					VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (service_id) DO NOTHING`, id, svc.Organization,
+					svc.Pool, repository, svc.RepositoryRevision, svc.DomainsRevision, svc.PreviewRevision)
 				if err != nil {
 					return err
 				}
@@ -172,13 +176,23 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 				return problem(409, "REVISION_CONFLICT", "Domain configuration changed")
 			}
 			tag, err := tx.Exec(ctx, `UPDATE krun_worker_services
-				SET domains_revision=$2, updated_at=now()
-				WHERE service_id=$1 AND domains_revision=$3`, id, svc.DomainsRevision, old.DomainsRevision)
+				SET domains_revision=$2, pool=$4, updated_at=now()
+				WHERE service_id=$1 AND domains_revision=$3`, id, svc.DomainsRevision, old.DomainsRevision, svc.Pool)
 			if err != nil {
 				return err
 			}
 			if tag.RowsAffected() != 1 {
 				return problem(409, "REVISION_CONFLICT", "Domain configuration changed")
+			}
+		}
+		if poolChanged && !domainsChanged {
+			tag, err := tx.Exec(ctx, `UPDATE krun_worker_services SET pool=$2, updated_at=now()
+				WHERE service_id=$1 AND pool=$3`, id, svc.Pool, old.Pool)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() != 1 {
+				return problem(409, "REVISION_CONFLICT", "Runtime placement changed")
 			}
 		}
 		if domainsChanged {
@@ -235,9 +249,15 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 					return problem(409, "REVISION_CONFLICT", "Environment configuration changed")
 				}
 			}
+			if err := replaceWorkerEnvironmentSecrets(ctx, tx, id, name, env.SecretVersions); err != nil {
+				return err
+			}
 		}
 		for name, oldEnv := range old.Environments {
 			if _, ok := svc.Environments[name]; !ok {
+				if _, err := tx.Exec(ctx, `DELETE FROM krun_worker_environment_secrets WHERE service_id=$1 AND env_name=$2`, id, name); err != nil {
+					return err
+				}
 				tag, err := tx.Exec(ctx, `DELETE FROM krun_worker_environments
 					WHERE service_id=$1 AND env_name=$2 AND config_revision=$3
 					  AND release_revision=$4 AND release_id=$5 AND confirmed_release_id=$6`,
@@ -256,6 +276,7 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 			continue
 		}
 		for _, statement := range []string{
+			`DELETE FROM krun_worker_environment_secrets WHERE service_id=$1`,
 			`DELETE FROM krun_worker_service_domains WHERE service_id=$1`,
 			`DELETE FROM krun_worker_environments WHERE service_id=$1`,
 		} {
@@ -276,7 +297,7 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 func defaultWorkerBaseline(name string, env WorkerEnvironment) bool {
 	return name == workerBaseline && env.Name == workerBaseline && env.Enabled &&
 		env.ConfigRevision == 1 && env.Revision == 0 && env.Release == "" && env.Confirmed == "" &&
-		len(env.Variables) == 0
+		len(env.Variables) == 0 && len(env.SecretVersions) == 0
 }
 
 func previewCount(environments map[string]WorkerEnvironment) int {
@@ -319,7 +340,7 @@ func replaceServiceDomains(ctx context.Context, tx pgx.Tx, service string, domai
 func sameEnvironment(a, b WorkerEnvironment) bool {
 	return a.Name == b.Name && a.Enabled == b.Enabled && a.ConfigRevision == b.ConfigRevision &&
 		a.Revision == b.Revision && a.Release == b.Release && a.Confirmed == b.Confirmed &&
-		reflect.DeepEqual(a.Variables, b.Variables)
+		reflect.DeepEqual(a.Variables, b.Variables) && reflect.DeepEqual(a.SecretVersions, b.SecretVersions)
 }
 
 func writeBuilds(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
@@ -518,7 +539,8 @@ func sameRelease(a, b WorkerRelease) bool {
 	return a.ID == b.ID && a.Service == b.Service && a.Organization == b.Organization &&
 		a.Environment == b.Environment && a.Artifact == b.Artifact && a.ArchiveDigest == b.ArchiveDigest &&
 		a.ModuleDigest == b.ModuleDigest && a.ConfigRevision == b.ConfigRevision &&
-		reflect.DeepEqual(a.Variables, b.Variables) && a.Pool == b.Pool && a.Created.Equal(b.Created)
+		reflect.DeepEqual(a.Variables, b.Variables) && a.SecretDigest == b.SecretDigest &&
+		reflect.DeepEqual(a.SecretVersions, b.SecretVersions) && a.Pool == b.Pool && a.Created.Equal(b.Created)
 }
 
 func writeReleases(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
@@ -532,24 +554,33 @@ func writeReleases(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 			return err
 		}
 		if !existed {
-			tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_releases (release_id, org_id, service_id, env_name, artifact_id, archive_digest, module_digest, config_revision, variables, pool, created_at)
-				SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11
+			tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_releases (release_id, org_id, service_id, env_name, artifact_id, archive_digest, module_digest, config_revision, variables, secret_digest, pool, created_at)
+				SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
 				WHERE EXISTS (SELECT 1 FROM krun_worker_artifacts WHERE artifact_id=$5 AND state='finalized')
-				ON CONFLICT (release_id) DO UPDATE SET release_id=excluded.release_id`, id, r.Organization, r.Service, r.Environment, r.Artifact, r.ArchiveDigest, r.ModuleDigest, r.ConfigRevision, variables, r.Pool, r.Created)
+				ON CONFLICT (release_id) DO UPDATE SET release_id=excluded.release_id`, id, r.Organization, r.Service, r.Environment, r.Artifact, r.ArchiveDigest, r.ModuleDigest, r.ConfigRevision, variables, r.SecretDigest, r.Pool, r.Created)
 			if err != nil {
 				return err
 			}
 			if tag.RowsAffected() == 0 {
 				return problem(409, "ARTIFACT_UNAVAILABLE", "Artifact is no longer available")
 			}
+			if err := replaceWorkerReleaseSecrets(ctx, tx, id, r.Service, r.Environment, r.SecretVersions); err != nil {
+				return err
+			}
 			continue
 		}
-		if _, err := tx.Exec(ctx, `UPDATE krun_worker_releases SET archive_digest=$2, module_digest=$3, config_revision=$4, variables=$5, pool=$6 WHERE release_id=$1`, id, r.ArchiveDigest, r.ModuleDigest, r.ConfigRevision, variables, r.Pool); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE krun_worker_releases SET archive_digest=$2, module_digest=$3, config_revision=$4, variables=$5, secret_digest=$6, pool=$7 WHERE release_id=$1`, id, r.ArchiveDigest, r.ModuleDigest, r.ConfigRevision, variables, r.SecretDigest, r.Pool); err != nil {
+			return err
+		}
+		if err := replaceWorkerReleaseSecrets(ctx, tx, id, r.Service, r.Environment, r.SecretVersions); err != nil {
 			return err
 		}
 	}
 	for id := range bw.Releases {
 		if _, ok := aw.Releases[id]; !ok {
+			if _, err := tx.Exec(ctx, `DELETE FROM krun_worker_release_secrets WHERE release_id=$1`, id); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, `DELETE FROM krun_worker_releases WHERE release_id=$1`, id); err != nil {
 				return err
 			}

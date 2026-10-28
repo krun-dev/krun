@@ -1,6 +1,7 @@
 package control
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"path"
@@ -20,6 +21,11 @@ type WorkersConfig struct {
 	BuilderMode    string `json:"builder_mode"`
 	BuilderScript  string `json:"builder_script"`
 	RuntimeService string `json:"runtime_service"`
+	// RuntimePools is infrastructure-only. Organization APIs expose only the
+	// public/private access primitives derived from domains; pool ids and
+	// services never leave the system scope. Empty preserves the legacy single
+	// runtime and is normalized into one default pool during validation.
+	RuntimePools []WorkerRuntimePool `json:"runtime_pools"`
 	// Kubernetes connection settings are regular application configuration.
 	// They intentionally live here instead of being read from hidden process
 	// environment variables so every runtime input passes through LoadConfig.
@@ -29,27 +35,42 @@ type WorkersConfig struct {
 	// Gateways and Domains are the routing catalog. Neither carries a network
 	// classification: a domain is just a suffix plus which Gateway instance
 	// serves it. Label is display text and never participates in routing.
-	Gateways              []WorkerGateway `json:"gateways"`
-	Domains               []WorkerDomain  `json:"domains"`
-	RuntimeToken          string          `json:"runtime_token"`
-	ManagementToken       string          `json:"management_token"`
-	RuntimeManagementBase string          `json:"runtime_management_base"`
-	S3Endpoint            string          `json:"s3_endpoint"`
-	S3BuilderEndpoint     string          `json:"s3_builder_endpoint"`
-	S3RuntimeEndpoint     string          `json:"s3_runtime_endpoint"`
-	S3Bucket              string          `json:"s3_bucket"`
-	S3LocationID          string          `json:"s3_location_id"`
-	S3AccessKey           string          `json:"s3_access_key"`
-	S3SecretKey           string          `json:"s3_secret_key"`
-	PreviewLimit          int             `json:"preview_limit"`
-	StaticService         string          `json:"static_service"`
-	StaticServicePort     int             `json:"static_service_port"`
+	Gateways        []WorkerGateway `json:"gateways"`
+	Domains         []WorkerDomain  `json:"domains"`
+	RuntimeToken    string          `json:"runtime_token"`
+	ManagementToken string          `json:"management_token"`
+	// SecretsKeys is a versioned ring of base64-encoded 32-byte AES keys used
+	// only by the control plane. Keep old versions while retained Releases
+	// reference them; new writes use SecretsActiveKey.
+	SecretsKeys           map[string]string `json:"secrets_keys"`
+	SecretsActiveKey      string            `json:"secrets_active_key"`
+	RuntimeManagementBase string            `json:"runtime_management_base"`
+	S3Endpoint            string            `json:"s3_endpoint"`
+	S3BuilderEndpoint     string            `json:"s3_builder_endpoint"`
+	S3RuntimeEndpoint     string            `json:"s3_runtime_endpoint"`
+	S3Bucket              string            `json:"s3_bucket"`
+	S3LocationID          string            `json:"s3_location_id"`
+	S3AccessKey           string            `json:"s3_access_key"`
+	S3SecretKey           string            `json:"s3_secret_key"`
+	PreviewLimit          int               `json:"preview_limit"`
+	StaticService         string            `json:"static_service"`
+	StaticServicePort     int               `json:"static_service_port"`
 	// ConfigBaseURL is the runtime-readable origin of config/latest.json and
 	// config/snapshots/*. It must be a private or cluster-internal endpoint.
 	ConfigBaseURL string `json:"config_base_url"`
 	// CloneDirectory is where repository checkouts are written during a build.
 	// Required when the control plane runs with a read-only root filesystem.
 	CloneDirectory string `json:"clone_directory"`
+}
+
+type WorkerRuntimePool struct {
+	ID                    string   `json:"id"`
+	Access                []string `json:"access"`
+	RuntimeService        string   `json:"runtime_service"`
+	RuntimeManagementBase string   `json:"runtime_management_base"`
+	RuntimeToken          string   `json:"runtime_token"`
+	ManagementToken       string   `json:"management_token"`
+	Default               bool     `json:"default"`
 }
 
 // WorkerGateway is one Gateway instance the control plane writes routes to.
@@ -65,14 +86,19 @@ type WorkerGateway struct {
 	Base string `json:"base"`
 }
 
-// WorkerDomain is one browser-facing suffix users can attach to an environment.
-// Label is purely descriptive ("公网", "内网", "办公网"); routing depends only on
-// Domain and Gateway.
+// WorkerDomain is one browser-facing suffix users can attach to a service.
+// Access is the portable public/private product primitive. Label is an
+// operator note; Gateway remains infrastructure-only and is never returned to
+// organization users.
 type WorkerDomain struct {
 	ID      string `json:"id"`
 	Domain  string `json:"domain"`
 	Label   string `json:"label"`
 	Gateway string `json:"gateway"`
+	// Access is the only product-facing network classification. It is deliberately
+	// limited to portable primitives so an open-source deployment can expose only
+	// public without inheriting an operator's internal pool names.
+	Access string `json:"access"`
 	// Default selects this domain for newly created environments.
 	Default bool `json:"default"`
 	// StaticDomain overrides the static-asset host served through this domain's
@@ -159,8 +185,14 @@ func (c *WorkersConfig) validate() error {
 		// give an off-host runtime a distinct, reachable origin.
 		c.S3RuntimeEndpoint = c.S3BuilderEndpoint
 	}
-	if (c.BuilderMode != "local" && c.BuilderImage == "") || len(c.RuntimeToken) < 24 || len(c.ManagementToken) < 24 || c.S3AccessKey == "" || c.S3SecretKey == "" {
+	if (c.BuilderMode != "local" && c.BuilderImage == "") || c.S3AccessKey == "" || c.S3SecretKey == "" {
 		return fmt.Errorf("Workers image and credentials required")
+	}
+	if len(c.RuntimePools) == 0 && (len(c.RuntimeToken) < 24 || len(c.ManagementToken) < 24) {
+		return fmt.Errorf("Workers runtime credentials required")
+	}
+	if err := c.validateSecretKeys(); err != nil {
+		return err
 	}
 	if c.RuntimeManagementBase != "" {
 		u, e := url.Parse(c.RuntimeManagementBase)
@@ -195,6 +227,223 @@ func (c *WorkersConfig) validate() error {
 		return fmt.Errorf("invalid Workers config base URL")
 	}
 	c.ConfigBaseURL = strings.TrimSuffix(c.ConfigBaseURL, "/")
+	if err := c.validateRuntimePools(dns); err != nil {
+		return err
+	}
+	return nil
+}
+
+func normalizeWorkerAccess(values []string) ([]string, error) {
+	seen := map[string]bool{}
+	for _, value := range values {
+		if value != "public" && value != "private" {
+			return nil, fmt.Errorf("Workers runtime pool access must contain only public or private")
+		}
+		seen[value] = true
+	}
+	out := []string{}
+	for _, value := range []string{"public", "private"} {
+		if seen[value] {
+			out = append(out, value)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("Workers runtime pool access required")
+	}
+	return out, nil
+}
+
+func (c *WorkersConfig) validateRuntimePools(dns *regexp.Regexp) error {
+	if len(c.RuntimePools) == 0 {
+		_, err := normalizeWorkerAccess(c.legacyRuntimePool().Access)
+		return err
+	}
+	seenIDs, seenServices := map[string]bool{}, map[string]bool{}
+	seenRuntimeTokens, seenManagementTokens, seenAccess := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	domainAccess := map[string]bool{}
+	for _, domain := range c.Domains {
+		domainAccess[domain.Access] = true
+	}
+	defaults := 0
+	for i := range c.RuntimePools {
+		pool := &c.RuntimePools[i]
+		if !slug.MatchString(pool.ID) || !dns.MatchString(pool.RuntimeService) {
+			return fmt.Errorf("invalid Workers runtime pool")
+		}
+		if seenIDs[pool.ID] || seenServices[pool.RuntimeService] {
+			return fmt.Errorf("duplicate Workers runtime pool id or service")
+		}
+		seenIDs[pool.ID], seenServices[pool.RuntimeService] = true, true
+		access, err := normalizeWorkerAccess(pool.Access)
+		if err != nil {
+			return err
+		}
+		pool.Access = access
+		accessKey := strings.Join(access, "+")
+		if seenAccess[accessKey] {
+			return fmt.Errorf("duplicate Workers runtime pool access combination")
+		}
+		seenAccess[accessKey] = true
+		for _, value := range access {
+			if !domainAccess[value] {
+				return fmt.Errorf("Workers runtime pool access has no configured domain")
+			}
+		}
+		if len(pool.RuntimeToken) < 24 || len(pool.ManagementToken) < 24 || seenRuntimeTokens[pool.RuntimeToken] || seenManagementTokens[pool.ManagementToken] {
+			return fmt.Errorf("Workers runtime pools require distinct credentials")
+		}
+		seenRuntimeTokens[pool.RuntimeToken] = true
+		seenManagementTokens[pool.ManagementToken] = true
+		if pool.RuntimeManagementBase != "" {
+			u, err := url.Parse(pool.RuntimeManagementBase)
+			if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
+				return fmt.Errorf("invalid Workers runtime pool management base")
+			}
+			pool.RuntimeManagementBase = strings.TrimSuffix(pool.RuntimeManagementBase, "/")
+		}
+		if pool.Default {
+			defaults++
+		}
+	}
+	if defaults == 0 && len(c.RuntimePools) == 1 {
+		c.RuntimePools[0].Default = true
+		defaults = 1
+	}
+	if defaults != 1 {
+		return fmt.Errorf("Workers runtime pools require exactly one default")
+	}
+	defaultsDomains := c.defaultDomains()
+	defaultPool := c.defaultRuntimePool()
+	matched, ok := c.poolForDomains(defaultsDomains)
+	if !ok || matched.ID != defaultPool.ID {
+		return fmt.Errorf("Workers default domains must match the default runtime pool access")
+	}
+	return nil
+}
+
+func sameWorkerAccess(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func workerAccessContains(available, requested []string) bool {
+	for _, wanted := range requested {
+		found := false
+		for _, value := range available {
+			if value == wanted {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func runtimePoolHasAccess(pool WorkerRuntimePool, access string) bool {
+	for _, value := range pool.Access {
+		if value == access {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *WorkersConfig) runtimePool(id string) (WorkerRuntimePool, bool) {
+	for _, pool := range c.configuredRuntimePools() {
+		if pool.ID == id {
+			return pool, true
+		}
+	}
+	return WorkerRuntimePool{}, false
+}
+
+func (c *WorkersConfig) defaultRuntimePool() WorkerRuntimePool {
+	for _, pool := range c.configuredRuntimePools() {
+		if pool.Default {
+			return pool
+		}
+	}
+	return c.legacyRuntimePool()
+}
+
+func (c *WorkersConfig) configuredRuntimePools() []WorkerRuntimePool {
+	if len(c.RuntimePools) > 0 {
+		return c.RuntimePools
+	}
+	return []WorkerRuntimePool{c.legacyRuntimePool()}
+}
+
+func (c *WorkersConfig) legacyRuntimePool() WorkerRuntimePool {
+	accessRaw := make([]string, 0, len(c.Domains))
+	for _, domain := range c.Domains {
+		accessRaw = append(accessRaw, domain.Access)
+	}
+	access, _ := normalizeWorkerAccess(accessRaw)
+	service := c.RuntimeService
+	if service == "" {
+		service = "runtime-default"
+	}
+	return WorkerRuntimePool{
+		ID: "default", Access: access, RuntimeService: service,
+		RuntimeManagementBase: c.RuntimeManagementBase, RuntimeToken: c.RuntimeToken,
+		ManagementToken: c.ManagementToken, Default: true,
+	}
+}
+
+func (c *WorkersConfig) poolForDomains(domainIDs []string) (WorkerRuntimePool, bool) {
+	accessRaw := []string{}
+	for _, id := range domainIDs {
+		if domain, ok := c.domain(id); ok {
+			accessRaw = append(accessRaw, domain.Access)
+		}
+	}
+	access, err := normalizeWorkerAccess(accessRaw)
+	if err != nil {
+		return WorkerRuntimePool{}, false
+	}
+	for _, pool := range c.configuredRuntimePools() {
+		if sameWorkerAccess(pool.Access, access) {
+			return pool, true
+		}
+	}
+	// The legacy single runtime historically served every configured domain.
+	// Preserve that behavior for any non-empty subset while explicit pools use
+	// exact combinations to avoid ambiguous placement.
+	if len(c.RuntimePools) == 0 {
+		pool := c.legacyRuntimePool()
+		if workerAccessContains(pool.Access, access) {
+			return pool, true
+		}
+	}
+	return WorkerRuntimePool{}, false
+}
+
+func (c *WorkersConfig) validateSecretKeys() error {
+	if len(c.SecretsKeys) == 0 && c.SecretsActiveKey == "" {
+		return nil
+	}
+	if c.SecretsActiveKey == "" || !slug.MatchString(c.SecretsActiveKey) {
+		return fmt.Errorf("valid Workers secrets_active_key required")
+	}
+	for version, encoded := range c.SecretsKeys {
+		key, err := base64.StdEncoding.DecodeString(encoded)
+		if !slug.MatchString(version) || err != nil || len(key) != 32 {
+			return fmt.Errorf("Workers secrets_keys must map valid versions to base64 for exactly 32 bytes")
+		}
+	}
+	if _, ok := c.SecretsKeys[c.SecretsActiveKey]; !ok {
+		return fmt.Errorf("Workers secrets_active_key is absent from secrets_keys")
+	}
 	return nil
 }
 
@@ -258,6 +507,12 @@ func (c *WorkersConfig) validateCatalog(dns *regexp.Regexp) error {
 		seenDomain[d.Domain] = true
 		if !seenGateway[d.Gateway] {
 			return fmt.Errorf("Workers domain %s references unknown gateway %q", d.ID, d.Gateway)
+		}
+		if d.Access == "" {
+			d.Access = "public"
+		}
+		if d.Access != "public" && d.Access != "private" {
+			return fmt.Errorf("Workers domain %s access must be public or private", d.ID)
 		}
 		if d.StaticDomain == "" {
 			d.StaticDomain = "static." + d.Domain
@@ -429,6 +684,10 @@ type WorkerEnvironment struct {
 	DisplayHosts   map[string]string `json:"display_hosts,omitempty"`
 	ConfigRevision int               `json:"configuration_revision"`
 	Variables      map[string]string `json:"variables"`
+	// SecretNames is safe metadata for the console. SecretVersions is the
+	// internal immutable binding map and is deliberately absent from JSON.
+	SecretNames    []string          `json:"secret_names"`
+	SecretVersions map[string]string `json:"-"`
 	Revision       int               `json:"release_revision"`
 	Release        string            `json:"release_id,omitempty"`
 	Confirmed      string            `json:"confirmed_release_id,omitempty"`
@@ -444,6 +703,10 @@ type WorkerService struct {
 	PreviewRevision int    `json:"preview_revision"`
 	Service         string `json:"service_id"`
 	Organization    string `json:"organization_id"`
+	// Pool is an infrastructure assignment. It is intentionally absent from
+	// organization JSON; users express only public/private access through
+	// domain selection and the control plane resolves that intent to a pool.
+	Pool string `json:"-"`
 	// Domains is the service-level domain selection. Every environment of the
 	// service is served on every selected domain, so adding a domain adds one
 	// host per environment without touching per-environment configuration.
@@ -530,8 +793,29 @@ type WorkerRelease struct {
 	ModuleDigest   string            `json:"module_sha256"`
 	ConfigRevision int               `json:"configuration_revision"`
 	Variables      map[string]string `json:"variables"`
-	Pool           string            `json:"pool"`
-	Created        time.Time         `json:"created_at"`
+	// SecretDigest is safe to distribute with the edge descriptor. The
+	// version IDs and values stay in PostgreSQL and are fetched only through
+	// the authenticated runtime endpoint.
+	SecretDigest   string            `json:"secret_digest,omitempty"`
+	SecretVersions map[string]string `json:"-"`
+	// Pool is an infrastructure placement detail. Internal config projections
+	// retain it, while organization-facing handlers clear it before encoding.
+	Pool    string    `json:"pool,omitempty"`
+	Created time.Time `json:"created_at"`
+}
+
+// WorkerSecretVersion is immutable metadata. Ciphertext is intentionally not
+// present: generic state loads must never materialize secret values.
+type WorkerSecretVersion struct {
+	ID           string    `json:"id"`
+	Organization string    `json:"organization_id"`
+	Service      string    `json:"service_id"`
+	Environment  string    `json:"environment"`
+	Name         string    `json:"name"`
+	ValueDigest  string    `json:"value_sha256"`
+	KeyVersion   string    `json:"key_version"`
+	CreatedBy    string    `json:"created_by"`
+	Created      time.Time `json:"created_at"`
 }
 type WorkerStep struct {
 	Name   string `json:"name"`
@@ -586,10 +870,11 @@ type WorkerState struct {
 	OperationPrivate map[string]WorkerOperationPrivate
 	Histories        map[string][]WorkerHistory
 	Idempotency      map[string]WorkerIdempotency
+	SecretVersions   map[string]WorkerSecretVersion
 }
 
 func newWorkerState() *WorkerState {
-	return &WorkerState{Revision: 1, Services: map[string]WorkerService{}, Builds: map[string]WorkerBuild{}, BuildPrivate: map[string]WorkerBuildPrivate{}, Artifacts: map[string]WorkerArtifact{}, Releases: map[string]WorkerRelease{}, Operations: map[string]WorkerOperation{}, OperationPrivate: map[string]WorkerOperationPrivate{}, Histories: map[string][]WorkerHistory{}, Idempotency: map[string]WorkerIdempotency{}}
+	return &WorkerState{Revision: 1, Services: map[string]WorkerService{}, Builds: map[string]WorkerBuild{}, BuildPrivate: map[string]WorkerBuildPrivate{}, Artifacts: map[string]WorkerArtifact{}, Releases: map[string]WorkerRelease{}, Operations: map[string]WorkerOperation{}, OperationPrivate: map[string]WorkerOperationPrivate{}, Histories: map[string][]WorkerHistory{}, Idempotency: map[string]WorkerIdempotency{}, SecretVersions: map[string]WorkerSecretVersion{}}
 }
 
 // A service has one durable baseline ("production") plus any number of
@@ -602,6 +887,12 @@ func workerPreviewValid(v string) bool {
 }
 func workerTerminal(v string) bool {
 	return contains([]string{"succeeded", "failed", "available", "superseded"}, v)
+}
+func workerOperationAction(kind string) string {
+	if kind == "secret" {
+		return "service.publish"
+	}
+	return "service." + kind
 }
 func workerActor(p Principal) WorkerActor {
 	a := WorkerActor{User: p.User.ID, AuthVersion: p.User.AuthVersion}

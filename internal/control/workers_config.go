@@ -22,6 +22,7 @@ type workerConfigRoute struct {
 	Path    string `json:"path,omitempty"`
 	Enabled bool   `json:"enabled"`
 	Release string `json:"release"`
+	Pool    string `json:"pool"`
 }
 
 type workerConfigProjection struct {
@@ -38,6 +39,7 @@ type workerConfigSnapshot struct {
 
 type workerConfigOp struct {
 	Type    string             `json:"type"`
+	Pool    string             `json:"pool"`
 	Host    string             `json:"host,omitempty"`
 	Route   *workerConfigRoute `json:"route,omitempty"`
 	Release *WorkerRelease     `json:"release,omitempty"`
@@ -56,6 +58,14 @@ const (
 	workerConfigLatestKey   = "config/latest.json"
 	workerConfigSnapshotDir = "config/snapshots/"
 )
+
+func workerPoolConfigPrefix(pool string) string { return "config/pools/" + pool + "/" }
+func workerPoolConfigLatestKey(pool string) string {
+	return workerPoolConfigPrefix(pool) + "latest.json"
+}
+func workerPoolConfigSnapshotKey(pool string, revision int64) string {
+	return workerPoolConfigPrefix(pool) + "snapshots/" + strconv.FormatInt(revision, 10) + ".json.gz"
+}
 
 func workerConfigSnapshotKey(revision int64) string {
 	return workerConfigSnapshotDir + strconv.FormatInt(revision, 10) + ".json.gz"
@@ -88,6 +98,10 @@ func workerConfigFromState(st *State, domains []WorkerDomain) workerConfigProjec
 			continue
 		}
 		hosts := serviceHostPatterns(ws, domains)
+		pool := ws.Pool
+		if pool == "" {
+			pool = "default"
+		}
 		for name, env := range ws.Environments {
 			// The map key is authoritative: Environment.Name is a denormalised
 			// copy that older rows may not carry.
@@ -98,18 +112,43 @@ func workerConfigFromState(st *State, domains []WorkerDomain) workerConfigProjec
 			// the Gateway instance already decided which entry a request used.
 			for _, host := range hosts {
 				if expanded := envHostName(host, name); expanded != "" {
-					out.Routes = append(out.Routes, workerConfigRoute{Host: expanded, Path: "/", Enabled: env.Enabled, Release: env.Release})
+					out.Routes = append(out.Routes, workerConfigRoute{Host: expanded, Path: "/", Enabled: env.Enabled, Release: env.Release, Pool: pool})
 				}
 			}
 			if env.Release == "" {
 				continue
 			}
-			if release, ok := st.Workers.Releases[env.Release]; ok && release.Pool == "default" && release.Service == id && release.Organization == ws.Organization {
+			if release, ok := st.Workers.Releases[env.Release]; ok && release.Pool == pool && release.Service == id && release.Organization == ws.Organization {
 				out.Releases[release.ID] = release
 			}
 		}
 	}
 	sort.Slice(out.Routes, func(i, j int) bool { return out.Routes[i].Host < out.Routes[j].Host })
+	return out
+}
+
+func workerConfigForPool(in workerConfigProjection, pool string) workerConfigProjection {
+	out := workerConfigProjection{Routes: []workerConfigRoute{}, Releases: map[string]WorkerRelease{}}
+	for _, route := range in.Routes {
+		if route.Pool == pool {
+			out.Routes = append(out.Routes, route)
+		}
+	}
+	for id, release := range in.Releases {
+		if release.Pool == pool {
+			out.Releases[id] = release
+		}
+	}
+	return out
+}
+
+func workerConfigOpsForPool(in []workerConfigOp, pool string) []workerConfigOp {
+	out := make([]workerConfigOp, 0, len(in))
+	for _, op := range in {
+		if op.Pool == pool {
+			out = append(out, op)
+		}
+	}
 	return out
 }
 
@@ -217,20 +256,20 @@ func diffWorkerConfig(prev *workerConfigProjection, next workerConfigProjection)
 	ops := make([]workerConfigOp, 0, len(releaseIDs)+len(changedRoutes)+len(deleted))
 	for _, id := range releaseIDs {
 		release := neededReleases[id]
-		ops = append(ops, workerConfigOp{Type: "release_put", Release: &release})
+		ops = append(ops, workerConfigOp{Type: "release_put", Pool: release.Pool, Release: &release})
 	}
 	for i := range changedRoutes {
 		route := changedRoutes[i]
-		ops = append(ops, workerConfigOp{Type: "route_upsert", Host: route.Host, Route: &route})
+		ops = append(ops, workerConfigOp{Type: "route_upsert", Pool: route.Pool, Host: route.Host, Route: &route})
 	}
 	for _, host := range deleted {
-		ops = append(ops, workerConfigOp{Type: "route_delete", Host: host})
+		ops = append(ops, workerConfigOp{Type: "route_delete", Pool: prevRoutes[host].Pool, Host: host})
 	}
 	return ops
 }
 
-func encodeWorkerConfigSnapshot(revision int64, p workerConfigProjection) ([]byte, error) {
-	snapshot := workerConfigSnapshot{ConfigRevision: revision, Pool: "default", Routes: p.Routes, Releases: p.Releases}
+func encodeWorkerConfigSnapshot(pool string, revision int64, p workerConfigProjection) ([]byte, error) {
+	snapshot := workerConfigSnapshot{ConfigRevision: revision, Pool: pool, Routes: p.Routes, Releases: p.Releases}
 	raw, err := json.Marshal(snapshot)
 	if err != nil {
 		return nil, err
@@ -430,37 +469,59 @@ func (w *workersController) writeConfigRevision(ctx context.Context, revision in
 		}
 		w.configBucket = true
 	}
-	raw, err := encodeWorkerConfigSnapshot(revision, projection)
-	if err != nil {
-		return err
-	}
-	key := workerConfigSnapshotKey(revision)
-	if w.s3 != nil {
-		if err := w.putImmutable(ctx, key, raw); err != nil {
+	for _, pool := range w.config.configuredRuntimePools() {
+		filtered := workerConfigForPool(projection, pool.ID)
+		raw, err := encodeWorkerConfigSnapshot(pool.ID, revision, filtered)
+		if err != nil {
 			return err
 		}
-	} else if err := w.putBytes(ctx, key, raw, minio.PutObjectOptions{ContentType: "application/gzip", CacheControl: "no-store"}); err != nil {
-		return err
+		key := workerPoolConfigSnapshotKey(pool.ID, revision)
+		if w.s3 != nil {
+			if err := w.putImmutable(ctx, key, raw); err != nil {
+				return err
+			}
+		} else if err := w.putBytes(ctx, key, raw, minio.PutObjectOptions{ContentType: "application/gzip", CacheControl: "no-store"}); err != nil {
+			return err
+		}
+		latest := workerConfigLatest{ConfigRevision: revision, Snapshot: workerConfigSnapshotRel(revision), SHA256: bytesDigest(raw), OpsFloor: w.configFloor, GeneratedAt: now().UTC().Format(time.RFC3339)}
+		if err := w.writeConfigLatest(ctx, workerPoolConfigLatestKey(pool.ID), latest); err != nil {
+			return err
+		}
+		// Preserve the legacy /config origin for the default runtime while new
+		// deployments move to /config/pools/<pool>.
+		if pool.Default {
+			legacyKey := workerConfigSnapshotKey(revision)
+			if w.s3 != nil {
+				if err := w.putImmutable(ctx, legacyKey, raw); err != nil {
+					return err
+				}
+			} else if err := w.putBytes(ctx, legacyKey, raw, minio.PutObjectOptions{ContentType: "application/gzip", CacheControl: "no-store"}); err != nil {
+				return err
+			}
+			if err := w.writeConfigLatest(ctx, workerConfigLatestKey, latest); err != nil {
+				return err
+			}
+		}
 	}
-	return w.writeConfigLatest(ctx, workerConfigLatest{ConfigRevision: revision, Snapshot: workerConfigSnapshotRel(revision), SHA256: bytesDigest(raw), OpsFloor: w.configFloor, GeneratedAt: now().UTC().Format(time.RFC3339)})
+	return nil
 }
 
-func (w *workersController) writeConfigLatest(ctx context.Context, next workerConfigLatest) error {
+func (w *workersController) writeConfigLatest(ctx context.Context, key string, next workerConfigLatest) error {
 	raw, err := json.Marshal(next)
 	if err != nil {
 		return err
 	}
 	if w.s3 == nil {
-		return w.putBytes(ctx, workerConfigLatestKey, raw, minio.PutObjectOptions{ContentType: "application/json", CacheControl: "no-store"})
+		return w.putBytes(ctx, key, raw, minio.PutObjectOptions{ContentType: "application/json", CacheControl: "no-store"})
 	}
 	// The pointer is the only mutable object. Use the object's ETag as a second
 	// CAS so an older publisher cannot overwrite a newer revision between GET
 	// and PUT. A precondition race is retried after observing the winner.
 	for attempts := 0; attempts < 4; attempts++ {
-		stat, statErr := w.s3.StatObject(ctx, w.config.S3Bucket, workerConfigLatestKey, minio.StatObjectOptions{})
+		stat, statErr := w.s3.StatObject(ctx, w.config.S3Bucket, key, minio.StatObjectOptions{})
 		opts := minio.PutObjectOptions{ContentType: "application/json", CacheControl: "no-store"}
 		if statErr == nil {
-			currentRaw, readErr := w.getObject(ctx, workerConfigLatestKey)
+			currentRaw, readErr := w.getObject(ctx, key)
 			if readErr != nil {
 				return readErr
 			}
@@ -479,7 +540,7 @@ func (w *workersController) writeConfigLatest(ctx context.Context, next workerCo
 		} else {
 			return statErr
 		}
-		if err := w.putBytes(ctx, workerConfigLatestKey, raw, opts); err == nil {
+		if err := w.putBytes(ctx, key, raw, opts); err == nil {
 			return nil
 		} else if minio.ToErrorResponse(err).Code != "PreconditionFailed" {
 			return err

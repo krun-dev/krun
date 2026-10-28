@@ -238,12 +238,69 @@ END $$;
 			return err
 		},
 	},
+	{
+		version: 15,
+		name:    "versioned encrypted worker secrets",
+		apply: func(ctx context.Context, tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS krun_worker_secret_versions (
+	secret_version_id text PRIMARY KEY,
+	org_id text NOT NULL,
+	service_id text NOT NULL,
+	env_name text NOT NULL,
+	name text NOT NULL,
+	ciphertext bytea NOT NULL,
+	nonce bytea NOT NULL,
+	key_version text NOT NULL,
+	value_digest text NOT NULL,
+	created_by text NOT NULL,
+	created_at timestamptz NOT NULL DEFAULT now(),
+	CHECK (octet_length(ciphertext) > 16),
+	CHECK (octet_length(nonce) = 12)
+);
+CREATE INDEX IF NOT EXISTS krun_worker_secret_versions_scope
+	ON krun_worker_secret_versions (service_id, env_name, name, created_at DESC);
+CREATE TABLE IF NOT EXISTS krun_worker_environment_secrets (
+	service_id text NOT NULL,
+	env_name text NOT NULL,
+	name text NOT NULL,
+	secret_version_id text NOT NULL,
+	PRIMARY KEY (service_id, env_name, name)
+);
+ALTER TABLE krun_worker_releases ADD COLUMN IF NOT EXISTS secret_digest text NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS krun_worker_release_secrets (
+	release_id text NOT NULL,
+	name text NOT NULL,
+	secret_version_id text NOT NULL,
+	PRIMARY KEY (release_id, name)
+);
+`)
+			return err
+		},
+	},
+	{
+		version: 16,
+		name:    "hidden worker runtime pool assignment",
+		apply: func(ctx context.Context, tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `
+ALTER TABLE krun_worker_services ADD COLUMN IF NOT EXISTS pool text NOT NULL DEFAULT 'default';
+ALTER TABLE worker_config_routes ADD COLUMN IF NOT EXISTS pool text NOT NULL DEFAULT 'default';
+ALTER TABLE worker_config_releases ADD COLUMN IF NOT EXISTS pool text NOT NULL DEFAULT 'default';
+ALTER TABLE worker_config_ops ADD COLUMN IF NOT EXISTS pool text NOT NULL DEFAULT 'default';
+UPDATE worker_config_routes SET pool=COALESCE(NULLIF(pool,''),'default');
+UPDATE worker_config_releases SET pool=COALESCE(NULLIF(payload->>'pool',''),pool,'default');
+UPDATE worker_config_ops SET pool=COALESCE(NULLIF(payload->>'pool',''),pool,'default');
+			`)
+			return err
+		},
+	},
 }
 
 func migrateNormalizedWorkerConfig(ctx context.Context, tx pgx.Tx) error {
 	if _, err := tx.Exec(ctx, `
 CREATE TABLE IF NOT EXISTS worker_config_routes (
 	host text PRIMARY KEY,
+	pool text NOT NULL DEFAULT 'default',
 	path text NOT NULL DEFAULT '',
 	enabled boolean NOT NULL,
 	release_id text NOT NULL DEFAULT ''
@@ -251,12 +308,14 @@ CREATE TABLE IF NOT EXISTS worker_config_routes (
 
 CREATE TABLE IF NOT EXISTS worker_config_releases (
 	release_id text PRIMARY KEY,
+	pool text NOT NULL DEFAULT 'default',
 	payload jsonb NOT NULL CHECK (jsonb_typeof(payload) = 'object')
 );
 
 CREATE TABLE IF NOT EXISTS worker_config_ops (
 	config_revision bigint NOT NULL,
 	ordinal integer NOT NULL CHECK (ordinal >= 0),
+	pool text NOT NULL DEFAULT 'default',
 	op_type text NOT NULL CHECK (op_type IN ('release_put','route_upsert','route_delete')),
 	host text NOT NULL DEFAULT '',
 	release_id text NOT NULL DEFAULT '',

@@ -144,9 +144,9 @@ type workerPodList struct {
 	} `json:"items"`
 }
 
-func (k *workerKubernetes) runtimeMembers(ctx context.Context, service string) ([]workerPod, error) {
+func (k *workerKubernetes) runtimeMembers(ctx context.Context, pool, service string) ([]workerPod, error) {
 	var pods workerPodList
-	if e := k.call(ctx, "GET", k.core("pods")+"?labelSelector="+url.QueryEscape("role=krun-runtime,pool=default"), nil, &pods); e != nil {
+	if e := k.call(ctx, "GET", k.core("pods")+"?labelSelector="+url.QueryEscape("role=krun-runtime,pool="+pool), nil, &pods); e != nil {
 		return nil, e
 	}
 	var slices struct {
@@ -231,7 +231,7 @@ func (k *workerKubernetes) buildLog(ctx context.Context, job string) string {
 // structural: an instance's route table only ever contains the hostnames of the
 // domains bound to it, so a forged Host cannot cross instances.
 // Gateways with no remaining hosts are pruned.
-func (k *workerKubernetes) ensureRoutes(ctx context.Context, c *WorkersConfig, name string, hostsByGateway map[string][]string) (bool, error) {
+func (k *workerKubernetes) ensureRoutes(ctx context.Context, c *WorkersConfig, name, runtimeService string, hostsByGateway map[string][]string) (bool, error) {
 	ready := true
 	desired := map[string]bool{}
 	for _, g := range c.Gateways {
@@ -241,7 +241,7 @@ func (k *workerKubernetes) ensureRoutes(ctx context.Context, c *WorkersConfig, n
 			route = name + "-" + g.ID
 		}
 		desired[route] = true
-		ok, e := k.ensureRoute(ctx, c, route, g, hosts)
+		ok, e := k.ensureRoute(ctx, route, runtimeService, g, hosts)
 		ready = ready && ok
 		if e != nil {
 			// One failing Gateway must not skip repairing the others.
@@ -305,7 +305,7 @@ func staleWorkerRoutes(ctx context.Context, k *workerKubernetes, prefix string, 
 	return out, nil
 }
 
-func (k *workerKubernetes) ensureRoute(ctx context.Context, c *WorkersConfig, name string, g WorkerGateway, hosts []string) (bool, error) {
+func (k *workerKubernetes) ensureRoute(ctx context.Context, name, runtimeService string, g WorkerGateway, hosts []string) (bool, error) {
 	base := "/apis/gateway.networking.k8s.io/v1/namespaces/" + k.namespace + "/httproutes"
 	if len(hosts) == 0 {
 		// Prune: a route with no hostnames would be invalid anyway, and leaving
@@ -318,7 +318,7 @@ func (k *workerKubernetes) ensureRoute(ctx context.Context, c *WorkersConfig, na
 	}
 	sort.Strings(hosts)
 	gatewayName, gatewayNamespace, section := g.Name, g.Namespace, g.Section
-	spec := map[string]any{"parentRefs": []any{map[string]string{"name": gatewayName, "namespace": gatewayNamespace, "sectionName": section}}, "hostnames": hosts, "rules": []any{map[string]any{"filters": []any{map[string]any{"type": "RequestHeaderModifier", "requestHeaderModifier": map[string]any{"remove": []string{"x-krun-scope", "x-krun-release", "x-forwarded-host", "x-internal"}}}}, "backendRefs": []any{map[string]any{"name": c.RuntimeService, "port": 8081}}}}}
+	spec := map[string]any{"parentRefs": []any{map[string]string{"name": gatewayName, "namespace": gatewayNamespace, "sectionName": section}}, "hostnames": hosts, "rules": []any{map[string]any{"filters": []any{map[string]any{"type": "RequestHeaderModifier", "requestHeaderModifier": map[string]any{"remove": []string{"x-krun-scope", "x-krun-release", "x-forwarded-host", "x-internal"}}}}, "backendRefs": []any{map[string]any{"name": runtimeService, "port": 8081}}}}}
 	var current struct {
 		Metadata struct {
 			Generation int `json:"generation"`
@@ -357,6 +357,11 @@ func (k *workerKubernetes) ensureRoute(ctx context.Context, c *WorkersConfig, na
 			Namespace string `json:"namespace"`
 			Section   string `json:"sectionName"`
 		} `json:"parentRefs"`
+		Rules []struct {
+			BackendRefs []struct {
+				Name string `json:"name"`
+			} `json:"backendRefs"`
+		} `json:"rules"`
 	}
 	_ = json.Unmarshal(current.Spec, &old)
 	// parentRefs is part of the desired state: re-pointing a route at another
@@ -364,7 +369,8 @@ func (k *workerKubernetes) ensureRoute(ctx context.Context, c *WorkersConfig, na
 	// host-only comparison would silently leave the old attachment in place.
 	parentDrift := len(old.Parent) != 1 || old.Parent[0].Name != gatewayName ||
 		old.Parent[0].Namespace != gatewayNamespace || old.Parent[0].Section != section
-	if parentDrift || strings.Join(old.Hosts, "\n") != strings.Join(hosts, "\n") {
+	backendDrift := len(old.Rules) != 1 || len(old.Rules[0].BackendRefs) != 1 || old.Rules[0].BackendRefs[0].Name != runtimeService
+	if parentDrift || backendDrift || strings.Join(old.Hosts, "\n") != strings.Join(hosts, "\n") {
 		return false, k.call(ctx, "PATCH", base+"/"+name, map[string]any{"spec": spec}, nil)
 	}
 	accepted, resolved := false, false

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json,pathlib,secrets,os,ipaddress,socket
+import base64,json,pathlib,secrets,os,ipaddress,socket
 root=pathlib.Path(__file__).resolve().parent
 out=root/'generated';out.mkdir(exist_ok=True)
 credential_file=out/'credentials.json'
@@ -7,13 +7,15 @@ if credential_file.exists():
  credential_file.chmod(0o600)
  credentials=json.loads(credential_file.read_text())
 else:
- credentials={k:secrets.token_hex(24) for k in ['db_password','s3_secret','runtime_token','management_token']};credentials['s3_access']='krun-workers';credential_file.write_text(json.dumps(credentials));credential_file.chmod(0o600)
+ credentials={k:secrets.token_hex(24) for k in ['db_password','s3_secret','runtime_token','management_token']};credentials['s3_access']='krun-workers';credentials['worker_secrets_key']=base64.b64encode(secrets.token_bytes(32)).decode();credential_file.write_text(json.dumps(credentials));credential_file.chmod(0o600)
+if 'worker_secrets_key' not in credentials:
+ credentials['worker_secrets_key']=base64.b64encode(secrets.token_bytes(32)).decode();credential_file.write_text(json.dumps(credentials));credential_file.chmod(0o600)
 api_ips=[str(ipaddress.ip_address(x)) for x in os.environ['KRUN_KUBE_API_IPS'].split(',')]
 ns='workers-mvp';tag='20261013';items=[]
 def resource(kind,name,**fields):
  return {'apiVersion':fields.pop('apiVersion','v1'),'kind':kind,'metadata':{'name':name,'namespace':ns},**fields}
 items.append({'apiVersion':'v1','kind':'Namespace','metadata':{'name':ns,'labels':{'lab':'krun-workers-mvp'}}})
-items.append(resource('Secret','workers-credentials',stringData={'KRUN_DATABASE_URL':f'postgres://postgres:{credentials["db_password"]}@postgres:5432/postgres?sslmode=disable','POSTGRES_PASSWORD':credentials['db_password'],'KRUN_S3_ACCESS':credentials['s3_access'],'KRUN_S3_SECRET':credentials['s3_secret'],'KRUN_RUNTIME_TOKEN':credentials['runtime_token'],'KRUN_MANAGEMENT_TOKEN':credentials['management_token'],'MINIO_ROOT_USER':credentials['s3_access'],'MINIO_ROOT_PASSWORD':credentials['s3_secret']}))
+items.append(resource('Secret','workers-credentials',stringData={'KRUN_DATABASE_URL':f'postgres://postgres:{credentials["db_password"]}@postgres:5432/postgres?sslmode=disable','POSTGRES_PASSWORD':credentials['db_password'],'KRUN_S3_ACCESS':credentials['s3_access'],'KRUN_S3_SECRET':credentials['s3_secret'],'KRUN_RUNTIME_TOKEN':credentials['runtime_token'],'KRUN_MANAGEMENT_TOKEN':credentials['management_token'],'KRUN_WORKERS_SECRETS_KEY':credentials['worker_secrets_key'],'MINIO_ROOT_USER':credentials['s3_access'],'MINIO_ROOT_PASSWORD':credentials['s3_secret']}))
 def claim(name,size):items.append(resource('PersistentVolumeClaim',name,spec={'accessModes':['ReadWriteOnce'],'resources':{'requests':{'storage':size}}}))
 claim('postgres-data','1Gi');claim('minio-data','1Gi')
 def service(name,ports,selector=None):items.append(resource('Service',name,spec={'selector':selector or {'app':name},'ports':[{'name':f'p{p}','port':p,'targetPort':p} for p in ports]}))
@@ -53,18 +55,23 @@ workers:
     - id: internal
       domain: workers.test
       label: 内网
+      access: private
       gateway: internal
       default: true
       static_domain: static.workers.test
     - id: external
       domain: public.workers.test
       label: 公网
+      access: public
       gateway: external
       static_domain: static.public.workers.test
   static_service: static-assets
   static_service_port: 9000
   runtime_token: ${KRUN_RUNTIME_TOKEN}
   management_token: ${KRUN_MANAGEMENT_TOKEN}
+  secrets_active_key: v1
+  secrets_keys:
+    v1: ${KRUN_WORKERS_SECRETS_KEY}
   s3_endpoint: http://minio:9000
   s3_bucket: krun-artifacts
   config_base_url: http://minio:9000/krun-artifacts/config
@@ -96,7 +103,7 @@ items.append(resource('Role','workers-control',apiVersion='rbac.authorization.k8
 items.append(resource('RoleBinding','workers-control',apiVersion='rbac.authorization.k8s.io/v1',roleRef={'apiGroup':'rbac.authorization.k8s.io','kind':'Role','name':'workers-control'},subjects=[{'kind':'ServiceAccount','name':'workers-control','namespace':ns}]))
 items.append({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'Role','metadata':{'name':'workers-mvp-reader','namespace':'kgateway-system'},'rules':[{'apiGroups':['gateway.networking.k8s.io'],'resources':['gateways'],'resourceNames':['workers-mvp','workers-public'],'verbs':['get']}]})
 items.append({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'RoleBinding','metadata':{'name':'workers-mvp-reader','namespace':'kgateway-system'},'roleRef':{'apiGroup':'rbac.authorization.k8s.io','kind':'Role','name':'workers-mvp-reader'},'subjects':[{'kind':'ServiceAccount','name':'workers-control','namespace':ns}]})
-deployment('backend',[{'name':'backend','image':f'krun-workers-backend:{tag}','imagePullPolicy':'Never','env':[env(n) for n in ['KRUN_DATABASE_URL','KRUN_S3_ACCESS','KRUN_S3_SECRET','KRUN_RUNTIME_TOKEN','KRUN_MANAGEMENT_TOKEN']],'securityContext':secure(),'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},{'name':'workdir','mountPath':'/workdir'}],'resources':limits('1Gi','128Mi'),'readinessProbe':{'httpGet':{'path':'/api/healthz','port':9000},'periodSeconds':5}}],serviceAccountName='workers-control',automountServiceAccountToken=True,volumes=[{'name':'config','configMap':{'name':'control-config'}},{'name':'workdir','emptyDir':{'sizeLimit':'1Gi'}}],terminationGracePeriodSeconds=10);service('backend',[9000,9001])
+deployment('backend',[{'name':'backend','image':f'krun-workers-backend:{tag}','imagePullPolicy':'Never','env':[env(n) for n in ['KRUN_DATABASE_URL','KRUN_S3_ACCESS','KRUN_S3_SECRET','KRUN_RUNTIME_TOKEN','KRUN_MANAGEMENT_TOKEN','KRUN_WORKERS_SECRETS_KEY']],'securityContext':secure(),'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},{'name':'workdir','mountPath':'/workdir'}],'resources':limits('1Gi','128Mi'),'readinessProbe':{'httpGet':{'path':'/api/healthz','port':9000},'periodSeconds':5}}],serviceAccountName='workers-control',automountServiceAccountToken=True,volumes=[{'name':'config','configMap':{'name':'control-config'}},{'name':'workdir','emptyDir':{'sizeLimit':'1Gi'}}],terminationGracePeriodSeconds=10);service('backend',[9000,9001])
 # Runtime has no Kubernetes token, DB identity, S3 credentials or public
 # network; it reaches only the control plane and object storage (via
 # short-lived presigned URLs issued by the control plane). workerd's network
@@ -113,6 +120,7 @@ const config :W.Config = (
    (name="POD_UID",text=embed "/pod/uid"),
    (name="RUNTIME_TOKEN",text=embed "/secrets/KRUN_RUNTIME_TOKEN"),
    (name="MANAGEMENT_TOKEN",text=embed "/secrets/KRUN_MANAGEMENT_TOKEN"),
+   (name="RUNTIME_POOL",text="default"),
    (name="CONFIG_BASE",text="http://minio:9000/krun-artifacts/config"),
    (name="ASSETS_CACHE_MAX",text="67108864")
   ],globalOutbound="storage")),

@@ -21,7 +21,7 @@ function untar(raw){
 }
 async function platformResponse(env,path,init={},timeout=2000){
  const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),timeout);
- const headers=new Headers(init.headers);headers.set('authorization',`Bearer ${env.RUNTIME_TOKEN}`);headers.set('x-runtime-pool','default');if(init.body)headers.set('content-type','application/json');
+ const headers=new Headers(init.headers);headers.set('authorization',`Bearer ${env.RUNTIME_TOKEN}`);headers.set('x-runtime-pool',env.RUNTIME_POOL||'default');if(init.body)headers.set('content-type','application/json');
  try{return await env.PLATFORM.fetch(new Request('http://platform/api/internal/workers'+path,{...init,headers,signal:controller.signal}));}
  finally{clearTimeout(timer);}
 }
@@ -43,7 +43,8 @@ async function requestBytes(url,timeout){
 async function gunzip(raw){
  return new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
 }
-function applySnapshot(snapshot){
+function applySnapshot(snapshot,pool='default'){
+ if(snapshot.pool&&snapshot.pool!==pool)throw new Error('snapshot pool mismatch');
  const routes=new Map();
  for(const route of snapshot.routes||[])if(route.host)routes.set(String(route.host).toLowerCase(),route);
  const releases=new Map();
@@ -61,15 +62,15 @@ async function bootstrap(env){
    if(latest.sha256&&await sha256(raw)!==latest.sha256)throw new Error('snapshot digest mismatch');
    const snapshot=JSON.parse(decoder.decode(await gunzip(raw)));
    if(Number(snapshot.config_revision)!==Number(latest.config_revision))throw new Error('snapshot revision mismatch');
-   applySnapshot(snapshot);
+   applySnapshot(snapshot,env.RUNTIME_POOL||'default');
    return view;
   }
  }catch(e){console.error('config bootstrap from storage failed',e.message);}
- applySnapshot(await platform(env,'/config/snapshot'));
+ applySnapshot(await platform(env,'/config/snapshot'),env.RUNTIME_POOL||'default');
  return view;
 }
 async function bootstrapFromControl(env){
- applySnapshot(await platform(env,'/config/snapshot'));
+ applySnapshot(await platform(env,'/config/snapshot'),env.RUNTIME_POOL||'default');
  return view;
 }
 function ensureBootstrap(env){
@@ -97,7 +98,7 @@ function applyBatch(batch){
  return true;
 }
 async function sendAck(env){
- try{await platform(env,'/ack',{method:'POST',body:JSON.stringify({pod:env.POD_NAME,pod_uid:env.POD_UID,pool:'default',revision:view.revision})});}catch{}
+ try{await platform(env,'/ack',{method:'POST',body:JSON.stringify({pod:env.POD_NAME,pod_uid:env.POD_UID,pool:env.RUNTIME_POOL||'default',revision:view.revision})});}catch{}
 }
 // One long-poll per Pod. 5s waits keep ack heartbeats fresh without the old
 // 500ms full-snapshot polling loop.
@@ -214,7 +215,13 @@ async function worker(env,d,artifact) {
    ||module?.name!=='index.js'||module?.path!=='modules/index.js'||module?.type!=='esm'
    ||module.size_bytes!==encoder.encode(code).length||module.sha256!==await sha256(code)
    ||module.sha256!==d.module_sha256)throw new Error('artifact manifest mismatch');
-  return {compatibilityDate:'2026-09-28',mainModule:'index.js',modules:{'index.js':{js:code}},env:{...d.variables,KRUN_ENVIRONMENT:d.environment,KRUN_SERVICE_ID:d.service_id,KRUN_RELEASE_ID:d.id},globalOutbound:null};
+  let secrets={};
+  if(d.secret_digest){
+   const payload=await platform(env,'/releases/'+encodeURIComponent(d.id)+'/secrets');
+   if(payload.release_id!==d.id||payload.secret_digest!==d.secret_digest||!payload.values||typeof payload.values!=='object')throw new Error('secret binding mismatch');
+   secrets=payload.values;
+  }
+  return {compatibilityDate:'2026-09-28',mainModule:'index.js',modules:{'index.js':{js:code}},env:{...d.variables,...secrets,KRUN_ENVIRONMENT:d.environment,KRUN_SERVICE_ID:d.service_id,KRUN_RELEASE_ID:d.id},globalOutbound:null};
  });
 }
 async function validate(env,d,artifact) {const stub=await worker(env,d,artifact);await stub.getEntrypoint('KrunValidation').ping();}
@@ -274,7 +281,7 @@ export class Management extends WorkerEntrypoint {
    // Readiness means the config view is loaded; releases are lazy-loaded on
    // first request so Pod start does not scale with the number of services.
    await ensureBootstrap(this.env);
-   return json({status:'ready',pod_uid:this.env.POD_UID,revision:view.revision,stale_ms:Date.now()-lastSync});
+   return json({status:'ready',pod_uid:this.env.POD_UID,pool:this.env.RUNTIME_POOL||'default',revision:view.revision,stale_ms:Date.now()-lastSync});
   }catch(e){const dependency=String(e.message).startsWith('platform');console.error('runtime management failed',e.message);return json({code:dependency?'DEPENDENCY_UNAVAILABLE':'CANDIDATE_INVALID',error:'runtime validation failed'},503);}
  }
 }

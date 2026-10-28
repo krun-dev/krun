@@ -335,12 +335,15 @@ func (s *Store) loadWorkers(ctx context.Context, st *State) error {
 		st.Workers = newWorkerState()
 	}
 	batch := &pgx.Batch{}
-	batch.Queue(`SELECT service_id, org_id, repository, repository_revision, domains_revision, preview_revision FROM krun_worker_services`)
+	batch.Queue(`SELECT service_id, org_id, pool, repository, repository_revision, domains_revision, preview_revision FROM krun_worker_services`)
 	batch.Queue(`SELECT service_id, domain_id FROM krun_worker_service_domains ORDER BY service_id, ordinal`)
 	batch.Queue(`SELECT service_id, env_name, enabled, config_revision, variables, release_revision, release_id, confirmed_release_id FROM krun_worker_environments`)
+	batch.Queue(`SELECT secret_version_id, org_id, service_id, env_name, name, value_digest, key_version, created_by, created_at FROM krun_worker_secret_versions`)
+	batch.Queue(`SELECT service_id, env_name, name, secret_version_id FROM krun_worker_environment_secrets`)
 	batch.Queue(`SELECT build_id, org_id, service_id, env_name, state, entrypoint, source_digest, profile, job, artifact_id, error, repository, assets, created_at, finished_at, claimed_by, claimed_at FROM krun_worker_builds`)
 	batch.Queue(`SELECT artifact_id, org_id, state, archive_digest, manifest_digest, module_digest, size_bytes, object_key, storage_location, bucket, created_at FROM krun_worker_artifacts`)
-	batch.Queue(`SELECT release_id, org_id, service_id, env_name, artifact_id, archive_digest, module_digest, config_revision, variables, pool, created_at FROM krun_worker_releases`)
+	batch.Queue(`SELECT release_id, org_id, service_id, env_name, artifact_id, archive_digest, module_digest, config_revision, variables, secret_digest, pool, created_at FROM krun_worker_releases`)
+	batch.Queue(`SELECT release_id, name, secret_version_id FROM krun_worker_release_secrets`)
 	batch.Queue(`SELECT operation_id, kind, org_id, service_id, env_name, state, build_id, release_id, expected_revision, config_revision, edge_revision, release_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at FROM krun_worker_operations`)
 	batch.Queue(`SELECT service_id, env_name, revision, release_id, operation_id, kind, created_at FROM krun_worker_history ORDER BY created_at DESC`)
 	batch.Queue(`SELECT idem_key, digest, target_id FROM krun_worker_idempotency`)
@@ -350,8 +353,9 @@ func (s *Store) loadWorkers(ctx context.Context, st *State) error {
 
 	for _, read := range []func(pgx.BatchResults, *State) error{
 		readWorkerServices, readWorkerDomains, readWorkerEnvironments,
+		readWorkerSecretVersions, readWorkerEnvironmentSecrets,
 		readWorkerBuilds, readWorkerArtifacts,
-		readWorkerReleases, readWorkerOperations, readWorkerHistory,
+		readWorkerReleases, readWorkerReleaseSecrets, readWorkerOperations, readWorkerHistory,
 		readWorkerIdempotency,
 	} {
 		if err := read(results, st); err != nil {
@@ -369,14 +373,14 @@ func readWorkerServices(results pgx.BatchResults, st *State) error {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id, org string
+		var id, org, pool string
 		var repository []byte
 		var repositoryRevision, domainsRevision, previewRevision int
-		if err = rows.Scan(&id, &org, &repository, &repositoryRevision, &domainsRevision, &previewRevision); err != nil {
+		if err = rows.Scan(&id, &org, &pool, &repository, &repositoryRevision, &domainsRevision, &previewRevision); err != nil {
 			return err
 		}
 		svc := WorkerService{
-			Service: id, Organization: org, RepositoryRevision: repositoryRevision,
+			Service: id, Organization: org, Pool: pool, RepositoryRevision: repositoryRevision,
 			DomainsRevision: domainsRevision, PreviewRevision: previewRevision,
 			Domains: []string{}, Environments: map[string]WorkerEnvironment{},
 		}
@@ -427,6 +431,7 @@ func readWorkerEnvironments(results pgx.BatchResults, st *State) error {
 		}
 		env.Name = name
 		env.Variables = map[string]string{}
+		env.SecretVersions = map[string]string{}
 		if len(variables) > 0 {
 			if err = json.Unmarshal(variables, &env.Variables); err != nil {
 				return err
@@ -438,6 +443,53 @@ func readWorkerEnvironments(results pgx.BatchResults, st *State) error {
 		}
 		svc.Environments[name] = env
 		ws.Services[service] = svc
+	}
+	return rows.Err()
+}
+
+func readWorkerSecretVersions(results pgx.BatchResults, st *State) error {
+	rows, err := results.Query()
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var version WorkerSecretVersion
+		if err = rows.Scan(&version.ID, &version.Organization, &version.Service, &version.Environment,
+			&version.Name, &version.ValueDigest, &version.KeyVersion, &version.CreatedBy, &version.Created); err != nil {
+			return err
+		}
+		st.Workers.SecretVersions[version.ID] = version
+	}
+	return rows.Err()
+}
+
+func readWorkerEnvironmentSecrets(results pgx.BatchResults, st *State) error {
+	rows, err := results.Query()
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var service, environment, name, version string
+		if err = rows.Scan(&service, &environment, &name, &version); err != nil {
+			return err
+		}
+		item, ok := st.Workers.Services[service]
+		if !ok {
+			continue
+		}
+		env, ok := item.Environments[environment]
+		if !ok {
+			continue
+		}
+		if env.SecretVersions == nil {
+			env.SecretVersions = map[string]string{}
+		}
+		env.SecretVersions[name] = version
+		env.SecretNames = workerSecretNames(env.SecretVersions)
+		item.Environments[environment] = env
+		st.Workers.Services[service] = item
 	}
 	return rows.Err()
 }
@@ -501,16 +553,41 @@ func readWorkerReleases(results pgx.BatchResults, st *State) error {
 	for rows.Next() {
 		var r WorkerRelease
 		var variables []byte
-		if err = rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.ArchiveDigest, &r.ModuleDigest, &r.ConfigRevision, &variables, &r.Pool, &r.Created); err != nil {
+		if err = rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.ArchiveDigest, &r.ModuleDigest, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Pool, &r.Created); err != nil {
 			return err
 		}
 		r.Variables = map[string]string{}
+		r.SecretVersions = map[string]string{}
 		if len(variables) > 0 {
 			if err = json.Unmarshal(variables, &r.Variables); err != nil {
 				return err
 			}
 		}
 		ws.Releases[r.ID] = r
+	}
+	return rows.Err()
+}
+
+func readWorkerReleaseSecrets(results pgx.BatchResults, st *State) error {
+	rows, err := results.Query()
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var release, name, version string
+		if err = rows.Scan(&release, &name, &version); err != nil {
+			return err
+		}
+		item, ok := st.Workers.Releases[release]
+		if !ok {
+			continue
+		}
+		if item.SecretVersions == nil {
+			item.SecretVersions = map[string]string{}
+		}
+		item.SecretVersions[name] = version
+		st.Workers.Releases[release] = item
 	}
 	return rows.Err()
 }

@@ -13,7 +13,18 @@ test("health exposes release context without caching", async () => {
     service: "krun-workers-fullstack",
     environment: "test",
     release_id: "rel_test",
+    secret_configured: false,
   });
+});
+
+test("health observes an injected Secret without returning its value", async () => {
+  const response = await worker.fetch(
+    new Request("https://example.test/api/health"),
+    { ...env, VERIFICATION_SECRET: "must-not-be-returned" },
+  );
+  const body = await response.json();
+  assert.equal(body.secret_configured, true);
+  assert.doesNotMatch(JSON.stringify(body), /must-not-be-returned/);
 });
 
 test("echo validates methods, JSON, and payloads", async () => {

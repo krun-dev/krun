@@ -3,6 +3,7 @@ package control
 import (
 	"net/http"
 	"sort"
+	"strings"
 )
 
 type workerServiceSummary struct {
@@ -20,22 +21,80 @@ type WorkerEnvironmentSummary struct {
 	Confirmed string   `json:"confirmed_release_id,omitempty"`
 }
 
-// WorkerDomainView is the client-facing domain catalog entry. Label is a note
-// for humans; it has no effect on routing.
+// WorkerDomainView is the client-facing domain catalog entry. It deliberately
+// omits Gateway and pool identifiers: organization users choose only the
+// portable public/private access primitive.
 type WorkerDomainView struct {
 	ID           string `json:"id"`
 	Domain       string `json:"domain"`
 	Label        string `json:"label"`
-	Gateway      string `json:"gateway"`
+	Access       string `json:"access"`
 	StaticDomain string `json:"static_domain"`
 	Default      bool   `json:"default"`
+}
+
+type WorkerNetworkOptionView struct {
+	ID      string   `json:"id"`
+	Access  []string `json:"access"`
+	Default bool     `json:"default"`
+}
+
+func (s *Server) workerNetworkOptions(st *State, p Principal, r *http.Request) (any, int, error) {
+	target, err := s.orgTarget(st, r)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := s.require(st, p, r, "service.list", target); err != nil {
+		return nil, 0, err
+	}
+	seen := map[string]bool{}
+	out := []WorkerNetworkOptionView{}
+	pools := s.Config.Workers.configuredRuntimePools()
+	if len(s.Config.Workers.RuntimePools) == 0 {
+		available := pools[0].Access
+		defaultAccessRaw := []string{}
+		for _, id := range s.Config.Workers.defaultDomains() {
+			if domain, ok := s.Config.Workers.domain(id); ok {
+				defaultAccessRaw = append(defaultAccessRaw, domain.Access)
+			}
+		}
+		defaultAccess, _ := normalizeWorkerAccess(defaultAccessRaw)
+		pools = nil
+		for _, access := range available {
+			pools = append(pools, WorkerRuntimePool{Access: []string{access}, Default: sameWorkerAccess([]string{access}, defaultAccess)})
+		}
+		if len(available) > 1 {
+			pools = append(pools, WorkerRuntimePool{Access: append([]string(nil), available...), Default: sameWorkerAccess(available, defaultAccess)})
+		}
+	}
+	for _, pool := range pools {
+		id := strings.Join(pool.Access, "+")
+		if seen[id] {
+			continue
+		}
+		available := true
+		for _, access := range pool.Access {
+			found := false
+			for _, domain := range s.Config.Workers.Domains {
+				if domain.Access == access {
+					found = true
+				}
+			}
+			available = available && found
+		}
+		if available {
+			seen[id] = true
+			out = append(out, WorkerNetworkOptionView{ID: id, Access: append([]string(nil), pool.Access...), Default: pool.Default})
+		}
+	}
+	return items(out)
 }
 
 // domainCatalog renders the platform domain catalog for clients.
 func (s *Server) domainCatalog() []WorkerDomainView {
 	out := make([]WorkerDomainView, 0, len(s.Config.Workers.Domains))
 	for _, d := range s.Config.Workers.Domains {
-		out = append(out, WorkerDomainView{ID: d.ID, Domain: d.Domain, Label: d.Label, Gateway: d.Gateway, StaticDomain: d.StaticDomain, Default: d.Default})
+		out = append(out, WorkerDomainView{ID: d.ID, Domain: d.Domain, Label: d.Label, Access: d.Access, StaticDomain: d.StaticDomain, Default: d.Default})
 	}
 	return out
 }

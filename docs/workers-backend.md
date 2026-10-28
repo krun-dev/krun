@@ -76,7 +76,9 @@ kind 使用 MinIO 验证真实 S3 协议；尚未验证阿里云 OSS 专用 API 
 
 Build 是编译结果，不是某个环境的活动版本。同一个成功 Build 可发布到多个环境。构建请求的 `environment` 用于权限和构建记录，不会把生产变量写进制品。
 
-Release（曾用名 Deployment）固定引用 Artifact、目标环境、配置 revision、普通变量和 runtime pool。ID 由这些内容计算，发布之后不修改；回滚恢复历史 Release 的代码与变量。环境 API 中的 `variables` 是下一次发布使用的配置，运行中配置以生效的 Release 为准。
+Release（曾用名 Deployment）固定引用 Artifact、目标环境、配置 revision、普通变量、Secret version 集合和 runtime pool。ID 由这些内容计算，发布之后不修改；回滚恢复历史 Release 的代码、变量和 Secret。环境 API 中的 `variables` 是下一次发布使用的配置，运行中配置以生效的 Release 为准。
+
+Secret 的行为与 Cloudflare Worker 默认命令一致：`PUT`（新增或轮换）和 `DELETE` 都创建不可变 Release 并立即进入发布流程，但复用当前 Artifact，不重新构建代码。每个环境保存 name → secret version 的期望映射，每个 Release 再固定一份映射，因此轮换后仍能准确回滚。值以 AES-256-GCM 加密后入库，AAD 绑定组织、服务、环境、名称和版本；公开 API 只返回名称与创建时间。`workers.secrets_keys` 是带版本的 key ring，`secrets_active_key` 只用于新写入，仍被保留 Release 引用的旧 key 不得删除。生产 key 应由 KMS/Secret Manager 注入配置，而不是提交到仓库。
 
 发布 API 提交 `expected_revision`，防止覆盖其他发布。幂等 key 相同且请求相同返回原对象；内容不同返回 409。候选验证失败不会修改 Release。验证时核对实际 Ready Pod 与 Service EndpointSlice 的交集；提交前和确认前重新检查成员集合。
 
@@ -109,7 +111,7 @@ Host 默认形如 `w-{组织与服务 hash 前16位}-{environment}.workers.test`
 
 配置了资产的版本在入口 Worker 内多一层路径决策：`run_worker_first` 命中 → 业务 Worker；否则查资产表（含 `html_handling` 规范化）→ 命中直接返回（ETag/304）；未命中且是导航请求 → 按 `not_found_handling` 返回 `index.html`；其余交给业务 Worker。资产按文件从桶的 `pub/` 前缀懒加载并做进程内 LRU，归档（`v1/` 前缀）始终需要凭证。两个静态域（`static.{domain}` / `static.{internal_domain}`）各有一条共享 HTTPRoute，路径改写为桶对象 key 后直接反代对象存储。
 
-每个 Pod 只有一个 workerd 进程，可动态加载多个业务 Worker。入口通过固定 `PLATFORM` service binding 请求受限内部 API；内部制品接口只签发短时预签名 GET URL，runtime 冷加载时直连对象存储下载并在本地校验归档与模块 hash（控制面不再代理制品字节，Pod 也不持有 S3 凭证）。业务 Worker 不持有数据库或对象存储凭证。入口 Worker 的出网白名单使用 workerd 的 `network=(allow=[...])`，**只接受 CIDR**（`host:port` 会在启动时报 `invalid CIDR`），需覆盖对象存储 Service 的 ClusterIP 网段；Pod 级 NetworkPolicy 仍把实际目标钉在对象存储 Pod 的 :9000。Loader key 包含组织、服务、环境、Release、runtime 版本和构建 profile，使用不可变模块及显式变量，`globalOutbound: null`。
+每个 Pod 只有一个 workerd 进程，可动态加载多个业务 Worker。入口通过固定 `PLATFORM` service binding 请求受限内部 API；内部制品接口只签发短时预签名 GET URL，runtime 冷加载时直连对象存储下载并在本地校验归档与模块 hash（控制面不再代理制品字节，Pod 也不持有 S3 凭证）。当 Release 含 Secret 时，入口再按精确 Release ID 从内部接口取值，核对绑定摘要后仅在 Loader 创建业务 isolate 时注入内存；Secret 不进入对象存储快照、公开 Release JSON 或业务日志。业务 Worker 不持有数据库或对象存储凭证。入口 Worker 的出网白名单使用 workerd 的 `network=(allow=[...])`，**只接受 CIDR**（`host:port` 会在启动时报 `invalid CIDR`），需覆盖对象存储 Service 的 ClusterIP 网段；Pod 级 NetworkPolicy 仍把实际目标钉在对象存储 Pod 的 :9000。Loader key 包含组织、服务、环境、Release、runtime 版本和构建 profile，使用不可变模块及显式变量，`globalOutbound: null`。
 
 ### 边缘配置分发
 
@@ -126,7 +128,7 @@ Host 默认形如 `w-{组织与服务 hash 前16位}-{environment}.workers.test`
 
 controller 不对每个 Pod 做管理 RPC。`/validate` 仍只在单个候选成员上冷加载并运行 `KrunValidation`；commit 后由配置流传播，controller 通过 `worker_runtime_acks` 观察收敛，`available` 表示当前 serving 成员都已上报该 revision。readiness 只要求配置视图已加载；Release 在首次请求时懒加载，避免 Pod 启动成本随服务数量线性增长。
 
-实验为单个 `default` pool、私网入口。公网入口、多 pool 配置、Service / DB bindings、Secrets 和动态出口策略留待后续。现有 runtime token 是 pool 内共享的受限凭证，生产应替换为可绑定 workload identity 的认证。隔离测试覆盖 HTTP、TCP 出口和凭证注入边界，没有宣称可阻止 V8 / workerd 原生漏洞逃逸。
+实验仍只有单个 `default` pool；公网域名目录与 Gateway 路由已实现，多 pool、Service / DB bindings 和按 pool 的出口策略留待后续，详细方案见 [Workers 资源池与网络策略设计](workers-pools.md)。Secret binding 已支持；现有 runtime token 仍是 pool 内共享的受限凭证，生产应替换为可绑定 workload identity 的认证。隔离测试覆盖 HTTP、TCP 出口和凭证注入边界，没有宣称可阻止 V8 / workerd 原生漏洞逃逸。
 
 ## API
 
@@ -143,6 +145,9 @@ controller 不对每个 Pod 做管理 RPC。`/validate` 仍只在单个候选成
 | `GET /artifacts/{id}` | 当前服务可见 Build 关联的制品记录 |
 | `GET /environments` | 可见环境和配置 / Release revision |
 | `PATCH /environments/{env}` | 开关及下一次发布变量 |
+| `GET /environments/{env}/secrets` | Secret 元数据（仅名称与创建时间） |
+| `PUT /environments/{env}/secrets/{name}` | 新增或轮换 Secret，自动创建并发布 Release |
+| `DELETE /environments/{env}/secrets/{name}` | 删除 Secret，自动创建并发布 Release |
 | `POST /environments/{env}/releases` | 发布成功 Build，返回 202 Operation |
 | `POST /environments/{env}/rollbacks` | 发布历史 Release，返回 202 Operation |
 | `GET /environments/{env}/history` | 成功生效历史 |
@@ -151,7 +156,9 @@ controller 不对每个 Pod 做管理 RPC。`/validate` 仍只在单个候选成
 | `POST /environments/{env}/invoke` | 鉴权后经 Gateway 调用业务 Worker，返回文本响应封装 |
 | `GET /operations/{id}` | 步骤、错误、提交与生效状态 |
 
-内部 runtime 接口只监听 `internal_listen`，不进公开 mux，使用 `Authorization: Bearer <runtime_token>` + `X-Runtime-Pool: default`：
+内部 runtime 接口只监听 `internal_listen`，不进公开 mux，使用池级身份
+`Authorization: Bearer <pool.runtime_token>` + `X-Runtime-Pool: <pool-id>`。控制面同时校验
+header 与该 pool 独立 token，不能只信任 header：
 
 | 方法与路径 | 用途 |
 | --- | --- |
@@ -159,6 +166,7 @@ controller 不对每个 Pod 做管理 RPC。`/validate` 仍只在单个候选成
 | `GET /api/internal/workers/config/changes?since=&wait=5s` | 增量 ops：200 批次、204 超时、409 重新 bootstrap |
 | `GET /api/internal/workers/releases/{id}/assets` | 资产 manifest |
 | `GET /api/internal/workers/releases/{id}/assets/{path...}` | 单文件短时 presigned GET |
+| `GET /api/internal/workers/releases/{id}/secrets` | 精确 Release 的 Secret 值，仅供 runtime Loader |
 | `GET /api/internal/workers/artifacts/{id}` | 制品短时 presigned GET |
 | `POST /api/internal/workers/ack` | 上报已应用的 config revision（每 Pod 一行） |
 
@@ -201,7 +209,7 @@ controller 不对每个 Pod 做管理 RPC。`/validate` 仍只在单个候选成
 
 ## 第一版边界
 
-源码最多 32 文件 / 合计 256 KiB；静态资产最多 500 文件 / 合计 20 MiB / 单文件 5 MiB，含资产时归档上限 32 MiB；模块最多 2 MiB；日志最多 32 KiB；每服务保留至多 100 个 Build。配置最多 32 个普通变量 / 合计 16 KiB，禁止使用平台预留 `KRUN_` 名称。普通变量不是 Secret。
+源码最多 32 文件 / 合计 256 KiB；静态资产最多 500 文件 / 合计 20 MiB / 单文件 5 MiB，含资产时归档上限 32 MiB；模块最多 2 MiB；日志最多 32 KiB；每服务保留至多 100 个 Build。配置最多 32 个普通变量 / 合计 16 KiB；Secret 最多 32 个、单值最多 16 KiB。两者都使用大写 binding 名并禁止平台预留 `KRUN_` 前缀，且不得重名。
 
 尚无 npm 依赖缓存、自定义构建命令、Wasm 制品、构建取消、运行日志 API、独立构建队列、高并发优化和完整 GC。完成 Job 30 分钟后由 TTL 清理；源码 ConfigMap、失败临时对象、历史制品仍需后续 GC。实验部署采用开发登录和单节点 kind，不能直接视作生产部署模板。
 

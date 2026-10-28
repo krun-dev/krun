@@ -10,15 +10,28 @@ import (
 	"time"
 )
 
+func (s *Server) workerRuntimePool(r *http.Request) (WorkerRuntimePool, bool) {
+	if s.Config.Workers == nil {
+		return WorkerRuntimePool{}, false
+	}
+	pool, ok := s.Config.Workers.runtimePool(r.Header.Get("X-Runtime-Pool"))
+	if !ok || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+pool.RuntimeToken)) != 1 {
+		return WorkerRuntimePool{}, false
+	}
+	return pool, true
+}
+
 func (s *Server) workerRuntimeAllowed(r *http.Request) bool {
-	return s.Config.Workers != nil && r.Header.Get("X-Runtime-Pool") == "default" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+s.Config.Workers.RuntimeToken)) == 1
+	_, ok := s.workerRuntimePool(r)
+	return ok
 }
 
 // workerRuntimeConfigSnapshot is the bootstrap fallback. Runtimes normally read
 // the immutable snapshot from object storage; this endpoint keeps a new Pod
 // bootstrappable when object storage is unreachable but the control plane is up.
 func (s *Server) workerRuntimeConfigSnapshot(w http.ResponseWriter, r *http.Request) {
-	if !s.workerRuntimeAllowed(r) {
+	pool, allowed := s.workerRuntimePool(r)
+	if !allowed {
 		s.writeError(w, r, forbidden())
 		return
 	}
@@ -28,7 +41,7 @@ func (s *Server) workerRuntimeConfigSnapshot(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if !ok {
-		s.json(w, 200, map[string]any{"pool": "default", "config_revision": 0, "routes": []workerConfigRoute{}, "releases": map[string]WorkerRelease{}})
+		s.json(w, 200, map[string]any{"pool": pool.ID, "config_revision": 0, "routes": []workerConfigRoute{}, "releases": map[string]WorkerRelease{}})
 		return
 	}
 	var projection workerConfigProjection
@@ -36,13 +49,15 @@ func (s *Server) workerRuntimeConfigSnapshot(w http.ResponseWriter, r *http.Requ
 		s.writeError(w, r, e)
 		return
 	}
-	s.json(w, 200, map[string]any{"pool": "default", "config_revision": latest.Revision, "routes": projection.Routes, "releases": projection.Releases})
+	projection = workerConfigForPool(projection, pool.ID)
+	s.json(w, 200, map[string]any{"pool": pool.ID, "config_revision": latest.Revision, "routes": projection.Routes, "releases": projection.Releases})
 }
 
 // workerRuntimeConfigChanges is the incremental feed. since=0 means bootstrap
 // from the snapshot. Responses: 200 batch, 204 timeout, 409 resync.
 func (s *Server) workerRuntimeConfigChanges(w http.ResponseWriter, r *http.Request) {
-	if !s.workerRuntimeAllowed(r) {
+	pool, allowed := s.workerRuntimePool(r)
+	if !allowed {
 		s.writeError(w, r, forbidden())
 		return
 	}
@@ -73,14 +88,14 @@ func (s *Server) workerRuntimeConfigChanges(w http.ResponseWriter, r *http.Reque
 				s.workerConfigResync(w, r)
 				return
 			}
-			ops := []json.RawMessage{}
+			ops := []workerConfigOp{}
 			for _, revision := range revisions {
-				batch := []json.RawMessage{}
+				batch := []workerConfigOp{}
 				if err := json.Unmarshal(revision.Ops, &batch); err != nil {
 					s.writeError(w, r, err)
 					return
 				}
-				ops = append(ops, batch...)
+				ops = append(ops, workerConfigOpsForPool(batch, pool.ID)...)
 			}
 			if len(ops) > 2000 {
 				s.workerConfigResync(w, r)
@@ -121,7 +136,8 @@ func (s *Server) workerConfigResync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {
-	if !s.workerRuntimeAllowed(r) {
+	pool, allowed := s.workerRuntimePool(r)
+	if !allowed {
 		s.writeError(w, r, forbidden())
 		return
 	}
@@ -135,7 +151,7 @@ func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {
 		}
 		allowed := false
 		for _, d := range st.Workers.Releases {
-			if d.Artifact == a.ID && d.Pool == "default" {
+			if d.Artifact == a.ID && d.Pool == pool.ID {
 				if _, ok := st.Resources[d.Service]; ok {
 					allowed = true
 				}
@@ -167,8 +183,43 @@ func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {
 		"size":           out.Size,
 	})
 }
+
+// workerRuntimeReleaseSecrets is the only plaintext delivery path. It is
+// available solely on the internal listener, requires the runtime credential,
+// and returns values for one immutable Release. Values are never cached by the
+// control plane or included in edge snapshots.
+func (s *Server) workerRuntimeReleaseSecrets(w http.ResponseWriter, r *http.Request) {
+	pool, allowed := s.workerRuntimePool(r)
+	if !allowed {
+		s.writeError(w, r, forbidden())
+		return
+	}
+	digest, encrypted, err := s.Store.encryptedReleaseSecrets(r.Context(), r.PathValue("release"), pool.ID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	values := make(map[string]string, len(encrypted))
+	versions := make(map[string]string, len(encrypted))
+	for _, item := range encrypted {
+		value, decryptErr := decryptWorkerSecret(s.Config.Workers, item)
+		if decryptErr != nil {
+			s.writeError(w, r, problem(503, "WORKER_SECRET_UNAVAILABLE", "Worker secret unavailable"))
+			return
+		}
+		values[item.Version.Name] = value
+		versions[item.Version.Name] = item.Version.ID
+	}
+	if workerSecretsDigest(versions) != digest {
+		s.writeError(w, r, problem(503, "WORKER_SECRET_UNAVAILABLE", "Worker secret binding mismatch"))
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	s.json(w, 200, map[string]any{"release_id": r.PathValue("release"), "secret_digest": digest, "values": values})
+}
 func (s *Server) workerRuntimeAck(w http.ResponseWriter, r *http.Request) {
-	if !s.workerRuntimeAllowed(r) {
+	pool, allowed := s.workerRuntimePool(r)
+	if !allowed {
 		s.writeError(w, r, forbidden())
 		return
 	}
@@ -177,7 +228,7 @@ func (s *Server) workerRuntimeAck(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, e)
 		return
 	}
-	if in.Pool != "default" || in.Pod == "" || in.UID == "" {
+	if in.Pool != pool.ID || in.Pod == "" || in.UID == "" {
 		s.writeError(w, r, problem(422, "ACK_INVALID", "Pod UID and pool required"))
 		return
 	}
@@ -205,12 +256,12 @@ type workerReleaseAssets struct {
 	Files    []workerManifestFile
 }
 
-func (w *workersController) releaseAssets(ctx context.Context, releaseID string) (workerReleaseAssets, error) {
+func (w *workersController) releaseAssets(ctx context.Context, releaseID, pool string) (workerReleaseAssets, error) {
 	var out workerReleaseAssets
 	// st.Resources is in the IAM partition; without it every release looks dead.
 	e := w.server.Store.View(ctx, PartitionAll, func(st *State) error {
 		rel, ok := st.Workers.Releases[releaseID]
-		if !ok || rel.Pool != "default" || st.Resources[rel.Service].ID == "" {
+		if !ok || rel.Pool != pool || st.Resources[rel.Service].ID == "" {
 			return notFound()
 		}
 		art, ok := st.Workers.Artifacts[rel.Artifact]
@@ -250,11 +301,12 @@ func (w *workersController) releaseAssets(ctx context.Context, releaseID string)
 }
 
 func (s *Server) workerRuntimeReleaseAssets(w http.ResponseWriter, r *http.Request) {
-	if !s.workerRuntimeAllowed(r) {
+	pool, allowed := s.workerRuntimePool(r)
+	if !allowed {
 		s.writeError(w, r, forbidden())
 		return
 	}
-	assets, e := s.workers.releaseAssets(r.Context(), r.PathValue("release"))
+	assets, e := s.workers.releaseAssets(r.Context(), r.PathValue("release"), pool.ID)
 	if e != nil {
 		s.writeError(w, r, e)
 		return
@@ -263,11 +315,12 @@ func (s *Server) workerRuntimeReleaseAssets(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) workerRuntimeReleaseAssetURL(w http.ResponseWriter, r *http.Request) {
-	if !s.workerRuntimeAllowed(r) {
+	pool, allowed := s.workerRuntimePool(r)
+	if !allowed {
 		s.writeError(w, r, forbidden())
 		return
 	}
-	assets, e := s.workers.releaseAssets(r.Context(), r.PathValue("release"))
+	assets, e := s.workers.releaseAssets(r.Context(), r.PathValue("release"), pool.ID)
 	if e != nil {
 		s.writeError(w, r, e)
 		return
@@ -284,7 +337,11 @@ func (s *Server) workerRuntimeReleaseAssetURL(w http.ResponseWriter, r *http.Req
 		s.writeError(w, r, notFound())
 		return
 	}
-	key := workerAssetObjectKey("pub", assets.Release.Organization, assets.Release.Service, assets.Artifact.ArchiveDigest, name)
+	prefix := "int"
+	if runtimePoolHasAccess(pool, "public") {
+		prefix = "pub"
+	}
+	key := workerAssetObjectKey(prefix, assets.Release.Organization, assets.Release.Service, assets.Artifact.ArchiveDigest, name)
 	signed, e := s.workers.runtimeS3().PresignedGetObject(r.Context(), s.workers.config.S3Bucket, key, 15*time.Minute, nil)
 	if e != nil {
 		s.writeError(w, r, problem(503, "ASSET_UNAVAILABLE", "Asset storage unavailable"))

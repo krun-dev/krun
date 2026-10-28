@@ -80,8 +80,9 @@ func (s *Store) AppendConfigRevisionCAS(ctx context.Context, expected int64, dig
 			INSERT INTO worker_config_revisions (config_revision, digest) VALUES ($1,$2)
 			RETURNING config_revision
 		), inserted_ops AS (
-			INSERT INTO worker_config_ops (config_revision, ordinal, op_type, host, release_id, payload)
+			INSERT INTO worker_config_ops (config_revision, ordinal, pool, op_type, host, release_id, payload)
 			SELECT inserted_revision.config_revision, (item.ordinality-1)::integer,
+				COALESCE(NULLIF(item.value->>'pool',''), item.value#>>'{route,pool}', item.value#>>'{release,pool}', 'default'),
 				item.value->>'type',
 				COALESCE(item.value->>'host', item.value#>>'{route,host}', ''),
 				COALESCE(item.value#>>'{release,id}', item.value#>>'{route,release}', ''),
@@ -139,6 +140,7 @@ func (s *Store) LatestConfigRevision(ctx context.Context) (workerConfigRevision,
 		err := s.pool.QueryRow(ctx, `SELECT revision.config_revision, revision.digest,
 			COALESCE((SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
 				'type', op.op_type,
+				'pool', op.pool,
 				'host', NULLIF(op.host,''),
 				'route', CASE WHEN op.op_type='route_upsert' THEN op.payload END,
 				'release', CASE WHEN op.op_type='release_put' THEN op.payload END
@@ -148,7 +150,7 @@ func (s *Store) LatestConfigRevision(ctx context.Context) (workerConfigRevision,
 			jsonb_build_object(
 				'routes', COALESCE((
 					SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
-						'host', host, 'path', NULLIF(path,''), 'enabled', enabled, 'release', release_id
+						'host', host, 'pool', pool, 'path', NULLIF(path,''), 'enabled', enabled, 'release', release_id
 					)) ORDER BY host) FROM worker_config_routes
 				), '[]'::jsonb),
 				'releases', COALESCE((
@@ -206,6 +208,7 @@ func (s *Store) ConfigRevisionsSince(ctx context.Context, since int64, limit int
 		rows, err := s.pool.Query(ctx, `SELECT revision.config_revision, revision.digest,
 			COALESCE((SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
 				'type', op.op_type,
+				'pool', op.pool,
 				'host', NULLIF(op.host,''),
 				'route', CASE WHEN op.op_type='route_upsert' THEN op.payload END,
 				'release', CASE WHEN op.op_type='release_put' THEN op.payload END

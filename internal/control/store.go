@@ -45,6 +45,8 @@ type Store struct {
 
 	ackMu sync.Mutex
 	acks  map[string]WorkerAck
+	// memorySecretValues backs encrypted secret rows in the test-only store.
+	memorySecretValues map[string]encryptedWorkerSecret
 }
 
 // StatePartition selects which tables Update loads and persists. Keeping the
@@ -233,6 +235,15 @@ func (s *Store) updateMemory(fn func(*State) error) error {
 		s.memoryAudits = append(s.memoryAudits, deniedAudits(after.pendingAudits)...)
 		s.memoryAudits = pruneMemoryAudits(s.memoryAudits, now())
 		return err
+	}
+	if len(after.pendingWorkerSecrets) > 0 {
+		if s.memorySecretValues == nil {
+			s.memorySecretValues = map[string]encryptedWorkerSecret{}
+		}
+		for id, secret := range after.pendingWorkerSecrets {
+			s.memorySecretValues[id] = secret
+		}
+		after.pendingWorkerSecrets = nil
 	}
 	audits := after.pendingAudits
 	after.pendingAudits = nil
@@ -455,6 +466,32 @@ func cloneState(src *State) (*State, error) {
 	dst := newState()
 	if err = json.Unmarshal(raw, dst); err != nil {
 		return nil, err
+	}
+	// Secret version references are internal and therefore excluded from JSON.
+	// Preserve only the identifiers; ciphertext is never part of State.
+	for service, source := range src.Workers.Services {
+		target, ok := dst.Workers.Services[service]
+		if !ok {
+			continue
+		}
+		target.Pool = source.Pool
+		for name, sourceEnv := range source.Environments {
+			targetEnv, ok := target.Environments[name]
+			if !ok {
+				continue
+			}
+			targetEnv.SecretVersions = cloneStringsMap(sourceEnv.SecretVersions)
+			target.Environments[name] = targetEnv
+		}
+		dst.Workers.Services[service] = target
+	}
+	for id, source := range src.Workers.Releases {
+		target, ok := dst.Workers.Releases[id]
+		if !ok {
+			continue
+		}
+		target.SecretVersions = cloneStringsMap(source.SecretVersions)
+		dst.Workers.Releases[id] = target
 	}
 	// Refresh tokens and their CAS/lease metadata are intentionally omitted
 	// from JSON. Preserve them only for the in-memory test store; PostgreSQL
