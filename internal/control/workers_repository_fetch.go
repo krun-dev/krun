@@ -11,11 +11,20 @@ import (
 	"unicode/utf8"
 )
 
-// extractRepositorySource walks the archive twice: the first pass only collects
-// the files needed to decide the build layout (the entrypoint tree plus any
-// wrangler config), the caller resolves the layout, and the second pass applies
-// it. That ordering is what lets a wrangler config decide its own asset
-// directory without a chicken-and-egg dependency.
+// Repository builds pass a complete, already-configured Cloudflare Workers
+// project to the isolated builder. This budget is deliberately separate from
+// the smaller inline-source API: framework configuration, lockfiles and
+// additional Text/Data/Wasm modules are build inputs even when esbuild does not
+// follow them from the JavaScript entrypoint.
+const workerRepositoryProjectFilesMax = 4096
+const workerRepositoryProjectBytesMax = 24 << 20
+const workerRepositoryProjectFileMax = 8 << 20
+const workerRepositoryProjectPathMax = 240
+
+// extractRepositorySource retains the complete project directory needed by a
+// Wrangler build. Assets are no longer peeled off before the build: Vite and
+// framework adapters may generate both the entrypoint and assets at build time,
+// while rules/find_additional_modules need non-JavaScript source files.
 func extractRepositorySource(raw []byte, rootDirectory, entrypoint string) (map[string]string, map[string][]byte, error) {
 	files, assets, err := extractArchive(raw, rootDirectory, nil, true)
 	if err != nil {
@@ -29,6 +38,49 @@ func extractRepositorySource(raw []byte, rootDirectory, entrypoint string) (map[
 		}
 	}
 	return files, assets, nil
+}
+
+func safeWorkerRepositoryProjectPath(name string) bool {
+	if name == "" || len(name) > workerRepositoryProjectPathMax || len(path.Base(name)) > 100 || path.IsAbs(name) || path.Clean(name) != name || strings.HasPrefix(name, "../") || strings.Contains(name, "\\") {
+		return false
+	}
+	// Source bundles use portable ustar paths and the builder rejects PAX/GNU
+	// extensions. Printable ASCII covers normal package and framework layouts
+	// without making archive interpretation platform-dependent.
+	for _, b := range []byte(name) {
+		if b < 0x21 || b > 0x7e {
+			return false
+		}
+	}
+	for _, part := range strings.Split(name, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// Repository credentials and local development secrets never belong in the
+// untrusted build container. Package-manager registry configuration is supplied
+// by the platform. Generated/cache trees are rebuilt inside the Job.
+func repositoryProjectFilePolicy(name string) (include bool, sensitive bool) {
+	for _, part := range strings.Split(name, "/") {
+		switch part {
+		case ".git", ".wrangler", "node_modules":
+			return false, false
+		}
+	}
+	base := strings.ToLower(path.Base(name))
+	switch base {
+	case ".dev.vars", ".npmrc", ".yarnrc":
+		return false, true
+	case ".pnp.cjs", ".pnp.loader.mjs":
+		return false, false
+	}
+	if base == ".env" || (strings.HasPrefix(base, ".env.") && !strings.HasSuffix(base, ".example")) {
+		return false, true
+	}
+	return true, false
 }
 
 // extractRepositoryAssets re-reads the archive for the resolved asset directory.
@@ -108,42 +160,37 @@ func extractArchive(raw []byte, rootDirectory string, assets *WorkerAssetsConfig
 			assetFiles[asset] = data
 			continue
 		}
-		// wrangler config declares the entrypoint and asset directory, so it must
-		// be retained even though it is not compilable source.
-		isWranglerConfig := false
-		for _, cfgName := range wranglerFileNames {
-			if name == cfgName {
-				isWranglerConfig = true
-				break
-			}
-		}
-		if !isWranglerConfig && !collectSource {
+		if !collectSource {
 			continue
 		}
-		if !isWranglerConfig {
-			// Type declarations are tooling input, not compilable source; standard
-			// workers projects ship one that can be hundreds of KiB.
-			if strings.HasSuffix(name, ".d.ts") {
-				continue
-			}
-			// Unrelated repository files must not fail the build: a project can sit
-			// next to lockfiles, images and fixtures.
-			if !contains([]string{".js", ".mjs", ".ts", ".json"}, path.Ext(name)) {
-				continue
-			}
-			if header.Size > int64(256<<10) {
-				return nil, nil, fmt.Errorf("Repository source file %s exceeds 256 KiB", name)
-			}
+		include, sensitive := repositoryProjectFilePolicy(name)
+		if sensitive {
+			return nil, nil, fmt.Errorf("Repository project contains a local credential or environment file: %s", name)
 		}
-		if !safeWorkerRepositoryPath(name, false) || header.Size < 0 || header.Size > int64((256<<10)-total) || len(files) >= 32 {
-			return nil, nil, fmt.Errorf("Repository source must contain at most 32 safe files and 256 KiB; select a smaller project directory")
+		if !include {
+			continue
+		}
+		if !safeWorkerRepositoryProjectPath(name) || header.Size < 0 || header.Size > workerRepositoryProjectFileMax || header.Size > int64(workerRepositoryProjectBytesMax-total) || len(files) >= workerRepositoryProjectFilesMax {
+			return nil, nil, fmt.Errorf("Repository project must contain at most %d safe files and %d MiB; select a smaller project directory", workerRepositoryProjectFilesMax, workerRepositoryProjectBytesMax>>20)
 		}
 		if _, duplicate := files[name]; duplicate {
 			return nil, nil, fmt.Errorf("Repository archive contains duplicate source paths")
 		}
 		data, err := io.ReadAll(archive)
-		if err != nil || !utf8.Valid(data) {
-			return nil, nil, fmt.Errorf("Repository source is not valid UTF-8")
+		if err != nil || len(data) != int(header.Size) {
+			return nil, nil, fmt.Errorf("Repository project file is invalid: %s", name)
+		}
+		switch strings.ToLower(path.Ext(name)) {
+		case ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".json", ".jsonc", ".toml":
+			if !utf8.Valid(data) {
+				return nil, nil, fmt.Errorf("Repository project text file is not valid UTF-8: %s", name)
+			}
+		}
+		if strings.EqualFold(path.Base(name), ".yarnrc.yml") {
+			config := strings.ToLower(string(data))
+			if strings.Contains(config, "npmauthtoken") || strings.Contains(config, "npmauthident") {
+				return nil, nil, fmt.Errorf("Repository project contains package-manager credentials: %s", name)
+			}
 		}
 		total += len(data)
 		files[name] = string(data)

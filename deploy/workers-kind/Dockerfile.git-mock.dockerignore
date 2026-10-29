@@ -1,0 +1,10 @@
+**
+!deploy/
+!deploy/workers-kind/
+!deploy/workers-kind/Dockerfile.git-mock
+!deploy/workers-kind/git-mock/
+!deploy/workers-kind/git-mock/**
+!examples/
+!examples/workers-fullstack/
+!examples/workers-fullstack/package.json
+!examples/workers-fullstack/package-lock.json

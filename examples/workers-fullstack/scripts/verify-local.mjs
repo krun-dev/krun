@@ -102,7 +102,12 @@ function tarFile(name, bytes) {
 }
 
 const file = (name) => readFileSync(new URL("../" + name, import.meta.url));
-const code = { "index.js": file("src/index.js"), "http.js": file("src/http.js") };
+const code = {
+  "index.js": file("src/index.js"),
+  "http.js": file("src/http.js"),
+  "package.json": file("package.json"),
+  "package-lock.json": file("package-lock.json"),
+};
 const assets = {
   "index.html": file("frontend/public/index.html"),
   "about.html": file("frontend/public/about.html"),
@@ -152,8 +157,11 @@ const queuedBuild = await api(base + "/builds", "POST", {
   source_type: "upload",
   source_upload: upload.source_upload,
   entrypoint: "index.js",
+  compatibility_date: "2026-09-28",
+  compatibility_flags: ["nodejs_compat"],
   assets: {
     directory: "frontend/public",
+    binding: "ASSETS",
     run_worker_first: ["/api/*"],
     not_found_handling: "single-page-application",
     html_handling: "auto-trailing-slash",
@@ -190,6 +198,8 @@ assert.equal(root.status, 200); assert(root.text.includes('data-app="krun-worker
 const health = await gatewayRequest(host, "/api/health");
 assert.equal(health.status, 200); assert.equal(health.body.service, "krun-workers-fullstack");
 assert.equal(health.body.secret_configured, false);
+const assetBinding = await gatewayRequest(host, "/api/asset-check");
+assert.equal(assetBinding.status, 200); assert.deepEqual(assetBinding.body, { status: 200, about_page: true });
 const secretValue = "local-secret-" + randomUUID();
 const queuedSecret = await api(base + "/environments/production/secrets/VERIFICATION_SECRET", "PUT", {
   value: secretValue,
@@ -258,6 +268,7 @@ console.log(JSON.stringify({
   checks: {
     root: root.status,
     health: health.status,
+    assets_binding: assetBinding.status,
     echo: echo.status,
     spa: spa.status,
     immutable: script.headers["cache-control"],

@@ -33,7 +33,7 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 		}
 		placed := now()
 		st.Workers.Placements[workerPlacementKey(release.Service, "default")] = WorkerPlacement{Service: release.Service, Organization: release.Organization, NetworkProfile: "default", Pool: "default", Role: "primary", State: "active", Revision: 1, Created: placed, Updated: placed}
-		st.Workers.Artifacts[release.Artifact] = WorkerArtifact{ID: release.Artifact, Organization: release.Organization, State: "finalized", Created: now()}
+		st.Workers.Artifacts[release.Artifact] = WorkerArtifact{ID: release.Artifact, Organization: release.Organization, State: "finalized", ArchiveDigest: release.ArchiveDigest, ModuleDigest: release.ModuleDigest, Created: now()}
 		st.Workers.Releases[release.ID] = release
 		return nil
 	}); err != nil {
@@ -54,6 +54,23 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 	environment := loaded.Workers.Services[release.Service].Environments["production"]
 	if environment.SecretVersions["API_TOKEN"] != encrypted.Version.ID || loaded.Workers.Releases[release.ID].SecretVersions["API_TOKEN"] != encrypted.Version.ID {
 		t.Fatalf("relational bindings not reloaded: env=%v release=%v", environment.SecretVersions, loaded.Workers.Releases[release.ID].SecretVersions)
+	}
+	var topologyBefore, topologyAfter string
+	if err = store.pool.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='worker_topology_generation'`).Scan(&topologyBefore); err != nil {
+		t.Fatal(err)
+	}
+	// PostgreSQL and the JSON snapshot clone may represent the same instant with
+	// different time.Location pointers. An unrelated Workers write must not
+	// mistake that representation difference for either a secret metadata or
+	// runtime-placement mutation.
+	if err = store.Update(ctx, PartitionWorkers, func(*State) error { return nil }); err != nil {
+		t.Fatalf("unchanged secret metadata rejected: %v", err)
+	}
+	if err = store.pool.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='worker_topology_generation'`).Scan(&topologyAfter); err != nil {
+		t.Fatal(err)
+	}
+	if topologyAfter != topologyBefore {
+		t.Fatalf("unchanged placement advanced topology generation: before=%s after=%s", topologyBefore, topologyAfter)
 	}
 	digest, values, err := store.encryptedReleaseSecrets(ctx, release.ID, "default")
 	if err != nil || digest != release.SecretDigest || len(values) != 1 {

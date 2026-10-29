@@ -10,12 +10,16 @@ else:
  credentials={k:secrets.token_hex(24) for k in ['db_password','s3_secret','runtime_token','management_token']};credentials['s3_access']='krun-workers';credentials['worker_secrets_key']=base64.b64encode(secrets.token_bytes(32)).decode();credential_file.write_text(json.dumps(credentials));credential_file.chmod(0o600)
 if 'worker_secrets_key' not in credentials:
  credentials['worker_secrets_key']=base64.b64encode(secrets.token_bytes(32)).decode();credential_file.write_text(json.dumps(credentials));credential_file.chmod(0o600)
+git_mock_certificate=(out/'git-mock.crt').read_text()
+git_mock_private_key=(out/'git-mock.key').read_text()
+git_mock_ca=(out/'git-mock-ca.crt').read_text()
 api_ips=[str(ipaddress.ip_address(x)) for x in os.environ['KRUN_KUBE_API_IPS'].split(',')]
 ns='workers-mvp';tag='20261013';items=[]
 def resource(kind,name,**fields):
  return {'apiVersion':fields.pop('apiVersion','v1'),'kind':kind,'metadata':{'name':name,'namespace':ns},**fields}
 items.append({'apiVersion':'v1','kind':'Namespace','metadata':{'name':ns,'labels':{'lab':'krun-workers-mvp'}}})
 items.append(resource('Secret','workers-credentials',stringData={'KRUN_DATABASE_URL':f'postgres://postgres:{credentials["db_password"]}@postgres:5432/postgres?sslmode=disable','POSTGRES_PASSWORD':credentials['db_password'],'KRUN_S3_ACCESS':credentials['s3_access'],'KRUN_S3_SECRET':credentials['s3_secret'],'KRUN_RUNTIME_TOKEN':credentials['runtime_token'],'KRUN_MANAGEMENT_TOKEN':credentials['management_token'],'KRUN_WORKERS_SECRETS_KEY':credentials['worker_secrets_key'],'MINIO_ROOT_USER':credentials['s3_access'],'MINIO_ROOT_PASSWORD':credentials['s3_secret']}))
+items.append(resource('Secret','git-mock-tls',type='kubernetes.io/tls',stringData={'tls.crt':git_mock_certificate,'tls.key':git_mock_private_key,'ca.crt':git_mock_ca}))
 def claim(name,size):items.append(resource('PersistentVolumeClaim',name,spec={'accessModes':['ReadWriteOnce'],'resources':{'requests':{'storage':size}}}))
 claim('postgres-data','1Gi');claim('minio-data','1Gi')
 def service(name,ports,selector=None):items.append(resource('Service',name,spec={'selector':selector or {'app':name},'ports':[{'name':f'p{p}','port':p,'targetPort':p} for p in ports]}))
@@ -25,6 +29,7 @@ def limits(memory='256Mi',request='64Mi'):return {'requests':{'cpu':'50m','memor
 def secure():return {'allowPrivilegeEscalation':False,'readOnlyRootFilesystem':True,'runAsNonRoot':True,'runAsUser':1000,'capabilities':{'drop':['ALL']},'seccompProfile':{'type':'RuntimeDefault'}}
 deployment('postgres',[{'name':'postgres','image':'postgres:18-alpine','imagePullPolicy':'Never','env':[env('POSTGRES_PASSWORD')],'volumeMounts':[{'name':'data','mountPath':'/var/lib/postgresql'}],'readinessProbe':{'exec':{'command':['pg_isready','-U','postgres']},'periodSeconds':2},'resources':limits('1Gi','256Mi')}],volumes=[{'name':'data','persistentVolumeClaim':{'claimName':'postgres-data'}}]);service('postgres',[5432])
 deployment('minio',[{'name':'minio','image':'krun-e2e-minio:20250907','imagePullPolicy':'Never','args':['server','/data','--console-address',':9001'],'env':[env('MINIO_ROOT_USER'),env('MINIO_ROOT_PASSWORD')],'volumeMounts':[{'name':'data','mountPath':'/data'}],'readinessProbe':{'httpGet':{'path':'/minio/health/ready','port':9000},'periodSeconds':2},'resources':limits('512Mi')}],volumes=[{'name':'data','persistentVolumeClaim':{'claimName':'minio-data'}}]);service('minio',[9000]);service('static-assets',[9000],selector={'app':'minio'})
+deployment('git-mock',[{'name':'git-mock','image':f'krun-e2e-git-mock:{tag}','imagePullPolicy':'Never','securityContext':secure(),'volumeMounts':[{'name':'tls','mountPath':'/tls','readOnly':True}],'readinessProbe':{'httpGet':{'scheme':'HTTPS','path':'/healthz','port':8443},'periodSeconds':2},'resources':limits('256Mi')}],volumes=[{'name':'tls','secret':{'secretName':'git-mock-tls'}}]);items.append(resource('Service','git-mock',spec={'selector':{'app':'git-mock'},'ports':[{'name':'https','port':443,'targetPort':8443}]}))
 config='''listen: 0.0.0.0:9000
 internal_listen: 0.0.0.0:9001
 public_url: http://127.0.0.1:4380
@@ -39,6 +44,8 @@ workers:
   namespace: workers-mvp
   builder_image: krun-worker-builder:20261013
   builder_pull_policy: Never
+  builder_timeout_seconds: 600
+  npm_registry: https://git-mock/npm/
   s3_location_id: primary
   clone_directory: /workdir
   runtime_pools:
@@ -112,6 +119,13 @@ workers:
   s3_access_key: ${KRUN_S3_ACCESS}
   s3_secret_key: ${KRUN_S3_SECRET}
   repository_providers:
+    - id: kind-git
+      type: gitlab
+      name: kind Git fixture
+      enabled: true
+      priority: 1
+      base_url: https://git-mock
+      allow_private_network: true
     - id: company-gitlab
       type: gitlab
       name: 公司 GitLab
@@ -133,7 +147,7 @@ workers:
 '''
 items.append(resource('ConfigMap','control-config',data={'control.yaml':config}))
 items.append(resource('ServiceAccount','workers-control'))
-items.append(resource('Role','workers-control',apiVersion='rbac.authorization.k8s.io/v1',rules=[{'apiGroups':[''],'resources':['pods','pods/log'],'verbs':['get','list']},{'apiGroups':[''],'resources':['configmaps'],'verbs':['get','create','patch','delete']},{'apiGroups':['batch'],'resources':['jobs'],'verbs':['get','list','create','delete']},{'apiGroups':['discovery.k8s.io'],'resources':['endpointslices'],'verbs':['get','list']},{'apiGroups':['gateway.networking.k8s.io'],'resources':['httproutes'],'verbs':['get','list','create','patch','delete'] }]))
+items.append(resource('Role','workers-control',apiVersion='rbac.authorization.k8s.io/v1',rules=[{'apiGroups':[''],'resources':['pods','pods/log'],'verbs':['get','list']},{'apiGroups':[''],'resources':['secrets'],'verbs':['get','create','patch','delete']},{'apiGroups':['batch'],'resources':['jobs'],'verbs':['get','list','create','patch','delete']},{'apiGroups':['discovery.k8s.io'],'resources':['endpointslices'],'verbs':['get','list']},{'apiGroups':['gateway.networking.k8s.io'],'resources':['httproutes'],'verbs':['get','list','create','patch','delete'] }]))
 items.append(resource('RoleBinding','workers-control',apiVersion='rbac.authorization.k8s.io/v1',roleRef={'apiGroup':'rbac.authorization.k8s.io','kind':'Role','name':'workers-control'},subjects=[{'kind':'ServiceAccount','name':'workers-control','namespace':ns}]))
 items.append({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'Role','metadata':{'name':'workers-mvp-reader','namespace':'kgateway-system'},'rules':[{'apiGroups':['gateway.networking.k8s.io'],'resources':['gateways'],'resourceNames':['workers-mvp','workers-public'],'verbs':['get']}]})
 items.append({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'RoleBinding','metadata':{'name':'workers-mvp-reader','namespace':'kgateway-system'},'roleRef':{'apiGroup':'rbac.authorization.k8s.io','kind':'Role','name':'workers-mvp-reader'},'subjects':[{'kind':'ServiceAccount','name':'workers-control','namespace':ns}]})
@@ -147,7 +161,7 @@ deployment('backend',[{'name':'backend','image':f'krun-workers-backend:{tag}','i
 capnp=f'''using W = import "/workerd/workerd.capnp";
 const config :W.Config = (
  services = [
-  (name="entry",worker=(modules=[(name="entry.js",esModule=embed "/app/entry.js")],compatibilityDate="2026-09-28",compatibilityFlags=["experimental"],bindings=[
+  (name="entry",worker=(modules=[(name="entry.js",esModule=embed "/app/entry.js")],compatibilityDate="2026-09-28",compatibilityFlags=["experimental", "enable_ctx_exports"],bindings=[
    (name="LOADER",workerLoader=(id="workers-mvp-default")),
    (name="PLATFORM",service="platform"),
    (name="POD_NAME",text=embed "/pod/name"),
@@ -175,19 +189,27 @@ def policy(name,labels,ingress=None,egress=None):items.append(resource('NetworkP
 policy('deny',{})
 policy('dns',{},egress=[{'to':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kube-system'}},'podSelector':{'matchLabels':{'k8s-app':'kube-dns'}}}],'ports':[{'protocol':'UDP','port':53},tcp(53)]}])
 policy('backend',{'app':'backend'},ingress=[{'from':[selector('tester')],'ports':[tcp(9000)]},{'from':[{'podSelector':{'matchLabels':{'role':'krun-runtime'}}}],'ports':[tcp(9001)]}],egress=[{'to':[selector('postgres')],'ports':[tcp(5432)]},{'to':[selector('minio')],'ports':[tcp(9000)]},{'to':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}},'podSelector':{'matchLabels':{'gateway.networking.k8s.io/gateway-name':'workers-mvp'}}}],'ports':[tcp(8080)]},{'to':[{'podSelector':{'matchLabels':{'role':'krun-runtime'}}}],'ports':[tcp(8083)]},{'to':[{'ipBlock':{'cidr':ip+('/32' if ':' not in ip else '/128')}} for ip in api_ips],'ports':[tcp(443),tcp(6443)]}])
-# Only the control plane fetches repositories; builders and runtimes keep their existing egress.
+# Only the control plane fetches repositories. A builder with package-lock
+# dependencies may additionally reach the single configured npm registry.
 repository_ips=set()
 if os.environ.get('KRUN_REPOSITORY_EGRESS_IPS'):
  repository_ips.update(str(ipaddress.ip_address(v)) for v in os.environ['KRUN_REPOSITORY_EGRESS_IPS'].split(','))
 else:
- for host in ['api.github.com','codeload.github.com','gitlab.com','gitlab.example.internal']:
+ # Repository checkout uses Git smart HTTP against the configured origin
+ # itself. api.github.com is also needed by the optional GitHub identity flow.
+ for host in ['github.com','api.github.com','gitlab.com','gitlab.example.internal']:
   try:
    repository_ips.update(item[4][0] for item in socket.getaddrinfo(host,443,type=socket.SOCK_STREAM))
   except OSError:
    print('Repository DNS not available while generating:',host)
 if repository_ips:
  policy('repository-egress',{'app':'backend'},egress=[{'to':[{'ipBlock':{'cidr':ip+('/32' if ':' not in ip else '/128')}} for ip in sorted(repository_ips)],'ports':[tcp(443)]}])
+# CNI implementations may evaluate Service traffic before or after targetPort
+# translation, so keep both ports scoped to the git-mock Pod selector.
+policy('repository-mock-egress',{'app':'backend'},egress=[{'to':[selector('git-mock')],'ports':[tcp(443),tcp(8443)]}])
 policy('postgres',{'app':'postgres'},ingress=[{'from':[selector('backend')],'ports':[tcp(5432)]}])
+policy('npm-mock-egress',{'app':'krun-builder'},egress=[{'to':[selector('git-mock')],'ports':[tcp(443),tcp(8443)]}])
+policy('git-mock',{'app':'git-mock'},ingress=[{'from':[selector('backend'),selector('krun-builder')],'ports':[tcp(8443)]}])
 # Both network scopes are separate Gateway instances. The gateway-name label
 # selector keeps each instance's traffic distinct at the NetworkPolicy layer.
 gw_selector=[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}},'podSelector':{'matchLabels':{'gateway.networking.k8s.io/gateway-name':g}}} for g in ['workers-mvp','workers-public']]

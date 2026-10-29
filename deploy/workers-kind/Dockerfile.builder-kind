@@ -1,0 +1,7 @@
+FROM krun-worker-builder-base:20261013
+USER 0:0
+COPY --chmod=0444 generated/git-mock-ca.crt /app/krun-kind-git-mock-ca.pem
+ENV NODE_EXTRA_CA_CERTS=/app/krun-kind-git-mock-ca.pem
+USER 1000:1000
+RUN test -r "$NODE_EXTRA_CA_CERTS" \
+    && node -e "require('node:fs').accessSync(process.env.NODE_EXTRA_CA_CERTS)"

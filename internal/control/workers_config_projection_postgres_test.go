@@ -11,7 +11,7 @@ func TestPostgresConfigRevisionsStoreNormalizedEntitiesAndOps(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	first := workerConfigProjection{
-		Routes: []workerConfigRoute{{Host: "old.workers.test", Path: "/", Enabled: true, Release: "rel-old"}},
+		Routes: []workerConfigRoute{{Host: "old.workers.test", Path: "/", Enabled: true, Release: "rel-old", Pool: "default"}},
 		Releases: map[string]WorkerRelease{
 			"rel-old": {ID: "rel-old", Service: "svc", Organization: "org", Environment: "production", Artifact: "art-old"},
 		},
@@ -26,7 +26,7 @@ func TestPostgresConfigRevisionsStoreNormalizedEntitiesAndOps(t *testing.T) {
 		t.Fatalf("first append revision=%d appended=%v err=%v", revision, appended, err)
 	}
 	second := workerConfigProjection{
-		Routes: []workerConfigRoute{{Host: "new.workers.test", Path: "/", Enabled: true, Release: "rel-new"}},
+		Routes: []workerConfigRoute{{Host: "new.workers.test", Path: "/", Enabled: true, Release: "rel-new", Pool: "default"}},
 		Releases: map[string]WorkerRelease{
 			"rel-new": {ID: "rel-new", Service: "svc", Organization: "org", Environment: "production", Artifact: "art-new"},
 		},
@@ -236,11 +236,15 @@ func TestPostgresTopologyGenerationCoversEveryProjectionInput(t *testing.T) {
 			t.Fatalf("%s generation=%d want %d", action, generation, before+1)
 		}
 	}
-	assertAdvanced("active release descriptor", func() error {
+	assertAdvanced("active release replacement", func() error {
 		return store.Update(ctx, PartitionWorkers, func(st *State) error {
-			release := st.Workers.Releases["rel-1"]
-			release.Variables = map[string]string{"VERSION": "2"}
-			st.Workers.Releases[release.ID] = release
+			st.Workers.Releases["rel-vars"] = WorkerRelease{ID: "rel-vars", Service: "svc", Organization: "org", Environment: "production", Artifact: "art", Variables: map[string]string{"VERSION": "2"}, Created: created}
+			service := st.Workers.Services["svc"]
+			environment := service.Environments["production"]
+			environment.Release = "rel-vars"
+			environment.ConfigRevision++
+			service.Environments[environment.Name] = environment
+			st.Workers.Services[service.Service] = service
 			return nil
 		})
 	})

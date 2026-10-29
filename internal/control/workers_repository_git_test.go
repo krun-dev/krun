@@ -130,7 +130,7 @@ func TestCloneHonoursRootDirectoryAndWrangler(t *testing.T) {
 	if err != nil || cfg == nil {
 		t.Fatalf("config parse: %v", err)
 	}
-	assets, entry, err := resolveWranglerBuild(cfg, nil, "")
+	assets, entry, err := resolveWranglerBuild(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

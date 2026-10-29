@@ -1,4 +1,4 @@
-# Workers 构建与发布后端（第一版）
+# Workers 构建与发布后端
 
 实现位置：`internal/control/workers_*.go`、`workers/builder`、`workers/runtime`。复用现有 Go 控制服务的登录、API Key、Cedar 权限和 PostgreSQL 状态存储。后续已接入现有 React 控制台，体验入口与验证见 [Workers 控制台](workers-console.md)。kind 部署与验收入口见 [部署说明](../deploy/workers-kind/README.md)。
 
@@ -21,7 +21,8 @@ sequenceDiagram
     C->>A: 上传源码，创建 Build
     A-->>C: 202 + queued Build
     A->>J: 固定镜像、源码、临时对象 PUT 签名
-    J->>J: esbuild 打包 JS / TS
+    J->>J: frozen install + Wrangler dry-run
+    J->>J: 可信 packer 校验并生成多模块制品
     J->>S: 上传临时 bundle.tar.gz
     A->>S: 验证归档与 hash，写入不可变对象
     A->>A: Build succeeded，登记 Artifact
@@ -43,19 +44,25 @@ Kubernetes、S3 和 runtime HTTP 请求均在 IAM 状态事务外进行。执行
 
 ## 构建和制品
 
-源码请求包含相对路径文件映射及入口。固定 `esbuild 0.28.2` 将源码编译为一个 ESM 模块，支持相对 JS / TS / JSON 依赖，以及 `cloudflare:workers`、`cloudflare:sockets` 内建模块。构建容器不执行用户代码、npm 安装、生命周期脚本或自定义构建命令。裸 npm 依赖和任意文件系统导入会报错。
+内联小 Worker 继续使用固定 `esbuild` profile；仓库构建则要求项目根目录包含 `wrangler.jsonc`、`wrangler.json` 或 `wrangler.toml`，不启用 Wrangler 的框架自动改造。控制面把完整且经过边界检查的项目目录交给 builder，固定版本 Wrangler 以 `deploy --dry-run` 完成 JS / TS、`rules`、`find_additional_modules`、`no_bundle`、Text / Data / Wasm 和已配置 Vite/adapter 项目的构建。Python、Rust、legacy Service Worker 语法以及 Cloudflare 登录、资源管理和真实 deploy 不在当前范围。详细兼容边界见 [Cloudflare Workers 构建兼容](workers-build-compatibility.md)。
 
-每次构建为独立 Kubernetes Job：非 root、无 ServiceAccount Token、只读根文件系统、独立临时目录、CPU / 内存限额、120 秒 Job deadline。Builder 只获得一个临时对象的 15 分钟 PUT 签名，不获得 S3 长期凭证。源码 ConfigMap 不注入业务凭证。
+项目必须提交且只提交一种受支持的锁文件；builder 使用镜像内固定版本的 npm、pnpm、Yarn 或 Bun 执行 frozen install，不通过 Corepack 在线下载任意工具版本。仓库模式会安装构建所需的 devDependencies，并可能执行 lifecycle/custom build，所以它本质上是租户代码执行；内联 direct 模式仍走更窄的依赖和 esbuild 路径。
+
+`workers.npm_registry` 是唯一受信任的包源，默认 `https://registry.npmjs.org/`。控制面把该值显式传给 builder，不从隐藏环境变量决定行为。私有 registry 凭据、多个 registry 与 scoped auth 尚未实现；生产应使用稳定的内部包代理，并在 NetworkPolicy 中只放行该代理。
+
+每次仓库构建为独立 Kubernetes Job：非 root、无 ServiceAccount Token、只读根文件系统、独立临时目录及 CPU / 内存 / 临时盘 / deadline 限额。一个 init container 只获得源码下载 URL 并执行不可信安装与构建；主容器只获得制品上传 URL，静态校验共享卷后生成归档，二者通过不同 Secret key 挂载，构建脚本看不到上传能力。Secret 归属于 Job，随 TTL 清理。生产多租户建议通过 `builder_runtime_class` 选择 gVisor、Kata Containers 或等价隔离。
 
 归档仅包含：
 
 ```text
 bundle.tar.gz
 ├── manifest.json
-└── modules/index.js
+├── modules/index.js
+├── modules/<additional ESM/CommonJS/Text/Data/Wasm>
+└── assets/...
 ```
 
-Manifest 固定为 schema 1、profile `esbuild-esm-v1`，登记模块类型、大小及 SHA-256。平台拒绝目录越界、符号链接、重复条目、非预期文件、超限大小、截断归档和 hash 不符的模块。编译器还生成 `KrunValidation` RPC，检查默认导出是否有 `fetch`，并实际触发模块初始化。
+Manifest profile 固定为 `workerd-bundle-v2`：无资产为 schema 1，有资产为 schema 2；同时固化 `compatibility_date`、排序后的 `compatibility_flags`、主模块和完整模块表。平台拒绝目录越界、PAX/GNU 扩展路径、符号链接、重复或未声明条目、超限大小、截断归档、类型不合法和 hash 不符的模块；Wasm magic、文本 UTF-8 与 source-map JSON 也会校验。构建 wrapper 保留原项目的命名导出，并增加 `KrunValidation` RPC 触发模块初始化和检查默认 `fetch`。
 
 存储键：
 
@@ -76,7 +83,7 @@ kind 使用 MinIO 验证真实 S3 协议；尚未验证阿里云 OSS 专用 API 
 
 Build 是编译结果，不是某个环境的活动版本。同一个成功 Build 可发布到多个环境。构建请求的 `environment` 用于权限和构建记录，不会把生产变量写进制品。
 
-Release（曾用名 Deployment）固定引用 Artifact、目标环境、配置 revision、普通变量、Secret version 集合和 runtime pool。ID 由这些内容计算，发布之后不修改；回滚恢复历史 Release 的代码、变量和 Secret。环境 API 中的 `variables` 是下一次发布使用的配置，运行中配置以生效的 Release 为准。
+Release（曾用名 Deployment）固定引用 Artifact、目标环境、构建 profile、compatibility 配置、配置 revision、普通变量和 Secret version 集合。资源池由服务 placement 决定，不写进 Release。ID 由这些内容计算，发布之后不修改；回滚恢复历史 Release 的代码、变量和 Secret。环境 API 中的 `variables` 是下一次发布使用的配置，运行中配置以生效的 Release 为准。
 
 Secret 的行为与 Cloudflare Worker 默认命令一致：`PUT`（新增或轮换）和 `DELETE` 都创建不可变 Release 并立即进入发布流程，但复用当前 Artifact，不重新构建代码。每个环境保存 name → secret version 的期望映射，每个 Release 再固定一份映射，因此轮换后仍能准确回滚。值以 AES-256-GCM 加密后入库，AAD 绑定组织、服务、环境、名称和版本；公开 API 只返回名称与创建时间。`workers.secrets_keys` 是带版本的 key ring，`secrets_active_key` 只用于新写入，仍被保留 Release 引用的旧 key 不得删除。生产 key 应由 KMS/Secret Manager 注入配置，而不是提交到仓库。
 
@@ -177,8 +184,11 @@ header 与该 pool 独立 token，不能只信任 header：
   "environment": "test",
   "entrypoint": "src/index.ts",
   "source_upload": "uploads/{org}/src/src_xxx/source.tar.gz",
+  "compatibility_date": "2026-09-28",
+  "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "public",
+    "binding": "ASSETS",
     "run_worker_first": ["/api/*"],
     "not_found_handling": "single-page-application",
     "html_handling": "auto-trailing-slash"
@@ -187,7 +197,7 @@ header 与该 pool 独立 token，不能只信任 header：
 }
 ```
 
-旧的内联 `files` 仍可用（仅代码，≤32 文件 / 256 KiB）；带 `assets` 时必须先 `POST /source-uploads` 并上传 `source.tar.gz`。源码包顶层固定为 `src/`（Worker 代码）与 `assets/`（相对 `assets.directory` 的文件）。
+旧的内联 `files` 仍可用（仅代码，≤512 文件 / 2 MiB）；带 `assets` 时必须先 `POST /source-uploads` 并上传 `source.tar.gz`。源码包顶层固定为 `src/`（Worker 代码）与 `assets/`（相对 `assets.directory` 的文件）。归档使用 portable ustar；短路径放在 100-byte name field，嵌套路径可使用 155-byte prefix + 100-byte name 的标准拆分。
 
 环境配置和发布请求分别使用不同 revision：
 
@@ -209,8 +219,8 @@ header 与该 pool 独立 token，不能只信任 header：
 
 ## 第一版边界
 
-源码最多 32 文件 / 合计 256 KiB；静态资产最多 500 文件 / 合计 20 MiB / 单文件 5 MiB，含资产时归档上限 32 MiB；模块最多 2 MiB；日志最多 32 KiB；每服务保留至多 100 个 Build。配置最多 32 个普通变量 / 合计 16 KiB；Secret 最多 32 个、单值最多 16 KiB。两者都使用大写 binding 名并禁止平台预留 `KRUN_` 前缀，且不得重名。
+内联源码最多 512 文件 / 合计 2 MiB；仓库项目最多 4096 文件 / 合计 24 MiB / 单文件 8 MiB。静态资产最多 500 文件 / 合计 20 MiB / 单文件 5 MiB，含资产时归档上限 32 MiB；模块最多 512 个、单个 2 MiB、合计 8 MiB；日志最多 32 KiB；每服务保留至多 100 个 Build。配置最多 32 个普通变量 / 合计 16 KiB；Secret 最多 32 个、单值最多 16 KiB。变量与 Secret 使用大写 binding 名并禁止平台预留 `KRUN_` 前缀；资产 binding 允许标准 JS 标识符式名称，但不得覆盖变量、Secret 或平台保留 binding。
 
-尚无 npm 依赖缓存、自定义构建命令、Wasm 制品、构建取消、运行日志 API、独立构建队列、高并发优化和完整 GC。完成 Job 30 分钟后由 TTL 清理；源码 ConfigMap、失败临时对象、历史制品仍需后续 GC。实验部署采用开发登录和单节点 kind，不能直接视作生产部署模板。
+尚无跨构建依赖缓存、构建取消、运行日志 API、独立构建队列和高并发优化。完成 Job 30 分钟后由 TTL 清理，控制器按保留策略清理源码上传、日志、操作和无引用制品。实验部署采用开发登录和单节点 kind，不能直接视作生产部署模板。
 
 仓库来源构建、服务列表与管理员来源配置见 [仓库构建说明](workers-repositories.md)。内联源码 API 仍可用于小 Worker；新控制台从仓库发起构建。

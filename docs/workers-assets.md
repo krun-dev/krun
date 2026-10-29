@@ -58,6 +58,7 @@
   "source_upload": "uploads/{org}/src/src_xxx/source.tar.gz",
   "assets": {
     "directory": "public",
+    "binding": "ASSETS",
     "run_worker_first": ["/api/*"],
     "not_found_handling": "single-page-application",
     "html_handling": "auto-trailing-slash"
@@ -65,10 +66,10 @@
 }
 ```
 
-- **源码包是唯一入口**：`POST /source-uploads` 返回 presigned PUT（15 分钟），客户端上传 `source.tar.gz`（顶层两段：`src/` 代码、`assets/` 资产），build 请求引用 `source_upload`。API 请求体上限 1 MiB、builder 输入 ConfigMap 上限 1 MiB，20 MiB 资产只能走对象存储。
-- 仓库构建由服务端自动完成：fetch 仓库 → 提取代码与 `assets.directory` 子树 → 打包上传 source bundle，客户端无需改动。
-- 轻量模式：内联 `files` 仍可用于 ≤32 文件 / 256 KiB 的纯代码 Worker；带 `assets` 时必须用 `source_upload`。
-- `directory` 是源码树内的相对目录，builder 原样复制，不执行 npm install、不跑自定义构建命令（对应 Cloudflare「预构建 dist」模型）。
+- **源码包是大项目与资产的入口**：`POST /source-uploads` 返回 presigned PUT，客户端上传 `source.tar.gz`（direct 模式顶层两段：`src/` 代码、`assets/` 资产），build 请求引用 `source_upload`。普通 API 请求体仍限制为 1 MiB；只有 build-create 为容纳 2 MiB 源码及 JSON escaping 使用独立的 16 MiB 包络。builder 输入使用短时 Secret URL，20 MiB 资产必须走对象存储。
+- 仓库构建由服务端自动完成：fetch 仓库 → 安全保留完整 Workers 项目 → Wrangler/custom build → 从构建后的 `assets.directory` 收集资产。Vite/adapter 在构建阶段生成的 dist 资产无需提前存在。
+- 轻量模式：内联 `files` 仍可用于 ≤512 文件 / 2 MiB 的纯代码 Worker；带 `assets` 时必须用 `source_upload`。
+- `directory` 是项目树内的相对目录。仓库模式按 npm/pnpm/Yarn/Bun 锁文件安装完整构建依赖，并在隔离 Job 中运行 Wrangler/custom build；direct 上传模式仍保持较窄的构建边界。
 - 配置固化进制品 manifest（第 4 节），不可变；Release 引用制品即间接持有，Release 的版本 ID 已含归档 digest。
 - pattern 校验在提交时做（语法错返回 400）：仅前缀匹配、`*` 只能是尾段、可选 `!` 前缀、≤16 条 × ≤128 字符。`directory` 缺失时其余字段必须为空。
 
@@ -103,7 +104,7 @@ bundle.tar.gz
 - 每 pod 上限 `ASSETS_CACHE_MAX`（kind 默认 64 MiB），LRU 淘汰；未命中才回源，首访多一次控制面 RPC + 一次桶 GET（同 region 几十 ms），命中后内存直出。
 - 资产 manifest（≤500 条）走内部 API `GET /releases/{id}/assets`，按 Release 缓存在内存，不进快照。
 - 归档下载仍发生在 `/validate`（单台候选成员）和成员首次请求（懒加载）——但那只是模块代码；readiness 不再遍历全部 Release，资产的磁盘约束因此消失。
-- 业务 Worker 的 `env.ASSETS` binding 本期未实现；入口决策流已覆盖页面与静态文件的全部访问路径，binding 作为后续能力补充。
+- 配置 `assets.binding`（wrangler 通常使用 `ASSETS`）后，runtime 通过 `ctx.exports` 给业务 Worker 注入 release-scoped Fetcher。`env.ASSETS.fetch(request)` 复用同一份资产 manifest、校验与 LRU，且 binding 不持有平台 token；名称冲突或平台保留名称会在验证阶段拒绝。
 
 ### 5.3 快照
 

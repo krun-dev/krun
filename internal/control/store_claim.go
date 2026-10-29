@@ -164,17 +164,22 @@ func (s *Store) storeClaimedRepositoryBuild(ctx context.Context, id, replica str
 			return err
 		}
 	}
+	flags, err := json.Marshal(build.CompatibilityFlags)
+	if err != nil {
+		return err
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 	tag, err := tx.Exec(ctx, `UPDATE krun_worker_builds
-		SET state=$3, entrypoint=$4, source_digest=$5, profile=$6, job=$7,
-		    artifact_id=$8, error=$9, repository=$10, assets=$11, finished_at=$12
+		SET state=$3, entrypoint=$4, source_digest=$5, profile=$6,
+		    compatibility_date=$7, compatibility_flags=$8, job=$9,
+		    artifact_id=$10, error=$11, repository=$12, assets=$13, finished_at=$14
 		WHERE build_id=$1 AND claimed_by=$2 AND state IN ('fetching','building')`,
 		id, replica, build.State, build.Entrypoint, build.SourceDigest, build.Profile,
-		build.Job, build.Artifact, build.Error, repository, assets, build.Finished)
+		build.CompatibilityDate, flags, build.Job, build.Artifact, build.Error, repository, assets, build.Finished)
 	if err != nil {
 		return err
 	}
@@ -514,6 +519,9 @@ func (s *Store) reserveBuildArtifact(ctx context.Context, id, replica string, ar
 		if ok && existing.State == "deleting" {
 			return errArtifactBeingCollected
 		}
+		if ok && !sameArtifactContent(existing, artifact) {
+			return errArtifactBeingCollected
+		}
 		if !ok {
 			existing = artifact
 			existing.State = "staging"
@@ -533,21 +541,26 @@ func (s *Store) reserveBuildArtifact(ctx context.Context, id, replica string, ar
 		return err
 	}
 	defer tx.Rollback(ctx)
+	flags, err := json.Marshal(artifact.CompatibilityFlags)
+	if err != nil {
+		return err
+	}
 	if _, err = tx.Exec(ctx, `INSERT INTO krun_worker_artifacts
-		(artifact_id, org_id, state, archive_digest, manifest_digest, module_digest, size_bytes, object_key, storage_location, bucket, created_at)
-		VALUES ($1,$2,'staging',$3,$4,$5,$6,$7,$8,$9,$10)
+		(artifact_id, org_id, state, profile, archive_digest, manifest_digest, module_digest, compatibility_date, compatibility_flags, size_bytes, object_key, storage_location, bucket, created_at)
+		VALUES ($1,$2,'staging',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		ON CONFLICT (artifact_id) DO NOTHING`, artifact.ID, artifact.Organization,
-		artifact.ArchiveDigest, artifact.ManifestDigest, artifact.ModuleDigest,
-		artifact.Size, artifact.ObjectKey, artifact.StorageLocation, artifact.Bucket, artifact.Created); err != nil {
+		artifact.Profile, artifact.ArchiveDigest, artifact.ManifestDigest, artifact.ModuleDigest,
+		artifact.CompatibilityDate, flags, artifact.Size, artifact.ObjectKey, artifact.StorageLocation, artifact.Bucket, artifact.Created); err != nil {
 		return err
 	}
 	var state string
 	err = tx.QueryRow(ctx, `UPDATE krun_worker_artifacts SET use_revision=use_revision+1
 		WHERE artifact_id=$1 AND state IN ('staging','finalized')
-		  AND org_id=$2 AND archive_digest=$3 AND manifest_digest=$4 AND module_digest=$5
-		  AND size_bytes=$6 AND object_key=$7 AND storage_location=$8 AND bucket=$9
-		RETURNING state`, artifact.ID, artifact.Organization, artifact.ArchiveDigest,
-		artifact.ManifestDigest, artifact.ModuleDigest, artifact.Size, artifact.ObjectKey,
+		  AND org_id=$2 AND profile=$3 AND archive_digest=$4 AND manifest_digest=$5 AND module_digest=$6
+		  AND compatibility_date=$7 AND compatibility_flags=$8
+		  AND size_bytes=$9 AND object_key=$10 AND storage_location=$11 AND bucket=$12
+		RETURNING state`, artifact.ID, artifact.Organization, artifact.Profile, artifact.ArchiveDigest,
+		artifact.ManifestDigest, artifact.ModuleDigest, artifact.CompatibilityDate, flags, artifact.Size, artifact.ObjectKey,
 		artifact.StorageLocation, artifact.Bucket).Scan(&state)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errArtifactBeingCollected
@@ -591,7 +604,7 @@ func (s *Store) finishBuildWithArtifactOwned(ctx context.Context, id, replica, s
 			return nil
 		}
 		stored, ok := s.memory.Workers.Artifacts[artifact.ID]
-		if !ok || (stored.State != "staging" && stored.State != "finalized") {
+		if !ok || (stored.State != "staging" && stored.State != "finalized") || !sameArtifactContent(stored, artifact) {
 			return errArtifactBeingCollected
 		}
 		stored.State = "finalized"
@@ -610,13 +623,18 @@ func (s *Store) finishBuildWithArtifactOwned(ctx context.Context, id, replica, s
 		return err
 	}
 	defer tx.Rollback(ctx)
+	flags, err := json.Marshal(artifact.CompatibilityFlags)
+	if err != nil {
+		return err
+	}
 	tag, err := tx.Exec(ctx, `UPDATE krun_worker_artifacts
 		SET state='finalized', gc_claimed_by='', gc_claimed_at=NULL
 		WHERE artifact_id=$1 AND state IN ('staging','finalized')
-		  AND org_id=$2 AND archive_digest=$3 AND manifest_digest=$4 AND module_digest=$5
-		  AND size_bytes=$6 AND object_key=$7 AND storage_location=$8 AND bucket=$9`,
-		artifact.ID, artifact.Organization, artifact.ArchiveDigest, artifact.ManifestDigest,
-		artifact.ModuleDigest, artifact.Size, artifact.ObjectKey, artifact.StorageLocation, artifact.Bucket)
+		  AND org_id=$2 AND profile=$3 AND archive_digest=$4 AND manifest_digest=$5 AND module_digest=$6
+		  AND compatibility_date=$7 AND compatibility_flags=$8
+		  AND size_bytes=$9 AND object_key=$10 AND storage_location=$11 AND bucket=$12`,
+		artifact.ID, artifact.Organization, artifact.Profile, artifact.ArchiveDigest, artifact.ManifestDigest,
+		artifact.ModuleDigest, artifact.CompatibilityDate, flags, artifact.Size, artifact.ObjectKey, artifact.StorageLocation, artifact.Bucket)
 	if err != nil {
 		return err
 	}
@@ -694,7 +712,7 @@ func (s *Store) pendingWork(ctx context.Context, limit int) (WorkerState, error)
 		state.Operations[op.Operation.ID] = op.Operation
 		state.OperationPrivate[op.Operation.ID] = WorkerOperationPrivate{Actor: op.Actor}
 	}
-	rows, err = s.pool.Query(ctx, `SELECT build_id, org_id, service_id, env_name, state, entrypoint, source_digest, profile, job, artifact_id, error, repository, assets, created_at, finished_at, claimed_by, claimed_at
+	rows, err = s.pool.Query(ctx, `SELECT build_id, org_id, service_id, env_name, state, entrypoint, source_digest, profile, compatibility_date, compatibility_flags, job, artifact_id, error, repository, assets, created_at, finished_at, claimed_by, claimed_at
 		FROM krun_worker_builds
 		WHERE state NOT IN ('succeeded','failed')
 		ORDER BY created_at LIMIT $1`, limit)
@@ -736,7 +754,7 @@ func (s *Store) pendingWork(ctx context.Context, limit int) (WorkerState, error)
 			}
 		}
 		if len(releaseIDs) > 0 {
-			rows, err = s.pool.Query(ctx, `SELECT release_id, org_id, service_id, env_name, artifact_id, archive_digest, module_digest, config_revision, variables, secret_digest, created_at
+			rows, err = s.pool.Query(ctx, `SELECT release_id, org_id, service_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at
 				FROM krun_worker_releases WHERE release_id = ANY($1)`, releaseIDs)
 			if err != nil {
 				return state, err
@@ -779,7 +797,7 @@ func (s *Store) pendingWork(ctx context.Context, limit int) (WorkerState, error)
 			}
 		}
 		if len(artifactIDs) > 0 {
-			rows, err = s.pool.Query(ctx, `SELECT artifact_id, org_id, state, archive_digest, manifest_digest, module_digest, size_bytes, object_key, storage_location, bucket, created_at
+			rows, err = s.pool.Query(ctx, `SELECT artifact_id, org_id, state, profile, archive_digest, manifest_digest, module_digest, compatibility_date, compatibility_flags, size_bytes, object_key, storage_location, bucket, created_at
 				FROM krun_worker_artifacts WHERE artifact_id = ANY($1)`, artifactIDs)
 			if err != nil {
 				return state, err
@@ -815,8 +833,11 @@ func readWorkerBuildPrivateRows(rows pgx.Rows, state *WorkerState) error {
 func readReleaseRows(rows pgx.Rows, state *WorkerState) error {
 	for rows.Next() {
 		var r WorkerRelease
-		var variables []byte
-		if err := rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.ArchiveDigest, &r.ModuleDigest, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created); err != nil {
+		var variables, flags []byte
+		if err := rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.Profile, &r.ArchiveDigest, &r.ModuleDigest, &r.CompatibilityDate, &flags, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created); err != nil {
+			return err
+		}
+		if err := json.Unmarshal(flags, &r.CompatibilityFlags); err != nil {
 			return err
 		}
 		r.Variables = map[string]string{}
@@ -833,7 +854,11 @@ func readReleaseRows(rows pgx.Rows, state *WorkerState) error {
 func readArtifactRows(rows pgx.Rows, state *WorkerState) error {
 	for rows.Next() {
 		var a WorkerArtifact
-		if err := rows.Scan(&a.ID, &a.Organization, &a.State, &a.ArchiveDigest, &a.ManifestDigest, &a.ModuleDigest, &a.Size, &a.ObjectKey, &a.StorageLocation, &a.Bucket, &a.Created); err != nil {
+		var flags []byte
+		if err := rows.Scan(&a.ID, &a.Organization, &a.State, &a.Profile, &a.ArchiveDigest, &a.ManifestDigest, &a.ModuleDigest, &a.CompatibilityDate, &flags, &a.Size, &a.ObjectKey, &a.StorageLocation, &a.Bucket, &a.Created); err != nil {
+			return err
+		}
+		if err := json.Unmarshal(flags, &a.CompatibilityFlags); err != nil {
 			return err
 		}
 		state.Artifacts[a.ID] = a
@@ -873,8 +898,11 @@ func scanBuilds(rows pgx.Rows) ([]WorkerBuild, error) {
 	out := []WorkerBuild{}
 	for rows.Next() {
 		var b WorkerBuild
-		var repository, assets []byte
-		if err := rows.Scan(&b.ID, &b.Organization, &b.Service, &b.Environment, &b.State, &b.Entrypoint, &b.SourceDigest, &b.Profile, &b.Job, &b.Artifact, &b.Error, &repository, &assets, &b.Created, &b.Finished, &b.ClaimedBy, &b.ClaimedAt); err != nil {
+		var repository, assets, flags []byte
+		if err := rows.Scan(&b.ID, &b.Organization, &b.Service, &b.Environment, &b.State, &b.Entrypoint, &b.SourceDigest, &b.Profile, &b.CompatibilityDate, &flags, &b.Job, &b.Artifact, &b.Error, &repository, &assets, &b.Created, &b.Finished, &b.ClaimedBy, &b.ClaimedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(flags, &b.CompatibilityFlags); err != nil {
 			return nil, err
 		}
 		if len(repository) > 0 {

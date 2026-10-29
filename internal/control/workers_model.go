@@ -17,10 +17,20 @@ type WorkersConfig struct {
 	Namespace           string                     `json:"namespace"`
 	BuilderImage        string                     `json:"builder_image"`
 	BuilderPullPolicy   string                     `json:"builder_pull_policy"`
+	// BuilderRuntimeClass selects an optional Kubernetes RuntimeClass for
+	// untrusted project builds (for example gVisor or Kata Containers).
+	BuilderRuntimeClass string `json:"builder_runtime_class"`
+	// BuilderTimeoutSeconds bounds both Kubernetes Jobs and trusted local-dev
+	// builds. Project dependency installation needs a larger budget than the
+	// direct single-file compiler.
+	BuilderTimeoutSeconds int `json:"builder_timeout_seconds"`
 	// BuilderMode selects the build executor: "kubernetes" creates a Job;
 	// "local" runs workers/builder/build-worker.mjs on the control-plane host.
 	BuilderMode   string `json:"builder_mode"`
 	BuilderScript string `json:"builder_script"`
+	// NPMRegistry is the single trusted public/package-proxy origin accepted by
+	// package-lock files. Credentials are intentionally not supported here.
+	NPMRegistry string `json:"npm_registry"`
 	// RuntimePools is infrastructure-only. Organization APIs expose only the
 	// deployment-defined network profiles; access modes, pool ids and services
 	// never leave the system scope.
@@ -134,6 +144,7 @@ type WorkerDomain struct {
 
 type WorkerAssetsConfig struct {
 	Directory        string   `json:"directory"`
+	Binding          string   `json:"binding,omitempty"`
 	RunWorkerFirst   []string `json:"run_worker_first,omitempty"`
 	NotFoundHandling string   `json:"not_found_handling,omitempty"`
 	HTMLHandling     string   `json:"html_handling,omitempty"`
@@ -161,6 +172,29 @@ func (c *WorkersConfig) validate() error {
 	if c.BuilderMode == "local" && c.BuilderScript == "" {
 		c.BuilderScript = "workers/builder/build-worker.mjs"
 	}
+	if c.BuilderRuntimeClass != "" {
+		runtimeClass := regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$`)
+		if !runtimeClass.MatchString(c.BuilderRuntimeClass) {
+			return fmt.Errorf("invalid Workers builder runtime class")
+		}
+	}
+	if c.BuilderTimeoutSeconds == 0 {
+		c.BuilderTimeoutSeconds = 600
+	}
+	if c.BuilderTimeoutSeconds < 60 || c.BuilderTimeoutSeconds > 1800 {
+		return fmt.Errorf("Workers builder timeout must be between 60 and 1800 seconds")
+	}
+	if c.NPMRegistry == "" {
+		c.NPMRegistry = "https://registry.npmjs.org/"
+	}
+	registry, err := url.Parse(c.NPMRegistry)
+	if err != nil || registry.Scheme != "https" || registry.Host == "" || registry.User != nil || registry.RawQuery != "" || registry.Fragment != "" {
+		return fmt.Errorf("invalid Workers npm registry; use an HTTPS origin without embedded credentials")
+	}
+	if !strings.HasSuffix(registry.Path, "/") {
+		registry.Path += "/"
+	}
+	c.NPMRegistry = registry.String()
 	if c.S3LocationID == "" {
 		c.S3LocationID = "primary"
 	}
@@ -826,21 +860,23 @@ type WorkerActor struct {
 	AuthVersion int
 }
 type WorkerBuild struct {
-	Repository   *WorkerBuildRepository `json:"repository_source,omitempty"`
-	Assets       *WorkerAssetsConfig    `json:"assets,omitempty"`
-	ID           string                 `json:"id"`
-	Organization string                 `json:"organization_id"`
-	Service      string                 `json:"service_id"`
-	Environment  string                 `json:"environment"`
-	State        string                 `json:"state"`
-	Entrypoint   string                 `json:"entrypoint"`
-	SourceDigest string                 `json:"source_sha256"`
-	Profile      string                 `json:"profile"`
-	Job          string                 `json:"job"`
-	Artifact     string                 `json:"artifact_id,omitempty"`
-	Error        string                 `json:"error,omitempty"`
-	Created      time.Time              `json:"created_at"`
-	Finished     *time.Time             `json:"finished_at,omitempty"`
+	Repository         *WorkerBuildRepository `json:"repository_source,omitempty"`
+	Assets             *WorkerAssetsConfig    `json:"assets,omitempty"`
+	ID                 string                 `json:"id"`
+	Organization       string                 `json:"organization_id"`
+	Service            string                 `json:"service_id"`
+	Environment        string                 `json:"environment"`
+	State              string                 `json:"state"`
+	Entrypoint         string                 `json:"entrypoint"`
+	SourceDigest       string                 `json:"source_sha256"`
+	Profile            string                 `json:"profile"`
+	CompatibilityDate  string                 `json:"compatibility_date"`
+	CompatibilityFlags []string               `json:"compatibility_flags,omitempty"`
+	Job                string                 `json:"job"`
+	Artifact           string                 `json:"artifact_id,omitempty"`
+	Error              string                 `json:"error,omitempty"`
+	Created            time.Time              `json:"created_at"`
+	Finished           *time.Time             `json:"finished_at,omitempty"`
 	// Claim metadata participates in storage CAS only. It is never returned by
 	// the API and cannot be changed through the generic snapshot writer.
 	ClaimedBy string     `json:"-"`
@@ -855,17 +891,20 @@ type WorkerBuildPrivate struct {
 	Log       string
 }
 type WorkerArtifact struct {
-	ID              string    `json:"id"`
-	Organization    string    `json:"organization_id"`
-	State           string    `json:"state"`
-	ArchiveDigest   string    `json:"archive_sha256"`
-	ManifestDigest  string    `json:"manifest_sha256"`
-	ModuleDigest    string    `json:"module_sha256"`
-	Size            int       `json:"archive_size_bytes"`
-	ObjectKey       string    `json:"object_key"`
-	StorageLocation string    `json:"storage_location_id"`
-	Bucket          string    `json:"bucket"`
-	Created         time.Time `json:"created_at"`
+	ID                 string    `json:"id"`
+	Organization       string    `json:"organization_id"`
+	State              string    `json:"state"`
+	Profile            string    `json:"profile"`
+	ArchiveDigest      string    `json:"archive_sha256"`
+	ManifestDigest     string    `json:"manifest_sha256"`
+	ModuleDigest       string    `json:"module_sha256"`
+	CompatibilityDate  string    `json:"compatibility_date"`
+	CompatibilityFlags []string  `json:"compatibility_flags,omitempty"`
+	Size               int       `json:"archive_size_bytes"`
+	ObjectKey          string    `json:"object_key"`
+	StorageLocation    string    `json:"storage_location_id"`
+	Bucket             string    `json:"bucket"`
+	Created            time.Time `json:"created_at"`
 	// UseRevision arbitrates build reservations against object-store GC. It is
 	// storage coordination metadata and is never exposed by the API.
 	UseRevision int64 `json:"-"`
@@ -1023,15 +1062,18 @@ func (s *Server) syncServiceDomains(ws WorkerService) []string {
 }
 
 type WorkerRelease struct {
-	ID             string            `json:"id"`
-	Service        string            `json:"service_id"`
-	Organization   string            `json:"organization_id"`
-	Environment    string            `json:"environment"`
-	Artifact       string            `json:"artifact_id"`
-	ArchiveDigest  string            `json:"archive_sha256"`
-	ModuleDigest   string            `json:"module_sha256"`
-	ConfigRevision int               `json:"configuration_revision"`
-	Variables      map[string]string `json:"variables"`
+	ID                 string            `json:"id"`
+	Service            string            `json:"service_id"`
+	Organization       string            `json:"organization_id"`
+	Environment        string            `json:"environment"`
+	Artifact           string            `json:"artifact_id"`
+	Profile            string            `json:"profile"`
+	ArchiveDigest      string            `json:"archive_sha256"`
+	ModuleDigest       string            `json:"module_sha256"`
+	CompatibilityDate  string            `json:"compatibility_date"`
+	CompatibilityFlags []string          `json:"compatibility_flags,omitempty"`
+	ConfigRevision     int               `json:"configuration_revision"`
+	Variables          map[string]string `json:"variables"`
 	// SecretDigest is safe to distribute with the edge descriptor. The
 	// version IDs and values stay in PostgreSQL and are fetched only through
 	// the authenticated runtime endpoint.
@@ -1138,21 +1180,30 @@ func workerActor(p Principal) WorkerActor {
 	}
 	return a
 }
+
+const workerSourceFilesMax = 512
+const workerSourceBytesMax = 2 << 20
+
+// Source bundles use the portable ustar name field. Keeping `src/` + path at
+// 100 UTF-8 bytes avoids PAX headers, which are deliberately not accepted by
+// the short-lived builder's narrow archive parser.
+const workerSourcePathMax = 96
+
 func sourceValid(entry string, files map[string]string) error {
-	if len(files) == 0 || len(files) > 32 {
-		return problem(422, "WORKER_SOURCE_INVALID", "Provide 1–32 source files")
+	if len(files) == 0 || len(files) > workerSourceFilesMax {
+		return problem(422, "WORKER_SOURCE_INVALID", "Provide 1–512 source files")
 	}
 	total := 0
 	valid := regexp.MustCompile(`^[a-zA-Z0-9_./-]+$`)
 	for name, code := range files {
 		ext := path.Ext(name)
-		if strings.HasPrefix(path.Base(name), "__krun_") || !valid.MatchString(name) || path.Clean(name) != name || strings.HasPrefix(name, "/") || strings.HasPrefix(name, "../") || len(name) > 160 || !contains([]string{".js", ".mjs", ".ts", ".json"}, ext) {
-			return problem(422, "WORKER_SOURCE_INVALID", "Only safe relative JS, TS and JSON paths are supported")
+		if strings.HasPrefix(path.Base(name), "__krun_") || !valid.MatchString(name) || path.Clean(name) != name || strings.HasPrefix(name, "/") || strings.HasPrefix(name, "../") || len(name) > workerSourcePathMax || !contains([]string{".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".json"}, ext) {
+			return problem(422, "WORKER_SOURCE_INVALID", "Only safe relative JS, JSX, TS, TSX and JSON paths are supported")
 		}
 		total += len(code)
 	}
-	if total > 256<<10 {
-		return problem(413, "WORKER_SOURCE_INVALID", "Source exceeds 256 KiB")
+	if total > workerSourceBytesMax {
+		return problem(413, "WORKER_SOURCE_INVALID", "Source exceeds 2 MiB")
 	}
 	return sourceEntryValid(entry, files)
 }
@@ -1161,8 +1212,8 @@ func sourceValid(entry string, files map[string]string) error {
 // entrypoint from wrangler config after the tree is fetched, so the file-level
 // checks and the entrypoint check happen at different times.
 func sourceEntryValid(entry string, files map[string]string) error {
-	if _, ok := files[entry]; !ok || !contains([]string{".js", ".mjs", ".ts"}, path.Ext(entry)) {
-		return problem(422, "WORKER_SOURCE_INVALID", "Entrypoint must be an included JS or TS file")
+	if _, ok := files[entry]; !ok || !contains([]string{".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx"}, path.Ext(entry)) {
+		return problem(422, "WORKER_SOURCE_INVALID", "Entrypoint must be an included JS, JSX, TS or TSX file")
 	}
 	return nil
 }

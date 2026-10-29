@@ -354,6 +354,8 @@ CREATE TABLE IF NOT EXISTS krun_worker_builds (
 	entrypoint    text NOT NULL DEFAULT '',
 	source_digest text NOT NULL DEFAULT '',
 	profile       text NOT NULL DEFAULT '',
+	compatibility_date  text NOT NULL DEFAULT '',
+	compatibility_flags jsonb NOT NULL DEFAULT '[]'::jsonb,
 	job           text NOT NULL DEFAULT '',
 	artifact_id   text NOT NULL DEFAULT '',
 	error         text NOT NULL DEFAULT '',
@@ -394,9 +396,12 @@ CREATE TABLE IF NOT EXISTS krun_worker_artifacts (
 	artifact_id      text PRIMARY KEY,
 	org_id           text NOT NULL,
 	state            text NOT NULL,
+	profile          text NOT NULL DEFAULT '',
 	archive_digest   text NOT NULL DEFAULT '',
 	manifest_digest  text NOT NULL DEFAULT '',
 	module_digest    text NOT NULL DEFAULT '',
+	compatibility_date  text NOT NULL DEFAULT '',
+	compatibility_flags jsonb NOT NULL DEFAULT '[]'::jsonb,
 	size_bytes       bigint NOT NULL DEFAULT 0,
 	object_key       text NOT NULL DEFAULT '',
 	storage_location text NOT NULL DEFAULT '',
@@ -414,8 +419,11 @@ CREATE TABLE IF NOT EXISTS krun_worker_releases (
 	service_id      text NOT NULL,
 	env_name        text NOT NULL,
 	artifact_id     text NOT NULL,
+	profile         text NOT NULL DEFAULT '',
 	archive_digest  text NOT NULL DEFAULT '',
 	module_digest   text NOT NULL DEFAULT '',
+	compatibility_date  text NOT NULL DEFAULT '',
+	compatibility_flags jsonb NOT NULL DEFAULT '[]'::jsonb,
 	config_revision integer NOT NULL DEFAULT 0,
 	variables       jsonb NOT NULL DEFAULT '{}'::jsonb,
 	secret_digest   text NOT NULL DEFAULT '',
@@ -547,6 +555,20 @@ func initializeStoreSchema(ctx context.Context, pool *pgxpool.Pool) error {
 			WHERE table_schema=current_schema()
 			  AND table_name='worker_config_revisions'
 			  AND column_name IN ('payload','ops')
+		)
+		OR 8 <> (
+			SELECT count(*) FROM information_schema.columns
+			WHERE table_schema=current_schema()
+			  AND (table_name, column_name) IN (
+				('krun_worker_builds','compatibility_date'),
+				('krun_worker_builds','compatibility_flags'),
+				('krun_worker_artifacts','profile'),
+				('krun_worker_artifacts','compatibility_date'),
+				('krun_worker_artifacts','compatibility_flags'),
+				('krun_worker_releases','profile'),
+				('krun_worker_releases','compatibility_date'),
+				('krun_worker_releases','compatibility_flags')
+			  )
 		)`).Scan(&incompatible); err != nil {
 		return err
 	}

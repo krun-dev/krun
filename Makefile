@@ -23,6 +23,8 @@ test:
 	npm run test:permissions
 	npm run test:i18n
 	npm --prefix web test
+	npm test --prefix examples/workers-fullstack
+	npm run build --prefix examples/workers-fullstack
 	npm test --prefix workers/builder
 	npm test --prefix workers/runtime
 

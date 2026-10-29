@@ -89,10 +89,11 @@ func postgresTestStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Cleanups run last-registered-first: Close is registered after the
-	// truncate, so the truncate sees a live pool.
-	t.Cleanup(func() { truncateControlTables(t, store) })
+	// Cleanups run last-registered-first: register Close first so the truncate
+	// runs while the pool is still live. Tests that close it themselves are
+	// handled by truncateControlTables's closed-pool guard.
 	t.Cleanup(store.Close)
+	t.Cleanup(func() { truncateControlTables(t, store) })
 	if _, seen := truncatedTests.LoadOrStore(t.Name(), true); !seen {
 		truncateControlTables(t, store)
 	}

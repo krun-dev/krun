@@ -75,7 +75,7 @@ func workerEdgeTopologyChanged(before, after *State) bool {
 			}
 		}
 	}
-	if !reflect.DeepEqual(bw.Placements, aw.Placements) {
+	if !sameWorkerPlacements(bw.Placements, aw.Placements) {
 		return true
 	}
 	for id := range referenced {
@@ -315,7 +315,7 @@ func writePlacements(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error 
 	}
 	for key, placement := range aw.Placements {
 		old, existed := bw.Placements[key]
-		if existed && old == placement {
+		if existed && sameWorkerPlacement(old, placement) {
 			continue
 		}
 		if !existed {
@@ -342,6 +342,25 @@ func writePlacements(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error 
 		}
 	}
 	return nil
+}
+
+func sameWorkerPlacements(a, b map[string]WorkerPlacement) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, placement := range a {
+		other, ok := b[key]
+		if !ok || !sameWorkerPlacement(placement, other) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameWorkerPlacement(a, b WorkerPlacement) bool {
+	return a.Service == b.Service && a.Organization == b.Organization &&
+		a.NetworkProfile == b.NetworkProfile && a.Pool == b.Pool && a.Role == b.Role &&
+		a.State == b.State && a.Revision == b.Revision && a.Created.Equal(b.Created) && a.Updated.Equal(b.Updated)
 }
 
 // The baseline row is lazily materialised. Two independent first requests may
@@ -403,6 +422,10 @@ func writeBuilds(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 			continue
 		}
 		var repository, assets []byte
+		flags, err := json.Marshal(b.CompatibilityFlags)
+		if err != nil {
+			return err
+		}
 		if b.Repository != nil {
 			raw, err := json.Marshal(b.Repository)
 			if err != nil {
@@ -434,18 +457,19 @@ func writeBuilds(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 					return err
 				}
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_builds (build_id, org_id, service_id, env_name, state, entrypoint, source_digest, profile, job, artifact_id, error, repository, assets, created_at, finished_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`, id, b.Organization, b.Service, b.Environment, b.State, b.Entrypoint, b.SourceDigest, b.Profile, b.Job, b.Artifact, b.Error, repository, assets, b.Created, b.Finished); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_builds (build_id, org_id, service_id, env_name, state, entrypoint, source_digest, profile, compatibility_date, compatibility_flags, job, artifact_id, error, repository, assets, created_at, finished_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`, id, b.Organization, b.Service, b.Environment, b.State, b.Entrypoint, b.SourceDigest, b.Profile, b.CompatibilityDate, flags, b.Job, b.Artifact, b.Error, repository, assets, b.Created, b.Finished); err != nil {
 				return err
 			}
 		} else {
 			tag, err := tx.Exec(ctx, `UPDATE krun_worker_builds
 				SET org_id=$2, service_id=$3, env_name=$4, state=$5, entrypoint=$6,
-				    source_digest=$7, profile=$8, job=$9, artifact_id=$10, error=$11,
-				    repository=$12, assets=$13, created_at=$14, finished_at=$15
-				WHERE build_id=$1 AND state=$16 AND claimed_by=$17
-				  AND claimed_at IS NOT DISTINCT FROM $18`, id, b.Organization, b.Service,
-				b.Environment, b.State, b.Entrypoint, b.SourceDigest, b.Profile, b.Job,
-				b.Artifact, b.Error, repository, assets, b.Created, b.Finished,
+				    source_digest=$7, profile=$8, compatibility_date=$9, compatibility_flags=$10,
+				    job=$11, artifact_id=$12, error=$13, repository=$14, assets=$15,
+				    created_at=$16, finished_at=$17
+				WHERE build_id=$1 AND state=$18 AND claimed_by=$19
+				  AND claimed_at IS NOT DISTINCT FROM $20`, id, b.Organization, b.Service,
+				b.Environment, b.State, b.Entrypoint, b.SourceDigest, b.Profile,
+				b.CompatibilityDate, flags, b.Job, b.Artifact, b.Error, repository, assets, b.Created, b.Finished,
 				old.State, old.ClaimedBy, old.ClaimedAt)
 			if err != nil {
 				return err
@@ -535,7 +559,8 @@ func sameBuild(a, b WorkerBuild) bool {
 	}
 	return a.ID == b.ID && a.Organization == b.Organization && a.Service == b.Service &&
 		a.Environment == b.Environment && a.State == b.State && a.Entrypoint == b.Entrypoint &&
-		a.SourceDigest == b.SourceDigest && a.Profile == b.Profile && a.Job == b.Job &&
+		a.SourceDigest == b.SourceDigest && a.Profile == b.Profile &&
+		a.CompatibilityDate == b.CompatibilityDate && sameStrings(a.CompatibilityFlags, b.CompatibilityFlags) && a.Job == b.Job &&
 		a.Artifact == b.Artifact && a.Error == b.Error && a.Created.Equal(b.Created)
 }
 
@@ -571,10 +596,14 @@ func (s *Store) workerBuildPrivate(ctx context.Context, id string) (WorkerBuildP
 
 func writeArtifacts(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 	for id, a := range aw.Artifacts {
-		if old, ok := bw.Artifacts[id]; ok && old == a {
+		if old, ok := bw.Artifacts[id]; ok && sameArtifact(old, a) {
 			continue
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_artifacts (artifact_id, org_id, state, archive_digest, manifest_digest, module_digest, size_bytes, object_key, storage_location, bucket, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (artifact_id) DO UPDATE SET state=excluded.state, archive_digest=excluded.archive_digest, manifest_digest=excluded.manifest_digest, module_digest=excluded.module_digest, size_bytes=excluded.size_bytes, object_key=excluded.object_key, storage_location=excluded.storage_location, bucket=excluded.bucket`, id, a.Organization, a.State, a.ArchiveDigest, a.ManifestDigest, a.ModuleDigest, a.Size, a.ObjectKey, a.StorageLocation, a.Bucket, a.Created); err != nil {
+		flags, err := json.Marshal(a.CompatibilityFlags)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_artifacts (artifact_id, org_id, state, profile, archive_digest, manifest_digest, module_digest, compatibility_date, compatibility_flags, size_bytes, object_key, storage_location, bucket, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (artifact_id) DO UPDATE SET state=excluded.state, profile=excluded.profile, archive_digest=excluded.archive_digest, manifest_digest=excluded.manifest_digest, module_digest=excluded.module_digest, compatibility_date=excluded.compatibility_date, compatibility_flags=excluded.compatibility_flags, size_bytes=excluded.size_bytes, object_key=excluded.object_key, storage_location=excluded.storage_location, bucket=excluded.bucket`, id, a.Organization, a.State, a.Profile, a.ArchiveDigest, a.ManifestDigest, a.ModuleDigest, a.CompatibilityDate, flags, a.Size, a.ObjectKey, a.StorageLocation, a.Bucket, a.Created); err != nil {
 			return err
 		}
 	}
@@ -588,10 +617,28 @@ func writeArtifacts(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 	return nil
 }
 
+func sameArtifact(a, b WorkerArtifact) bool {
+	return a.ID == b.ID && a.Organization == b.Organization && a.State == b.State &&
+		a.Profile == b.Profile && a.ArchiveDigest == b.ArchiveDigest &&
+		a.ManifestDigest == b.ManifestDigest && a.ModuleDigest == b.ModuleDigest &&
+		a.CompatibilityDate == b.CompatibilityDate && sameStrings(a.CompatibilityFlags, b.CompatibilityFlags) &&
+		a.Size == b.Size && a.ObjectKey == b.ObjectKey && a.StorageLocation == b.StorageLocation &&
+		a.Bucket == b.Bucket && a.Created.Equal(b.Created) && a.UseRevision == b.UseRevision
+}
+
+func sameArtifactContent(a, b WorkerArtifact) bool {
+	return a.ID == b.ID && a.Organization == b.Organization && a.Profile == b.Profile &&
+		a.ArchiveDigest == b.ArchiveDigest && a.ManifestDigest == b.ManifestDigest &&
+		a.ModuleDigest == b.ModuleDigest && a.CompatibilityDate == b.CompatibilityDate &&
+		sameStrings(a.CompatibilityFlags, b.CompatibilityFlags) && a.Size == b.Size &&
+		a.ObjectKey == b.ObjectKey && a.StorageLocation == b.StorageLocation && a.Bucket == b.Bucket
+}
+
 func sameRelease(a, b WorkerRelease) bool {
 	return a.ID == b.ID && a.Service == b.Service && a.Organization == b.Organization &&
-		a.Environment == b.Environment && a.Artifact == b.Artifact && a.ArchiveDigest == b.ArchiveDigest &&
-		a.ModuleDigest == b.ModuleDigest && a.ConfigRevision == b.ConfigRevision &&
+		a.Environment == b.Environment && a.Artifact == b.Artifact && a.Profile == b.Profile && a.ArchiveDigest == b.ArchiveDigest &&
+		a.ModuleDigest == b.ModuleDigest && a.CompatibilityDate == b.CompatibilityDate &&
+		sameStrings(a.CompatibilityFlags, b.CompatibilityFlags) && a.ConfigRevision == b.ConfigRevision &&
 		reflect.DeepEqual(a.Variables, b.Variables) && a.SecretDigest == b.SecretDigest &&
 		reflect.DeepEqual(a.SecretVersions, b.SecretVersions) && a.Created.Equal(b.Created)
 }
@@ -599,31 +646,32 @@ func sameRelease(a, b WorkerRelease) bool {
 func writeReleases(ctx context.Context, tx pgx.Tx, bw, aw *WorkerState) error {
 	for id, r := range aw.Releases {
 		old, existed := bw.Releases[id]
-		if existed && sameRelease(old, r) {
-			continue
+		if existed {
+			if sameRelease(old, r) {
+				continue
+			}
+			return errors.New("worker release descriptors are immutable")
 		}
 		variables, err := json.Marshal(r.Variables)
 		if err != nil {
 			return err
 		}
-		if !existed {
-			tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_releases (release_id, org_id, service_id, env_name, artifact_id, archive_digest, module_digest, config_revision, variables, secret_digest, created_at)
-				SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11
-				WHERE EXISTS (SELECT 1 FROM krun_worker_artifacts WHERE artifact_id=$5 AND state='finalized')
-				ON CONFLICT (release_id) DO UPDATE SET release_id=excluded.release_id`, id, r.Organization, r.Service, r.Environment, r.Artifact, r.ArchiveDigest, r.ModuleDigest, r.ConfigRevision, variables, r.SecretDigest, r.Created)
-			if err != nil {
-				return err
-			}
-			if tag.RowsAffected() == 0 {
-				return problem(409, "ARTIFACT_UNAVAILABLE", "Artifact is no longer available")
-			}
-			if err := replaceWorkerReleaseSecrets(ctx, tx, id, r.Service, r.Environment, r.SecretVersions); err != nil {
-				return err
-			}
-			continue
-		}
-		if _, err := tx.Exec(ctx, `UPDATE krun_worker_releases SET archive_digest=$2, module_digest=$3, config_revision=$4, variables=$5, secret_digest=$6 WHERE release_id=$1`, id, r.ArchiveDigest, r.ModuleDigest, r.ConfigRevision, variables, r.SecretDigest); err != nil {
+		flags, err := json.Marshal(r.CompatibilityFlags)
+		if err != nil {
 			return err
+		}
+		tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_releases (release_id, org_id, service_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at)
+				SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14
+				WHERE EXISTS (SELECT 1 FROM krun_worker_artifacts
+					WHERE artifact_id=$5 AND state='finalized' AND org_id=$2
+					  AND profile=$6 AND archive_digest=$7 AND module_digest=$8
+					  AND compatibility_date=$9 AND compatibility_flags=$10)
+				ON CONFLICT (release_id) DO UPDATE SET release_id=excluded.release_id`, id, r.Organization, r.Service, r.Environment, r.Artifact, r.Profile, r.ArchiveDigest, r.ModuleDigest, r.CompatibilityDate, flags, r.ConfigRevision, variables, r.SecretDigest, r.Created)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return problem(409, "ARTIFACT_UNAVAILABLE", "Artifact is no longer available")
 		}
 		if err := replaceWorkerReleaseSecrets(ctx, tx, id, r.Service, r.Environment, r.SecretVersions); err != nil {
 			return err

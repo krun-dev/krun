@@ -66,6 +66,73 @@ func TestWorkerBuildPermissionScopeAndIdempotency(t *testing.T) {
 	})
 }
 
+func TestWorkerBuildUsesScopedJSONBodyLimit(t *testing.T) {
+	s, _, base := workerTestServer(t)
+	source := strings.Repeat("x", apiJSONBodyMax+1024)
+	payload, err := json.Marshal(map[string]any{
+		"environment":     "production",
+		"entrypoint":      "index.js",
+		"files":           map[string]string{"index.js": source},
+		"idempotency_key": "large-inline-source",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payload) <= apiJSONBodyMax {
+		t.Fatalf("test payload did not exceed the default API limit: %d", len(payload))
+	}
+	response := request(s, "POST", base+"/builds", "krun_cli_admin", string(payload))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("scoped build body limit: %d %s", response.Code, response.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(strings.Repeat(" ", apiJSONBodyMax+1)))
+	req.Header.Set("Content-Type", "application/json")
+	var value map[string]any
+	apiErr, ok := body(req, &value).(*APIError)
+	if !ok || apiErr.Status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("default API body limit changed: %#v", apiErr)
+	}
+}
+
+func TestWorkerCompatibilityEmptyFlagsSurviveStateClone(t *testing.T) {
+	state := newState()
+	created := now()
+	state.Workers.Builds["build"] = WorkerBuild{ID: "build", CompatibilityFlags: []string{}, Created: created}
+	state.Workers.Artifacts["artifact"] = WorkerArtifact{ID: "artifact", CompatibilityFlags: []string{}, Created: created}
+	state.Workers.Releases["release"] = WorkerRelease{ID: "release", CompatibilityFlags: []string{}, Variables: map[string]string{}, SecretVersions: map[string]string{}, Created: created}
+
+	cloned, err := cloneState(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameBuild(state.Workers.Builds["build"], cloned.Workers.Builds["build"]) {
+		t.Fatal("empty build compatibility flags changed snapshot identity")
+	}
+	if !sameArtifact(state.Workers.Artifacts["artifact"], cloned.Workers.Artifacts["artifact"]) ||
+		!sameArtifactContent(state.Workers.Artifacts["artifact"], cloned.Workers.Artifacts["artifact"]) {
+		t.Fatal("empty artifact compatibility flags changed snapshot identity")
+	}
+	if !sameRelease(state.Workers.Releases["release"], cloned.Workers.Releases["release"]) {
+		t.Fatal("empty release compatibility flags changed snapshot identity")
+	}
+}
+
+func TestWriteReleasesRejectsExistingDescriptorMutation(t *testing.T) {
+	before := newWorkerState()
+	after := newWorkerState()
+	release := WorkerRelease{
+		ID: "release", Artifact: "artifact", Profile: workerProfile,
+		CompatibilityDate: workerDefaultCompatibilityDate, Variables: map[string]string{}, Created: now(),
+	}
+	before.Releases[release.ID] = release
+	release.CompatibilityDate = "2026-09-27"
+	after.Releases[release.ID] = release
+	if err := writeReleases(context.Background(), nil, before, after); err == nil || !strings.Contains(err.Error(), "immutable") {
+		t.Fatalf("existing release descriptor mutation was accepted: %v", err)
+	}
+}
+
 func TestWorkerPreviewLimitAndRevisionLifecycle(t *testing.T) {
 	s, store, base := workerTestServer(t)
 	s.Config.Workers.PreviewLimit = 1
@@ -153,7 +220,7 @@ func TestWorkerSourcesCannotEscapeOrOverridePlatformEntry(t *testing.T) {
 	cases := []struct {
 		entry string
 		files map[string]string
-	}{{"../evil.ts", map[string]string{"../evil.ts": "x"}}, {"/etc/passwd.js", map[string]string{"/etc/passwd.js": "x"}}, {"a/../index.ts", map[string]string{"a/../index.ts": "x"}}, {"__krun_entry__.mjs", map[string]string{"__krun_entry__.mjs": "x"}}, {"index.ts", map[string]string{"index.ts": strings.Repeat("x", 256<<10+1)}}}
+	}{{"../evil.ts", map[string]string{"../evil.ts": "x"}}, {"/etc/passwd.js", map[string]string{"/etc/passwd.js": "x"}}, {"a/../index.ts", map[string]string{"a/../index.ts": "x"}}, {"__krun_entry__.mjs", map[string]string{"__krun_entry__.mjs": "x"}}, {"index.ts", map[string]string{"index.ts": strings.Repeat("x", workerSourceBytesMax+1)}}}
 	for _, tc := range cases {
 		if sourceValid(tc.entry, tc.files) == nil {
 			t.Fatal("source accepted", tc.entry)
@@ -319,7 +386,7 @@ func TestWorkerEnvironmentScopedKeyCanReadCollections(t *testing.T) {
 }
 func workerArchive(t *testing.T, names []string, module string, link bool) []byte {
 	t.Helper()
-	manifest, _ := json.Marshal(workerManifest{Schema: 1, Profile: workerProfile, MainModule: "index.js", Modules: []workerManifestModule{{Name: "index.js", Path: "modules/index.js", Type: "esm", Digest: bytesDigest([]byte(module)), Size: len(module)}}})
+	manifest, _ := json.Marshal(workerManifest{Schema: 1, Profile: workerProfile, CompatibilityDate: workerDefaultCompatibilityDate, MainModule: "index.js", Modules: []workerManifestModule{{Name: "index.js", Path: "modules/index.js", Type: "esm", Digest: bytesDigest([]byte(module)), Size: len(module)}}})
 	var raw bytes.Buffer
 	gz := gzip.NewWriter(&raw)
 	tr := tar.NewWriter(gz)

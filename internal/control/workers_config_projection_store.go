@@ -191,7 +191,8 @@ func (s *Store) WorkerConfigProjection(ctx context.Context, config *WorkersConfi
 	rows.Close()
 
 	rows, err = tx.Query(ctx, `SELECT rel.release_id, rel.org_id, rel.service_id, rel.env_name,
-		rel.artifact_id, rel.archive_digest, rel.module_digest, rel.config_revision,
+		rel.artifact_id, rel.profile, rel.archive_digest, rel.module_digest,
+		rel.compatibility_date, rel.compatibility_flags, rel.config_revision,
 		rel.variables, rel.secret_digest, rel.created_at
 		FROM krun_worker_releases rel
 		JOIN krun_worker_environments e ON e.release_id=rel.release_id

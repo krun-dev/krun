@@ -43,52 +43,65 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 			return build, private, errBuildClaimLost
 		}
 	}
-	files, archiveRaw, err := w.server.fetchRepositorySource(ctx, provider, source, fetchToken)
+	files, _, err := w.server.fetchRepositorySource(ctx, provider, source, fetchToken)
 	if err != nil {
 		return build, private, err
 	}
-	// A repository carrying wrangler config declares its own entrypoint and asset
-	// directory. Resolve those before bundling so a standard Cloudflare project
-	// builds without editing its layout or restating the config per build.
+	// Repository builds require an explicit Cloudflare Workers configuration.
+	// Wrangler's framework auto-configuration intentionally is not part of this
+	// platform: users submit a Workers-ready project and the isolated builder
+	// only performs its declared build.
 	wrangler, wranglerFile, err := parseWranglerConfig(files)
 	if err != nil {
 		return build, private, err
 	}
-	resolvedAssets, entrypoint, err := resolveWranglerBuild(wrangler, build.Assets, source.Entrypoint)
+	if wranglerFile == "" {
+		return build, private, fmt.Errorf("Repository project must include wrangler.jsonc, wrangler.json or wrangler.toml")
+	}
+	resolvedAssets, entrypoint, err := resolveWranglerBuild(wrangler)
 	if err != nil {
 		return build, private, err
 	}
-	// Assets are read in a second pass: their directory is only known now.
-	var assetFiles map[string][]byte
-	if resolvedAssets.Directory != "" {
-		assetFiles, err = extractRepositoryAssets(archiveRaw, source.RootDirectory, resolvedAssets.Directory)
-		if err != nil {
-			return build, private, err
-		}
-		if len(assetFiles) == 0 {
-			return build, private, fmt.Errorf("Assets directory %s is missing or empty", resolvedAssets.Directory)
+	if resolvedAssets.Directory != "" || resolvedAssets.Binding != "" || resolvedAssets.RunWorkerFirst != nil || resolvedAssets.NotFoundHandling != "" || resolvedAssets.HTMLHandling != "" {
+		if err := validateWranglerInputAssets(resolvedAssets); err != nil {
+			return build, private, fmt.Errorf("Invalid Worker assets configuration: %w", err)
 		}
 	}
-	if entrypoint == "" {
-		return build, private, fmt.Errorf("No entrypoint: set one in the build request or declare `main` in wrangler config")
+	if build.CompatibilityDate == "" {
+		build.CompatibilityDate, build.CompatibilityFlags, err = resolveWranglerCompatibility(wrangler)
+	} else {
+		build.CompatibilityDate, build.CompatibilityFlags, err = normalizeWorkerCompatibility(build.CompatibilityDate, build.CompatibilityFlags)
 	}
-	if err := sourceEntryValid(entrypoint, files); err != nil {
-		return build, private, fmt.Errorf("Repository project does not contain the entrypoint %s", entrypoint)
+	if err != nil {
+		return build, private, fmt.Errorf("Invalid Worker compatibility configuration: %w", err)
 	}
-	// The config file itself is not source; drop it so the builder never sees it.
-	for _, cfgName := range wranglerFileNames {
-		delete(files, cfgName)
+	// Do not require main to exist before the build. Wrangler custom builds and
+	// Vite/framework adapters commonly generate dist/worker.js (and assets) as
+	// part of their checked-in build command.
+	if entrypoint == "" && resolvedAssets.Directory == "" {
+		// Do not try to guess a framework here. A custom/Vite build remains valid
+		// because Wrangler will resolve its generated deployment configuration;
+		// requiring package.json prevents an empty config from masquerading as one.
+		if _, ok := files["package.json"]; !ok {
+			return build, private, fmt.Errorf("Wrangler configuration must declare main or assets, or the project must declare a build in package.json")
+		}
 	}
 	build.Assets = nil
-	if resolvedAssets.Directory != "" || resolvedAssets.RunWorkerFirst != nil || resolvedAssets.NotFoundHandling != "" || resolvedAssets.HTMLHandling != "" {
+	// Only persist a complete pre-build assets configuration. Vite-generated
+	// assets are taken from the validated final artifact instead of storing an
+	// intentionally incomplete binding-only declaration on the Build row.
+	if resolvedAssets.Directory != "" {
 		build.Assets = &resolvedAssets
 	}
-	// The builder receives b.Entrypoint, not the repository source, so the
-	// resolved value has to be written back onto the build itself.
+	// Keep the declared entrypoint as build metadata. Wrangler remains
+	// authoritative and may replace it with generated deployment config.
 	build.Entrypoint = entrypoint
-	source.Entrypoint = entrypoint
+	source.ConfigPath = wranglerFile
 	build.Repository = &source
-	bundle, err := workerSourceBundle(files, assetFiles)
+	// Keep the complete project (including Wrangler config, lockfiles and binary
+	// modules) under src/. The builder distinguishes this from legacy direct
+	// source by the build_mode/config_path input fields.
+	bundle, err := workerSourceBundle(files, nil)
 	if err != nil {
 		return build, private, err
 	}
@@ -102,7 +115,7 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 	build.State = "fetching"
 	private.Files = nil
 	private.SourceKey = sourceKey
-	private.Log = fmt.Sprintf("Repository: %s/%s\nRef: %s\nCommit: %s\nProject: %s\nLoaded %d source files and %d asset files\n", source.ProviderID, source.Repository, source.Ref, source.Commit, source.RootDirectory, len(files), len(assetFiles))
+	private.Log = fmt.Sprintf("Repository: %s/%s\nRef: %s\nCommit: %s\nProject: %s\nLoaded %d project files\n", source.ProviderID, source.Repository, source.Ref, source.Commit, source.RootDirectory, len(files))
 	if wranglerFile != "" {
 		private.Log += fmt.Sprintf("Config: %s (entrypoint %s", wranglerFile, entrypoint)
 		if resolvedAssets.Directory != "" {
@@ -110,6 +123,11 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 		}
 		private.Log += ")\n"
 	}
+	private.Log += fmt.Sprintf("Compatibility: %s", build.CompatibilityDate)
+	if len(build.CompatibilityFlags) > 0 {
+		private.Log += fmt.Sprintf(" (%v)", build.CompatibilityFlags)
+	}
+	private.Log += "\n"
 	// Authorization needs the IAM partition, so it runs before the Workers write.
 	denied, authErr := w.authorizeActor(ctx, private.Actor, build.Service, build.Environment, "build.start")
 	if authErr != nil {

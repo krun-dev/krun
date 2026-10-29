@@ -12,7 +12,6 @@ export type RepositorySource = {
   repository: string;
   ref: string;
   root_directory: string;
-  entrypoint: string;
 };
 export type RepositoryProvider = {
   id: string;

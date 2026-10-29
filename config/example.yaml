@@ -145,6 +145,11 @@ workers:
   kubernetes_ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
   builder_image: krun-worker-builder:20261013
   builder_pull_policy: IfNotPresent
+  # 生产多租户建议配置 gVisor/Kata 等 RuntimeClass；留空使用集群默认运行时。
+  builder_runtime_class: ""
+  builder_timeout_seconds: 600
+  # 所有包管理器只允许从这个无凭据的 HTTPS registry / 代理安装依赖。
+  npm_registry: https://registry.npmjs.org/
   # 网关实例清单。路由按域名所属的 gateway 分组下发：一个实例的路由表里只会有
   # 绑定到它的域名，别的域名即使伪造 Host 也匹配不到。base 仅用于本地调试（SSH
   # 隧道），生产留空即走 <name>.<namespace>.svc:8080。

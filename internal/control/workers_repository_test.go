@@ -61,7 +61,7 @@ func TestRepositoryProviderConfigurationAndDisplay(t *testing.T) {
 func TestRepositoryBindingSnapshotAndBuildRetry(t *testing.T) {
 	s, store, base := workerTestServer(t)
 	s.Config.Workers.RepositoryProviders = repositoryTestProviders()
-	payload := `{"source":{"provider_id":"company","repository":"https://gitlab.example.com/team/nested/worker.git","ref":"main","root_directory":"worker","entrypoint":"index.ts"},"expected_revision":0}`
+	payload := `{"source":{"provider_id":"company","repository":"https://gitlab.example.com/team/nested/worker.git","ref":"main","root_directory":"worker"},"expected_revision":0}`
 	if r := request(s, "PUT", base+"/repository", "krun_cli_viewer", payload); r.Code != 403 {
 		t.Fatal(r.Code, r.Body.String())
 	}
@@ -108,12 +108,11 @@ func TestRepositoryInputBoundaries(t *testing.T) {
 	s, _, base := workerTestServer(t)
 	s.Config.Workers.RepositoryProviders = repositoryTestProviders()
 	for _, source := range []WorkerRepositorySource{
-		{ProviderID: "disabled", Repository: "team/worker", Entrypoint: "index.ts"},
-		{ProviderID: "company", Repository: "https://attacker.test/team/worker", Entrypoint: "index.ts"},
-		{ProviderID: "company", Repository: "other/worker", Entrypoint: "index.ts"},
-		{ProviderID: "company", Repository: "team/nested/worker", RootDirectory: "../private", Entrypoint: "index.ts"},
-		{ProviderID: "company", Repository: "team/nested/worker", Entrypoint: "../index.ts"},
-		{ProviderID: "company", Repository: "team/nested/worker", Ref: "main?token=secret", Entrypoint: "index.ts"},
+		{ProviderID: "disabled", Repository: "team/worker"},
+		{ProviderID: "company", Repository: "https://attacker.test/team/worker"},
+		{ProviderID: "company", Repository: "other/worker"},
+		{ProviderID: "company", Repository: "team/nested/worker", RootDirectory: "../private"},
+		{ProviderID: "company", Repository: "team/nested/worker", Ref: "main?token=secret"},
 	} {
 		payload, _ := json.Marshal(map[string]any{"source": source, "expected_revision": 0})
 		r := request(s, "PUT", base+"/repository", "krun_cli_admin", string(payload))
@@ -146,15 +145,16 @@ func repositoryTestArchive(t *testing.T, names map[string]string) []byte {
 }
 
 func TestRepositoryArchiveBoundaries(t *testing.T) {
-	source := WorkerBuildRepository{WorkerRepositorySource: WorkerRepositorySource{RootDirectory: "worker", Entrypoint: "index.ts"}}
+	source := WorkerBuildRepository{WorkerRepositorySource: WorkerRepositorySource{RootDirectory: "worker"}}
+	entrypoint := "index.ts"
 	for _, files := range []map[string]string{
 		{"repo/../worker/index.ts": "unsafe"},
 		{"repo/worker/../index.ts": "unsafe"},
-		{"repo/worker/index.ts": strings.Repeat("x", (256<<10)+1)},
+		{"repo/worker/index.ts": strings.Repeat("x", workerRepositoryProjectFileMax+1)},
 		{"repo/worker/not-entry.ts": "missing entry"},
 		{"repo/worker/index.ts": string([]byte{0xff})},
 	} {
-		if _, _, err := extractRepositorySource(repositoryTestArchive(t, files), source.RootDirectory, source.Entrypoint); err == nil {
+		if _, _, err := extractRepositorySource(repositoryTestArchive(t, files), source.RootDirectory, entrypoint); err == nil {
 			t.Fatal("invalid archive accepted")
 		}
 	}
@@ -164,15 +164,92 @@ func TestRepositoryArchiveBoundaries(t *testing.T) {
 	_ = archive.WriteHeader(&tar.Header{Name: "repo/worker/index.ts", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd"})
 	_ = archive.Close()
 	_ = zip.Close()
-	if _, _, err := extractRepositorySource(buf.Bytes(), source.RootDirectory, source.Entrypoint); err == nil {
+	if _, _, err := extractRepositorySource(buf.Bytes(), source.RootDirectory, entrypoint); err == nil {
 		t.Fatal("symlink accepted")
+	}
+}
+
+func TestRepositoryProjectKeepsWranglerInputsAndRejectsLocalSecrets(t *testing.T) {
+	wasm := string([]byte{'\x00', 'a', 's', 'm', 1, 0, 0, 0})
+	archive := repositoryTestArchive(t, map[string]string{
+		"repo/worker/wrangler.jsonc":            `{"main":"src/index.ts","rules":[{"type":"CompiledWasm","globs":["**/*.wasm"]}]}`,
+		"repo/worker/package.json":              `{"private":true}`,
+		"repo/worker/package-lock.json":         `{"lockfileVersion":3,"packages":{}}`,
+		"repo/worker/.yarnrc.yml":               "nodeLinker: node-modules",
+		"repo/worker/src/index.ts":              `import parser from "./parser.wasm"; export default {fetch(){return new Response(String(parser))}}`,
+		"repo/worker/src/message.html":          "<p>hello</p>",
+		"repo/worker/src/parser.wasm":           wasm,
+		"repo/worker/node_modules/pkg/index.js": "must not cross the build boundary",
+		"repo/worker/.wrangler/tmp/output.js":   "stale generated output",
+	})
+	files, _, err := extractRepositorySource(archive, "worker", "src/index.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files["src/parser.wasm"] != wasm || files["src/message.html"] != "<p>hello</p>" || files["package-lock.json"] == "" || files[".yarnrc.yml"] == "" {
+		t.Fatalf("complete Wrangler inputs were not retained: %#v", files)
+	}
+	if _, ok := files["node_modules/pkg/index.js"]; ok {
+		t.Fatal("node_modules crossed the repository build boundary")
+	}
+	if _, ok := files[".wrangler/tmp/output.js"]; ok {
+		t.Fatal("stale .wrangler output crossed the repository build boundary")
+	}
+	bundle, err := workerSourceBundle(files, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(bundle))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tarReader := tar.NewReader(gz)
+	foundWasm := false
+	for {
+		header, nextErr := tarReader.Next()
+		if nextErr == io.EOF {
+			break
+		}
+		if nextErr != nil {
+			t.Fatal(nextErr)
+		}
+		data, readErr := io.ReadAll(tarReader)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if header.Name == "src/src/parser.wasm" {
+			foundWasm = string(data) == wasm
+		}
+	}
+	_ = gz.Close()
+	if !foundWasm {
+		t.Fatal("binary module did not survive the source bundle round trip")
+	}
+
+	for _, secret := range []string{".env", ".env.production", ".dev.vars", ".npmrc", ".yarnrc"} {
+		files := map[string]string{
+			"repo/worker/wrangler.jsonc": `{"main":"index.ts"}`,
+			"repo/worker/index.ts":       "export default {}",
+			"repo/worker/" + secret:      "credential=should-not-enter-builder",
+		}
+		if _, _, err := extractRepositorySource(repositoryTestArchive(t, files), "worker", "index.ts"); err == nil {
+			t.Fatalf("sensitive build input %s was accepted", secret)
+		}
+	}
+	authYarn := map[string]string{
+		"repo/worker/wrangler.jsonc": `{"main":"index.ts"}`,
+		"repo/worker/index.ts":       "export default {}",
+		"repo/worker/.yarnrc.yml":    "npmAuthToken: secret-token",
+	}
+	if _, _, err := extractRepositorySource(repositoryTestArchive(t, authYarn), "worker", "index.ts"); err == nil {
+		t.Fatal("package-manager credentials were accepted")
 	}
 }
 
 func TestWorkerServiceListFiltersEnvironmentPermissions(t *testing.T) {
 	s, _, base := workerTestServer(t)
 	s.Config.Workers.RepositoryProviders = repositoryTestProviders()
-	if r := request(s, "PUT", base+"/repository", "krun_cli_admin", `{"source":{"provider_id":"github","repository":"team/worker","entrypoint":"index.ts"},"expected_revision":0}`); r.Code != 200 {
+	if r := request(s, "PUT", base+"/repository", "krun_cli_admin", `{"source":{"provider_id":"github","repository":"team/worker"},"expected_revision":0}`); r.Code != 200 {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	payload := `{"name":"test list","expires_in":3600,"policy":{"schema_version":1,"statements":[{"effect":"allow","actions":["service.list"],"resource":{"kind":"organization","organization_id":"org-a","ids":["org-a"]},"conditions":{"environments":["global"]}},{"effect":"allow","actions":["service.read"],"resource":{"kind":"service","organization_id":"org-a","ids":["svc-a"]},"conditions":{"environments":["fix-demo"]}}]}}`

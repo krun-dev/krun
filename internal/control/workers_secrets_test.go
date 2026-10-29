@@ -11,10 +11,25 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testWorkerSecretsKey() string {
 	return base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
+}
+
+func TestSameWorkerSecretVersionUsesInstantEquality(t *testing.T) {
+	created := time.Date(2026, time.October, 29, 3, 4, 5, 6, time.FixedZone("test", 8*60*60))
+	version := WorkerSecretVersion{ID: "secret-version", Organization: "org", Service: "service", Environment: "production", Name: "TOKEN", ValueDigest: "digest", KeyVersion: "v1", CreatedBy: "user", Created: created}
+	other := version
+	other.Created = created.UTC()
+	if !sameWorkerSecretVersion(version, other) {
+		t.Fatal("equal instants with different locations were treated as different metadata")
+	}
+	other.Name = "OTHER"
+	if sameWorkerSecretVersion(version, other) {
+		t.Fatal("changed secret metadata was treated as equal")
+	}
 }
 
 func enableWorkerSecrets(config *WorkersConfig) {

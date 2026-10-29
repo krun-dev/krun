@@ -45,7 +45,7 @@ func workerAssetManifest(files []map[string]any, options map[string]any) map[str
 			assets[k] = v
 		}
 	}
-	return map[string]any{"schema_version": 2, "profile": "esbuild-esm-v1", "main_module": "index.js",
+	return map[string]any{"schema_version": 2, "profile": workerProfile, "compatibility_date": workerDefaultCompatibilityDate, "main_module": "index.js",
 		"modules": []map[string]any{{"name": "index.js", "path": "modules/index.js", "type": "esm", "sha256": bytesDigest([]byte("export default {fetch(){return new Response('ok')}}")), "size_bytes": len("export default {fetch(){return new Response('ok')}}")}},
 		"assets":  assets}
 }
@@ -53,19 +53,24 @@ func workerAssetManifest(files []map[string]any, options map[string]any) map[str
 func TestParseWorkerAssets(t *testing.T) {
 	html := []byte("<!doctype html><title>app</title>")
 	js := []byte("console.log('app')")
+	license := []byte("fixture license")
 	manifest := workerAssetManifest([]map[string]any{
 		{"path": "index.html", "sha256": bytesDigest(html), "size_bytes": len(html), "content_type": "text/html; charset=utf-8"},
 		{"path": "assets/app-0123abcd.js", "sha256": bytesDigest(js), "size_bytes": len(js), "content_type": "application/javascript; charset=utf-8"},
+		{"path": "LICENSE", "sha256": bytesDigest(license), "size_bytes": len(license), "content_type": "application/octet-stream"},
 	}, nil)
-	code, _, err := parseWorkerArchive(workerAssetArchive(t, manifest, map[string][]byte{"index.html": html, "assets/app-0123abcd.js": js}))
+	code, _, err := parseWorkerArchive(workerAssetArchive(t, manifest, map[string][]byte{"index.html": html, "assets/app-0123abcd.js": js, "LICENSE": license}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if code.Assets == nil || len(code.AssetFiles) != 2 || code.Assets.NotFoundHandling != "single-page-application" {
+	if code.Assets == nil || len(code.AssetFiles) != 3 || code.Assets.NotFoundHandling != "single-page-application" {
 		t.Fatal("assets were not parsed", code.Assets, len(code.AssetFiles))
 	}
 	if code.AssetFiles["index.html"].ContentType != "text/html; charset=utf-8" {
 		t.Fatal("content type lost")
+	}
+	if code.AssetFiles["LICENSE"].ContentType != "application/octet-stream" {
+		t.Fatal("extensionless asset did not use the opaque fallback")
 	}
 }
 
@@ -74,9 +79,9 @@ func TestParseWorkerAssetsRejections(t *testing.T) {
 	bad := []byte("binary")
 	if _, _, err := parseWorkerArchive(workerAssetArchive(t, workerAssetManifest([]map[string]any{
 		{"path": "index.html", "sha256": bytesDigest(html), "size_bytes": len(html), "content_type": "text/html; charset=utf-8"},
-		{"path": "payload.exe", "sha256": bytesDigest(bad), "size_bytes": len(bad), "content_type": "application/octet-stream"},
+		{"path": "payload.exe", "sha256": bytesDigest(bad), "size_bytes": len(bad), "content_type": "text/html; charset=utf-8"},
 	}, nil), map[string][]byte{"index.html": html, "payload.exe": bad})); err == nil {
-		t.Fatal("unknown extension accepted")
+		t.Fatal("unknown extension accepted a spoofed content type")
 	}
 	if _, _, err := parseWorkerArchive(workerAssetArchive(t, workerAssetManifest([]map[string]any{
 		{"path": "index.html", "sha256": bytesDigest([]byte("tampered")), "size_bytes": len(html), "content_type": "text/html; charset=utf-8"},
@@ -120,7 +125,7 @@ func TestSchemaOneArchiveStillParses(t *testing.T) {
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 	code := []byte("export default {fetch(){return new Response('ok')}}")
-	manifest, _ := json.Marshal(map[string]any{"schema_version": 1, "profile": "esbuild-esm-v1", "main_module": "index.js",
+	manifest, _ := json.Marshal(map[string]any{"schema_version": 1, "profile": workerProfile, "compatibility_date": workerDefaultCompatibilityDate, "main_module": "index.js",
 		"modules": []map[string]any{{"name": "index.js", "path": "modules/index.js", "type": "esm", "sha256": bytesDigest(code), "size_bytes": len(code)}}})
 	for name, data := range map[string][]byte{"manifest.json": manifest, "modules/index.js": code} {
 		_ = tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(data)), Typeflag: tar.TypeReg})

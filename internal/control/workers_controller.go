@@ -695,7 +695,11 @@ func (w *workersController) runLocalBuild(b WorkerBuild, private WorkerBuildPriv
 	if parent == nil {
 		parent = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(parent, 180*time.Second)
+	timeout := w.config.BuilderTimeoutSeconds
+	if timeout == 0 {
+		timeout = 600
+	}
+	ctx, cancel := context.WithTimeout(parent, time.Duration(timeout)*time.Second)
 	defer cancel()
 	done := make(chan struct{})
 	defer close(done)
@@ -774,7 +778,21 @@ func (w *workersController) executeLocalBuilder(ctx context.Context, b WorkerBui
 		return "", e
 	}
 	defer os.RemoveAll(dir)
-	input, e := json.Marshal(map[string]any{"entrypoint": b.Entrypoint, "source_url": source, "assets": b.Assets, "upload_url": upload})
+	buildMode := "direct"
+	configPath := ""
+	assets := b.Assets
+	if b.Repository != nil {
+		buildMode = "wrangler"
+		configPath = b.Repository.ConfigPath
+		// Repository builds take their assets configuration from Wrangler.  The
+		// control-plane snapshot may describe an older direct-upload build and
+		// must not override the checked-out project's configuration.
+		assets = nil
+		if configPath == "" {
+			return "", errors.New("repository build requires an explicit Wrangler config")
+		}
+	}
+	input, e := json.Marshal(map[string]any{"build_mode": buildMode, "config_path": configPath, "entrypoint": b.Entrypoint, "source_url": source, "assets": assets, "compatibility_date": b.CompatibilityDate, "compatibility_flags": b.CompatibilityFlags, "upload_url": upload})
 	if e != nil {
 		return "", e
 	}
@@ -784,6 +802,10 @@ func (w *workersController) executeLocalBuilder(ctx context.Context, b WorkerBui
 	}
 	workDir := filepath.Join(dir, "work")
 	if e := os.MkdirAll(workDir, 0700); e != nil {
+		return "", e
+	}
+	tmpDir := filepath.Join(dir, "tmp")
+	if e := os.MkdirAll(tmpDir, 0700); e != nil {
 		return "", e
 	}
 	script := w.config.BuilderScript
@@ -796,7 +818,7 @@ func (w *workersController) executeLocalBuilder(ctx context.Context, b WorkerBui
 	}
 	cmd := exec.CommandContext(ctx, "node", filepath.Base(script))
 	cmd.Dir = filepath.Dir(script)
-	cmd.Env = append(os.Environ(), "KRUN_BUILD_INPUT="+inputPath, "KRUN_BUILD_WORK="+workDir)
+	cmd.Env = localBuilderEnvironment(inputPath, workDir, w.config.NPMRegistry, dir, tmpDir, w.config.BuilderTimeoutSeconds)
 	out, runErr := cmd.CombinedOutput()
 	log := string(out)
 	if len(log) > 32768 {
@@ -809,4 +831,44 @@ func (w *workersController) executeLocalBuilder(ctx context.Context, b WorkerBui
 		return safeWorkerLog(log + "\n" + runErr.Error()), runErr
 	}
 	return log, nil
+}
+
+// localBuilderEnvironment deliberately does not inherit the control plane's
+// environment. In particular HOME, npm_config_* and cloud credentials must
+// never become available to a build started by an untrusted tenant. A small
+// allowlist keeps executable lookup, corporate TLS roots and an explicitly
+// configured transport proxy working without exposing unrelated secrets.
+func workerBuilderCommandTimeoutMillis(seconds int) string {
+	if seconds == 0 {
+		seconds = 600
+	}
+	// Leave time for packing, upload and process shutdown. Small configured
+	// deadlines still get a usable child timeout; the outer context/Job is the
+	// authoritative total deadline.
+	seconds -= 30
+	if seconds < 30 {
+		seconds = 30
+	}
+	return strconv.Itoa(seconds * 1000)
+}
+
+func localBuilderEnvironment(inputPath, workDir, registry, homeDir, tmpDir string, timeoutSeconds int) []string {
+	env := []string{
+		"HOME=" + homeDir,
+		"TMPDIR=" + tmpDir,
+		"KRUN_BUILD_PHASE=all",
+		"KRUN_BUILD_INPUT=" + inputPath,
+		"KRUN_BUILD_WORK=" + workDir,
+		"KRUN_NPM_REGISTRY=" + registry,
+		"KRUN_BUILD_TIMEOUT_MS=" + workerBuilderCommandTimeoutMillis(timeoutSeconds),
+	}
+	for _, key := range []string{
+		"PATH", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
+		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+	} {
+		if value := os.Getenv(key); value != "" {
+			env = append(env, key+"="+value)
+		}
+	}
+	return env
 }

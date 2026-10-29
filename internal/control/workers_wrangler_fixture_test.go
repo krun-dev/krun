@@ -34,7 +34,7 @@ func TestParseRealCloudflareTemplateConfig(t *testing.T) {
 	}
 	// End-to-end resolution: wrangler alone determines entrypoint and assets,
 	// with no per-build overrides from the caller.
-	assets, entry, err := resolveWranglerBuild(cfg, nil, "")
+	assets, entry, err := resolveWranglerBuild(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,14 +46,17 @@ func TestParseRealCloudflareTemplateConfig(t *testing.T) {
 	}
 }
 
-// A real repository tree carries files that are not part of the module graph:
-// type declarations, lockfiles, images. They must not count against the source
-// budget or fail the build, while the resolved entrypoint and assets still work.
+// A real Wrangler build needs more than the JavaScript module graph: lockfiles,
+// framework config, type declarations and rule-selected Text/Data/Wasm files
+// must all reach the isolated builder unchanged.
 func TestRepositoryWithRealWorldNoiseFiles(t *testing.T) {
+	wasm := string([]byte{'\x00', 'a', 's', 'm', 1, 0, 0, 0})
 	archive := repositoryTestArchive(t, map[string]string{
 		"repo/worker/wrangler.jsonc":            `{"main":"src/index.ts","assets":{"directory":"./public"}}`,
 		"repo/worker/src/index.ts":              "export default {fetch(){return new Response('ok')}}",
 		"repo/worker/src/helper.ts":             "export const x = 1;",
+		"repo/worker/src/template.html":         "<p>module text</p>",
+		"repo/worker/src/parser.wasm":           wasm,
 		"repo/worker/public/index.html":         "<!doctype html><title>ok</title>",
 		"repo/worker/worker-configuration.d.ts": "declare const X: string;\n" + strings.Repeat("// types\n", 20000),
 		"repo/worker/package-lock.json":         strings.Repeat("{}", 40000),
@@ -65,11 +68,21 @@ func TestRepositoryWithRealWorldNoiseFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extraction rejected a realistic tree: %v", err)
 	}
+	for name, want := range map[string]string{
+		"wrangler.jsonc":    `{"main":"src/index.ts","assets":{"directory":"./public"}}`,
+		"src/template.html": "<p>module text</p>",
+		"src/parser.wasm":   wasm,
+		"README.md":         strings.Repeat("# docs\n", 5000),
+	} {
+		if files[name] != want {
+			t.Fatalf("project input %s was not retained", name)
+		}
+	}
 	cfg, _, err := parseWranglerConfig(files)
 	if err != nil || cfg == nil {
 		t.Fatalf("config: %v %v", cfg, err)
 	}
-	assets, entry, err := resolveWranglerBuild(cfg, nil, "")
+	assets, entry, err := resolveWranglerBuild(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

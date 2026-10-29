@@ -17,13 +17,16 @@ func (s *Server) requireWorkers(w http.ResponseWriter, r *http.Request) bool {
 
 func (s *Server) workersRoutes(m *http.ServeMux) {
 	base := "/api/v1/orgs/{org}/services/{resource}/workers"
-	protect := func(sessionOnly bool, fn endpoint) http.HandlerFunc {
-		return s.protectedWorkers(sessionOnly, func(st *State, p Principal, r *http.Request) (any, int, error) {
+	protectWithBodyLimit := func(sessionOnly bool, bodyLimit int64, fn endpoint) http.HandlerFunc {
+		return s.protectedWorkersWithBodyLimit(sessionOnly, bodyLimit, func(st *State, p Principal, r *http.Request) (any, int, error) {
 			if s.Config.Workers == nil {
 				return nil, 0, problem(503, "WORKERS_NOT_CONFIGURED", "Workers is not configured")
 			}
 			return fn(st, p, r)
 		})
+	}
+	protect := func(sessionOnly bool, fn endpoint) http.HandlerFunc {
+		return protectWithBodyLimit(sessionOnly, apiJSONBodyMax, fn)
 	}
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/services", protect(false, s.workerServiceList))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/domains", protect(false, s.workerDomains))
@@ -38,7 +41,7 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	m.HandleFunc("PUT "+base+"/network-profile", protect(false, s.workerServiceNetworkProfileUpdate))
 	m.HandleFunc("GET "+base+"/repository", protect(false, s.workerRepositoryGet))
 	m.HandleFunc("PUT "+base+"/repository", protect(false, s.workerRepositoryUpdate))
-	m.HandleFunc("POST "+base+"/builds", protect(false, s.workerBuildCreate))
+	m.HandleFunc("POST "+base+"/builds", protectWithBodyLimit(false, workerBuildRequestBodyMax, s.workerBuildCreate))
 	m.HandleFunc("POST "+base+"/source-uploads", protect(false, s.workerSourceUploadCreate))
 	m.HandleFunc("GET "+base+"/builds", protect(false, s.workerBuildList))
 	m.HandleFunc("GET "+base+"/builds/{build}", protect(false, s.workerBuildGet))
@@ -223,6 +226,12 @@ func workerRemember(st *State, key string, in any, id string) {
 	raw, _ := json.Marshal(in)
 	st.Workers.Idempotency[key] = WorkerIdempotency{bytesDigest(raw), id}
 }
+
+// JSON escaping can expand a source byte to six wire bytes (for example, a
+// control character encoded as \u00xx). Keep this scoped envelope large enough
+// for the full 2 MiB decoded source limit without raising every API's 1 MiB cap.
+const workerBuildRequestBodyMax = 16 << 20
+
 func (s *Server) workerBuildCreate(st *State, p Principal, r *http.Request) (any, int, error) {
 	var in struct {
 		SourceType         string              `json:"source_type"`
@@ -232,10 +241,12 @@ func (s *Server) workerBuildCreate(st *State, p Principal, r *http.Request) (any
 		Entrypoint         string              `json:"entrypoint"`
 		Files              map[string]string   `json:"files"`
 		SourceUpload       string              `json:"source_upload"`
+		CompatibilityDate  string              `json:"compatibility_date"`
+		CompatibilityFlags []string            `json:"compatibility_flags"`
 		Assets             *WorkerAssetsConfig `json:"assets,omitempty"`
 		Key                string              `json:"idempotency_key"`
 	}
-	if e := body(r, &in); e != nil {
+	if e := bodyWithLimit(r, &in, workerBuildRequestBodyMax); e != nil {
 		return nil, 0, e
 	}
 	if in.Environment == "" {
@@ -268,8 +279,22 @@ func (s *Server) workerBuildCreate(st *State, p Principal, r *http.Request) (any
 		return st.Workers.Builds[id], 200, nil
 	}
 	var repository *WorkerBuildRepository
+	compatibilityDate := in.CompatibilityDate
+	compatibilityFlags := in.CompatibilityFlags
 	switch in.SourceType {
 	case "repository":
+		if in.Assets != nil {
+			return nil, 0, problem(422, "WORKER_BUILD_INVALID", "Repository assets are read from the Wrangler configuration")
+		}
+		if compatibilityDate == "" && len(compatibilityFlags) > 0 {
+			return nil, 0, problem(422, "WORKER_COMPATIBILITY_INVALID", "compatibility_flags require an explicit compatibility_date for repository builds")
+		}
+		if compatibilityDate != "" {
+			compatibilityDate, compatibilityFlags, e = normalizeWorkerCompatibility(compatibilityDate, compatibilityFlags)
+			if e != nil {
+				return nil, 0, problem(422, "WORKER_COMPATIBILITY_INVALID", e.Error())
+			}
+		}
 		if in.RepositoryRevision == nil || *in.RepositoryRevision != ws.RepositoryRevision {
 			return nil, 0, problem(409, "REVISION_CONFLICT", "Repository configuration changed")
 		}
@@ -305,6 +330,10 @@ func (s *Server) workerBuildCreate(st *State, p Principal, r *http.Request) (any
 				return nil, 0, err
 			}
 		}
+		compatibilityDate, compatibilityFlags, e = normalizeWorkerCompatibility(compatibilityDate, compatibilityFlags)
+		if e != nil {
+			return nil, 0, problem(422, "WORKER_COMPATIBILITY_INVALID", e.Error())
+		}
 	default:
 		return nil, 0, problem(422, "WORKER_BUILD_INVALID", "Use repository or upload as source_type")
 	}
@@ -323,13 +352,12 @@ func (s *Server) workerBuildCreate(st *State, p Principal, r *http.Request) (any
 	if s.Config.Workers.BuilderMode == "local" {
 		job = "local-" + digest(id)[:16]
 	}
-	b := WorkerBuild{ID: id, Organization: t.Organization, Service: t.ID, Environment: in.Environment, State: "queued", Entrypoint: in.Entrypoint, SourceDigest: bytesDigest(raw), Profile: workerProfile, Job: job, Assets: in.Assets, Created: now()}
+	b := WorkerBuild{ID: id, Organization: t.Organization, Service: t.ID, Environment: in.Environment, State: "queued", Entrypoint: in.Entrypoint, SourceDigest: bytesDigest(raw), Profile: workerProfile, CompatibilityDate: compatibilityDate, CompatibilityFlags: compatibilityFlags, Job: job, Assets: in.Assets, Created: now()}
 	if in.SourceUpload != "" {
 		b.SourceDigest = ""
 	}
 	if repository != nil {
 		b.Repository = repository
-		b.Entrypoint = repository.Entrypoint
 		b.SourceDigest = ""
 	}
 	st.Workers.Builds[id] = b
@@ -869,7 +897,7 @@ func (s *Server) workerReleaseCreate(st *State, p Principal, r *http.Request, ki
 		if !ok || a.State != "finalized" {
 			return nil, 0, problem(409, "ARTIFACT_UNAVAILABLE", "Artifact unavailable")
 		}
-		release = WorkerRelease{Service: t.ID, Organization: t.Organization, Environment: env, Artifact: a.ID, ArchiveDigest: a.ArchiveDigest, ModuleDigest: a.ModuleDigest, ConfigRevision: current.ConfigRevision, Variables: current.Variables, SecretDigest: workerSecretsDigest(current.SecretVersions), SecretVersions: cloneStringsMap(current.SecretVersions)}
+		release = WorkerRelease{Service: t.ID, Organization: t.Organization, Environment: env, Artifact: a.ID, Profile: a.Profile, ArchiveDigest: a.ArchiveDigest, ModuleDigest: a.ModuleDigest, CompatibilityDate: a.CompatibilityDate, CompatibilityFlags: append([]string(nil), a.CompatibilityFlags...), ConfigRevision: current.ConfigRevision, Variables: current.Variables, SecretDigest: workerSecretsDigest(current.SecretVersions), SecretVersions: cloneStringsMap(current.SecretVersions)}
 		raw, _ := json.Marshal(release)
 		release.ID = "rel_" + bytesDigest(raw)
 		release.Created = now()

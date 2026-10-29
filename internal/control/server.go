@@ -31,12 +31,19 @@ func (e *APIError) Error() string                    { return e.Code }
 func problem(status int, code, message string) error { return &APIError{status, code, message} }
 func forbidden() error                               { return problem(403, "PERMISSION_DENIED", "Permission denied") }
 func notFound() error                                { return problem(404, "RESOURCE_NOT_FOUND", "Resource not found") }
+
+const apiJSONBodyMax = 1 << 20
+
 func body(r *http.Request, value any) error {
+	return bodyWithLimit(r, value, apiJSONBodyMax)
+}
+
+func bodyWithLimit(r *http.Request, value any, limit int64) error {
 	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 		return problem(415, "INVALID_REQUEST", "application/json required")
 	}
-	raw, e := io.ReadAll(io.LimitReader(r.Body, 1<<20+1))
-	if e != nil || len(raw) > 1<<20 {
+	raw, e := io.ReadAll(io.LimitReader(r.Body, limit+1))
+	if e != nil || int64(len(raw)) > limit {
 		return problem(413, "INVALID_REQUEST", "Request body too large")
 	}
 	if e = configfile.DecodeJSON(raw, value); e != nil {
@@ -214,6 +221,10 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, e error) {
 	var target *APIError
 	if errors.As(e, &target) {
 		a = target
+	} else {
+		// Keep internal details out of the response, but preserve enough server-side
+		// context to correlate a generic 503 with the actual storage/runtime error.
+		slog.Error("request failed", "error", e, "request_id", r.Header.Get("X-Krun-Request-ID"), "method", r.Method, "path", r.URL.Path)
 	}
 	s.json(w, a.Status, map[string]any{"error": map[string]string{"code": a.Code, "message": localize.Text(localize.RequestLanguage(r.Header.Get("Accept-Language")), a.Message)}, "request_id": r.Header.Get("X-Krun-Request-ID")})
 }
@@ -354,17 +365,21 @@ func (s *Server) protectedPrincipal(st *State, c authCredentials, r *http.Reques
 }
 
 func (s *Server) protected(sessionOnly bool, fn endpoint) http.HandlerFunc {
-	return s.protectedWith(sessionOnly, PartitionIAM, PartitionIAM, fn)
+	return s.protectedWith(sessionOnly, PartitionIAM, PartitionIAM, apiJSONBodyMax, fn)
 }
 
 // protectedWorkers serves the Workers API. Authorization reads IAM, the handler
 // reads and writes Workers rows, and only Workers rows are persisted — IAM and
 // Workers never share a transaction.
 func (s *Server) protectedWorkers(sessionOnly bool, fn endpoint) http.HandlerFunc {
-	return s.protectedWith(sessionOnly, PartitionAll, PartitionWorkers, fn)
+	return s.protectedWorkersWithBodyLimit(sessionOnly, apiJSONBodyMax, fn)
 }
 
-func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, fn endpoint) http.HandlerFunc {
+func (s *Server) protectedWorkersWithBodyLimit(sessionOnly bool, bodyLimit int64, fn endpoint) http.HandlerFunc {
+	return s.protectedWith(sessionOnly, PartitionAll, PartitionWorkers, bodyLimit, fn)
+}
+
+func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, bodyLimit int64, fn endpoint) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		requestPersist := persist
 		c, e := s.readCredentials(r)
@@ -382,8 +397,8 @@ func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, f
 		// Read the bounded request outside the state transaction; slow clients
 		// must not hold a database transaction open.
 		if r.Body != nil && r.Method != "GET" && r.Method != "HEAD" {
-			raw, e := io.ReadAll(io.LimitReader(r.Body, (1<<20)+1))
-			if e != nil || len(raw) > 1<<20 {
+			raw, e := io.ReadAll(io.LimitReader(r.Body, bodyLimit+1))
+			if e != nil || int64(len(raw)) > bodyLimit {
 				s.writeError(w, r, problem(413, "INVALID_REQUEST", "Request body too large"))
 				return
 			}

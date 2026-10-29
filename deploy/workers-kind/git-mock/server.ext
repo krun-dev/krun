@@ -1,0 +1,9 @@
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature,keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = git-mock
+DNS.2 = git-mock.workers-mvp.svc
+DNS.3 = git-mock.workers-mvp.svc.cluster.local

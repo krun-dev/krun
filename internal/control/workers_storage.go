@@ -14,31 +14,44 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
-const workerArchiveMax = 8 << 20
+// Schema-1 modules may total 8 MiB. Incompressible payload plus manifest and
+// tar/gzip framing is slightly larger, so the compressed envelope needs its
+// own headroom while the expanded module limit remains exact below.
+const workerArchiveMax = 9 << 20
 const workerArchiveAssetsMax = 32 << 20
 const workerModuleMax = 2 << 20
+const workerModulesTotalMax = 8 << 20
+const workerModulesMax = 512
+
+// The maximum declared 512 modules + 500 assets with portable nested paths
+// can exceed 256 KiB even though all payload limits remain bounded.
+const workerManifestMax = 1 << 20
 const workerAssetMax = 5 << 20
 const workerAssetsTotalMax = 20 << 20
 const workerAssetsFilesMax = 500
 const workerSourceMax = 32 << 20
-const workerProfile = "esbuild-esm-v1"
+const workerProfile = "workerd-bundle-v2"
 const workerUploadRetain = 24 * time.Hour
 
 type workerManifest struct {
-	Schema     int                    `json:"schema_version"`
-	Profile    string                 `json:"profile"`
-	MainModule string                 `json:"main_module"`
-	Modules    []workerManifestModule `json:"modules"`
-	Assets     *workerManifestAssets  `json:"assets,omitempty"`
+	Schema             int                    `json:"schema_version"`
+	Profile            string                 `json:"profile"`
+	CompatibilityDate  string                 `json:"compatibility_date"`
+	CompatibilityFlags []string               `json:"compatibility_flags,omitempty"`
+	MainModule         string                 `json:"main_module"`
+	Modules            []workerManifestModule `json:"modules"`
+	Assets             *workerManifestAssets  `json:"assets,omitempty"`
 }
 type workerManifestModule struct {
 	Name   string `json:"name"`
@@ -49,6 +62,7 @@ type workerManifestModule struct {
 }
 type workerManifestAssets struct {
 	Directory        string               `json:"directory"`
+	Binding          string               `json:"binding,omitempty"`
 	RunWorkerFirst   []string             `json:"run_worker_first"`
 	NotFoundHandling string               `json:"not_found_handling"`
 	HTMLHandling     string               `json:"html_handling"`
@@ -65,19 +79,30 @@ type workerAsset struct {
 	Size        int
 	ContentType string
 }
+type workerModule struct {
+	Type   string
+	Digest string
+	Size   int
+	Text   string
+	Bytes  []byte
+}
 type workerCode struct {
-	Digest            string                       `json:"digest"`
-	ArchiveDigest     string                       `json:"archive_digest"`
-	Size              int                          `json:"size"`
-	CompatibilityDate string                       `json:"compatibilityDate"`
-	MainModule        string                       `json:"mainModule"`
-	Modules           map[string]map[string]string `json:"modules"`
-	Assets            *WorkerAssetsConfig          `json:"assets,omitempty"`
-	AssetFiles        map[string]workerAsset       `json:"asset_files,omitempty"`
-	AssetBytes        map[string][]byte            `json:"-"`
+	Profile            string                  `json:"profile"`
+	Digest             string                  `json:"digest"`
+	ArchiveDigest      string                  `json:"archive_digest"`
+	Size               int                     `json:"size"`
+	CompatibilityDate  string                  `json:"compatibilityDate"`
+	CompatibilityFlags []string                `json:"compatibilityFlags,omitempty"`
+	MainModule         string                  `json:"mainModule"`
+	Modules            map[string]workerModule `json:"modules"`
+	Assets             *WorkerAssetsConfig     `json:"assets,omitempty"`
+	AssetFiles         map[string]workerAsset  `json:"asset_files,omitempty"`
+	AssetBytes         map[string][]byte       `json:"-"`
 }
 
-// Only these extensions are served as assets; unknown extensions fail the build.
+// Known extensions get deterministic browser-facing types. Unknown and
+// extensionless assets remain valid Cloudflare static assets and are served as
+// opaque bytes instead of being content-sniffed into an executable type.
 var workerAssetTypes = map[string]string{
 	".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8",
 	".js": "application/javascript; charset=utf-8", ".mjs": "application/javascript; charset=utf-8",
@@ -90,10 +115,22 @@ var workerAssetTypes = map[string]string{
 	".wasm": "application/wasm", ".glb": "model/gltf-binary", ".gltf": "model/gltf+json",
 	".mp3": "audio/mpeg", ".mp4": "video/mp4", ".webm": "video/webm", ".wav": "audio/wav", ".ogg": "audio/ogg",
 }
+var workerAssetBindingName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+var workerReservedBindings = map[string]bool{
+	"PLATFORM": true, "LOADER": true, "RUNTIME_TOKEN": true, "RUNTIME_POOL": true,
+	"MANAGEMENT_TOKEN": true, "CONFIG_BASE": true, "POD_NAME": true, "POD_UID": true,
+	"ASSETS_CACHE_MAX": true,
+	// These names have special prototype semantics on ordinary JavaScript
+	// objects. Reject them even though the runtime also uses null-prototype envs.
+	"__proto__": true, "prototype": true, "constructor": true,
+}
 
 func workerAssetType(name string) (string, bool) {
 	kind, ok := workerAssetTypes[strings.ToLower(path.Ext(name))]
-	return kind, ok
+	if !ok {
+		return "application/octet-stream", true
+	}
+	return kind, true
 }
 
 // Both query handling modes and pattern syntax are validated at submit time.
@@ -103,6 +140,9 @@ func validateWorkerAssets(c *WorkerAssetsConfig) error {
 	}
 	if c.Directory == "" || path.IsAbs(c.Directory) || path.Clean(c.Directory) != c.Directory || c.Directory == "." || strings.HasPrefix(c.Directory, "../") {
 		return problem(422, "WORKER_ASSETS_INVALID", "assets.directory must be a safe relative directory")
+	}
+	if c.Binding != "" && (!workerAssetBindingName.MatchString(c.Binding) || strings.HasPrefix(c.Binding, "KRUN_") || workerReservedBindings[c.Binding]) {
+		return problem(422, "WORKER_ASSETS_INVALID", "assets.binding must be a non-reserved Worker binding name")
 	}
 	if len(c.RunWorkerFirst) > 16 {
 		return problem(422, "WORKER_ASSETS_INVALID", "At most 16 run_worker_first patterns are supported")
@@ -132,13 +172,52 @@ func validateWorkerAssets(c *WorkerAssetsConfig) error {
 }
 
 func workerAssetPath(name string) (string, bool) {
-	if name == "" || strings.HasPrefix(name, "/") || path.Clean(name) != name || strings.HasPrefix(name, "../") || strings.Contains(name, "\\") {
+	if name == "" || len(name) > 240 || strings.HasPrefix(name, "/") || path.Clean(name) != name || strings.HasPrefix(name, "../") || strings.Contains(name, "\\") ||
+		strings.IndexFunc(name, func(r rune) bool { return r < 0x20 || r == 0x7f }) != -1 || !workerUSTARPathValid("assets/"+name) {
 		return "", false
 	}
 	return name, true
 }
 
 func bytesDigest(raw []byte) string { sum := sha256.Sum256(raw); return hex.EncodeToString(sum[:]) }
+
+func workerModuleNameValid(name string) bool {
+	return name != "" && len(name) <= 240 && !path.IsAbs(name) && path.Clean(name) == name &&
+		!strings.HasPrefix(name, "../") && !strings.Contains(name, "\\") &&
+		strings.IndexFunc(name, func(r rune) bool { return r < 0x20 || r == 0x7f }) == -1 &&
+		workerUSTARPathValid("modules/"+name)
+}
+
+// workerUSTARPathValid accepts either the short name field or the portable
+// prefix/name split used by the builder.  This keeps deeply nested framework
+// output without silently falling back to GNU or PAX tar extensions.
+func workerUSTARPathValid(name string) bool {
+	if len(name) <= 100 {
+		return true
+	}
+	if len(name) > 256 {
+		return false
+	}
+	for i := strings.LastIndexByte(name, '/'); i >= 0; i = strings.LastIndexByte(name[:i], '/') {
+		if i <= 155 && len(name)-i-1 <= 100 {
+			return true
+		}
+	}
+	return false
+}
+
+// Wrangler rules determine module type independently of the filename. For
+// example, a project may load `template.html` as Text, `dictionary.dat` as
+// Data, or explicitly treat a `.js` file as CommonJS. The manifest type is
+// therefore authoritative; payload validation below protects the runtime.
+func workerModuleTypeValid(kind string) bool {
+	switch kind {
+	case "esm", "commonjs", "wasm", "text", "data", "source-map":
+		return true
+	default:
+		return false
+	}
+}
 
 // Parse the versioned profile. Schema 1 has no assets; schema 2 adds an assets/ tree.
 // Paths, duplicates, links, sizes and all digests are checked before Loader sees code.
@@ -164,14 +243,21 @@ func parseWorkerArchive(raw []byte) (workerCode, string, error) {
 		if e != nil {
 			return out, "", errors.New("invalid tar archive")
 		}
-		if h.Typeflag != tar.TypeReg || h.Size < 0 || h.Size > workerAssetMax || files[h.Name] != nil {
+		_, duplicate := files[h.Name]
+		if h.Format != tar.FormatUSTAR || h.Typeflag != tar.TypeReg || h.Size < 0 || duplicate || h.Name == "" || path.Clean(h.Name) != h.Name || path.IsAbs(h.Name) || strings.HasPrefix(h.Name, "../") || strings.Contains(h.Name, "\\") {
 			return out, "", errors.New("unsupported artifact entry")
 		}
-		allowed := h.Name == "manifest.json" || h.Name == "modules/index.js" || strings.HasPrefix(h.Name, "assets/")
-		if !allowed {
+		limit := int64(workerModuleMax)
+		allowed := strings.HasPrefix(h.Name, "modules/")
+		if h.Name == "manifest.json" {
+			allowed, limit = true, workerManifestMax
+		} else if strings.HasPrefix(h.Name, "assets/") {
+			allowed, limit = true, workerAssetMax
+		}
+		if !allowed || h.Size > limit {
 			return out, "", errors.New("unsupported artifact entry")
 		}
-		data, e := io.ReadAll(io.LimitReader(tr, workerAssetMax+1))
+		data, e := io.ReadAll(io.LimitReader(tr, limit+1))
 		if e != nil || len(data) != int(h.Size) {
 			return out, "", errors.New("invalid artifact file size")
 		}
@@ -186,26 +272,78 @@ func parseWorkerArchive(raw []byte) (workerCode, string, error) {
 	if e != nil || len(tail) > 1024 {
 		return out, "", errors.New("invalid gzip trailer or trailing payload")
 	}
-	if len(files) < 2 || files["manifest.json"] == nil || files["modules/index.js"] == nil {
+	if len(files) < 2 || files["manifest.json"] == nil {
 		return out, "", errors.New("manifest and module required")
 	}
 	var m workerManifest
 	decoder := json.NewDecoder(bytes.NewReader(files["manifest.json"]))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&m) != nil || (m.Schema != 1 && m.Schema != 2) || m.Profile != workerProfile || m.MainModule != "index.js" || len(m.Modules) != 1 {
+	if decoder.Decode(&m) != nil || decoder.Decode(&struct{}{}) != io.EOF || (m.Schema != 1 && m.Schema != 2) || m.Profile != workerProfile || !workerModuleNameValid(m.MainModule) || len(m.Modules) == 0 || len(m.Modules) > workerModulesMax {
 		return out, "", errors.New("unsupported manifest")
 	}
-	module := m.Modules[0]
-	code := files["modules/index.js"]
-	if len(code) > workerModuleMax || module.Name != "index.js" || module.Path != "modules/index.js" || module.Type != "esm" || module.Size != len(code) || module.Digest != bytesDigest(code) {
-		return out, "", errors.New("module digest mismatch")
+	compatibilityDate, compatibilityFlags, compatibilityErr := normalizeWorkerCompatibility(m.CompatibilityDate, m.CompatibilityFlags)
+	if compatibilityErr != nil || compatibilityDate != m.CompatibilityDate {
+		return out, "", errors.New("unsupported manifest compatibility")
 	}
-	out = workerCode{Digest: module.Digest, ArchiveDigest: bytesDigest(raw), Size: len(code), CompatibilityDate: "2026-09-28", MainModule: "index.js", Modules: map[string]map[string]string{"index.js": {"js": string(code)}}}
+	m.CompatibilityFlags = compatibilityFlags
+	moduleNames := make(map[string]bool, len(m.Modules))
+	modulePaths := make(map[string]bool, len(m.Modules))
+	modules := make(map[string]workerModule, len(m.Modules))
+	modulesTotal := 0
+	mainDigest := ""
+	for _, module := range m.Modules {
+		if !workerModuleNameValid(module.Name) || !workerModuleTypeValid(module.Type) || module.Path != "modules/"+module.Name || moduleNames[module.Name] || modulePaths[module.Path] {
+			return out, "", errors.New("invalid or duplicate module")
+		}
+		moduleNames[module.Name], modulePaths[module.Path] = true, true
+		data, ok := files[module.Path]
+		if !ok {
+			return out, "", errors.New("module file missing from archive: " + module.Name)
+		}
+		if module.Size != len(data) || module.Digest != bytesDigest(data) || len(data) > workerModuleMax {
+			return out, "", errors.New("module digest mismatch: " + module.Name)
+		}
+		modulesTotal += len(data)
+		if modulesTotal > workerModulesTotalMax {
+			return out, "", errors.New("modules exceed total size limit")
+		}
+		value := workerModule{Type: module.Type, Digest: module.Digest, Size: module.Size}
+		switch module.Type {
+		case "esm", "commonjs", "text":
+			if !utf8.Valid(data) {
+				return out, "", errors.New("module is not valid UTF-8: " + module.Name)
+			}
+			value.Text = string(data)
+		case "source-map":
+			if !utf8.Valid(data) || !json.Valid(data) {
+				return out, "", errors.New("source map is not valid JSON: " + module.Name)
+			}
+			value.Text = string(data)
+		case "wasm":
+			if len(data) < 8 || !bytes.Equal(data[:4], []byte{'\x00', 'a', 's', 'm'}) {
+				return out, "", errors.New("module is not valid WebAssembly: " + module.Name)
+			}
+			value.Bytes = data
+		case "data":
+			value.Bytes = data
+		}
+		modules[module.Name] = value
+		if module.Name == m.MainModule {
+			if module.Type != "esm" && module.Type != "commonjs" {
+				return out, "", errors.New("main module must be JavaScript")
+			}
+			mainDigest = module.Digest
+		}
+	}
+	if mainDigest == "" {
+		return out, "", errors.New("main module is not declared")
+	}
+	out = workerCode{Profile: m.Profile, Digest: mainDigest, ArchiveDigest: bytesDigest(raw), Size: modulesTotal, CompatibilityDate: m.CompatibilityDate, CompatibilityFlags: append([]string(nil), m.CompatibilityFlags...), MainModule: m.MainModule, Modules: modules}
 	if m.Schema == 1 {
 		if m.Assets != nil {
 			return out, "", errors.New("schema 1 cannot declare assets")
 		}
-		if len(files) != 2 || len(raw) > max {
+		if len(files) != len(m.Modules)+1 || len(raw) > max {
 			return out, "", errors.New("schema 1 artifact has unexpected entries")
 		}
 		return out, bytesDigest(files["manifest.json"]), nil
@@ -213,7 +351,7 @@ func parseWorkerArchive(raw []byte) (workerCode, string, error) {
 	if m.Assets == nil {
 		return out, "", errors.New("schema 2 requires assets")
 	}
-	if e := validateWorkerAssets(&WorkerAssetsConfig{Directory: m.Assets.Directory, RunWorkerFirst: m.Assets.RunWorkerFirst, NotFoundHandling: m.Assets.NotFoundHandling, HTMLHandling: m.Assets.HTMLHandling}); e != nil {
+	if e := validateWorkerAssets(&WorkerAssetsConfig{Directory: m.Assets.Directory, Binding: m.Assets.Binding, RunWorkerFirst: m.Assets.RunWorkerFirst, NotFoundHandling: m.Assets.NotFoundHandling, HTMLHandling: m.Assets.HTMLHandling}); e != nil {
 		return out, "", e
 	}
 	if len(m.Assets.Files) > workerAssetsFilesMax {
@@ -247,13 +385,13 @@ func parseWorkerArchive(raw []byte) (workerCode, string, error) {
 		assetFiles[name] = workerAsset{Digest: f.Digest, Size: f.Size, ContentType: f.ContentType}
 		assetBytes[name] = data
 	}
-	if len(files) != len(m.Assets.Files)+2 {
+	if len(files) != len(m.Assets.Files)+len(m.Modules)+1 {
 		return out, "", errors.New("archive contains undeclared entries")
 	}
 	if m.Assets.NotFoundHandling == "single-page-application" && !seen["index.html"] {
 		return out, "", errors.New("single-page-application requires index.html")
 	}
-	out.Assets = &WorkerAssetsConfig{Directory: m.Assets.Directory, RunWorkerFirst: m.Assets.RunWorkerFirst, NotFoundHandling: m.Assets.NotFoundHandling, HTMLHandling: m.Assets.HTMLHandling}
+	out.Assets = &WorkerAssetsConfig{Directory: m.Assets.Directory, Binding: m.Assets.Binding, RunWorkerFirst: m.Assets.RunWorkerFirst, NotFoundHandling: m.Assets.NotFoundHandling, HTMLHandling: m.Assets.HTMLHandling}
 	out.AssetFiles = assetFiles
 	out.AssetBytes = assetBytes
 	return out, bytesDigest(files["manifest.json"]), nil
@@ -354,11 +492,21 @@ func (w *workersController) runtimeS3() *minio.Client {
 
 func (w *workersController) uploadURL(ctx context.Context, b WorkerBuild) (string, error) {
 	// Sign with the builder-visible endpoint so in-cluster Pods can reach (and verify) the URL.
-	u, e := w.builderS3().PresignedPutObject(ctx, w.config.S3Bucket, workerUploadKey(b), 15*time.Minute)
+	u, e := w.builderS3().PresignedPutObject(ctx, w.config.S3Bucket, workerUploadKey(b), w.buildURLTTL())
 	if e != nil {
 		return "", e
 	}
 	return u.String(), nil
+}
+
+func (w *workersController) buildURLTTL() time.Duration {
+	seconds := w.config.BuilderTimeoutSeconds
+	if seconds == 0 {
+		seconds = 600
+	}
+	// Leave time for Pod scheduling and the controller's finalize pass without
+	// turning a build-scoped URL into a long-lived credential.
+	return time.Duration(seconds+300) * time.Second
 }
 
 // Runtime artifact URLs use the runtime's own network view. In a full
@@ -412,7 +560,7 @@ func (w *workersController) sourceBundleURL(ctx context.Context, key string) (st
 	if info.Size <= 0 || info.Size > workerSourceMax {
 		return "", errors.New("source bundle exceeds size limit")
 	}
-	u, e := w.builderS3().PresignedGetObject(ctx, w.config.S3Bucket, key, 15*time.Minute, nil)
+	u, e := w.builderS3().PresignedGetObject(ctx, w.config.S3Bucket, key, w.buildURLTTL(), nil)
 	if e != nil {
 		return "", e
 	}
@@ -427,7 +575,10 @@ func workerSourceBundle(code map[string]string, assets map[string][]byte) ([]byt
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 	write := func(name string, raw []byte) error {
-		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(raw)), Typeflag: tar.TypeReg}); err != nil {
+		if len(name) > 255 || len(path.Base(name)) > 100 {
+			return errors.New("source bundle path exceeds portable ustar limit")
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(raw)), Typeflag: tar.TypeReg, Format: tar.FormatUSTAR}); err != nil {
 			return err
 		}
 		_, err := tw.Write(raw)
@@ -505,7 +656,10 @@ func (w *workersController) finalizeBuild(ctx context.Context, b WorkerBuild) (W
 	if e != nil {
 		return WorkerArtifact{}, e
 	}
-	a := WorkerArtifact{ID: "art_" + digest(b.Organization+"/"+code.ArchiveDigest), Organization: b.Organization, State: "finalized", StorageLocation: w.config.S3LocationID, Bucket: w.config.S3Bucket, ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, Size: len(raw), ObjectKey: "v1/" + b.Organization + "/sha256/" + code.ArchiveDigest + "/bundle.tar.gz", Created: now()}
+	if code.Profile != b.Profile || code.CompatibilityDate != b.CompatibilityDate || !slices.Equal(code.CompatibilityFlags, b.CompatibilityFlags) {
+		return WorkerArtifact{}, errors.New("artifact build profile does not match requested compatibility")
+	}
+	a := WorkerArtifact{ID: "art_" + digest(b.Organization+"/"+code.ArchiveDigest), Organization: b.Organization, State: "finalized", Profile: code.Profile, StorageLocation: w.config.S3LocationID, Bucket: w.config.S3Bucket, ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: append([]string(nil), code.CompatibilityFlags...), Size: len(raw), ObjectKey: "v1/" + b.Organization + "/sha256/" + code.ArchiveDigest + "/bundle.tar.gz", Created: now()}
 	if e := w.server.Store.reserveBuildArtifact(ctx, b.ID, w.replica, a); e != nil {
 		return a, e
 	}
@@ -535,7 +689,7 @@ func (w *workersController) artifactCode(ctx context.Context, a WorkerArtifact) 
 	if e != nil {
 		return code, e
 	}
-	if code.ArchiveDigest != a.ArchiveDigest || code.Digest != a.ModuleDigest || manifest != a.ManifestDigest || len(raw) != a.Size {
+	if code.Profile != a.Profile || code.ArchiveDigest != a.ArchiveDigest || code.Digest != a.ModuleDigest || code.CompatibilityDate != a.CompatibilityDate || !slices.Equal(code.CompatibilityFlags, a.CompatibilityFlags) || manifest != a.ManifestDigest || len(raw) != a.Size {
 		return code, fmt.Errorf("artifact metadata mismatch")
 	}
 	return code, nil

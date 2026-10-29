@@ -56,6 +56,6 @@ ssh -o ConnectTimeout=8 "$REMOTE" "set -e
   kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp create configmap runtime-config --from-file=runtime.capnp=/tmp/runtime.capnp --dry-run=client -o yaml | kubectl --kubeconfig $KUBECONFIG_REMOTE apply -f -
   kubectl --kubeconfig $KUBECONFIG_REMOTE apply -f /tmp/networkpolicy.yaml
   kubectl --kubeconfig $KUBECONFIG_REMOTE apply -f /tmp/static-assets.yaml
-  kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp scale deployment backend postgres minio tester --replicas=0
+  kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp scale deployment backend postgres minio git-mock tester --replicas=0
   kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp rollout restart deployment/runtime-default
   kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp rollout status deployment/runtime-default --timeout=180s"

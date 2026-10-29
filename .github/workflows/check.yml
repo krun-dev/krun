@@ -33,7 +33,26 @@ jobs:
       - run: npm run build
       - run: make check-secrets check-static-build
       - run: npm ci --prefix workers/builder && npm test --prefix workers/builder
+      - name: Test real Cloudflare Vite plugin build
+        run: npm run test:vite --prefix workers/builder
+      - run: docker build -t krun-worker-builder:test workers/builder
+      - name: Smoke-test builder image isolation
+        run: >-
+          docker run --rm --read-only
+          --tmpfs /tmp:rw,noexec,nosuid,size=16m
+          -e HOME=/tmp -e WRANGLER_SEND_METRICS=false
+          -e WRANGLER_LOG_PATH=/tmp/wrangler.log
+          --entrypoint sh krun-worker-builder:test -c
+          'test "$(id -u)" = 1000 &&
+          test ! -e /app/package-lock.json &&
+          test ! -e /usr/local/lib/node_modules/npm &&
+          test ! -e /usr/local/bin/npm &&
+          test ! -e /usr/local/bin/npx &&
+          test ! -e /app/node_modules/npm/node_modules/undici &&
+          test ! -e /app/node_modules/npm/node_modules/ip-address &&
+          test "$(node_modules/.bin/wrangler --version | tail -n 1)" = 4.155.0'
       - run: npm ci --prefix workers/runtime && npm test --prefix workers/runtime
+      - run: npm ci --prefix examples/workers-fullstack && npm test --prefix examples/workers-fullstack && npm run build --prefix examples/workers-fullstack
       - run: go vet ./...
       - run: go test -race ./...
         env:

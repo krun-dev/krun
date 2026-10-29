@@ -1,10 +1,13 @@
+import { Hono } from "hono";
+import { createHash } from "node:crypto";
 import { json, methodNotAllowed } from "./http.js";
 
 const service = "krun-workers-fullstack";
+const serviceDigest = createHash("sha256").update(service).digest("hex");
 
 async function health(request, env) {
   if (request.method !== "GET") return methodNotAllowed("GET");
-  return json({
+  const response = json({
     ok: true,
     service,
     environment: env.KRUN_ENVIRONMENT ?? "local-test",
@@ -13,6 +16,8 @@ async function health(request, env) {
       typeof env.VERIFICATION_SECRET === "string" &&
       env.VERIFICATION_SECRET.length > 0,
   });
+  response.headers.set("x-service-digest", serviceDigest);
+  return response;
 }
 
 async function echo(request, env) {
@@ -36,11 +41,27 @@ async function echo(request, env) {
   });
 }
 
-export async function handleRequest(request, env = {}) {
-  const url = new URL(request.url);
-  if (url.pathname === "/api/health") return health(request, env);
-  if (url.pathname === "/api/echo") return echo(request, env);
-  return json({ error: "not_found", path: url.pathname }, { status: 404 });
+async function assetCheck(request, env) {
+  if (!env.ASSETS || typeof env.ASSETS.fetch !== "function") {
+    return json({ error: "assets_binding_unavailable" }, { status: 503 });
+  }
+  const target = new URL("/about", request.url);
+  const response = await env.ASSETS.fetch(new Request(target));
+  const body = await response.text();
+  return json({ status: response.status, about_page: body.includes("STATIC HTML") });
 }
 
-export default { fetch: handleRequest };
+const app = new Hono();
+app.get("/api/health", (c) => health(c.req.raw, c.env));
+app.all("/api/health", () => methodNotAllowed("GET"));
+app.post("/api/echo", (c) => echo(c.req.raw, c.env));
+app.all("/api/echo", () => methodNotAllowed("POST"));
+app.get("/api/asset-check", (c) => assetCheck(c.req.raw, c.env));
+app.all("/api/asset-check", () => methodNotAllowed("GET"));
+app.notFound((c) => json({ error: "not_found", path: c.req.path }, { status: 404 }));
+
+export function handleRequest(request, env = {}, ctx) {
+  return app.fetch(request, env, ctx);
+}
+
+export default app;

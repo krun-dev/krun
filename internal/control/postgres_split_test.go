@@ -132,7 +132,7 @@ func TestPostgresWorkerRepositoryRevisionCASIsExclusive(t *testing.T) {
 				if service.RepositoryRevision != 0 {
 					return problem(409, "REVISION_CONFLICT", "test did not load the shared pre-image")
 				}
-				service.Repository = &WorkerRepositorySource{ProviderID: "github", Repository: repository, Ref: "main", Entrypoint: "index.ts"}
+				service.Repository = &WorkerRepositorySource{ProviderID: "github", Repository: repository, Ref: "main"}
 				service.RepositoryRevision++
 				st.Workers.Services[service.Service] = service
 				ready <- struct{}{}
@@ -569,7 +569,7 @@ func TestPostgresRetentionPrunesBuildsAndSessions(t *testing.T) {
 			st.Workers.BuildPrivate[id] = WorkerBuildPrivate{Actor: WorkerActor{User: "u"}, Log: "log"}
 		}
 		st.Workers.Artifacts["art-old"] = WorkerArtifact{ID: "art-old", Organization: "o", State: "finalized", ArchiveDigest: "archive-old", ObjectKey: "v1/o/old.tar.gz", StorageLocation: "test", Bucket: "test", Created: old}
-		st.Workers.Releases["rel-old"] = WorkerRelease{ID: "rel-old", Organization: "o", Service: "s", Environment: "production", Artifact: "art-old", Created: old}
+		st.Workers.Releases["rel-old"] = WorkerRelease{ID: "rel-old", Organization: "o", Service: "s", Environment: "production", Artifact: "art-old", ArchiveDigest: "archive-old", Created: old}
 		return nil
 	}); err != nil {
 		t.Fatal(err)

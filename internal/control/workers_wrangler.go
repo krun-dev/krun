@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/tailscale/hujson"
@@ -135,9 +137,9 @@ func encodeRunWorkerFirst(value interface{}) json.RawMessage {
 // declared, so unrelated wrangler settings are ignored instead of rejected.
 func parseWranglerTOML(raw string) (*wranglerConfig, error) {
 	var doc struct {
-		Main               string         `toml:"main"`
-		CompatibilityDate  string         `toml:"compatibility_date"`
-		CompatibilityFlags []string       `toml:"compatibility_flags"`
+		Main               string              `toml:"main"`
+		CompatibilityDate  string              `toml:"compatibility_date"`
+		CompatibilityFlags []string            `toml:"compatibility_flags"`
 		Assets             *wranglerTOMLAssets `toml:"assets"`
 	}
 	if _, err := toml.Decode(raw, &doc); err != nil {
@@ -197,22 +199,64 @@ func (a *wranglerTOMLAssets) wranglerAssets() *wranglerAssets {
 
 // workerCompatibilityDate is validated loosely: wrangler requires yyyy-mm-dd,
 // and accepting anything else would silently change runtime behaviour.
+const workerMinimumCompatibilityDate = "2021-11-02"
+const workerDefaultCompatibilityDate = "2026-09-28"
+
 var workerCompatibilityDate = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+var workerCompatibilityFlag = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+// normalizeWorkerCompatibility makes runtime semantics immutable build input.
+// The upper bound tracks the workerd version shipped by workers/runtime; a
+// future compatibility date cannot be promised until that binary is upgraded.
+func normalizeWorkerCompatibility(date string, flags []string) (string, []string, error) {
+	if date == "" {
+		date = workerDefaultCompatibilityDate
+	}
+	parsed, err := time.Parse("2006-01-02", date)
+	if err != nil || !workerCompatibilityDate.MatchString(date) || parsed.Format("2006-01-02") != date {
+		return "", nil, fmt.Errorf("compatibility_date must be a valid yyyy-mm-dd date")
+	}
+	if date > workerDefaultCompatibilityDate {
+		return "", nil, fmt.Errorf("compatibility_date %s is newer than the supported workerd date %s", date, workerDefaultCompatibilityDate)
+	}
+	if date < workerMinimumCompatibilityDate {
+		return "", nil, fmt.Errorf("compatibility_date %s is older than the Workers runtime minimum %s", date, workerMinimumCompatibilityDate)
+	}
+	if len(flags) > 32 {
+		return "", nil, fmt.Errorf("at most 32 compatibility_flags are supported")
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(flags))
+	for _, flag := range flags {
+		if !workerCompatibilityFlag.MatchString(flag) {
+			return "", nil, fmt.Errorf("invalid compatibility flag %q", flag)
+		}
+		if seen[flag] {
+			return "", nil, fmt.Errorf("duplicate compatibility flag %q", flag)
+		}
+		seen[flag] = true
+		out = append(out, flag)
+	}
+	sort.Strings(out)
+	return date, out, nil
+}
+
+func resolveWranglerCompatibility(cfg *wranglerConfig) (string, []string, error) {
+	if cfg == nil {
+		return normalizeWorkerCompatibility("", nil)
+	}
+	return normalizeWorkerCompatibility(cfg.CompatibilityDate, cfg.CompatibilityFlags)
+}
 
 // resolveWranglerBuild turns a parsed wrangler config into the build parameters
 // this platform needs, mapping wrangler's paths onto our repository layout.
-//
-// Explicit request fields always win; wrangler only supplies defaults. This is
-// what makes a standard Cloudflare repository buildable without editing it, and
-// still lets a user override the entrypoint or asset directory per build.
-func resolveWranglerBuild(cfg *wranglerConfig, assets *WorkerAssetsConfig, entrypoint string) (WorkerAssetsConfig, string, error) {
+// Wrangler is the sole source of truth for repository entrypoints and assets;
+// the repository build API deliberately exposes no per-build overrides.
+func resolveWranglerBuild(cfg *wranglerConfig) (WorkerAssetsConfig, string, error) {
 	var out WorkerAssetsConfig
-	if assets != nil {
-		out = *assets
-	}
-	entry := entrypoint
+	var entry string
 	if cfg != nil {
-		if entry == "" && cfg.Main != "" {
+		if cfg.Main != "" {
 			// wrangler's `main` is relative to the project root; our bundle strips
 			// the project root, so the same relative path works unchanged.
 			entry = path.Clean(cfg.Main)
@@ -223,10 +267,11 @@ func resolveWranglerBuild(cfg *wranglerConfig, assets *WorkerAssetsConfig, entry
 		}
 		if cfg.Assets != nil {
 			wa := cfg.Assets
-			if out.Directory == "" && wa.Directory != "" {
+			if wa.Directory != "" {
 				out.Directory = strings.TrimPrefix(path.Clean(wa.Directory), "./")
 			}
-			if out.RunWorkerFirst == nil && len(wa.RunWorkerFirst) > 0 {
+			out.Binding = wa.Binding
+			if len(wa.RunWorkerFirst) > 0 {
 				var boolValue bool
 				if err := json.Unmarshal(wa.RunWorkerFirst, &boolValue); err == nil {
 					// wrangler: true means "run the Worker first for every request".
@@ -240,12 +285,8 @@ func resolveWranglerBuild(cfg *wranglerConfig, assets *WorkerAssetsConfig, entry
 					}
 				}
 			}
-			if out.NotFoundHandling == "" {
-				out.NotFoundHandling = wa.NotFoundHandling
-			}
-			if out.HTMLHandling == "" {
-				out.HTMLHandling = wa.HTMLHandling
-			}
+			out.NotFoundHandling = wa.NotFoundHandling
+			out.HTMLHandling = wa.HTMLHandling
 		}
 	}
 	if out.Directory != "" {
@@ -255,4 +296,16 @@ func resolveWranglerBuild(cfg *wranglerConfig, assets *WorkerAssetsConfig, entry
 		}
 	}
 	return out, entry, nil
+}
+
+// validateWranglerInputAssets validates the fields that are known before a
+// repository build. Cloudflare's Vite plugin may declare only an assets
+// binding initially and generate the concrete directory in
+// .wrangler/deploy/config.json, so the final directory requirement belongs to
+// the artifact validator rather than this pre-build check.
+func validateWranglerInputAssets(c WorkerAssetsConfig) error {
+	if c.Directory == "" {
+		c.Directory = "__wrangler_generated_assets__"
+	}
+	return validateWorkerAssets(&c)
 }

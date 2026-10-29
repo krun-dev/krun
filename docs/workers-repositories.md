@@ -2,7 +2,7 @@
 
 Workers 导航先展示当前组织中有权查看的服务列表。服务名称、关联仓库和可见环境状态来自后端；点击服务才进入构建 / 发布详情。返回服务列表和浏览器返回均可用，详情 URL 可以直接打开。创建服务后进入新服务详情，不再自动打开第一个已有服务。
 
-“构建新版本”现在从 GitHub、GitLab.com 或管理员配置的自建 GitLab 拉取代码。用户填写仓库地址、分支 / Tag / Commit、项目目录和入口文件，保存为该服务的仓库配置，然后选择构建环境。后续打开会恢复已保存配置。历史构建展示仓库、请求的 ref 与实际 commit，发布与回滚继续选用已成功构建的不可变制品。
+“构建新版本”现在从 GitHub、GitLab.com 或管理员配置的自建 GitLab 拉取代码。用户填写仓库地址、分支 / Tag / Commit 和项目目录，保存为该服务的仓库配置；入口、静态资源与构建命令统一以项目内 Wrangler 配置为准，避免平台表单与项目配置出现两套真相。后续打开会恢复已保存配置。历史构建展示仓库、请求的 ref 与实际 commit，发布与回滚继续选用已成功构建的不可变制品。
 
 ## 管理员配置
 
@@ -52,33 +52,35 @@ workers:
 link-local 地址。可信内网 GitLab 可以逐 provider 显式放行 private/loopback，但
 link-local/unspecified 永远拒绝，不能把普通 OAuth 配置变成任意内网请求入口。
 
-GitHub API 用 Bearer Token，GitLab 用 PRIVATE-TOKEN。GitHub 归档下载会跳转到 codeload.github.com，该请求不会携带 GitHub API 的 Token；其他跨来源跳转拒绝。接口依据 [GitHub 仓库归档 API](https://docs.github.com/en/rest/repos/contents#download-a-repository-archive-tar)、[GitLab Commit API](https://docs.gitlab.com/api/commits/#retrieve-a-commit) 和 [GitLab 归档 API](https://docs.gitlab.com/api/repositories/#get-file-archive) 实现。
+仓库 ref 解析和浅克隆统一使用 [Git smart HTTP](https://git-scm.com/docs/http-protocol)，直接访问 provider 的固定 HTTPS origin（例如 `https://github.com/<owner>/<repo>.git`）。公开仓库匿名读取；私有仓库只在 Git 请求的 Basic Auth 中使用短期或管理员只读 Token，错误和构建日志会清理 URL 与凭据。控制面把 commit 固定后只拉取该 commit；服务端不支持 exact-SHA want 时最多回退到深度 32 的指定 ref，并在 checkout 前再次核对 commit。
 
 ## 后端流程
 
 1. `PUT .../workers/repository` 使用 `service.update` 权限及 `expected_revision` 保存共享仓库配置。`GET .../workers/repository` 返回配置与修订号。
 2. `POST .../workers/builds` 传 `source_type: repository`、`repository_revision`、构建环境及幂等键，要求目标环境 `build.start`。先检查仓库配置修订号，防止构建请求与另一个用户的配置修改串用。入队时复制服务的仓库配置，后续配置修改不影响该构建。
-3. 控制器在数据库事务外请求配置平台的 API，将 ref 解析为完整 commit，并先持久化 commit。下载中断后的重试仍使用该 commit。
-4. 下载该 commit 的 tar.gz，检查目录边界、文件类型、链接、UTF-8、大小与入口文件，持久化源码摘要和私有源码输入。仓库中任何脚本、hook 都不会在控制面执行。
-5. 现有 Kubernetes Job 用固定 esbuild profile 构建这些源文件，上传至 S3；控制器验证制品后标记成功。Job 接收源码和临时上传 URL，不接收 Git 平台凭证。
+3. 控制器在数据库事务外通过 Git smart HTTP 将 ref 解析为完整 commit，并先持久化 commit。下载中断后的重试仍使用该 commit。
+4. 对固定 commit 做有界浅克隆，在控制面内生成项目归档并检查目录边界、链接、特殊文件、路径和大小；拒绝 `.env`、`.dev.vars`、`.npmrc` 等本地凭据，并保留 Wrangler 配置、锁文件、框架配置及 Text/Data/Wasm 等二进制构建输入。仓库中任何脚本、hook 都不会在控制面执行。
+5. Kubernetes Job 根据唯一锁文件执行 frozen install，并由固定 Wrangler dry-run 构建已经配置好的 Workers 项目。安装和 custom build 在无上传凭据的 init container 中执行；可信 packer 在单独主容器校验输出、生成 `workerd-bundle-v2` 并上传。Job 不接收 Git 平台凭据或 S3 长期凭据。
 6. 选历史制品发布到 test / staging / production，沿用候选验证 → Release 提交 → 副本确认流程。
 
-`GET /api/v1/orgs/{org}/workers/services` 返回按用户环境权限过滤的列表；`GET /api/v1/orgs/{org}/workers/repository-providers` 返回当前组织启用的来源展示信息。旧源码上传构建 API 保留兼容，产品页面已使用仓库构建。
+`GET /api/v1/orgs/{org}/workers/services` 返回按用户环境权限过滤的列表；`GET /api/v1/orgs/{org}/workers/repository-providers` 返回当前组织启用的来源展示信息。源码上传与仓库构建是两种独立输入模式，产品页面使用仓库构建。
 
 ## 当前范围与网络
 
-当前使用固定 `esbuild-esm-v1` profile，支持 JS / TS、JSON 与相对导入及已有 Cloudflare builtins；不执行 npm 安装、自定义 build command 或 Git submodule 拉取。项目目录内最多 32 个源码文件，总计 256 KiB；源码归档最多 16 MiB，解压最多 64 MiB、10,000 项。不改变原有发布语义。
+当前使用固定 `workerd-bundle-v2` profile，支持模块 Workers、npm/pnpm/Yarn/Bun 锁定安装、Wrangler custom build、静态资产、Vite/已配置 adapter、`rules`、`find_additional_modules`、`no_bundle`、ESM/CommonJS/Text/Data/Wasm/source-map 和 `nodejs_compat`。仓库必须显式包含 Wrangler 配置；平台不会把普通框架仓库自动改造成 Workers 项目，也不执行 Cloudflare deploy/resource 命令。Python、Rust、legacy Service Worker 暂不支持，Git submodule 仍拒绝。项目目录最多 4096 文件、24 MiB、单文件 8 MiB；仓库归档解压最多 64 MiB、10,000 项。compatibility date/flags 优先取显式构建参数，否则取 Wrangler 配置，再否则使用平台锁定的 workerd 日期。
 
-kind 只为控制面增加已配置仓库 API / 下载域名解析所得 IP 的 TCP 443 出口；builder 仍只访问 MinIO，runtime 仍只访问平台代码接口。后端镜像安装系统 CA，TLS 校验保持启用。实验网络策略中的 IP 是部署时解析的快照，DNS 地址变化需要重新生成；生产环境应使用可持续管理域名访问的出口代理或网络策略。
+kind 为控制面增加已配置 Git provider origin 解析所得 IP 的 TCP 443 出口；独立 E2E 把 npm registry 指向集群内 TLS fixture，builder 除该 registry 与 MinIO 外没有业务出口，runtime 仍只访问控制面与 MinIO。kind 专用镜像注入 fixture CA，TLS 校验保持启用；tracked 示例 lockfile 保持标准 npmjs 地址，E2E 只在上传的临时源码包内替换为 fixture tarball 与现场计算的 integrity。生产环境应把 `npm_registry` 指向稳定的内部 proxy，并使用可持续管理域名访问的出口代理或网络策略。
 
 日常本地开发使用 `make dev` 的 local-first 拓扑；完整集群验收才使用 `deploy/workers-kind`。私有仓库只有在 `.data/dev.yaml` 或独立 E2E 生成配置中提供了真实测试凭据后才算完成验收，不能把公开仓库接口测试当作私有仓库验收。
 
-## kind 与浏览器验收 · 2026-10-13
+## 历史 kind 与浏览器验收（双阶段 Wrangler Job 改造前）· 2026-10-13
+
+下面记录验证的是早期仓库下载、direct builder、发布和请求链路，不能作为当前 Wrangler build/pack 双阶段 Job 的验收证据。当前实现已有真实 Wrangler → `workerd-bundle-v2` → 控制面校验的跨组件测试，以及独立的真实 workerd smoke；仍需在部署环境重新执行一次 repository → init build → pack → finalize → publish → kgateway 请求和浏览器操作，才能宣称新链路完成 kind 级全量验收。
 
 实际浏览器完成服务列表进入、侧边栏 Workers 返回列表、浏览器返回、新服务创建、来源选择、仓库配置保存、源码构建、日志和 MinIO 制品查看、发布 test，以及经 kgateway 调用 Worker。默认来源按配置选择公司 GitLab，重新打开表单能恢复已保存的 GitHub 仓库配置。返回列表后会重新获取仓库和环境状态。
 
 - 服务：`github-repository-demo` / `service_RjTQNfLdyPFLgnF-`，组织为 Workers 体验。
-- 仓库：`cloudflare/workers-sdk`，ref `main`，项目目录 `fixtures/worker-ts/src`，入口 `index.ts`。
+- 仓库：`cloudflare/workers-sdk`，ref `main`，项目目录 `fixtures/worker-ts/src`；入口由 Wrangler 配置读取。
 - Commit：`97b2fb1632de1f02bb0d12639f8602cefb3de158`。
 - 成功构建：`bld_U6NJm3nXeUXsyKVS`，编译 696 bytes，归档 645 bytes。
 - 归档 SHA-256：`ba1af0c24152f808d4d761a897a528f458adb45e638b173ed6e13a337c1f4d78`，bucket `krun-artifacts`。

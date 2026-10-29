@@ -3,17 +3,20 @@
 这是一个可以直接作为 krun Workers 源码发布的完整示例：
 
 - `src/` 是 Worker 后端，提供 `GET /api/health` 和 `POST /api/echo`；
+- 后端使用真实 Hono npm 依赖与 `node:crypto`，由 package-lock 驱动构建；
 - `frontend/public/` 是预构建静态前端，不需要 Node 运行时；
 - `wrangler.jsonc` 把 `/api/*` 交给 Worker，其余请求交给静态资产；
 - 未命中的浏览器导航使用 `index.html` 做 SPA fallback；
 - `about.html` 用来验证 HTML 路径规范化；带 hash 的 CSS、JS、SVG 用来验证 immutable 缓存。
 - `/api/health` 只报告 `VERIFICATION_SECRET` 是否已注入，从不回显 Secret 值。
+- `/api/asset-check` 从 Hono 业务代码调用 release-scoped `env.ASSETS.fetch()`。
 
 前端和 API 始终同源，不需要 CORS，也不读取运行期后端地址。
 
 ## 本地检查
 
 ```bash
+npm ci --prefix examples/workers-fullstack
 npm --prefix examples/workers-fullstack test
 npm --prefix examples/workers-fullstack run build
 python3 "$STATIC_EXPORT_GUARD/check_static_export.py" examples/workers-fullstack/frontend

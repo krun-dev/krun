@@ -24,7 +24,6 @@ const emptySource: RepositorySource = {
   repository: "",
   ref: "HEAD",
   root_directory: ".",
-  entrypoint: "",
 };
 
 export function errorMessage(e: unknown): string {
@@ -58,8 +57,8 @@ function useProviders(organizationBase: string, open: boolean) {
 }
 
 // ---------------------------------------------------------------------------
-// Settings panel: bind the repository once (provider, repo, directory,
-// entrypoint) and manage the per-user connection. Lives in the settings tab.
+// Settings panel: bind the repository once (provider, repo and project
+// directory) and manage the per-user connection. Wrangler owns build inputs.
 // ---------------------------------------------------------------------------
 export function RepositorySettings({
   base,
@@ -177,7 +176,7 @@ export function RepositorySettings({
       {providers === null && !error ? <p className="text-sm">{t("加载中…")}</p> : null}
       {providers && providers.length > 0 ? (
         <>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div>
             <SelectField
               label={t("仓库平台")}
               disabled={busy}
@@ -254,21 +253,10 @@ export function RepositorySettings({
                 disabled={busy}
               />
             </Field>
-            <Field
-              label={t("入口文件")}
-              hint={t("留空则读取仓库里的 wrangler 配置（main 字段）。")}
-            >
-              <Input
-                aria-label={t("入口文件")}
-                value={source.entrypoint}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  update("entrypoint", e.target.value)
-                }
-                maxLength={160}
-                disabled={busy}
-              />
-            </Field>
           </div>
+          <p className="text-xs text-muted-foreground">
+            {t("入口、静态资源和构建命令读取项目内的 Wrangler 配置。")}
+          </p>
           <div className="flex justify-end gap-3">
             {bound ? (
               <Button

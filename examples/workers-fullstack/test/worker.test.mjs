@@ -8,6 +8,7 @@ test("health exposes release context without caching", async () => {
   const response = await worker.fetch(new Request("https://example.test/api/health"), env);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.match(response.headers.get("x-service-digest"), /^[0-9a-f]{64}$/);
   assert.deepEqual(await response.json(), {
     ok: true,
     service: "krun-workers-fullstack",
@@ -54,4 +55,13 @@ test("unknown paths are explicit JSON 404s", async () => {
   const response = await worker.fetch(new Request("https://example.test/api/missing"), env);
   assert.equal(response.status, 404);
   assert.deepEqual(await response.json(), { error: "not_found", path: "/api/missing" });
+});
+
+test("ASSETS binding is release-scoped and callable from Hono", async () => {
+  const response = await worker.fetch(
+    new Request("https://example.test/api/asset-check"),
+    {...env, ASSETS: {fetch: async () => new Response("<h1>STATIC HTML</h1>")}},
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {status: 200, about_page: true});
 });

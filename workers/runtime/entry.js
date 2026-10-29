@@ -3,21 +3,77 @@ import {WorkerEntrypoint} from 'cloudflare:workers';
 // bootstrap reads one snapshot, then a long-poll applies incremental ops.
 let view={revision:0,routes:new Map(),releases:new Map()};
 let viewLoaded=false,booting=null,started=false,lastSync=0,lastLoop=0;
-const encoder=new TextEncoder();const decoder=new TextDecoder();const json=(value,status=200)=>Response.json(value,{status});
+const encoder=new TextEncoder();const decoder=new TextDecoder();const strictDecoder=new TextDecoder('utf-8',{fatal:true});const json=(value,status=200)=>Response.json(value,{status});
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const sha256=async raw=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',typeof raw==='string'?encoder.encode(raw):raw))].map(x=>x.toString(16).padStart(2,'0')).join('');
-// The bundle profile is manifest.json + modules/index.js (+ assets/ in schema 2).
+// The bundle profile is manifest.json + one or more modules/* entries
+// (+ assets/ in schema 2). Return every regular file so the manifest verifier
+// can reject undeclared payloads rather than silently ignoring them.
 function untar(raw){
- const files={};let off=0;
+ const files=new Map();let off=0;
  while(off+512<=raw.length){
-  const header=raw.subarray(off,off+512);const name=decoder.decode(header.subarray(0,100)).replace(/\0.*$/,'');
+  const header=raw.subarray(off,off+512),base=decoder.decode(header.subarray(0,100)).replace(/\0.*$/,''),prefix=decoder.decode(header.subarray(345,500)).replace(/\0.*$/,''),name=prefix?prefix+'/'+base:base;
   const sizeField=decoder.decode(header.subarray(124,136)).replace(/[\0 ].*$/,'').trim();
   const size=parseInt(sizeField,8)||0;const type=header[156];
   if(!name)break;
-  if(type===48&&['manifest.json','modules/index.js'].includes(name)&&!files[name])files[name]=raw.subarray(off+512,off+512+size);
-  off+=512+Math.ceil(size/512)*512;
+  const end=off+512+size,next=off+512+Math.ceil(size/512)*512;
+  if(type!==48||size<0||end>raw.length||next>raw.length||files.has(name))throw new Error('invalid artifact entry');
+  if(name!=='manifest.json'&&!name.startsWith('modules/')&&!name.startsWith('assets/'))throw new Error('unsupported artifact entry');
+  files.set(name,raw.subarray(off+512,end));off=next;
  }
  return files;
+}
+const portableUSTAR=name=>{const bytes=encoder.encode(name).length;if(bytes<=100)return true;if(bytes>256)return false;for(let index=name.lastIndexOf('/');index>=0;index=name.lastIndexOf('/',index-1)){if(encoder.encode(name.slice(0,index)).length<=155&&encoder.encode(name.slice(index+1)).length<=100)return true;}return false;};
+const safeModuleName=(name,maxBytes=240,prefix='modules/')=>typeof name==='string'&&name!==''&&encoder.encode(name).length<=maxBytes&&!name.startsWith('/')&&!name.startsWith('../')&&!name.includes('\\')&&!name.split('/').some(part=>part===''||part==='.'||part==='..')&&![...name].some(char=>{const code=char.codePointAt(0);return code<0x20||code===0x7f;})&&portableUSTAR(prefix+name);
+const sameStrings=(a,b)=>Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((v,i)=>v===b[i]);
+const exactKeys=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).every(key=>keys.includes(key));
+const bytesBuffer=bytes=>bytes.slice().buffer;
+async function loadArtifact(archive,descriptor){
+ const files=untar(await gunzip(archive));
+ const manifestBytes=files.get('manifest.json');if(!manifestBytes)throw new Error('artifact manifest missing');
+ let manifest;try{manifest=JSON.parse(strictDecoder.decode(manifestBytes));}catch{throw new Error('artifact manifest invalid');}
+ if(!exactKeys(manifest,['schema_version','profile','compatibility_date','compatibility_flags','main_module','modules','assets'])
+  ||(manifest.schema_version!==1&&manifest.schema_version!==2)||manifest.profile!=='workerd-bundle-v2'
+  ||typeof manifest.compatibility_date!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(manifest.compatibility_date)||manifest.compatibility_date<'2021-11-02'||manifest.compatibility_date>'2026-09-28'
+  ||(manifest.compatibility_flags!==undefined&&(!Array.isArray(manifest.compatibility_flags)||manifest.compatibility_flags.length>32||manifest.compatibility_flags.some(flag=>typeof flag!=='string'||!/^[a-z][a-z0-9_]{0,63}$/.test(flag))||new Set(manifest.compatibility_flags).size!==manifest.compatibility_flags.length))
+  ||!safeModuleName(manifest.main_module)||!Array.isArray(manifest.modules)||manifest.modules.length===0||manifest.modules.length>512)throw new Error('artifact manifest unsupported');
+ manifest.compatibility_flags=manifest.compatibility_flags||[];
+ if(descriptor.profile!==manifest.profile||descriptor.compatibility_date!==manifest.compatibility_date
+  ||!sameStrings(descriptor.compatibility_flags||[],manifest.compatibility_flags))throw new Error('artifact compatibility mismatch');
+ const allowedTypes=new Set(['esm','commonjs','wasm','text','data','source-map']);
+ const modules={};const declared=new Set(['manifest.json']);let mainDigest='';let total=0;
+ for(const module of manifest.modules){
+  if(!exactKeys(module,['name','path','type','sha256','size_bytes'])||!safeModuleName(module.name)||module.path!=='modules/'+module.name
+   ||!allowedTypes.has(module.type)||typeof module.sha256!=='string'||!/^[0-9a-f]{64}$/.test(module.sha256)
+   ||!Number.isInteger(module.size_bytes)||module.size_bytes<0||module.size_bytes>2*1024*1024||declared.has(module.path))throw new Error('artifact module metadata invalid');
+  const bytes=files.get(module.path);if(!bytes||bytes.length!==module.size_bytes||await sha256(bytes)!==module.sha256)throw new Error('artifact module mismatch');
+  declared.add(module.path);total+=bytes.length;if(total>8*1024*1024)throw new Error('artifact modules too large');
+  if(module.name===manifest.main_module){if(module.type!=='esm'&&module.type!=='commonjs')throw new Error('artifact main module type invalid');mainDigest=module.sha256;}
+  try{
+   if(module.type==='esm')modules[module.name]={js:strictDecoder.decode(bytes)};
+   else if(module.type==='commonjs')modules[module.name]={cjs:strictDecoder.decode(bytes)};
+   else if(module.type==='text')modules[module.name]={text:strictDecoder.decode(bytes)};
+   else if(module.type==='data')modules[module.name]={data:bytesBuffer(bytes)};
+   else if(module.type==='wasm'){
+    if(bytes.length<8||bytes[0]!==0||bytes[1]!==97||bytes[2]!==115||bytes[3]!==109)throw new Error('artifact wasm module invalid');
+    modules[module.name]={wasm:bytesBuffer(bytes)};
+   }else if(module.type==='source-map'){
+    // Source maps are integrity-checked archive metadata, not Loader modules.
+    JSON.parse(strictDecoder.decode(bytes));
+   }
+  }catch{throw new Error('artifact text module invalid');}
+ }
+ if(!mainDigest||mainDigest!==descriptor.module_sha256)throw new Error('artifact main module mismatch');
+ if(manifest.schema_version===1&&manifest.assets!==undefined)throw new Error('schema 1 cannot declare assets');
+ if(manifest.schema_version===2){
+  const assets=manifest.assets;if(!exactKeys(assets,['directory','binding','run_worker_first','not_found_handling','html_handling','files'])||!Array.isArray(assets.files))throw new Error('artifact assets invalid');
+  for(const file of assets.files){
+   if(!exactKeys(file,['path','sha256','size_bytes','content_type'])||!safeModuleName(file.path,240,'assets/')||typeof file.sha256!=='string'||typeof file.content_type!=='string'||!Number.isInteger(file.size_bytes))throw new Error('artifact asset metadata invalid');
+   const archivePath='assets/'+file.path,bytes=files.get(archivePath);if(declared.has(archivePath)||!bytes||bytes.length!==file.size_bytes||await sha256(bytes)!==file.sha256)throw new Error('artifact asset mismatch');declared.add(archivePath);
+  }
+ }
+ if(files.size!==declared.size||[...files.keys()].some(name=>!declared.has(name)))throw new Error('artifact contains undeclared entries');
+ return {manifest,modules};
 }
 async function platformResponse(env,path,init={},timeout=2000){
  const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),timeout);
@@ -194,11 +250,31 @@ function lookupAsset(files,path,htmlHandling){
 const hashedAsset=/[-.][0-9a-f]{8,}\.[a-z0-9]+$/i;
 function serveAsset(request,path,value){
  const etag='"'+value.digest+'"';
- if(request.headers.get('if-none-match')===etag)return new Response(null,{status:304,headers:{etag}});
- return new Response(value.bytes,{status:200,headers:{'content-type':value.content_type,etag,'cache-control':hashedAsset.test(path)?'public, max-age=31536000, immutable':'public, max-age=300'}});
+ const baseHeaders={etag,'x-content-type-options':'nosniff'};
+ if(request.headers.get('if-none-match')===etag)return new Response(null,{status:304,headers:baseHeaders});
+ return new Response(value.bytes,{status:200,headers:{...baseHeaders,'content-type':value.content_type,'cache-control':hashedAsset.test(path)?'public, max-age=31536000, immutable':'public, max-age=300'}});
 }
-async function worker(env,d,artifact) {
- return env.LOADER.get(`${d.organization_id}/${d.service_id}/${d.environment}/${d.id}/workerd-20260928/profile-v1`,async()=>{
+async function boundAssetResponse(env,release,request){
+ const manifest=await assetManifest(env,release);if(!manifest.config)return json({error:'assets unavailable'},404);
+ const path=normalizePath(new URL(request.url).pathname);if(path===null)return json({error:'invalid path'},400);
+ const files=new Map((manifest.files||[]).map(file=>['/'+file.path,file.path]));
+ const hit=lookupAsset(files,path,manifest.config.html_handling||'auto-trailing-slash');
+ if(hit.redirect!==undefined)return new Response(null,{status:307,headers:{location:hit.redirect}});
+ if(hit.file)return serveAsset(request,hit.file,await assetBytes(env,release,files.get(hit.file)));
+ if(manifest.config.not_found_handling==='single-page-application'&&files.has('/index.html'))return serveAsset(request,'/index.html',await assetBytes(env,release,files.get('/index.html')));
+ return json({error:'asset not found'},404);
+}
+export class ReleaseAssets extends WorkerEntrypoint {
+ async fetch(request){
+  const releaseId=this.ctx?.props?.release_id;if(typeof releaseId!=='string'||releaseId==='')return json({error:'asset binding unavailable'},404);
+  return boundAssetResponse(this.env,{id:releaseId},request);
+ }
+}
+const bindingName=/^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const reservedBindings=new Set(['PLATFORM','LOADER','RUNTIME_TOKEN','RUNTIME_POOL','MANAGEMENT_TOKEN','CONFIG_BASE','POD_NAME','POD_UID','ASSETS_CACHE_MAX']);
+const magicBindings=new Set(['__proto__','prototype','constructor']);
+async function worker(env,ctx,d,artifact) {
+ return env.LOADER.get(`${d.organization_id}/${d.service_id}/${d.environment}/${d.id}/workerd-20260928/workerd-bundle-v2`,async()=>{
   // The platform hands out a short-lived URL; artifact bytes go straight from
   // object storage to this Pod, never through the control plane. Candidate
   // validation may supply the URL with the management request instead.
@@ -207,24 +283,27 @@ async function worker(env,d,artifact) {
   if(!response.ok)throw new Error('artifact download failed ('+response.status+')');
   const archive=new Uint8Array(await response.arrayBuffer());
   if(archive.length!==a.size||await sha256(archive)!==a.archive_sha256)throw new Error('artifact archive mismatch');
-  const files=untar(new Uint8Array(await new Response(new Blob([archive]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer()));
-  const manifest=JSON.parse(decoder.decode(files['manifest.json']));
-  const code=decoder.decode(files['modules/index.js']);
-  const module=manifest.modules?.[0];
-  if((manifest.schema_version!==1&&manifest.schema_version!==2)||manifest.profile!=='esbuild-esm-v1'||manifest.main_module!=='index.js'
-   ||module?.name!=='index.js'||module?.path!=='modules/index.js'||module?.type!=='esm'
-   ||module.size_bytes!==encoder.encode(code).length||module.sha256!==await sha256(code)
-   ||module.sha256!==d.module_sha256)throw new Error('artifact manifest mismatch');
+  const loaded=await loadArtifact(archive,d),manifest=loaded.manifest;
   let secrets={};
   if(d.secret_digest){
    const payload=await platform(env,'/releases/'+encodeURIComponent(d.id)+'/secrets');
    if(payload.release_id!==d.id||payload.secret_digest!==d.secret_digest||!payload.values||typeof payload.values!=='object')throw new Error('secret binding mismatch');
    secrets=payload.values;
   }
-  return {compatibilityDate:'2026-09-28',mainModule:'index.js',modules:{'index.js':{js:code}},env:{...d.variables,...secrets,KRUN_ENVIRONMENT:d.environment,KRUN_SERVICE_ID:d.service_id,KRUN_RELEASE_ID:d.id},globalOutbound:null};
+  // Object spread defines own data properties even for magic names such as
+  // `__proto__`; the assets binding below uses defineProperty for the same reason.
+  // A normal prototype is required because WorkerLoader structured-clones env.
+  const childEnv={...(d.variables||{}),...secrets,KRUN_ENVIRONMENT:d.environment,KRUN_SERVICE_ID:d.service_id,KRUN_RELEASE_ID:d.id};
+  const assetBinding=manifest.assets?.binding;
+  if(assetBinding){
+   if(!bindingName.test(assetBinding)||assetBinding.startsWith('KRUN_')||reservedBindings.has(assetBinding)||magicBindings.has(assetBinding)||Object.hasOwn(childEnv,assetBinding))throw new Error('asset binding name conflicts with environment');
+   if(!ctx?.exports?.ReleaseAssets)throw new Error('asset binding factory unavailable');
+   Object.defineProperty(childEnv,assetBinding,{value:ctx.exports.ReleaseAssets({props:{release_id:d.id}}),enumerable:true,writable:false,configurable:false});
+  }
+  return {compatibilityDate:manifest.compatibility_date,compatibilityFlags:manifest.compatibility_flags,mainModule:manifest.main_module,modules:loaded.modules,env:childEnv,globalOutbound:null};
  });
 }
-async function validate(env,d,artifact) {const stub=await worker(env,d,artifact);await stub.getEntrypoint('KrunValidation').ping();}
+async function validate(env,ctx,d,artifact) {const stub=await worker(env,ctx,d,artifact);await stub.getEntrypoint('KrunValidation').ping();}
 export class Private extends WorkerEntrypoint {
  async fetch(request){
   try{
@@ -235,7 +314,7 @@ export class Private extends WorkerEntrypoint {
    if(!route.enabled)return json({error:'environment disabled'},410);
    const d=view.releases.get(route.release);if(!d)return json({error:'environment not published'},503);
    const headers=new Headers(request.headers);for(const name of ['x-krun-release','x-krun-scope','x-forwarded-host','x-internal'])headers.delete(name);
-   const forward=async()=>{const stub=await worker(this.env,d);return await stub.getEntrypoint().fetch(new Request(request,{headers}));};
+   const forward=async()=>{const stub=await worker(this.env,this.ctx,d);return await stub.getEntrypoint().fetch(new Request(request,{headers}));};
    let response;
    const manifest=await assetManifest(this.env,d);
    if(!manifest.config){response=await forward();}
@@ -274,7 +353,7 @@ export class Management extends WorkerEntrypoint {
     if(!input.release||!input.artifact)return json({error:'release and artifact required'},400);
     // The controller supplies the immutable descriptor and a short-lived
     // artifact URL; cold-load and run the KrunValidation RPC on this member.
-    await validate(this.env,input.release,input.artifact);
+    await validate(this.env,this.ctx,input.release,input.artifact);
     return json({pod_uid:this.env.POD_UID,release_id:input.release.id,archive_sha256:input.release.archive_sha256});
    }
    if(path!=='/ready')return json({error:'not found'},404);

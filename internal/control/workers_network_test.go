@@ -12,7 +12,22 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+func TestSameWorkerPlacementUsesInstantEquality(t *testing.T) {
+	created := time.Date(2026, time.October, 29, 3, 4, 5, 6, time.FixedZone("test", 8*60*60))
+	placement := WorkerPlacement{Service: "service", Organization: "org", NetworkProfile: "default", Pool: "pool", Role: "primary", State: "active", Revision: 1, Created: created, Updated: created}
+	other := placement
+	other.Created, other.Updated = created.UTC(), created.UTC()
+	if !sameWorkerPlacement(placement, other) || !sameWorkerPlacements(map[string]WorkerPlacement{"one": placement}, map[string]WorkerPlacement{"one": other}) {
+		t.Fatal("equal placement instants with different locations were treated as different metadata")
+	}
+	other.Revision++
+	if sameWorkerPlacement(placement, other) {
+		t.Fatal("changed placement metadata was treated as equal")
+	}
+}
 
 // catalogConfig models the current deployment: two Gateway instances and two
 // domains whose labels are purely descriptive.
@@ -55,6 +70,12 @@ func TestCatalogValidationAndDefaults(t *testing.T) {
 	}
 	if c.S3BuilderEndpoint != c.S3Endpoint || c.S3RuntimeEndpoint != c.S3BuilderEndpoint {
 		t.Fatalf("storage endpoint defaults: control=%q builder=%q runtime=%q", c.S3Endpoint, c.S3BuilderEndpoint, c.S3RuntimeEndpoint)
+	}
+	if c.NPMRegistry != "https://registry.npmjs.org/" {
+		t.Fatalf("npm registry default: %q", c.NPMRegistry)
+	}
+	if c.BuilderTimeoutSeconds != 600 {
+		t.Fatalf("builder timeout default: %d", c.BuilderTimeoutSeconds)
 	}
 	if got := c.defaultDomains(); len(got) != 1 || got[0] != "internal" {
 		t.Fatalf("default domains: %v", got)
@@ -229,6 +250,222 @@ func TestRuntimeStorageEndpointValidation(t *testing.T) {
 	c.S3RuntimeEndpoint = "file:///tmp/storage"
 	if err := c.validate(); err == nil || !strings.Contains(err.Error(), "runtime endpoint") {
 		t.Fatalf("invalid runtime endpoint accepted: %v", err)
+	}
+}
+
+func TestNPMRegistryValidation(t *testing.T) {
+	c := catalogConfig()
+	c.NPMRegistry = "https://npm.example.test/company"
+	if err := c.validate(); err != nil || c.NPMRegistry != "https://npm.example.test/company/" {
+		t.Fatalf("registry normalization: %q %v", c.NPMRegistry, err)
+	}
+	for _, value := range []string{"http://npm.example.test/", "https://user:secret@npm.example.test/", "https://npm.example.test/?token=secret"} {
+		c = catalogConfig()
+		c.NPMRegistry = value
+		if err := c.validate(); err == nil {
+			t.Fatalf("invalid npm registry accepted: %s", value)
+		}
+	}
+}
+
+func TestBuilderIsolationConfigurationValidation(t *testing.T) {
+	c := catalogConfig()
+	c.BuilderRuntimeClass = "gvisor.production"
+	c.BuilderTimeoutSeconds = 900
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*WorkersConfig){
+		func(c *WorkersConfig) { c.BuilderRuntimeClass = "Bad_Runtime_Class" },
+		func(c *WorkersConfig) { c.BuilderTimeoutSeconds = 59 },
+		func(c *WorkersConfig) { c.BuilderTimeoutSeconds = 1801 },
+	} {
+		c = catalogConfig()
+		mutate(c)
+		if err := c.validate(); err == nil {
+			t.Fatal("invalid builder isolation configuration accepted")
+		}
+	}
+}
+
+func captureBuildJob(t *testing.T, build WorkerBuild) (map[string]any, map[string]any) {
+	t.Helper()
+	var submitted map[string]any
+	var inputSecret map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/jobs/"):
+			http.NotFound(w, r)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/secrets"):
+			if err := json.NewDecoder(r.Body).Decode(&inputSecret); err != nil {
+				t.Fatal(err)
+			}
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/secrets/"):
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/jobs/"):
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/jobs"):
+			if err := json.NewDecoder(r.Body).Decode(&submitted); err != nil {
+				t.Fatal(err)
+			}
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"metadata":{"uid":"job-uid"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	k := &workerKubernetes{base: srv.URL, namespace: "workers-mvp", npmRegistry: "https://npm.example.test/", client: srv.Client()}
+	if err := k.ensureBuildJob(context.Background(), build, WorkerBuildPrivate{}, "https://source.example.test/source", "https://storage.example.test/upload", "builder:test", "Never"); err != nil {
+		t.Fatal(err)
+	}
+	return submitted, inputSecret
+}
+
+func TestBuildJobBoundsEphemeralStorage(t *testing.T) {
+	build := WorkerBuild{ID: "build", Job: "krun-build-direct", Entrypoint: "index.js", CompatibilityDate: workerDefaultCompatibilityDate}
+	submitted, inputSecret := captureBuildJob(t, build)
+
+	jobSpec := submitted["spec"].(map[string]any)
+	template := jobSpec["template"].(map[string]any)
+	podSpec := template["spec"].(map[string]any)
+	if _, exists := podSpec["initContainers"]; exists {
+		t.Fatal("direct build unexpectedly uses a repository build init container")
+	}
+	container := podSpec["containers"].([]any)[0].(map[string]any)
+	resources := container["resources"].(map[string]any)
+	requests := resources["requests"].(map[string]any)
+	limits := resources["limits"].(map[string]any)
+	if requests["ephemeral-storage"] != workerBuilderEphemeralRequest || limits["ephemeral-storage"] != workerBuilderEphemeralLimit {
+		t.Fatalf("ephemeral storage resources: requests=%v limits=%v", requests, limits)
+	}
+
+	sizes := map[string]string{}
+	for _, raw := range podSpec["volumes"].([]any) {
+		volume := raw.(map[string]any)
+		if empty, ok := volume["emptyDir"].(map[string]any); ok {
+			sizes[volume["name"].(string)], _ = empty["sizeLimit"].(string)
+		}
+	}
+	if sizes["work"] != workerBuilderWorkSize || sizes["build-tmp"] != workerBuilderTmpSize {
+		t.Fatalf("emptyDir size limits: %v", sizes)
+	}
+	data := inputSecret["stringData"].(map[string]any)
+	if len(data) != 1 {
+		t.Fatalf("direct build should receive one input: %#v", data)
+	}
+	directInput := data["input.json"].(string)
+	if !strings.Contains(directInput, "source_url") || !strings.Contains(directInput, "upload_url") {
+		t.Fatalf("direct build input is incomplete: %s", directInput)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(directInput), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["build_mode"] != "direct" || decoded["entrypoint"] != "index.js" {
+		t.Fatalf("direct build contract: %#v", decoded)
+	}
+}
+
+func TestRepositoryBuildJobSeparatesBuildAndPackCapabilities(t *testing.T) {
+	build := WorkerBuild{
+		ID:                "build",
+		Job:               "krun-build-repository",
+		Entrypoint:        "index.js",
+		CompatibilityDate: workerDefaultCompatibilityDate,
+		Repository:        &WorkerBuildRepository{ConfigPath: "wrangler.jsonc"},
+		// Repository configuration, not a stale service snapshot, is
+		// authoritative for assets.
+		Assets: &WorkerAssetsConfig{Directory: "old-public"},
+	}
+	submitted, inputSecret := captureBuildJob(t, build)
+	jobSpec := submitted["spec"].(map[string]any)
+	template := jobSpec["template"].(map[string]any)
+	podSpec := template["spec"].(map[string]any)
+	if len(podSpec["initContainers"].([]any)) != 1 || len(podSpec["containers"].([]any)) != 1 {
+		t.Fatalf("repository build must have one build and one pack container: %#v", podSpec)
+	}
+
+	data := inputSecret["stringData"].(map[string]any)
+	buildInput := data["build.json"].(string)
+	packInput := data["pack.json"].(string)
+	if strings.Contains(buildInput, "upload") || !strings.Contains(buildInput, "source_url") {
+		t.Fatalf("untrusted build input leaks upload capability: %s", buildInput)
+	}
+	if strings.Contains(packInput, "source_url") || !strings.Contains(packInput, "upload_url") {
+		t.Fatalf("trusted pack input has wrong capabilities: %s", packInput)
+	}
+	for name, raw := range map[string]string{"build": buildInput, "pack": packInput} {
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+			t.Fatalf("decode %s input: %v", name, err)
+		}
+		if decoded["build_mode"] != "wrangler" || decoded["config_path"] != "wrangler.jsonc" {
+			t.Fatalf("%s input lost repository build contract: %#v", name, decoded)
+		}
+		if name == "build" && decoded["assets"] != nil {
+			t.Fatalf("repository build inherited stale assets: %#v", decoded["assets"])
+		}
+	}
+}
+
+func TestBuildJobCleansInputSecretWhenJobCreationFails(t *testing.T) {
+	deleted := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/jobs/"):
+			http.NotFound(w, r)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/secrets"):
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/jobs"):
+			http.Error(w, "job rejected", http.StatusInternalServerError)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/secrets/"):
+			deleted = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	k := &workerKubernetes{base: srv.URL, namespace: "workers-mvp", client: srv.Client()}
+	build := WorkerBuild{Job: "krun-build-cleanup", Entrypoint: "index.js", CompatibilityDate: workerDefaultCompatibilityDate}
+	if err := k.ensureBuildJob(context.Background(), build, WorkerBuildPrivate{}, "https://source.test/source", "https://storage.test/upload", "builder:test", "Never"); err == nil {
+		t.Fatal("job creation failure was ignored")
+	}
+	if !deleted {
+		t.Fatal("ownerless build input Secret was not cleaned up")
+	}
+}
+
+func TestBuildJobReattachesRecreatedInputSecret(t *testing.T) {
+	secretPatched, jobPatched := false, false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/jobs/"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"metadata":{"uid":"job-uid","annotations":{"workers.krun.dev/input-adopted":"true"}}}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/secrets"):
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/secrets/"):
+			secretPatched = true
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/jobs/"):
+			jobPatched = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	k := &workerKubernetes{base: srv.URL, namespace: "workers-mvp", client: srv.Client()}
+	build := WorkerBuild{Job: "krun-build-reattach", Entrypoint: "index.js", CompatibilityDate: workerDefaultCompatibilityDate}
+	if err := k.ensureBuildJob(context.Background(), build, WorkerBuildPrivate{}, "https://source.test/source", "https://storage.test/upload", "builder:test", "Never"); err != nil {
+		t.Fatal(err)
+	}
+	if !secretPatched || jobPatched {
+		t.Fatalf("recreated Secret adoption: secretPatched=%v jobPatched=%v", secretPatched, jobPatched)
 	}
 }
 
@@ -653,7 +890,7 @@ func TestProcessOperationStopsAfterCommitCASConflict(t *testing.T) {
 		http: apiServer.Client(), assetCache: map[string]workerCachedAssets{}, replica: "test",
 	}
 	release := WorkerRelease{ID: "rel-cas", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-cas", ArchiveDigest: code.ArchiveDigest, ModuleDigest: code.Digest}
-	artifact := WorkerArtifact{ID: "art-cas", Organization: "org-a", State: "finalized", ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, Size: len(raw), ObjectKey: "v1/org-a/archive.tar.gz", StorageLocation: "test", Bucket: "artifacts", Created: now()}
+	artifact := WorkerArtifact{ID: "art-cas", Organization: "org-a", State: "finalized", Profile: code.Profile, ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: code.CompatibilityFlags, Size: len(raw), ObjectKey: "v1/org-a/archive.tar.gz", StorageLocation: "test", Bucket: "artifacts", Created: now()}
 	op := WorkerOperation{ID: "op-cas", Kind: "publish", Service: "svc-a", Organization: "org-a", Environment: "production", State: "validating", Release: release.ID, ExpectedRevision: 99, Created: now()}
 	state := WorkerState{
 		Releases: map[string]WorkerRelease{release.ID: release}, Artifacts: map[string]WorkerArtifact{artifact.ID: artifact},

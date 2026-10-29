@@ -1,7 +1,7 @@
 using W = import "/workerd/workerd.capnp";
 const config :W.Config = (
  services = [
-  (name="entry",worker=(modules=[(name="entry.js",esModule=embed "/app/entry.js")],compatibilityDate="2026-09-28",compatibilityFlags=["experimental"],bindings=[
+  (name="entry",worker=(modules=[(name="entry.js",esModule=embed "/app/entry.js")],compatibilityDate="2026-09-28",compatibilityFlags=["experimental", "enable_ctx_exports"],bindings=[
    (name="LOADER",workerLoader=(id="workers-mvp-default")),
    (name="PLATFORM",service="platform"),
    (name="POD_NAME",text=embed "/pod/name"),

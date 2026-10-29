@@ -341,9 +341,9 @@ func (s *Store) loadWorkers(ctx context.Context, st *State) error {
 	batch.Queue(`SELECT service_id, env_name, enabled, config_revision, variables, release_revision, release_id, confirmed_release_id FROM krun_worker_environments`)
 	batch.Queue(`SELECT secret_version_id, org_id, service_id, env_name, name, value_digest, key_version, created_by, created_at FROM krun_worker_secret_versions`)
 	batch.Queue(`SELECT service_id, env_name, name, secret_version_id FROM krun_worker_environment_secrets`)
-	batch.Queue(`SELECT build_id, org_id, service_id, env_name, state, entrypoint, source_digest, profile, job, artifact_id, error, repository, assets, created_at, finished_at, claimed_by, claimed_at FROM krun_worker_builds`)
-	batch.Queue(`SELECT artifact_id, org_id, state, archive_digest, manifest_digest, module_digest, size_bytes, object_key, storage_location, bucket, created_at FROM krun_worker_artifacts`)
-	batch.Queue(`SELECT release_id, org_id, service_id, env_name, artifact_id, archive_digest, module_digest, config_revision, variables, secret_digest, created_at FROM krun_worker_releases`)
+	batch.Queue(`SELECT build_id, org_id, service_id, env_name, state, entrypoint, source_digest, profile, compatibility_date, compatibility_flags, job, artifact_id, error, repository, assets, created_at, finished_at, claimed_by, claimed_at FROM krun_worker_builds`)
+	batch.Queue(`SELECT artifact_id, org_id, state, profile, archive_digest, manifest_digest, module_digest, compatibility_date, compatibility_flags, size_bytes, object_key, storage_location, bucket, created_at FROM krun_worker_artifacts`)
+	batch.Queue(`SELECT release_id, org_id, service_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at FROM krun_worker_releases`)
 	batch.Queue(`SELECT release_id, name, secret_version_id FROM krun_worker_release_secrets`)
 	batch.Queue(`SELECT operation_id, kind, org_id, service_id, env_name, state, build_id, release_id, expected_revision, config_revision, edge_revision, release_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at FROM krun_worker_operations`)
 	batch.Queue(`SELECT service_id, env_name, revision, release_id, operation_id, kind, created_at FROM krun_worker_history ORDER BY created_at DESC`)
@@ -521,8 +521,11 @@ func readWorkerBuilds(results pgx.BatchResults, st *State) error {
 	defer rows.Close()
 	for rows.Next() {
 		var b WorkerBuild
-		var repository, assets []byte
-		if err = rows.Scan(&b.ID, &b.Organization, &b.Service, &b.Environment, &b.State, &b.Entrypoint, &b.SourceDigest, &b.Profile, &b.Job, &b.Artifact, &b.Error, &repository, &assets, &b.Created, &b.Finished, &b.ClaimedBy, &b.ClaimedAt); err != nil {
+		var repository, assets, flags []byte
+		if err = rows.Scan(&b.ID, &b.Organization, &b.Service, &b.Environment, &b.State, &b.Entrypoint, &b.SourceDigest, &b.Profile, &b.CompatibilityDate, &flags, &b.Job, &b.Artifact, &b.Error, &repository, &assets, &b.Created, &b.Finished, &b.ClaimedBy, &b.ClaimedAt); err != nil {
+			return err
+		}
+		if err = json.Unmarshal(flags, &b.CompatibilityFlags); err != nil {
 			return err
 		}
 		if len(repository) > 0 {
@@ -553,7 +556,11 @@ func readWorkerArtifacts(results pgx.BatchResults, st *State) error {
 	defer rows.Close()
 	for rows.Next() {
 		var a WorkerArtifact
-		if err = rows.Scan(&a.ID, &a.Organization, &a.State, &a.ArchiveDigest, &a.ManifestDigest, &a.ModuleDigest, &a.Size, &a.ObjectKey, &a.StorageLocation, &a.Bucket, &a.Created); err != nil {
+		var flags []byte
+		if err = rows.Scan(&a.ID, &a.Organization, &a.State, &a.Profile, &a.ArchiveDigest, &a.ManifestDigest, &a.ModuleDigest, &a.CompatibilityDate, &flags, &a.Size, &a.ObjectKey, &a.StorageLocation, &a.Bucket, &a.Created); err != nil {
+			return err
+		}
+		if err = json.Unmarshal(flags, &a.CompatibilityFlags); err != nil {
 			return err
 		}
 		ws.Artifacts[a.ID] = a
@@ -570,8 +577,11 @@ func readWorkerReleases(results pgx.BatchResults, st *State) error {
 	defer rows.Close()
 	for rows.Next() {
 		var r WorkerRelease
-		var variables []byte
-		if err = rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.ArchiveDigest, &r.ModuleDigest, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created); err != nil {
+		var variables, flags []byte
+		if err = rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.Profile, &r.ArchiveDigest, &r.ModuleDigest, &r.CompatibilityDate, &flags, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created); err != nil {
+			return err
+		}
+		if err = json.Unmarshal(flags, &r.CompatibilityFlags); err != nil {
 			return err
 		}
 		r.Variables = map[string]string{}

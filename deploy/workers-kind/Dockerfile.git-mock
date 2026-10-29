@@ -1,0 +1,27 @@
+FROM node:24-bookworm-slim AS npm-fixture
+WORKDIR /fixture
+COPY examples/workers-fullstack/package.json examples/workers-fullstack/package-lock.json ./
+RUN npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
+    && mkdir /registry \
+    && npm pack ./node_modules/hono --ignore-scripts --pack-destination /registry \
+    && test -s /registry/hono-4.13.14.tgz
+
+FROM node:24-bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY deploy/workers-kind/git-mock/server.mjs /app/server.mjs
+COPY deploy/workers-kind/git-mock/repository/ /seed/
+COPY --from=npm-fixture /registry/hono-4.13.14.tgz /registry/hono-4.13.14.tgz
+RUN git init -b main /seed \
+    && git -C /seed config user.name "krun e2e" \
+    && git -C /seed config user.email "krun-e2e@example.invalid" \
+    && git -C /seed add . \
+    && GIT_AUTHOR_DATE=2026-01-01T00:00:00Z GIT_COMMITTER_DATE=2026-01-01T00:00:00Z git -C /seed commit -m fixture \
+    && mkdir -p /repos/fixture \
+    && git clone --bare /seed /repos/fixture/worker.git \
+    && rm -rf /seed \
+    && chown -R 1000:1000 /app /repos
+USER 1000:1000
+CMD ["node","/app/server.mjs"]

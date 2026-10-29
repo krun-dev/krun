@@ -3,7 +3,14 @@ import {execFileSync,spawn} from 'node:child_process';
 import {mkdirSync,writeFileSync,openSync,closeSync,chmodSync,readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {gzipSync} from 'node:zlib';
+const scriptDirectory=path.dirname(fileURLToPath(import.meta.url));
+const evidenceDirectory=path.join(scriptDirectory,'evidence');
+const generatedDirectory=path.join(scriptDirectory,'generated');
+const evidencePath=name=>path.join(evidenceDirectory,name);
+const generatedPath=name=>path.join(generatedDirectory,name);
 const kubeconfig=process.env.KUBECONFIG;assert(kubeconfig,'KUBECONFIG must identify the intended kind cluster');
 const kubectl=(...args)=>execFileSync('kubectl',['--kubeconfig',kubeconfig,...args],{encoding:'utf8',timeout:180000});
 const clusterName=process.env.KIND_CLUSTER_NAME;assert(clusterName,'KIND_CLUSTER_NAME must identify the intended kind cluster');
@@ -26,23 +33,41 @@ function request(route,method='GET',input,options={}){return new Promise((resolv
  const r=http.request(origin+route,{method,headers,agent:false,signal:AbortSignal.timeout(12000)},res=>{for(const c of res.headers['set-cookie']||[]){const [name,value]=c.split(';')[0].split('=');cookies.set(name,value)}let raw='';res.setEncoding('utf8');res.on('data',x=>raw+=x);res.on('end',()=>{let body;try{body=JSON.parse(raw)}catch{body=raw}resolve({status:res.statusCode,body,headers:res.headers});});});r.on('error',e=>reject(new Error(method+' '+route+': '+e.message,{cause:e})));r.end(data);
 });}
 async function api(route,method='GET',body,expected=200,options={}){
- let r;for(let attempt=0;;attempt++){try{r=await request(route,method,body,options);if(method==='GET'&&expected===200&&r.status===503&&r.body==='')throw new Error('proxy upstream temporarily unavailable');break;}catch(error){if(method!=='GET'||attempt>=3)throw error;transportRetries.push({route,attempt:attempt+1});writeFileSync('evidence/transport-retries.json',JSON.stringify(transportRetries,null,2));await sleep(1000);}}
+ const idempotentMutation=method!=='GET'&&body&&typeof body==='object'&&typeof body.idempotency_key==='string';
+ const retryable=method==='GET'||idempotentMutation;
+ let r,attempt=0;
+ for(;;attempt++){
+  try{
+   r=await request(route,method,body,options);
+   const unavailableGET=method==='GET'&&expected===200&&r.status===503&&r.body==='';
+   const unavailableMutation=idempotentMutation&&[502,503,504].includes(r.status);
+   if(!unavailableGET&&!unavailableMutation)break;
+   if(attempt>=3)break;
+   transportRetries.push({route,method,status:r.status,attempt:attempt+1});writeFileSync(evidencePath('transport-retries.json'),JSON.stringify(transportRetries,null,2));await sleep(1000);
+  }catch(error){
+   if(!retryable||attempt>=3)throw error;
+   transportRetries.push({route,method,error:error.message,attempt:attempt+1});writeFileSync(evidencePath('transport-retries.json'),JSON.stringify(transportRetries,null,2));await sleep(1000);
+  }
+ }
+ // A retried idempotent create may observe the already-committed operation.
+ if(idempotentMutation&&attempt>0&&expected===202&&r.status===200)return r.body;
  assert.equal(r.status,expected,method+' '+route+' '+JSON.stringify(r.body));return r.body;
 }
-async function check(name,run){const detail=await run();const result={name,state:'pass',detail};evidence.push(result);writeFileSync('evidence/e2e.json',JSON.stringify(evidence,null,2));console.log(JSON.stringify(result));}
+async function check(name,run){const detail=await run();const result={name,state:'pass',detail};evidence.push(result);writeFileSync(evidencePath('e2e.json'),JSON.stringify(evidence,null,2));console.log(JSON.stringify(result));}
 async function poll(route,states,timeout=150000){const until=Date.now()+timeout;let last;while(Date.now()<until){last=await api(route);if(states.includes(last.state))return last;if(last.state==='failed')throw new Error('Unexpected failed operation: '+JSON.stringify(last));await sleep(500);}throw new Error('Timeout '+JSON.stringify(last));}
 let forward;
 process.on('exit',()=>forward?.kill());
 async function startForward(){
  if(podTransport){for(let i=0;i<60;i++){try{await api('/api/healthz');return;}catch{await sleep(500);}}throw new Error('Backend did not become healthy');}
  forward?.kill();
- const log=openSync('evidence/port-forward.log','a');
+ const log=openSync(evidencePath('port-forward.log'),'a');
  forward=spawn('kubectl',['--kubeconfig',kubeconfig,'-n','workers-mvp','port-forward','deployment/backend','4380:9000','--address=127.0.0.1'],{stdio:['ignore',log,log],env:{...process.env,KUBECTL_PORT_FORWARD_WEBSOCKETS:'false'}});closeSync(log);forward.unref();
  for(let i=0;i<60;i++){try{await api('/api/healthz');return;}catch{await sleep(500);}}
  throw new Error('Backend port-forward did not become healthy');
 }
-mkdirSync('evidence',{recursive:true});
-writeFileSync('evidence/transport-retries.json','[]');
+mkdirSync(evidenceDirectory,{recursive:true});
+mkdirSync(generatedDirectory,{recursive:true});
+writeFileSync(evidencePath('transport-retries.json'),'[]');
 await startForward();
 const auth=await api('/api/auth/csrf','POST',undefined,200,{session:true});csrf=auth.csrf_token;
 const login=await api('/api/auth/local/login','POST',new URLSearchParams({return_to:'/'}).toString(),200,{session:true,form:true});
@@ -50,7 +75,7 @@ const callback=new URL(login.redirect_url,origin);await api(callback.pathname+ca
 let me=await api('/api/auth/me','GET',undefined,200,{session:true});if(!me.system_admin)kubectl('exec','-n','workers-mvp','deploy/backend','-c','backend','--','/app/krun-server','bootstrap','--config','/config/control.yaml','--user',me.user.user_id);
 csrf=(await api('/api/auth/csrf','POST',undefined,200,{session:true})).csrf_token;
 const credential=await api('/api/v1/system/api-keys','POST',{name:'Workers kind verification',expires_in:86400,policy:{schema_version:1,statements:[{effect:'allow',actions:['*'],resource:{kind:'*',all_in_system:true}}]}},201,{session:true});key=credential.key;
-mkdirSync('generated',{recursive:true});writeFileSync('generated/api-key.json',JSON.stringify({key,expires_at:credential.expires_at}),{mode:0o600});chmodSync('generated/api-key.json',0o600);
+writeFileSync(generatedPath('api-key.json'),JSON.stringify({key,expires_at:credential.expires_at}),{mode:0o600});chmodSync(generatedPath('api-key.json'),0o600);
 const run=randomUUID().slice(0,8);
 const org=await api('/api/v1/orgs','POST',{name:'Workers '+run},201,{session:true});const service=await api('/api/v1/orgs/'+org.id+'/services','POST',{name:'orders-'+run},201);const base='/api/v1/orgs/'+org.id+'/services/'+service.id+'/workers';
 const initialPods=JSON.parse(kubectl('get','pods','-n','workers-mvp','-l','role=krun-runtime','-o','json')).items.filter(p=>!p.metadata.deletionTimestamp).map(p=>({name:p.metadata.name,uid:p.metadata.uid,restarts:p.status.containerStatuses[0].restartCount}));
@@ -82,10 +107,19 @@ function sourceBundle(code,assets){
  const parts=[];for(const [name,text] of Object.entries(code))parts.push(tarFile('src/'+name,Buffer.from(text)));for(const [name,text] of Object.entries(assets||{}))parts.push(tarFile('assets/'+name,Buffer.from(text)));parts.push(Buffer.alloc(1024));
  return gzipSync(Buffer.concat(parts),{level:6});
 }
+const npmMetadataScript=`const https=require('https'),fs=require('fs');https.get({hostname:'127.0.0.1',port:8443,path:'/npm/hono',servername:'git-mock',ca:fs.readFileSync('/tls/ca.crt')},res=>{let body='';res.on('data',chunk=>body+=chunk);res.on('end',()=>{if(res.statusCode!==200)process.exit(1);console.log(body)});}).on('error',error=>{console.error(error.message);process.exit(1)});`;
+const npmMetadata=JSON.parse(kubectl('exec','-n','workers-mvp','deploy/git-mock','--','node','-e',npmMetadataScript));
+const honoDistribution=npmMetadata.versions?.['4.13.14']?.dist;
+assert(honoDistribution?.tarball&&honoDistribution?.integrity,'kind npm fixture metadata is incomplete');
 const fullstackFile=name=>readFileSync(new URL('../../examples/workers-fullstack/'+name,import.meta.url));
+const fullstackLock=JSON.parse(fullstackFile('package-lock.json').toString('utf8'));
+fullstackLock.packages['node_modules/hono'].resolved=honoDistribution.tarball;
+fullstackLock.packages['node_modules/hono'].integrity=honoDistribution.integrity;
 const fullstackCode={
  'index.js':fullstackFile('src/index.js'),
  'http.js':fullstackFile('src/http.js'),
+ 'package.json':fullstackFile('package.json'),
+ 'package-lock.json':JSON.stringify(fullstackLock),
 };
 const fullstackAssets={
  'index.html':fullstackFile('frontend/public/index.html'),
@@ -95,17 +129,30 @@ const fullstackAssets={
  'assets/krun-a1b2c3d4.svg':fullstackFile('frontend/public/assets/krun-a1b2c3d4.svg'),
 };
 const source=version=>({entrypoint:'src/index.ts',files:{'src/lib.ts':`export const version = ${JSON.stringify(version)};`,'src/index.ts':`import {version} from './lib'; import {connect} from 'cloudflare:sockets'; export default {async fetch(request: Request, env: Record<string,string>) {if(new URL(request.url).pathname==='/probe'){let blocked=false;try{await fetch('http://backend:9001/api/internal/workers/config/snapshot')}catch{blocked=true};let tcpBlocked=false;try{const socket=connect({hostname:'postgres',port:5432});await socket.opened;await socket.close()}catch{tcpBlocked=true};return Response.json({blocked,tcpBlocked,bindings:Object.keys(env)})};return Response.json({version,environment:env.KRUN_ENVIRONMENT,greeting:env.GREETING||'default',url:request.url})}}`}});
-async function build(input,expected='succeeded',options={}){const b=await api(base+'/builds','POST',{environment:'production',...input,idempotency_key:randomUUID()},202,options);return poll(base+'/builds/'+b.id,[expected],150000);}
-async function publish(buildId,environment,revision){const op=await api(base+'/environments/'+environment+'/releases','POST',{build_id:buildId,expected_revision:revision,idempotency_key:randomUUID()},202);return poll(base+'/operations/'+op.id,['available'],150000);}
-let b1,b2,prodFirst,hostTest,hostProd;
+async function buildAt(workerBase,input,expected='succeeded',options={}){const b=await api(workerBase+'/builds','POST',{environment:'production',...input,idempotency_key:randomUUID()},202,options);return poll(workerBase+'/builds/'+b.id,[expected],150000);}
+async function publishAt(workerBase,buildId,environment,revision){const op=await api(workerBase+'/environments/'+environment+'/releases','POST',{build_id:buildId,expected_revision:revision,idempotency_key:randomUUID()},202);return poll(workerBase+'/operations/'+op.id,['available'],150000);}
+async function build(input,expected='succeeded',options={}){return buildAt(base,input,expected,options);}
+async function publish(buildId,environment,revision){return publishAt(base,buildId,environment,revision);}
+let b1,b2,prodFirst,hostTest,hostProd,repositoryBuild,repositoryRelease,repositoryHost;
 await check('authenticated real Kubernetes build finalizes S3 archive',async()=>{b1=await build(source('v1-'+run));const a=await api(base+'/artifacts/'+b1.artifact_id);assert.equal(a.state,'finalized');assert.equal(a.storage_location_id,'primary');assert.equal(a.bucket,'krun-artifacts');assert(a.object_key.endsWith('/bundle.tar.gz'));assert(a.archive_size_bytes>0);const logs=await api(base+'/builds/'+b1.id+'/logs');assert(logs.log.includes('Archive SHA-256'));assert(!logs.log.includes('X-Amz-'));return {build_id:b1.id,artifact:a,job:b1.job};});
 await check('preview release waits for actual runtime and Gateway adoption',async()=>{await api(base+'/environments','POST',{name:'fix-auth'},201);const op=await publish(b1.id,'fix-auth',0);assert(op.steps.every(s=>s.state==='done'));const envs=(await api(base+'/environments')).items;hostTest=environmentHost(envs.find(e=>e.name==='fix-auth'));hostProd=environmentHost(envs.find(e=>e.name==='production'));assert(hostTest&&hostProd);const r=await invoke(hostTest,'/orders?id=1');assert.equal(r.status,200);assert.equal(r.body.version,'v1-'+run);assert.equal(r.body.environment,'fix-auth');assert(r.body.url.includes('/orders?id=1'));assert.equal(envs.find(e=>e.name==='production').release_revision,0);return {operation:op.id,response:r.body};});
+await check('repository build uses TLS Git and the Wrangler build-pack Job',async()=>{
+ const providers=await api('/api/v1/orgs/'+org.id+'/workers/repository-providers');assert(providers.items.some(provider=>provider.id==='kind-git'));
+ const binding=await api(base+'/repository','PUT',{source:{provider_id:'kind-git',repository:'fixture/worker',ref:'main',root_directory:'.'},expected_revision:0});assert.equal(binding.revision,1);
+ repositoryBuild=await build({source_type:'repository',repository_revision:binding.revision,ref:'main'});assert(repositoryBuild.artifact_id);assert.match(repositoryBuild.repository_source.commit,/^[0-9a-f]{40}$/);
+ const job=JSON.parse(kubectl('get','job',repositoryBuild.job,'-n','workers-mvp','-o','json'));assert.deepEqual(job.spec.template.spec.initContainers.map(container=>container.name),['builder-build']);assert.deepEqual(job.spec.template.spec.containers.map(container=>container.name),['builder-pack']);
+ const logs=await api(base+'/builds/'+repositoryBuild.id+'/logs');assert(logs.log.includes('Wrangler build complete'));assert(logs.log.includes('Uploaded; awaiting platform finalize'));
+ await api(base+'/environments','POST',{name:'repository-e2e'},201);repositoryRelease=await publish(repositoryBuild.id,'repository-e2e',0);
+ const environment=(await api(base+'/environments')).items.find(item=>item.name==='repository-e2e');repositoryHost=environmentHost(environment);assert(repositoryHost);
+ const response=await invoke(repositoryHost,'/from-repository?run='+run);assert.equal(response.status,200);assert.equal(response.body.source,'repository-wrangler');assert.equal(response.body.environment,'repository-e2e');assert(response.body.url.includes('/from-repository?run='+run));
+ return {provider:'kind-git',build:repositoryBuild.id,commit:repositoryBuild.repository_source.commit,artifact:repositoryBuild.artifact_id,release:repositoryRelease.release_id,response:response.body};
+});
 await check('same Artifact publishes with production configuration',async()=>{await api(base+'/environments/production','PATCH',{expected_revision:1,variables:{GREETING:'production-value'}});prodFirst=await publish(b1.id,'production',0);const r=await invoke(hostProd);assert.equal(r.body.greeting,'production-value');assert.equal(r.body.environment,'production');return {release:prodFirst.release_id,response:r.body};});
 await check('v2 build and publish changes production without changing test',async()=>{b2=await build(source('v2-'+run));await publish(b2.id,'production',1);assert.equal((await invoke(hostProd)).body.version,'v2-'+run);assert.equal((await invoke(hostTest)).body.version,'v1-'+run);return {build_id:b2.id};});
 await check('stale Release revision rejected',async()=>{const r=await request(base+'/environments/production/releases','POST',{build_id:b1.id,expected_revision:1,idempotency_key:randomUUID()});assert.equal(r.status,409);return r.body.error.code;});
 await check('historical release rollback restores code and immutable configuration',async()=>{await api(base+'/environments/production','PATCH',{expected_revision:2,variables:{GREETING:'future-config'}});const op=await api(base+'/environments/production/rollbacks','POST',{release_id:prodFirst.release_id,expected_revision:2,idempotency_key:randomUUID()},202);await poll(base+'/operations/'+op.id,['available']);const r=await invoke(hostProd);assert.equal(r.body.version,'v1-'+run);assert.equal(r.body.greeting,'production-value');assert.equal((await api(base+'/environments/production/history')).items.length,3);return r.body;});
 await check('syntax error fails build and retains production',async()=>{const b=await build({entrypoint:'index.ts',files:{'index.ts':'export default {fetch('}},'failed');assert(!b.artifact_id);assert((await api(base+'/builds/'+b.id+'/logs')).log.includes('Build failed'));assert.equal((await invoke(hostProd)).body.version,'v1-'+run);return {build_id:b.id,error:b.error};});
-await check('compiler cannot read files outside project',async()=>{const b=await build({entrypoint:'index.ts',files:{'index.ts':`import input from '/input/input.json';export default {fetch(){return Response.json(input)}}`}},'failed');assert((await api(base+'/builds/'+b.id+'/logs')).log.includes('Only relative'));return {build_id:b.id};});
+await check('compiler cannot read files outside project',async()=>{const b=await build({entrypoint:'index.ts',files:{'index.ts':`import input from '/input/input.json';export default {fetch(){return Response.json(input)}}`}},'failed');const log=(await api(base+'/builds/'+b.id+'/logs')).log;assert.match(log,/source-boundary.*outside project is forbidden/is);return {build_id:b.id};});
 await check('candidate module initialization failure leaves current Release',async()=>{const bad=await build({entrypoint:'index.ts',files:{'index.ts':`throw new Error('candidate-init-failed'); export default {fetch(){return new Response('bad')}}`}});const op=await api(base+'/environments/production/releases','POST',{build_id:bad.id,expected_revision:3,idempotency_key:randomUUID()},202);const result=await poll(base+'/operations/'+op.id,['failed']);assert(result.error.includes('Candidate'));assert.equal((await invoke(hostProd)).body.version,'v1-'+run);assert.equal((await api(base+'/environments')).items.find(e=>e.name==='production').release_revision,3);return {operation:op.id,error:result.error};});
 await check('API Key is scoped to environment and cannot publish production',async()=>{const limited=await api('/api/v1/orgs/'+org.id+'/api-keys','POST',{name:'test only',expires_in:3600,policy:{schema_version:1,statements:[{effect:'allow',actions:['service.publish','service.read','service.version.read'],resource:{kind:'service',organization_id:org.id,ids:[service.id]},conditions:{environments:['fix-auth']}}]}},201,{session:true});const r=await request(base+'/environments/production/releases','POST',{build_id:b1.id,expected_revision:3,idempotency_key:randomUUID()},{token:limited.key});assert.equal(r.status,403);const visible=await api(base+'/environments','GET',undefined,200,{token:limited.key});assert.deepEqual(visible.items.map(e=>e.name),['fix-auth']);assert.equal((await api(base+'/builds','GET',undefined,200,{token:limited.key})).items.length,0);return {denied:r.status,visible:['fix-auth']};});
 await check('preview lifecycle: create, publish with own variables, then delete',async()=>{await api(base+'/environments','POST',{name:'demo-preview'},201);await api(base+'/environments/demo-preview','PATCH',{expected_revision:1,variables:{GREETING:'preview-value'}});await publish(b1.id,'demo-preview',0);const envs=(await api(base+'/environments')).items;const stage=envs.find(e=>e.name==='demo-preview');assert.equal((await invoke(environmentHost(stage))).body.greeting,'preview-value');await api(base+'/environments/demo-preview','DELETE',undefined,204);assert.equal((await api(base+'/environments')).items.some(e=>e.name==='demo-preview'),false);const recreated=await api(base+'/environments','POST',{name:'demo-preview'},201);await api(base+'/environments/demo-preview','DELETE',undefined,204);return {deleted:'demo-preview',recreated:recreated.name,baseline:envs.find(e=>e.name==='production').name};});
@@ -113,7 +160,7 @@ await check('business network and platform credentials are absent',async()=>{con
 await check('build idempotency and content addressed Artifact deduplication',async()=>{const data={environment:'fix-auth',...source('v1-'+run),idempotency_key:randomUUID()};const a=await api(base+'/builds','POST',data,202);const b=await api(base+'/builds','POST',data);assert.equal(a.id,b.id);const done=await poll(base+'/builds/'+a.id,['succeeded']);assert.equal(done.artifact_id,b1.artifact_id);const conflict=await request(base+'/builds','POST',{...data,...source('different')});assert.equal(conflict.status,409);return {same_build:a.id,artifact:done.artifact_id};});
 await check('invalid paths and cross-service Artifact access rejected',async()=>{const r=await request(base+'/builds','POST',{environment:'fix-auth',entrypoint:'../bad.ts',files:{'../bad.ts':'x'},idempotency_key:randomUUID()});assert.equal(r.status,422);const other=await api('/api/v1/orgs/'+org.id+'/services','POST',{name:'unrelated'},201);const x=await request('/api/v1/orgs/'+org.id+'/services/'+other.id+'/workers/artifacts/'+b1.artifact_id);assert.equal(x.status,404);return {path:r.status,other_service:x.status};});
 await check('publishing never restarted the runtime Pods',async()=>{const now=JSON.parse(kubectl('get','pods','-n','workers-mvp','-l','role=krun-runtime','-o','json')).items.filter(p=>!p.metadata.deletionTimestamp);assert.deepEqual(now.map(p=>p.metadata.uid).sort(),initialPods.map(p=>p.uid).sort());assert(now.every(p=>p.status.containerStatuses[0].restartCount===initialPods.find(x=>x.uid===p.metadata.uid).restarts));return initialPods;});
-writeFileSync('generated/test-service.json',JSON.stringify({org:org.id,service:service.id,base,hostTest,hostProd,b1:b1.id,prodFirst:prodFirst.release_id},null,2));
+writeFileSync(generatedPath('test-service.json'),JSON.stringify({org:org.id,service:service.id,base,hostTest,hostProd,b1:b1.id,prodFirst:prodFirst.release_id},null,2));
 await check('control restart recovers durable state and object-backed code',async()=>{kubectl('rollout','restart','deployment/backend','-n','workers-mvp');kubectl('rollout','status','deployment/backend','-n','workers-mvp','--timeout=120s');await startForward();const history=await api(base+'/environments/production/history');assert.equal(history.items.length,3);assert.equal((await invoke(hostProd)).body.version,'v1-'+run);return {history:history.items.length};});
 let recoveryBuild;
 await check('control interruption during build resumes the durable Job',async()=>{
@@ -168,7 +215,7 @@ await check('full-stack example source and static assets build as one Artifact',
  const bundle=sourceBundle(fullstackCode,fullstackAssets);
  const put=testerPut(upload.upload_url,bundle.toString('base64'));
  assert.equal(put.status,200);
- assetBuild=await build({source_type:'upload',source_upload:upload.source_upload,entrypoint:'index.js',assets:{directory:'frontend/public',run_worker_first:['/api/*'],not_found_handling:'single-page-application',html_handling:'auto-trailing-slash'}});
+ assetBuild=await build({source_type:'upload',source_upload:upload.source_upload,entrypoint:'index.js',compatibility_date:'2026-09-28',compatibility_flags:['nodejs_compat'],assets:{directory:'frontend/public',binding:'ASSETS',run_worker_first:['/api/*'],not_found_handling:'single-page-application',html_handling:'auto-trailing-slash'}});
  assert(assetBuild.artifact_id);
  const artifact=await api(base+'/artifacts/'+assetBuild.artifact_id);assert(artifact.archive_size_bytes>0);
  const source=await api(base+'/builds/'+assetBuild.id+'/source');assert(source.download_url.includes('source.tar.gz'));
@@ -190,6 +237,8 @@ await check('full-stack page, API, SPA, HTML, and cache behavior work through ru
  assert.equal(styles.status,200);assert((styles.headers['content-type']||'').startsWith('text/css'));assert((styles.headers['cache-control']||'').includes('immutable'));
  const health=await invoke(hostProd,'/api/health');
  assert.equal(health.status,200);assert.equal(health.body.ok,true);assert.equal(health.body.service,'krun-workers-fullstack');assert.equal(health.body.environment,'production');assert.equal(health.body.release_id,assetRelease.release_id);
+ const assetBinding=await invoke(hostProd,'/api/asset-check');
+ assert.equal(assetBinding.status,200);assert.deepEqual(assetBinding.body,{status:200,about_page:true});
  const echoResult=await api(base+'/environments/production/invoke','POST',{path:'/api/echo',method:'POST',body:JSON.stringify({message:'browser to Worker round trip'})});
  assert.equal(echoResult.status,200);const echo=JSON.parse(echoResult.body);assert.equal(echo.echo,'browser to Worker round trip');assert.equal(echo.environment,'production');
  const missing=await invoke(hostProd,'/api/missing');assert.equal(missing.status,404);assert.equal(missing.body.error,'not_found');
@@ -200,7 +249,7 @@ await check('full-stack page, API, SPA, HTML, and cache behavior work through ru
  const etag=root.headers.etag;assert(etag);
  const cached=await invoke(hostProd,'/',{'if-none-match':etag});
  assert.equal(cached.status,304);
- return {release:assetRelease.release_id,etag,root:root.status,api:health.status,echo:echoResult.status,spa:navigate.status,redirect:redirect.status,missing:missing.status};
+ return {release:assetRelease.release_id,etag,root:root.status,api:health.status,assets_binding:assetBinding.status,echo:echoResult.status,spa:navigate.status,redirect:redirect.status,missing:missing.status};
 });
 await check('Secret put and delete create configuration-only Releases and deploy immediately',async()=>{
  const before=(await api(base+'/environments')).items.find(e=>e.name==='production');
@@ -238,11 +287,20 @@ await check('static domain serves pub/ directly and v1/ stays private',async()=>
 // resolve to any route.
 await check('gateway instances are isolated per domain binding',async()=>{
  const privateHost=hostProd;
- // Domains are selected per service; enable the public one and wait for its route.
- await api(base+'/domains','PUT',{domains:['internal','external'],expected_revision:0});
+ // One product profile cannot mix internal and external domain scopes.
+ const mixed=await request(base+'/domains','PUT',{domains:['internal','external'],expected_revision:0});
+ assert.equal(mixed.status,422);
+ // Publish a separate external-profile service so both Gateway instances have
+ // a real route, then prove neither accepts the other service's Host header.
+ const publicService=await api('/api/v1/orgs/'+org.id+'/services','POST',{name:'public-'+run},201);
+ const publicBase='/api/v1/orgs/'+org.id+'/services/'+publicService.id+'/workers';
+ const profile=await api(publicBase+'/network-profile','PUT',{network_profile:'external-service',expected_revision:0});
+ assert.equal(profile.network_profile.id,'external-service');assert.deepEqual(profile.selected,['external']);
+ const publicBuild=await buildAt(publicBase,source('public-'+run));
+ const publicRelease=await publishAt(publicBase,publicBuild.id,'production',0);
  let publicHost;
  for(let i=0;i<20;i++){
-  const envs=(await api(base+'/environments','GET')).items;
+  const envs=(await api(publicBase+'/environments','GET')).items;
   const prod=envs.find(e=>e.name==='production');
   publicHost=environmentHost(prod,'external');
   if(publicHost){const probe=await invokeAt(publicGateway,publicHost);if(probe.status!==404)break;}
@@ -257,6 +315,6 @@ await check('gateway instances are isolated per domain binding',async()=>{
  assert.equal(viaPublicOwn.status,200);
  const viaPrivateOwn=await invokeAt(gateway,privateHost);
  assert.equal(viaPrivateOwn.status,200);
- return {publicHost,privateHost,forgedPublic:viaPublicPrivateHost.status,forgedPrivate:viaPrivatePublicHost.status,public:viaPublicOwn.status,private:viaPrivateOwn.status};
+ return {publicService:publicService.id,publicBuild:publicBuild.id,publicRelease:publicRelease.release_id,publicHost,privateHost,mixed:mixed.status,forgedPublic:viaPublicPrivateHost.status,forgedPrivate:viaPrivatePublicHost.status,public:viaPublicOwn.status,private:viaPrivateOwn.status};
 });
 console.log('PASS '+evidence.length+' kind backend end-to-end checks');

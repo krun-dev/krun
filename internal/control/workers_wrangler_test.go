@@ -14,6 +14,7 @@ func TestParseWranglerJSONC(t *testing.T) {
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "./public",
+    "binding": "ASSETS",
     "run_worker_first": ["/api/*", "!/api/health"],
     "not_found_handling": "single-page-application",
     "html_handling": "auto-trailing-slash", // trailing comma below
@@ -29,7 +30,7 @@ func TestParseWranglerJSONC(t *testing.T) {
 	if cfg.Main != "src/index.ts" || cfg.CompatibilityDate != "2026-09-28" || len(cfg.CompatibilityFlags) != 1 {
 		t.Fatalf("core fields: %+v", cfg)
 	}
-	if cfg.Assets == nil || cfg.Assets.Directory != "./public" || cfg.Assets.NotFoundHandling != "single-page-application" || cfg.Assets.HTMLHandling != "auto-trailing-slash" {
+	if cfg.Assets == nil || cfg.Assets.Directory != "./public" || cfg.Assets.Binding != "ASSETS" || cfg.Assets.NotFoundHandling != "single-page-application" || cfg.Assets.HTMLHandling != "auto-trailing-slash" {
 		t.Fatalf("assets: %+v", cfg.Assets)
 	}
 	var flags []string
@@ -49,6 +50,7 @@ compatibility_flags = [
 
 [assets]
 directory = "./public"
+binding = "ASSETS"
 run_worker_first = ["/api/*"]
 not_found_handling = "404-page"
 html_handling = "none"
@@ -60,7 +62,7 @@ html_handling = "none"
 	if name != "wrangler.toml" || cfg.Main != "src/index.ts" || len(cfg.CompatibilityFlags) != 1 {
 		t.Fatalf("config: %q %+v", name, cfg)
 	}
-	if cfg.Assets == nil || cfg.Assets.Directory != "./public" || cfg.Assets.NotFoundHandling != "404-page" || cfg.Assets.HTMLHandling != "none" {
+	if cfg.Assets == nil || cfg.Assets.Directory != "./public" || cfg.Assets.Binding != "ASSETS" || cfg.Assets.NotFoundHandling != "404-page" || cfg.Assets.HTMLHandling != "none" {
 		t.Fatalf("assets: %+v", cfg.Assets)
 	}
 	var flags []string
@@ -75,7 +77,7 @@ func TestParseWranglerTOMLBooleanRunWorkerFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assets, entry, err := resolveWranglerBuild(cfg, nil, "")
+	assets, entry, err := resolveWranglerBuild(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,6 +87,31 @@ func TestParseWranglerTOMLBooleanRunWorkerFirst(t *testing.T) {
 	// wrangler's `true` means every request goes through the Worker first.
 	if len(assets.RunWorkerFirst) != 1 || assets.RunWorkerFirst[0] != "/*" {
 		t.Fatalf("run_worker_first boolean: %v", assets.RunWorkerFirst)
+	}
+}
+
+func TestResolveWranglerCompatibility(t *testing.T) {
+	date, flags, err := resolveWranglerCompatibility(&wranglerConfig{
+		CompatibilityDate:  "2026-09-28",
+		CompatibilityFlags: []string{"nodejs_compat", "enable_nodejs_fs_module"},
+	})
+	if err != nil || date != "2026-09-28" || len(flags) != 2 || flags[0] != "enable_nodejs_fs_module" {
+		t.Fatalf("resolved compatibility: %q %v %v", date, flags, err)
+	}
+	date, flags, err = resolveWranglerCompatibility(nil)
+	if err != nil || date != workerDefaultCompatibilityDate || len(flags) != 0 {
+		t.Fatalf("default compatibility: %q %v %v", date, flags, err)
+	}
+	for _, cfg := range []*wranglerConfig{
+		{CompatibilityDate: "2026-02-30"},
+		{CompatibilityDate: "2021-11-01"},
+		{CompatibilityDate: "2026-09-29"},
+		{CompatibilityFlags: []string{"nodejs-compat"}},
+		{CompatibilityFlags: []string{"nodejs_compat", "nodejs_compat"}},
+	} {
+		if _, _, err := resolveWranglerCompatibility(cfg); err == nil {
+			t.Fatalf("invalid compatibility accepted: %+v", cfg)
+		}
 	}
 }
 
@@ -107,43 +134,12 @@ func TestParseWranglerPrecedenceAndAbsence(t *testing.T) {
 	}
 }
 
-func TestResolveWranglerBuildExplicitOverrideWins(t *testing.T) {
-	cfg := &wranglerConfig{
-		Main: "src/worker.ts",
-		Assets: &wranglerAssets{
-			Directory:        "./public",
-			NotFoundHandling: "none",
-			HTMLHandling:     "none",
-			RunWorkerFirst:   []byte(`["/api/*"]`),
-		},
-	}
-	override := &WorkerAssetsConfig{
-		Directory:        "static",
-		RunWorkerFirst:   []string{"/headers"},
-		NotFoundHandling: "single-page-application",
-		HTMLHandling:     "drop-trailing-slash",
-	}
-	assets, entry, err := resolveWranglerBuild(cfg, override, "custom.ts")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if entry != "custom.ts" {
-		t.Fatalf("explicit entrypoint must win: %q", entry)
-	}
-	if assets.Directory != "static" || assets.NotFoundHandling != "single-page-application" || assets.HTMLHandling != "drop-trailing-slash" {
-		t.Fatalf("explicit assets must win: %+v", assets)
-	}
-	if len(assets.RunWorkerFirst) != 1 || assets.RunWorkerFirst[0] != "/headers" {
-		t.Fatalf("explicit run_worker_first must win: %v", assets.RunWorkerFirst)
-	}
-}
-
 func TestResolveWranglerBuildRejectsEscapes(t *testing.T) {
 	for _, cfg := range []*wranglerConfig{
 		{Main: "../outside.ts"},
 		{Assets: &wranglerAssets{Directory: "../outside"}},
 	} {
-		if _, _, err := resolveWranglerBuild(cfg, nil, ""); err == nil {
+		if _, _, err := resolveWranglerBuild(cfg); err == nil {
 			t.Fatalf("escape accepted: %+v", cfg)
 		}
 	}
@@ -151,12 +147,24 @@ func TestResolveWranglerBuildRejectsEscapes(t *testing.T) {
 
 func TestResolveWranglerBuildNormalisesPaths(t *testing.T) {
 	cfg := &wranglerConfig{Main: "./src/index.ts", Assets: &wranglerAssets{Directory: "./public/"}}
-	assets, entry, err := resolveWranglerBuild(cfg, nil, "")
+	assets, entry, err := resolveWranglerBuild(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if entry != "src/index.ts" || assets.Directory != "public" {
 		t.Fatalf("normalisation: %q %q", entry, assets.Directory)
+	}
+}
+
+func TestValidateWranglerInputAssetsAllowsGeneratedDirectory(t *testing.T) {
+	if err := validateWranglerInputAssets(WorkerAssetsConfig{Binding: "ASSETS"}); err != nil {
+		t.Fatalf("Vite binding-only assets were rejected: %v", err)
+	}
+	if err := validateWranglerInputAssets(WorkerAssetsConfig{Binding: "PLATFORM"}); err == nil {
+		t.Fatal("reserved generated assets binding was accepted")
+	}
+	if err := validateWranglerInputAssets(WorkerAssetsConfig{Directory: "../outside"}); err == nil {
+		t.Fatal("unsafe declared assets directory was accepted")
 	}
 }
 

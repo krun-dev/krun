@@ -18,15 +18,25 @@ import (
 )
 
 type workerKubernetes struct {
-	base      string
-	tokenFile string
-	client    *http.Client
-	namespace string
+	base           string
+	tokenFile      string
+	client         *http.Client
+	namespace      string
+	npmRegistry    string
+	runtimeClass   string
+	timeoutSeconds int
 }
 type workerKubeError struct {
 	status    int
 	operation string
 }
+
+const (
+	workerBuilderWorkSize         = "2Gi"
+	workerBuilderTmpSize          = "256Mi"
+	workerBuilderEphemeralRequest = "512Mi"
+	workerBuilderEphemeralLimit   = "3Gi"
+)
 
 func (e *workerKubeError) Error() string {
 	return fmt.Sprintf("Kubernetes %s returned %d", e.operation, e.status)
@@ -47,7 +57,7 @@ func newWorkerKubernetes(config *WorkersConfig) (*workerKubernetes, error) {
 	if strings.TrimSpace(string(token)) == "" {
 		return nil, errors.New("empty Kubernetes bearer token")
 	}
-	return &workerKubernetes{base: config.KubernetesAPI, tokenFile: config.KubernetesTokenFile, namespace: config.Namespace, client: &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}}}, nil
+	return &workerKubernetes{base: config.KubernetesAPI, tokenFile: config.KubernetesTokenFile, namespace: config.Namespace, npmRegistry: config.NPMRegistry, runtimeClass: config.BuilderRuntimeClass, timeoutSeconds: config.BuilderTimeoutSeconds, client: &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}}}, nil
 }
 func (k *workerKubernetes) call(ctx context.Context, method, route string, in, out any) error {
 	var raw []byte
@@ -115,7 +125,8 @@ func (k *workerKubernetes) jobs() string { return "/apis/batch/v1/namespaces/" +
 
 type workerJob struct {
 	Metadata struct {
-		UID string `json:"uid"`
+		UID         string            `json:"uid"`
+		Annotations map[string]string `json:"annotations"`
 	} `json:"metadata"`
 	Status struct {
 		Succeeded int `json:"succeeded"`
@@ -192,38 +203,238 @@ func (k *workerKubernetes) runtimeMembers(ctx context.Context, pool, service str
 	return out, nil
 }
 func (k *workerKubernetes) ensureBuildJob(ctx context.Context, b WorkerBuild, private WorkerBuildPrivate, sourceURL, uploadURL, image, pullPolicy string) error {
+	buildMode := "direct"
+	configPath := ""
+	assets := b.Assets
+	if b.Repository != nil {
+		buildMode = "wrangler"
+		configPath = b.Repository.ConfigPath
+		// Wrangler is authoritative for repository assets.  Do not let stale
+		// service metadata override the checked-out project's configuration.
+		assets = nil
+		if configPath == "" {
+			return errors.New("repository build requires an explicit Wrangler config")
+		}
+	}
+	buildInput, e := json.Marshal(map[string]any{
+		"build_mode":          buildMode,
+		"config_path":         configPath,
+		"entrypoint":          b.Entrypoint,
+		"source_url":          sourceURL,
+		"assets":              assets,
+		"compatibility_date":  b.CompatibilityDate,
+		"compatibility_flags": b.CompatibilityFlags,
+	})
+	if e != nil {
+		return e
+	}
+	// The untrusted build phase never receives this payload. In particular it
+	// cannot race the trusted packer by writing to the one-shot upload URL.
+	packInput, e := json.Marshal(map[string]any{
+		"build_mode":          buildMode,
+		"config_path":         configPath,
+		"upload_url":          uploadURL,
+		"compatibility_date":  b.CompatibilityDate,
+		"compatibility_flags": b.CompatibilityFlags,
+	})
+	if e != nil {
+		return e
+	}
+	secretData := map[string]string{"build.json": string(buildInput), "pack.json": string(packInput)}
+	if buildMode == "direct" {
+		// Direct uploads only run the platform's fixed esbuild pipeline. They do
+		// not execute repository build or lifecycle scripts, so they retain the
+		// original single-container contract and can upload their own result.
+		directInput, marshalErr := json.Marshal(map[string]any{
+			"build_mode":          buildMode,
+			"entrypoint":          b.Entrypoint,
+			"source_url":          sourceURL,
+			"assets":              assets,
+			"compatibility_date":  b.CompatibilityDate,
+			"compatibility_flags": b.CompatibilityFlags,
+			"upload_url":          uploadURL,
+		})
+		if marshalErr != nil {
+			return marshalErr
+		}
+		secretData = map[string]string{"input.json": string(directInput)}
+	}
+	secret := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Secret",
+		"metadata": map[string]any{
+			"name":      b.Job,
+			"namespace": k.namespace,
+			"labels":    map[string]string{"app": "krun-builder"},
+		},
+		"type":       "Opaque",
+		"stringData": secretData,
+	}
 	var job workerJob
-	e := k.call(ctx, "GET", k.jobs()+"/"+b.Job, nil, &job)
+	e = k.call(ctx, "GET", k.jobs()+"/"+b.Job, nil, &job)
 	if e == nil {
-		return nil
+		if createErr := k.call(ctx, "POST", k.core("secrets"), secret, nil); createErr != nil && !kubeConflict(createErr) {
+			return createErr
+		}
+		return k.adoptBuildInput(ctx, b.Job, job)
 	}
 	if !kubeMissing(e) {
 		return e
 	}
-	input, _ := json.Marshal(map[string]any{"entrypoint": b.Entrypoint, "source_url": sourceURL, "assets": b.Assets, "upload_url": uploadURL})
-	cm := map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": b.Job, "namespace": k.namespace, "labels": map[string]string{"app": "krun-builder"}}, "data": map[string]string{"input.json": string(input)}}
-	if e = k.call(ctx, "POST", k.core("configmaps"), cm, nil); e != nil && !kubeConflict(e) {
+	if e = k.call(ctx, "POST", k.core("secrets"), secret, nil); kubeConflict(e) {
+		// A previous reconcile may have created the input before failing to
+		// create the Job. Refresh the short-lived presigned URLs in that case.
+		e = k.call(ctx, http.MethodPatch, k.core("secrets")+"/"+b.Job, map[string]any{"stringData": secret["stringData"]}, nil)
+	}
+	if e != nil {
 		return e
 	}
-	container := map[string]any{"name": "builder", "image": image, "imagePullPolicy": pullPolicy, "command": []string{"node", "/app/build-worker.mjs"}, "resources": map[string]any{"requests": map[string]string{"cpu": "100m", "memory": "128Mi"}, "limits": map[string]string{"cpu": "1", "memory": "512Mi"}}, "securityContext": map[string]any{"runAsUser": 1000, "runAsNonRoot": true, "allowPrivilegeEscalation": false, "readOnlyRootFilesystem": true, "capabilities": map[string]any{"drop": []string{"ALL"}}, "seccompProfile": map[string]string{"type": "RuntimeDefault"}}, "volumeMounts": []any{map[string]any{"name": "input", "mountPath": "/input", "readOnly": true}, map[string]any{"name": "work", "mountPath": "/work"}, map[string]any{"name": "tmp", "mountPath": "/tmp"}}}
-	spec := map[string]any{"restartPolicy": "Never", "automountServiceAccountToken": false, "securityContext": map[string]int{"fsGroup": 1000}, "containers": []any{container}, "volumes": []any{map[string]any{"name": "input", "configMap": map[string]string{"name": b.Job}}, map[string]any{"name": "work", "emptyDir": map[string]any{}}, map[string]any{"name": "tmp", "emptyDir": map[string]any{}}}}
-	value := map[string]any{"apiVersion": "batch/v1", "kind": "Job", "metadata": map[string]any{"name": b.Job, "namespace": k.namespace, "labels": map[string]string{"app": "krun-builder"}}, "spec": map[string]any{"backoffLimit": 0, "activeDeadlineSeconds": 120, "ttlSecondsAfterFinished": 1800, "template": map[string]any{"metadata": map[string]any{"labels": map[string]string{"app": "krun-builder"}}, "spec": spec}}}
+	registry := k.npmRegistry
+	if registry == "" {
+		registry = "https://registry.npmjs.org/"
+	}
+	timeout := k.timeoutSeconds
+	if timeout == 0 {
+		timeout = 600
+	}
+	commandTimeout := workerBuilderCommandTimeoutMillis(timeout)
+	securityContext := func() map[string]any {
+		return map[string]any{"runAsUser": 1000, "runAsGroup": 1000, "runAsNonRoot": true, "allowPrivilegeEscalation": false, "readOnlyRootFilesystem": true, "capabilities": map[string]any{"drop": []string{"ALL"}}, "seccompProfile": map[string]string{"type": "RuntimeDefault"}}
+	}
+	command := []string{"node", "/app/build-worker.mjs"}
+	buildContainer := map[string]any{
+		"name":            "builder-build",
+		"image":           image,
+		"imagePullPolicy": pullPolicy,
+		"command":         command,
+		"env": []map[string]string{
+			{"name": "KRUN_BUILD_PHASE", "value": "build"},
+			{"name": "KRUN_NPM_REGISTRY", "value": registry},
+			{"name": "KRUN_BUILD_TIMEOUT_MS", "value": commandTimeout},
+		},
+		"resources": map[string]any{
+			"requests": map[string]string{"cpu": "100m", "memory": "256Mi", "ephemeral-storage": workerBuilderEphemeralRequest},
+			"limits":   map[string]string{"cpu": "2", "memory": "2Gi", "ephemeral-storage": workerBuilderEphemeralLimit},
+		},
+		"securityContext": securityContext(),
+		"volumeMounts": []any{
+			map[string]any{"name": "build-input", "mountPath": "/input", "readOnly": true},
+			map[string]any{"name": "work", "mountPath": "/work"},
+			map[string]any{"name": "build-tmp", "mountPath": "/tmp"},
+		},
+	}
+	packContainer := map[string]any{
+		"name":            "builder-pack",
+		"image":           image,
+		"imagePullPolicy": pullPolicy,
+		"command":         command,
+		"env":             []map[string]string{{"name": "KRUN_BUILD_PHASE", "value": "pack"}},
+		"resources": map[string]any{
+			"requests": map[string]string{"cpu": "50m", "memory": "128Mi", "ephemeral-storage": "64Mi"},
+			"limits":   map[string]string{"cpu": "1", "memory": "512Mi", "ephemeral-storage": "512Mi"},
+		},
+		"securityContext": securityContext(),
+		"volumeMounts": []any{
+			map[string]any{"name": "pack-input", "mountPath": "/input", "readOnly": true},
+			map[string]any{"name": "work", "mountPath": "/work"},
+			map[string]any{"name": "pack-tmp", "mountPath": "/tmp"},
+		},
+	}
+	secretVolume := func(key string) map[string]any {
+		return map[string]any{"secretName": b.Job, "defaultMode": 0o400, "items": []any{map[string]any{"key": key, "path": "input.json"}}}
+	}
+	spec := map[string]any{
+		"restartPolicy":                 "Never",
+		"automountServiceAccountToken":  false,
+		"enableServiceLinks":            false,
+		"terminationGracePeriodSeconds": 5,
+		"securityContext":               map[string]any{"fsGroup": 1000, "fsGroupChangePolicy": "OnRootMismatch"},
+	}
+	if buildMode == "wrangler" {
+		spec["initContainers"] = []any{buildContainer}
+		spec["containers"] = []any{packContainer}
+		spec["volumes"] = []any{
+			map[string]any{"name": "build-input", "secret": secretVolume("build.json")},
+			map[string]any{"name": "pack-input", "secret": secretVolume("pack.json")},
+			map[string]any{"name": "work", "emptyDir": map[string]any{"sizeLimit": workerBuilderWorkSize}},
+			map[string]any{"name": "build-tmp", "emptyDir": map[string]any{"sizeLimit": workerBuilderTmpSize}},
+			map[string]any{"name": "pack-tmp", "emptyDir": map[string]any{"sizeLimit": "64Mi"}},
+		}
+	} else {
+		buildContainer["name"] = "builder-pack"
+		buildContainer["env"] = []map[string]string{
+			{"name": "KRUN_BUILD_PHASE", "value": "all"},
+			{"name": "KRUN_NPM_REGISTRY", "value": registry},
+			{"name": "KRUN_BUILD_TIMEOUT_MS", "value": commandTimeout},
+		}
+		buildContainer["volumeMounts"] = []any{
+			map[string]any{"name": "direct-input", "mountPath": "/input", "readOnly": true},
+			map[string]any{"name": "work", "mountPath": "/work"},
+			map[string]any{"name": "build-tmp", "mountPath": "/tmp"},
+		}
+		spec["containers"] = []any{buildContainer}
+		spec["volumes"] = []any{
+			map[string]any{"name": "direct-input", "secret": secretVolume("input.json")},
+			map[string]any{"name": "work", "emptyDir": map[string]any{"sizeLimit": workerBuilderWorkSize}},
+			map[string]any{"name": "build-tmp", "emptyDir": map[string]any{"sizeLimit": workerBuilderTmpSize}},
+		}
+	}
+	if k.runtimeClass != "" {
+		spec["runtimeClassName"] = k.runtimeClass
+	}
+	value := map[string]any{"apiVersion": "batch/v1", "kind": "Job", "metadata": map[string]any{"name": b.Job, "namespace": k.namespace, "labels": map[string]string{"app": "krun-builder"}}, "spec": map[string]any{"backoffLimit": 0, "activeDeadlineSeconds": timeout, "ttlSecondsAfterFinished": 1800, "template": map[string]any{"metadata": map[string]any{"labels": map[string]string{"app": "krun-builder"}}, "spec": spec}}}
 	e = k.call(ctx, "POST", k.jobs(), value, &job)
 	if kubeConflict(e) {
+		if e = k.call(ctx, "GET", k.jobs()+"/"+b.Job, nil, &job); e != nil {
+			return e
+		}
+	} else if e != nil {
+		// The Secret cannot have an ownerReference until the Job has a UID. Do
+		// not leak it forever when Job creation fails permanently.
+		_ = k.call(ctx, http.MethodDelete, k.core("secrets")+"/"+b.Job, nil, nil)
+		return e
+	}
+	return k.adoptBuildInput(ctx, b.Job, job)
+}
+
+func (k *workerKubernetes) adoptBuildInput(ctx context.Context, name string, job workerJob) error {
+	const adoptedAnnotation = "workers.krun.dev/input-adopted"
+	if job.Metadata.UID == "" {
+		return errors.New("Kubernetes Job has no UID")
+	}
+	owner := map[string]any{
+		"apiVersion": "batch/v1",
+		"kind":       "Job",
+		"name":       name,
+		"uid":        job.Metadata.UID,
+		"controller": true,
+	}
+	if err := k.call(ctx, http.MethodPatch, k.core("secrets")+"/"+name, map[string]any{"metadata": map[string]any{"ownerReferences": []any{owner}}}, nil); err != nil {
+		return err
+	}
+	if job.Metadata.Annotations[adoptedAnnotation] == "true" {
 		return nil
 	}
-	return e
+	return k.call(ctx, http.MethodPatch, k.jobs()+"/"+name, map[string]any{"metadata": map[string]any{"annotations": map[string]string{adoptedAnnotation: "true"}}}, nil)
 }
+
 func (k *workerKubernetes) buildLog(ctx context.Context, job string) string {
 	var pods workerPodList
 	if k.call(ctx, "GET", k.core("pods")+"?labelSelector="+url.QueryEscape("job-name="+job), nil, &pods) != nil || len(pods.Items) == 0 {
 		return "Builder log unavailable"
 	}
-	var text string
-	if k.call(ctx, "GET", k.core("pods")+"/"+pods.Items[0].Metadata.Name+"/log?limitBytes=32768", nil, &text) != nil {
+	var logs []string
+	for _, container := range []string{"builder-build", "builder-pack"} {
+		var text string
+		route := k.core("pods") + "/" + pods.Items[0].Metadata.Name + "/log?container=" + url.QueryEscape(container) + "&limitBytes=16384"
+		if k.call(ctx, "GET", route, nil, &text) == nil && strings.TrimSpace(text) != "" {
+			logs = append(logs, text)
+		}
+	}
+	if len(logs) == 0 {
 		return "Builder log unavailable"
 	}
-	return safeWorkerLog(text)
+	return safeWorkerLog(strings.Join(logs, "\n"))
 }
 
 // ensureRoutes reconciles one HTTPRoute per (worker, Gateway instance). Grouping

@@ -159,13 +159,13 @@ func decryptWorkerSecret(config *WorkersConfig, encrypted encryptedWorkerSecret)
 func writeWorkerSecretVersions(ctx context.Context, tx pgx.Tx, before, after *WorkerState, pending map[string]encryptedWorkerSecret) error {
 	for id, version := range after.SecretVersions {
 		if old, exists := before.SecretVersions[id]; exists {
-			if old != version {
+			if !sameWorkerSecretVersion(old, version) {
 				return errors.New("Worker secret version is immutable")
 			}
 			continue
 		}
 		encrypted, ok := pending[id]
-		if !ok || encrypted.Version != version {
+		if !ok || !sameWorkerSecretVersion(encrypted.Version, version) {
 			return errors.New("Worker secret ciphertext is missing")
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_secret_versions
@@ -179,6 +179,12 @@ func writeWorkerSecretVersions(ctx context.Context, tx pgx.Tx, before, after *Wo
 		}
 	}
 	return nil
+}
+
+func sameWorkerSecretVersion(a, b WorkerSecretVersion) bool {
+	return a.ID == b.ID && a.Organization == b.Organization && a.Service == b.Service &&
+		a.Environment == b.Environment && a.Name == b.Name && a.ValueDigest == b.ValueDigest &&
+		a.KeyVersion == b.KeyVersion && a.CreatedBy == b.CreatedBy && a.Created.Equal(b.Created)
 }
 
 func replaceWorkerEnvironmentSecrets(ctx context.Context, tx pgx.Tx, service, environment string, versions map[string]string) error {
@@ -346,7 +352,8 @@ func (s *Server) workerSecretChange(st *State, p Principal, r *http.Request, del
 
 	release := WorkerRelease{
 		Service: target.ID, Organization: target.Organization, Environment: environment,
-		Artifact: active.Artifact, ArchiveDigest: active.ArchiveDigest, ModuleDigest: active.ModuleDigest,
+		Artifact: active.Artifact, Profile: active.Profile, ArchiveDigest: active.ArchiveDigest, ModuleDigest: active.ModuleDigest,
+		CompatibilityDate: active.CompatibilityDate, CompatibilityFlags: append([]string(nil), active.CompatibilityFlags...),
 		ConfigRevision: current.ConfigRevision, Variables: cloneStringsMap(current.Variables),
 		SecretDigest: workerSecretsDigest(versions), SecretVersions: cloneStringsMap(versions),
 		Created: now(),
