@@ -53,7 +53,7 @@ func workerV2TestManifest(main string, modules map[string]struct {
 	data []byte
 }) (workerManifest, map[string][]byte) {
 	manifest := workerManifest{
-		Schema:             1,
+		Schema:             2,
 		Profile:            workerProfile,
 		CompatibilityDate:  workerDefaultCompatibilityDate,
 		CompatibilityFlags: []string{"nodejs_compat"},
@@ -294,7 +294,7 @@ func TestParseWorkerV2RejectsInvalidMetadataAndModules(t *testing.T) {
 func TestParseWorkerV2RejectsUnknownManifestFields(t *testing.T) {
 	code := []byte("export default {fetch(){}}")
 	manifest := map[string]any{
-		"schema_version":     1,
+		"schema_version":     2,
 		"profile":            workerProfile,
 		"compatibility_date": workerDefaultCompatibilityDate,
 		"main_module":        "index.js",

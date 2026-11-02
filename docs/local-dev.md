@@ -21,9 +21,9 @@
 - 控制面、Postgres、MinIO、builder、前端都在开发机；改后端或 builder 不需要构建镜像。
 - 集群内通过 selectorless `static-assets` Service/EndpointSlice 和开发机 IP 访问 MinIO；没有 MinIO Pod，也没有对象存储端口转发。
 - 集群里只保留 `runtime-default`、不接业务 Gateway 的 `runtime-validator-default` 和 kgateway；旧的 backend/postgres/minio/tester deployment 已 scale 到 0。
-- 业务 Worker 的 host 仍然是 `w-xxx-<env>.workers.test`；nginx 把外网域名改写成它。
+- 业务 Worker 的 host 仍然是 `w-xxx-<env>.p-<pool-hash>.workers.test`；nginx 把外网域名改写成它。
 
-共享网关模式的 host 多一层 `p-<pool-hash>` 标签；启用 `workers.shared_routing` 时需同步配置对应 DNS / nginx / TLS。已有未启用配置可保持旧地址，完整说明见 [百万站点改造](performance-scaling.md)。
+业务入口统一使用共享路由，DNS / nginx / TLS 必须覆盖 pool 标签。规则见 [域名与路由](workers-domains.md)。
 
 ## 唯一配置
 
@@ -112,24 +112,19 @@ validator 或 Gateway rollout 会让本地 38084/38080/38081 的 port-forward �
 
 ## 外网域名
 
-Worker 的外网访问（浏览器用 out）：
+Worker 的外网访问：
 
 ```text
-https://w-<hash>-<env>.<external-domain>/
+https://w-<hash>-<env>.p-<pool-hash>.<external-domain>/
 ```
 
-内网入口（in，内部地址，不作为控制台展示的浏览器链接）：
+内网入口：
 
 ```text
-https://w-<hash>-<env>.<internal-domain>/
+https://w-<hash>-<env>.p-<pool-hash>.<internal-domain>/
 ```
 
-nginx 只改 Host，两个入口分别指向各自的上游：
-
-```text
-w-xxx-production.<external-domain> → w-xxx-production.public.workers.test
-w-xxx-production.<internal-domain> → w-xxx-production.workers.test
-```
+nginx 保留完整 Host，分别转发到域名绑定的 Gateway。
 
 两个入口是**真正分开的两条数据路径**：
 
@@ -145,16 +140,16 @@ w-xxx-production.<internal-domain> → w-xxx-production.workers.test
 在 kind 宿主机上验证（NodePort 32284 = 公网，30739 = 内网）：
 
 ```bash
-curl -o /dev/null -w '%{http_code}\n' -H 'Host: w-x-production.workers.test'        http://<node>:32284/  # 404
-curl -o /dev/null -w '%{http_code}\n' -H 'Host: w-x-production.public.workers.test' http://<node>:32284/  # 200
+curl -o /dev/null -w '%{http_code}\n' -H 'Host: w-x-production.p-<pool-hash>.workers.test'        http://<node>:32284/  # 404
+curl -o /dev/null -w '%{http_code}\n' -H 'Host: w-x-production.p-<pool-hash>.public.workers.test' http://<node>:32284/  # 200
 ```
 
 ## 远端 runtime 的前置条件
 
-当前 kind 里的 runtime 已经指向开发机：
+执行 `dev-runtime-config.sh` 后，kind runtime 指向开发机：
 
 - `platform` 地址：`<control-host>:9001`（开发机控制面的 internal listener）。
-- `CONFIG_BASE`：`http://<minio-host>:9000/krun-artifacts/config`。
+- `CONFIG_BASE`：`http://<minio-host>:9000/<bucket>/config/pools/default`。
 - `storage` network allow：`<minio-host>/32`、`<control-host>/32`。
 - NetworkPolicy：允许 runtime 到上述两个地址的 9000/9001，以及本地管理隧道访问 8083。
 

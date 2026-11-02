@@ -73,22 +73,7 @@ kind 为控制面增加已配置 Git provider origin 解析所得 IP 的 TCP 443
 
 日常本地开发使用 `make dev` 的 local-first 拓扑；完整集群验收才使用 `deploy/workers-kind`。私有仓库只有在 `.data/dev.yaml` 或独立 E2E 生成配置中提供了真实测试凭据后才算完成验收，不能把公开仓库接口测试当作私有仓库验收。
 
-## 历史 kind 与浏览器验收（双阶段 Wrangler Job 改造前）· 2026-10-13
+## 验证
 
-下面记录验证的是早期仓库下载、direct builder、发布和请求链路，不能作为当前 Wrangler build/pack 双阶段 Job 的验收证据。当前实现已有真实 Wrangler → `workerd-bundle-v2` → 控制面校验的跨组件测试，以及独立的真实 workerd smoke；仍需在部署环境重新执行一次 repository → init build → pack → finalize → publish → kgateway 请求和浏览器操作，才能宣称新链路完成 kind 级全量验收。
-
-实际浏览器完成服务列表进入、侧边栏 Workers 返回列表、浏览器返回、新服务创建、来源选择、仓库配置保存、源码构建、日志和 MinIO 制品查看、发布 test，以及经 kgateway 调用 Worker。默认来源按配置选择公司 GitLab，重新打开表单能恢复已保存的 GitHub 仓库配置。返回列表后会重新获取仓库和环境状态。
-
-- 服务：`github-repository-demo` / `service_RjTQNfLdyPFLgnF-`，组织为 Workers 体验。
-- 仓库：`cloudflare/workers-sdk`，ref `main`，项目目录 `fixtures/worker-ts/src`；入口由 Wrangler 配置读取。
-- Commit：`97b2fb1632de1f02bb0d12639f8602cefb3de158`。
-- 成功构建：`bld_U6NJm3nXeUXsyKVS`，编译 696 bytes，归档 645 bytes。
-- 归档 SHA-256：`ba1af0c24152f808d4d761a897a528f458adb45e638b173ed6e13a337c1f4d78`，bucket `krun-artifacts`。
-- test Release：`rel_a64372b5395c21729e28183a0dba06f9bf5d11e1e94a15647fcd008e2563b941`，发布已生效。
-- 调用：HTTP 200，正文 `Hello World!`，响应 Pod UID `3b5cdbbd-c847-4e0b-9bba-7b9a6aacb73e`。
-
-首次真实归档下载发现 GitHub 的全局 PAX metadata 被误认为归档根目录；已修复并增加回归测试，失败记录保留在历史中。九组新增后端回归测试覆盖来源排序与关闭、URL / 目录及仓库访问范围、仓库配置 CAS、幂等重试、commit 固定、GitLab 嵌套 namespace / ref、GitHub 重定向的凭证隔离、归档边界、列表环境权限和全局 PAX header。完整 `go test -race ./...`、`go vet ./...` 通过；前端类型 / 生产构建、4 项国际化与 5 项权限检查通过。
-
-从 kind 控制面访问 `https://gitlab.example.internal/api/v4/version` 的 HTTPS 请求得到 HTTP 401，证明当前网络可达并要求认证。没有该实例 Token 和具体私有仓库的授权，当前仅完成 GitLab API 合约及凭证隔离测试，未声称真实私有仓库构建已验收。私有仓库接入需先在配置中填写允许的仓库，并向控制面注入只读 Token 环境变量。
-
-最终 API 增加 `repository_revision` 后再次从保存配置发起构建并成功。该次 main 已移动到 `f3608290da40…`，新构建记录独立保存新 commit；已发布制品与上一构建的代码相同，因此复用相同内容哈希制品，已发布环境没有变化。
+仓库下载、TLS Git、Wrangler build/pack、finalize、发布和 Gateway 调用由独立 kind E2E 验证；
+真实浏览器测试覆盖绑定仓库、默认 HEAD 构建、发布和调用。运行方式见 [验证说明](verification.md)。

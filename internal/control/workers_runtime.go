@@ -38,31 +38,12 @@ func (s *Server) workerRuntimeConfigSnapshot(w http.ResponseWriter, r *http.Requ
 		s.writeError(w, r, forbidden())
 		return
 	}
-	if s.Store.pool != nil {
-		head, _, err := s.Store.ConfigState(r.Context())
-		if err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		s.json(w, 200, map[string]any{"pool": pool.ID, "config_revision": head, "lazy_routes": true, "routes": []workerConfigRoute{}, "releases": map[string]WorkerRelease{}})
+	head, _, err := s.Store.ConfigState(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
 		return
 	}
-	latest, ok, e := s.Store.LatestConfigRevision(r.Context())
-	if e != nil {
-		s.writeError(w, r, e)
-		return
-	}
-	if !ok {
-		s.json(w, 200, map[string]any{"pool": pool.ID, "config_revision": 0, "routes": []workerConfigRoute{}, "releases": map[string]WorkerRelease{}})
-		return
-	}
-	var projection workerConfigProjection
-	if e := json.Unmarshal(latest.Payload, &projection); e != nil {
-		s.writeError(w, r, e)
-		return
-	}
-	projection = workerConfigForPool(projection, pool.ID)
-	s.json(w, 200, map[string]any{"pool": pool.ID, "config_revision": latest.Revision, "routes": projection.Routes, "releases": projection.Releases})
+	s.json(w, 200, map[string]any{"pool": pool.ID, "config_revision": head, "lazy_routes": true, "routes": []workerConfigRoute{}, "releases": map[string]WorkerRelease{}})
 }
 
 // workerRuntimeConfigChanges is the incremental feed. since=0 means bootstrap
@@ -268,25 +249,17 @@ func (w *workersController) releaseAssets(ctx context.Context, releaseID, pool s
 			return cached, nil
 		}
 		raw, err := w.getObject(ctx, workerArtifactManifestKey(out.Artifact))
-		var manifest workerManifest
-		if err == nil {
-			if bytesDigest(raw) != out.Artifact.ManifestDigest {
-				return nil, errors.New("artifact manifest digest mismatch")
-			}
-			if err = json.Unmarshal(raw, &manifest); err != nil {
-				return nil, err
-			}
-		} else {
-			// Pre-release artifacts built before the standalone manifest existed can
-			// still be opened; every new finalize writes the compact object.
-			code, loadErr := w.artifactCode(ctx, out.Artifact)
-			if loadErr != nil {
-				return nil, loadErr
-			}
-			if err = json.Unmarshal(code.ManifestRaw, &manifest); err != nil {
-				return nil, err
-			}
+		if err != nil {
+			return nil, err
 		}
+		if bytesDigest(raw) != out.Artifact.ManifestDigest {
+			return nil, errors.New("artifact manifest digest mismatch")
+		}
+		var manifest workerManifest
+		if err = json.Unmarshal(raw, &manifest); err != nil {
+			return nil, err
+		}
+
 		cached = workerCachedAssets{Used: now()}
 		if assets := manifest.Assets; assets != nil {
 			cached.Config = &WorkerAssetsConfig{Directory: assets.Directory, Binding: assets.Binding, RunWorkerFirst: assets.RunWorkerFirst, NotFoundHandling: assets.NotFoundHandling, HTMLHandling: assets.HTMLHandling}
@@ -361,7 +334,7 @@ func (s *Server) workerRuntimeReleaseAssetURL(w http.ResponseWriter, r *http.Req
 		prefix = "pub"
 	}
 	key := workerAssetObjectKey(prefix, assets.Release.Organization, assets.Release.Service, assets.Artifact.ArchiveDigest, name)
-	signed, e := s.workers.runtimeS3().PresignedGetObject(r.Context(), s.workers.config.S3Bucket, key, 15*time.Minute, nil)
+	signed, e := s.workers.s3Runtime.PresignedGetObject(r.Context(), s.workers.config.S3Bucket, key, 15*time.Minute, nil)
 	if e != nil {
 		s.writeError(w, r, problem(503, "ASSET_UNAVAILABLE", "Asset storage unavailable"))
 		return

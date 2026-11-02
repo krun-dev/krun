@@ -218,7 +218,7 @@ func TestPostgresWorkerDomainsCASIsExclusive(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	beforeGeneration := workerTopologyGenerationForTest(t, store)
+	beforeGeneration := workerDirtyGenerationForTest(t, store)
 	ready := make(chan struct{}, 2)
 	start := make(chan struct{})
 	errs := make(chan error, 2)
@@ -250,7 +250,7 @@ func TestPostgresWorkerDomainsCASIsExclusive(t *testing.T) {
 	if service.DomainsRevision != 1 || len(service.Domains) != 1 || service.Domains[0] != "alpha" && service.Domains[0] != "bravo" {
 		t.Fatalf("domain CAS result = %+v", service)
 	}
-	if generation := workerTopologyGenerationForTest(t, store); generation != beforeGeneration+1 {
+	if generation := workerDirtyGenerationForTest(t, store); generation <= beforeGeneration {
 		t.Fatalf("domain topology generation=%d, want %d", generation, beforeGeneration+1)
 	}
 }
@@ -269,7 +269,7 @@ func TestPostgresWorkerPreviewSetCASPreventsConcurrentLimitOverflow(t *testing.T
 	}); err != nil {
 		t.Fatal(err)
 	}
-	beforeGeneration := workerTopologyGenerationForTest(t, store)
+	beforeGeneration := workerDirtyGenerationForTest(t, store)
 	ready := make(chan struct{}, 2)
 	start := make(chan struct{})
 	errs := make(chan error, 2)
@@ -305,15 +305,15 @@ func TestPostgresWorkerPreviewSetCASPreventsConcurrentLimitOverflow(t *testing.T
 	if service.PreviewRevision != 1 || previewCount(service.Environments) != 1 {
 		t.Fatalf("preview CAS result = %+v", service)
 	}
-	if generation := workerTopologyGenerationForTest(t, store); generation != beforeGeneration+1 {
+	if generation := workerDirtyGenerationForTest(t, store); generation <= beforeGeneration {
 		t.Fatalf("preview topology generation=%d, want %d", generation, beforeGeneration+1)
 	}
 }
 
-func workerTopologyGenerationForTest(t *testing.T, store *Store) int64 {
+func workerDirtyGenerationForTest(t *testing.T, store *Store) int64 {
 	t.Helper()
 	var generation int64
-	if err := store.pool.QueryRow(context.Background(), `SELECT value::bigint FROM krun_meta WHERE key='worker_topology_generation'`).Scan(&generation); err != nil {
+	if err := store.pool.QueryRow(context.Background(), `SELECT last_value FROM worker_dirty_seq`).Scan(&generation); err != nil {
 		t.Fatal(err)
 	}
 	return generation
@@ -340,54 +340,46 @@ func assertOneWorkerCASWinner(t *testing.T, errs <-chan error) {
 func TestPostgresConfigRevisionCASIsExclusive(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
-	if _, err := store.pool.Exec(ctx, `DELETE FROM worker_config_revisions`); err != nil {
+	if _, err := store.pool.Exec(ctx, `INSERT INTO worker_config_dirty(service_id) VALUES('site-cas')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.pool.Exec(ctx, `DELETE FROM krun_meta WHERE key='worker_config_head'`); err != nil {
+	dirty, err := store.dirtyWorkerServices(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_, _ = store.pool.Exec(context.Background(), `DELETE FROM worker_config_revisions`)
-		_, _ = store.pool.Exec(context.Background(), `DELETE FROM krun_meta WHERE key='worker_config_head'`)
-	})
 	type result struct {
-		revision int64
-		appended bool
-		err      error
+		won bool
+		err error
 	}
 	start := make(chan struct{})
 	results := make(chan result, 2)
-	for _, digest := range []string{"publisher-a", "publisher-b"} {
-		go func(digest string) {
+	for range 2 {
+		go func() {
 			<-start
-			revision, _, appended, err := store.AppendConfigRevisionCAS(ctx, 0, digest, []byte(`{"routes":[]}`), []byte(`[]`), 10)
-			results <- result{revision: revision, appended: appended, err: err}
-		}(digest)
+			_, won, err := store.appendConfigDelta(ctx, 0, dirty, []workerConfigOp{{Type: "route_upsert", Pool: "default", Host: "site.workers.test", Route: &workerConfigRoute{Service: "site-cas", Host: "site.workers.test", Pool: "default"}}})
+			results <- result{won, err}
+		}()
 	}
 	close(start)
 	winners := 0
 	for range 2 {
-		got := <-results
-		if got.err != nil {
-			t.Fatal(got.err)
+		r := <-results
+		if r.err != nil {
+			t.Fatal(r.err)
 		}
-		if got.revision != 1 {
-			t.Fatalf("revision=%d, want durable head 1", got.revision)
-		}
-		if got.appended {
+		if r.won {
 			winners++
 		}
 	}
 	if winners != 1 {
-		t.Fatalf("CAS winners=%d, want 1", winners)
+		t.Fatalf("CAS winners=%d", winners)
 	}
-	var rows int
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM worker_config_revisions`).Scan(&rows); err != nil || rows != 1 {
-		t.Fatalf("config revisions=%d err=%v", rows, err)
+	head, _, err := store.ConfigState(ctx)
+	if err != nil || head != 1 {
+		t.Fatalf("head=%d err=%v", head, err)
 	}
 }
 
-// TestPostgresOperationClaimIsExclusive is the release-pipeline equivalent.
 func TestPostgresOperationClaimIsExclusive(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()

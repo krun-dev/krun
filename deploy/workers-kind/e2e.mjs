@@ -16,6 +16,8 @@ const kubectl=(...args)=>execFileSync('kubectl',['--kubeconfig',kubeconfig,...ar
 const clusterName=process.env.KIND_CLUSTER_NAME;assert(clusterName,'KIND_CLUSTER_NAME must identify the intended kind cluster');
 const expectedContext='kind-'+clusterName;assert.equal(kubectl('config','current-context').trim(),expectedContext,'Verification requires the intended kind context');
 const podTransport=process.env.KRUN_E2E_TRANSPORT!=='port-forward';
+const bucket=process.env.KRUN_E2E_BUCKET||'krun-e2e';
+const storage='http://minio:9000/'+bucket;
 const origin=process.env.KRUN_E2E_ORIGIN||'http://127.0.0.1:4380';const cookies=new Map();let csrf='',key='';const evidence=[];const transportRetries=[];
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function request(route,method='GET',input,options={}){return new Promise((resolve,reject)=>{
@@ -147,7 +149,7 @@ async function publishAt(workerBase,buildId,environment,revision){const op=await
 async function build(input,expected='succeeded',options={}){return buildAt(base,input,expected,options);}
 async function publish(buildId,environment,revision){return publishAt(base,buildId,environment,revision);}
 let b1,b2,prodFirst,hostTest,hostProd,repositoryBuild,repositoryRelease,repositoryHost;
-await check('authenticated real Kubernetes build finalizes S3 archive',async()=>{b1=await build(source('v1-'+run));const a=await api(base+'/artifacts/'+b1.artifact_id);assert.equal(a.state,'finalized');assert.equal(a.storage_location_id,'primary');assert.equal(a.bucket,'krun-artifacts');assert(a.object_key.endsWith('/bundle.tar.gz'));assert(a.archive_size_bytes>0);const logs=await api(base+'/builds/'+b1.id+'/logs');assert(logs.log.includes('Archive SHA-256'));assert(!logs.log.includes('X-Amz-'));return {build_id:b1.id,artifact:a,job:b1.job};});
+await check('authenticated real Kubernetes build finalizes S3 archive',async()=>{b1=await build(source('v1-'+run));const a=await api(base+'/artifacts/'+b1.artifact_id);assert.equal(a.state,'finalized');assert.equal(a.storage_location_id,'primary');assert.equal(a.bucket,bucket);assert(a.object_key.endsWith('/bundle.tar.gz'));assert(a.archive_size_bytes>0);const logs=await api(base+'/builds/'+b1.id+'/logs');assert(logs.log.includes('Archive SHA-256'));assert(!logs.log.includes('X-Amz-'));return {build_id:b1.id,artifact:a,job:b1.job};});
 await check('preview release waits for actual runtime and Gateway adoption',async()=>{await api(base+'/environments','POST',{name:'fix-auth'},201);const op=await publish(b1.id,'fix-auth',0);assert(op.steps.every(s=>s.state==='done'));const envs=(await api(base+'/environments')).items;hostTest=environmentHost(envs.find(e=>e.name==='fix-auth'));hostProd=environmentHost(envs.find(e=>e.name==='production'));assert(hostTest&&hostProd);const r=await invoke(hostTest,'/orders?id=1');assert.equal(r.status,200);assert.equal(r.body.version,'v1-'+run);assert.equal(r.body.environment,'fix-auth');assert(r.body.url.includes('/orders?id=1'));assert.equal(envs.find(e=>e.name==='production').release_revision,0);return {operation:op.id,response:r.body};});
 await check('repository build uses TLS Git and the Wrangler build-pack Job',async()=>{
  const providers=await api('/api/v1/orgs/'+org.id+'/workers/repository-providers');assert(providers.items.some(provider=>provider.id==='kind-git'));
@@ -289,9 +291,9 @@ await check('static domain serves pub/ directly and v1/ stays private',async()=>
  let static200;for(let i=0;i<20;i++){static200=await invoke('static.workers.test',path);if(static200.status===200)break;await sleep(500);}
  assert.equal(static200.status,200);assert(String(static200.body).includes('<!doctype html>'));
  assert.equal(static200.headers['access-control-allow-origin'],'*');
- const pub=testerGet('http://minio:9000/krun-artifacts/pub/'+org.id+'/'+service.id+'/'+assetArtifact.archive_sha256+'/index.html');
+ const pub=testerGet(storage+'/pub/'+org.id+'/'+service.id+'/'+assetArtifact.archive_sha256+'/index.html');
  assert.equal(pub.status,200);
- const privateObject=testerGet('http://minio:9000/krun-artifacts/v1/'+org.id+'/sha256/'+assetArtifact.archive_sha256+'/bundle.tar.gz');
+ const privateObject=testerGet(storage+'/v1/'+org.id+'/sha256/'+assetArtifact.archive_sha256+'/bundle.tar.gz');
  assert.equal(privateObject.status,403);
  return {static:static200.status,pub:pub.status,v1:privateObject.status};
 });
@@ -350,10 +352,10 @@ await check('site pagination is complete and shared Gateway routes stay bounded'
  return {sites:seen.size,pages,gateway_routes:before};
 });
 await check('runtime bootstraps from a compact head and immutable host shards',async()=>{
- const latest=testerGet('http://minio:9000/krun-artifacts/config/pools/default/latest.json');assert.equal(latest.status,200);assert.equal(latest.body.lazy_routes,true);assert.equal(latest.body.snapshot,'');
+ const latest=testerGet(storage+'/config/pools/default/latest.json');assert.equal(latest.status,200);assert.equal(latest.body.lazy_routes,true);assert.equal(latest.body.snapshot,'');
  const {createHash}=await import('node:crypto');const shard=createHash('sha256').update(hostProd).digest('hex').slice(0,2);
- const pointer=testerGet('http://minio:9000/krun-artifacts/config/pools/default/shards/'+shard+'/latest.json');assert.equal(pointer.status,200);assert(pointer.body.snapshot.endsWith('.json.gz'));assert(pointer.body.sha256);
- const snapshot=testerGet('http://minio:9000/krun-artifacts/config/pools/default/'+pointer.body.snapshot);assert.equal(snapshot.status,200);
+ const pointer=testerGet(storage+'/config/pools/default/shards/'+shard+'/latest.json');assert.equal(pointer.status,200);assert(pointer.body.snapshot.endsWith('.json.gz'));assert(pointer.body.sha256);
+ const snapshot=testerGet(storage+'/config/pools/default/'+pointer.body.snapshot);assert.equal(snapshot.status,200);
  return {lazy_routes:true,shard,checkpoint_revision:pointer.body.config_revision};
 });
 await check('background GC removes indexed artifact files and preserves live assets',async()=>{
@@ -363,8 +365,8 @@ await check('background GC removes indexed artifact files and preserves live ass
  const upload=await api(target+'/source-uploads','POST',{},201);testerPut(upload.upload_url,input.toString('base64'));
  const b=await buildAt(target,{source_type:'upload',entrypoint:'index.ts',source_upload:upload.source_upload,assets:{directory:'public',run_worker_first:[],not_found_handling:'none',html_handling:'none'}});
  const artifact=await api(target+'/artifacts/'+b.artifact_id);
- const objectURL='http://minio:9000/krun-artifacts/pub/'+org.id+'/'+doomed.id+'/'+artifact.archive_sha256+'/index.html';assert.equal(testerGet(objectURL).status,200);
- const sql=query=>kubectl('exec','-n','workers-mvp','deploy/postgres','--','psql','-U','postgres','-d','postgres','-tAc',query).trim();
+ const objectURL=storage+'/pub/'+org.id+'/'+doomed.id+'/'+artifact.archive_sha256+'/index.html';assert.equal(testerGet(objectURL).status,200);
+ const sql=query=>kubectl('exec','-n','workers-mvp','deploy/postgres','--','psql','-U','postgres','-d',process.env.KRUN_E2E_DATABASE||'krun_e2e','-tAc',query).trim();
  assert.equal(Number(sql(`SELECT count(*) FROM worker_asset_objects WHERE artifact_id='${artifact.id}'`)),2);
  sql(`WITH private AS(DELETE FROM krun_worker_build_private WHERE build_id='${b.id}') DELETE FROM krun_worker_builds WHERE build_id='${b.id}'`);
  sql(`UPDATE krun_worker_artifacts SET created_at=now()-interval '31 days' WHERE artifact_id='${artifact.id}'`);
@@ -373,7 +375,7 @@ await check('background GC removes indexed artifact files and preserves live ass
   if(Number(sql(`SELECT count(*) FROM krun_worker_artifacts WHERE artifact_id='${artifact.id}'`))===0){removed=true;break}await sleep(1000);
  }
  assert(removed,'artifact GC did not converge');assert.equal(Number(sql(`SELECT count(*) FROM worker_asset_objects WHERE artifact_id='${artifact.id}'`)),0);assert.equal(testerGet(objectURL).status,404);
- const live=testerGet('http://minio:9000/krun-artifacts/pub/'+org.id+'/'+service.id+'/'+assetArtifact.archive_sha256+'/index.html');assert.equal(live.status,200);
+ const live=testerGet(storage+'/pub/'+org.id+'/'+service.id+'/'+assetArtifact.archive_sha256+'/index.html');assert.equal(live.status,200);
  return {removed_artifact:artifact.id,removed_files:2,live_assets:live.status};
 });
 console.log('PASS '+evidence.length+' kind backend end-to-end checks');

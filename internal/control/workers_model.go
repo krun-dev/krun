@@ -13,8 +13,6 @@ import (
 
 // Workers is opt-in: existing authentication deployments keep their current behavior.
 type WorkersConfig struct {
-	// SharedRouting bounds Gateway resources by pool and domain, not site count.
-	SharedRouting        bool                       `json:"shared_routing"`
 	ReconcileConcurrency int                        `json:"reconcile_concurrency"`
 	RepositoryProviders  []WorkerRepositoryProvider `json:"repository_providers"`
 	Namespace            string                     `json:"namespace"`
@@ -69,7 +67,7 @@ type WorkersConfig struct {
 	StaticService     string            `json:"static_service"`
 	StaticServicePort int               `json:"static_service_port"`
 	// ConfigBaseURL is the runtime-readable origin of config/latest.json and
-	// config/snapshots/*. It must be a private or cluster-internal endpoint.
+	// config/pools/<pool>/shards/*. It must be a private or cluster-internal endpoint.
 	ConfigBaseURL string `json:"config_base_url"`
 	// CloneDirectory is where repository checkouts are written during a build.
 	// Required when the control plane runs with a read-only root filesystem.
@@ -1032,7 +1030,7 @@ func (s *Server) syncEnvironmentHosts(env *WorkerEnvironment, organization, serv
 			continue
 		}
 		suffix := d.Domain
-		if c.SharedRouting {
+		{
 			profile := c.defaultNetworkProfile().ID
 			if len(profiles) > 0 {
 				profile = profiles[0]
@@ -1264,9 +1262,6 @@ func workerVariablesValid(vars map[string]string) bool {
 }
 
 func (c *WorkersConfig) poolHostSuffix(pool, domain string) string {
-	if !c.SharedRouting {
-		return domain
-	}
 	return "p-" + digest(pool)[:10] + "." + domain
 }
 

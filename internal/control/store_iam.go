@@ -17,7 +17,7 @@ import (
 // statements grouped so the metadata cannot contradict itself, never a
 // whole-document rewrite and never containing network calls.
 func (s *Store) persistIAM(ctx context.Context, before, after *State, audits []Audit) error {
-	topologyChanged := workerIAMTopologyChanged(before, after)
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -86,43 +86,7 @@ func (s *Store) persistIAM(ctx context.Context, before, after *State, audits []A
 	if err = insertAudits(ctx, tx, audits); err != nil {
 		return err
 	}
-	if topologyChanged {
-		if err = bumpWorkerTopologyGeneration(ctx, tx); err != nil {
-			return err
-		}
-	}
 	return tx.Commit(ctx)
-}
-
-func workerIAMTopologyChanged(before, after *State) bool {
-	if len(before.Organizations) != len(after.Organizations) {
-		return true
-	}
-	for id := range before.Organizations {
-		if _, ok := after.Organizations[id]; !ok {
-			return true
-		}
-	}
-	serviceResources := func(resources map[string]Resource) map[string]Resource {
-		out := map[string]Resource{}
-		for id, resource := range resources {
-			if resource.Kind == "service" {
-				out[id] = resource
-			}
-		}
-		return out
-	}
-	oldServices, newServices := serviceResources(before.Resources), serviceResources(after.Resources)
-	if len(oldServices) != len(newServices) {
-		return true
-	}
-	for id, old := range oldServices {
-		current, ok := newServices[id]
-		if !ok || current.Organization != old.Organization {
-			return true
-		}
-	}
-	return false
 }
 
 func writeIAMDiff(ctx context.Context, tx pgx.Tx, before, after *State) error {

@@ -180,3 +180,24 @@ func TestKeyExpiryAndOwnerIsolation(t *testing.T) {
 		t.Fatal("expired key updated")
 	}
 }
+
+func TestSystemSelectorIsLimitedToPlatformResources(t *testing.T) {
+	st, admin, _ := fixture()
+	policy := Policy{Version: 1, Statements: []Statement{{Effect: "allow", Actions: []string{"*"}, Resource: Selector{Kind: "system", AllSystem: true}}}}
+	if err := validatePolicy(st, Principal{User: admin}, "", "system", policy); err != nil {
+		t.Fatal(err)
+	}
+	key := APIKey{ID: "platform-only", Owner: admin.ID, ScopeKind: "system", Policy: policy}
+	target, err := resolve(st, "service", "svc-a", "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := Authorize(st, Principal{User: admin, Key: &key}, "service.read", target)
+	if err != nil || decision.Allowed {
+		t.Fatalf("platform selector granted service access: %+v %v", decision, err)
+	}
+	policy.Statements[0].Actions = []string{"service.read"}
+	if err := validatePolicy(st, Principal{User: admin}, "", "system", policy); err == nil {
+		t.Fatal("cross-kind platform statement accepted")
+	}
+}

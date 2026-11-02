@@ -63,18 +63,14 @@ func TestSharedGatewayRouteCountIndependentOfSites(t *testing.T) {
 	defer server.Close()
 	config := workerProjectionConfig([]WorkerDomain{{ID: "internal", Domain: "workers.test", Gateway: "edge"}})
 	config.Gateways = []WorkerGateway{{ID: "edge", Name: "edge", Namespace: "test", Section: "http"}}
-	config.SharedRouting = true
+
 	controller := &workersController{config: config, kube: &workerKubernetes{base: server.URL, client: server.Client(), namespace: "test"}}
-	sites := map[string]workerRoutingService{}
-	for i := 0; i < 10000; i++ {
-		sites[fmt.Sprint(i)] = workerRoutingService{}
-	}
-	_, err := controller.reconcileRoutes(context.Background(), sites)
+	_, err := controller.reconcileRoutes(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(posts) != 1 || lists != 1 {
-		t.Fatalf("10k sites produced %d routes and %d namespace lists", len(posts), lists)
+		t.Fatalf("shared routing produced %d routes and %d namespace lists", len(posts), lists)
 	}
 	hosts := posts[0]["spec"].(map[string]any)["hostnames"].([]any)
 	if hosts[0] != "*."+config.poolHostSuffix("default", "workers.test") {

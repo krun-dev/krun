@@ -31,14 +31,14 @@
 
 后端只有一张路由表（`internal/control/server.go` 的 `routes()` + `apiRoutes` + `workersRoutes`）。规范前缀：
 
-| 现在（禁止新增） | 目标 |
+| 前缀 | 用途 |
 | --- | --- |
-| `/auth/providers`、`/auth/csrf`、`/auth/{provider}/login`、`/auth/{provider}/callback`、`/auth/me`、`/auth/logout`、`/auth/cli/*` | `/api/auth/...` |
-| `/healthz` | `/api/healthz` |
-| `/internal/workers/*` | `/api/internal/workers/*` |
-| `/api/v1/*` | 不变（已经是 `/api` 下） |
+| `/api/auth/*` | 登录、身份、会话与 CLI 授权 |
+| `/api/healthz` | 控制面健康检查 |
+| `/api/internal/workers/*` | 内部 listener 的 Runtime API |
+| `/api/v1/*` | 业务与管理 API |
 
-理由：网关不用再枚举 `location ~ ^/(auth|api)/`，也不用给 healthz 单独开规则；新增接口天然落在 `/api` 下，不需要动网关。
+新增接口必须使用这些规范前缀，使网关始终只需转发 `/api/*`。
 
 `/api/` 下的未知路径统一返回 `RESOURCE_NOT_FOUND`，与既有 `/api/` 兜底一致。
 
@@ -101,28 +101,20 @@
 
 （脚本会对 `scripts/`、`deploy/` 下的 Node 工具报 blocker；那些是开发工具，不是发布产物。真正要保证 `publish_allowed` 为 `true` 的是 `web/` 的构建产物。）
 
-## 6. 迁移清单（/auth 收进 /api，base 改为 /）
+## 6. 当前基线
 
-后端（`internal/control/server.go`）：
+项目尚未上线，以当前代码、主配置与 `internal/control/schema.go` 为唯一基线。
+不保留旧路由、旧制品格式、旧库导入、补列或回填兼容。数据库初始化保存 schema
+fingerprint；已有库与基线不一致时拒绝启动，由开发者显式重建专用开发/测试库。
+禁止启动时自动删库、删表或重写旧数据。后续模型修改直接更新完整建表定义，正式上线
+后的升级策略另行制定。
 
-- `/auth/*` → `/api/auth/*`；`/healthz` → `/api/healthz`；`/internal/workers/*` → `/api/internal/workers/*`。
-- 根级 `/` 兜底与 `/api/` 兜底合并；删除 `/auth/` 前缀兜底。
-- `internal/control/provider.go`：dev 分支 `begin()` 的 `/auth/<id>/callback`、OAuth `RedirectURL`、`loginReturnPath` 校验前缀、登录失败重定向、CLI `verification_uri` 里的 `/console/`。
-- `internal/cli/cli.go`：`/auth/cli/start`、`/auth/cli/poll`、`/auth/logout`。
-- 测试：`control_test.go` / `email_test.go` / `console_test.go` / `workers_test.go` / `cli_test.go` 里的路径与 `/console/` 断言；`deploy/workers-kind/e2e.mjs` 的 `/auth/local/login`、`/healthz`。
-- 部署清单与 `control-config`：探针路径、`public_url`、`static_dir`。
-
-前端（`web/`）：
-
-- `vite.config.ts`：`base` 改 `"/"`；`server.proxy` 改为代理 `/api`。
-- 所有 `/auth/...` → `/api/auth/...`（`lib/api.ts`、`components/login.tsx`、`components/email-login.tsx`、`App.tsx` 的 `/auth/me`、`/auth/logout`、`/auth/cli/approve`）。
-- `/console/` → `/`（`login.tsx`、`email-login.tsx` 的 `return_to`、`App.tsx` 的 `replaceState` / `location.assign`）。
-
-> OAuth callback 定为 `https://<origin>/api/auth/<provider-id>/callback`（GitHub / GitLab / 阿里云 IDaaS 在各自应用里填这个）。项目尚未上线，没有存量地址需要兼容，可以自由选择路径；等上线后再改这个地址才需要协调上游应用。
+文档只描述已实现接口、运行约束和复现步骤；不保留评审稿、实施阶段或未实现方案。
+当前架构入口见 [docs/README.md](docs/README.md)。
 
 ## 7. 当前状态（已核实）
 
-- 后端接口统一在 `/api/` 下，前端 `base` 为 `/`（第 1/3 节的迁移已完成）。
+- 后端接口统一在 `/api/` 下，前端 `base` 为 `/`。
 - 日常开发使用 **local-first** 拓扑，见 [docs/local-dev.md](docs/local-dev.md)：控制面、Postgres、MinIO、builder、Vite 在开发机；集群只保留 serving runtime、独立 validator（均为 workerd）+ kgateway。
 - `deploy/workers-kind` 是完整独立 e2e 环境（backend/Postgres/MinIO 都在集群里），已标注不要和 local-first 同时运行。
 - 生产 OSS + CDN 的 `/api/*` 同域转发规则仍需部署侧落地（第 2 节）。
@@ -140,9 +132,9 @@
 
 ## 9. 持久化设计约束（硬约束）
 
-方案与表结构见 [docs/storage-redesign.md](docs/storage-redesign.md)。
+方案与表结构见 [docs/storage.md](docs/storage.md)。
 
-1. **一实体一行，禁止整文档快照**。不要再新增 `jsonb` 大文档承载多个实体。`krun_control_state` 是待退役的首版实现，只允许在迁移过程中被读写，不得在其上扩展。
+1. **一实体一行，禁止整文档快照**。不要再新增 `jsonb` 大文档承载多个实体。`State` 仅为请求工作副本，不作为数据库持久化格式。
 2. **不使用外键**。`REFERENCES` / `FOREIGN KEY` / `ON DELETE CASCADE` 一律不写。引用完整性靠三件事：
    - 写入路径先校验被引用对象存在；
    - 删除路径在同一事务里显式删关联行；

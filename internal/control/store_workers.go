@@ -7,7 +7,6 @@ import (
 	"reflect"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // persistWorkers writes only changed Workers rows. Operation and build state
@@ -15,7 +14,6 @@ import (
 // this writer simply skips; that is the extent of the concurrency guarantee
 // (AGENTS.md section 9: builds and releases converge eventually).
 func (s *Store) persistWorkers(ctx context.Context, before, after *State, audits []Audit) error {
-	topologyChanged := workerEdgeTopologyChanged(before, after)
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -27,65 +25,7 @@ func (s *Store) persistWorkers(ctx context.Context, before, after *State, audits
 	if err = insertAudits(ctx, tx, audits); err != nil {
 		return err
 	}
-	if topologyChanged {
-		if err = bumpWorkerTopologyGeneration(ctx, tx); err != nil {
-			return err
-		}
-	}
 	return tx.Commit(ctx)
-}
-
-func bumpWorkerTopologyGeneration(ctx context.Context, tx interface {
-	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
-}) error {
-	_, err := tx.Exec(ctx, `INSERT INTO krun_meta (key, value) VALUES ('worker_topology_generation','1')
-		ON CONFLICT (key) DO UPDATE SET value=(krun_meta.value::bigint + 1)::text`)
-	return err
-}
-
-// workerEdgeTopologyChanged mirrors workerConfigFromState's durable inputs.
-// Build/operation/log mutations intentionally do not wake config publishers.
-func workerEdgeTopologyChanged(before, after *State) bool {
-	bw, aw := before.Workers, after.Workers
-	if bw == nil {
-		bw = newWorkerState()
-	}
-	if aw == nil {
-		aw = newWorkerState()
-	}
-	if len(bw.Services) != len(aw.Services) {
-		return true
-	}
-	referenced := map[string]bool{}
-	for id, current := range aw.Services {
-		previous, ok := bw.Services[id]
-		if !ok || current.Service != previous.Service || current.Organization != previous.Organization || current.NetworkProfile != previous.NetworkProfile || !sameStrings(current.Domains, previous.Domains) || len(current.Environments) != len(previous.Environments) {
-			return true
-		}
-		for name, env := range current.Environments {
-			old, ok := previous.Environments[name]
-			if !ok || env.Enabled != old.Enabled || env.Release != old.Release {
-				return true
-			}
-			if env.Release != "" {
-				referenced[env.Release] = true
-			}
-			if old.Release != "" {
-				referenced[old.Release] = true
-			}
-		}
-	}
-	if !sameWorkerPlacements(bw.Placements, aw.Placements) {
-		return true
-	}
-	for id := range referenced {
-		old, oldOK := bw.Releases[id]
-		current, currentOK := aw.Releases[id]
-		if oldOK != currentOK || oldOK && !sameRelease(old, current) {
-			return true
-		}
-	}
-	return false
 }
 
 func writeWorkersDiff(ctx context.Context, tx pgx.Tx, before, after *State) error {

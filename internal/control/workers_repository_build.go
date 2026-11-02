@@ -99,7 +99,7 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 	source.ConfigPath = wranglerFile
 	build.Repository = &source
 	// Keep the complete project (including Wrangler config, lockfiles and binary
-	// modules) under src/. The builder distinguishes this from legacy direct
+	// modules) under src/. The builder distinguishes this from inline direct
 	// source by the build_mode/config_path input fields.
 	bundle, err := workerSourceBundle(files, nil)
 	if err != nil {

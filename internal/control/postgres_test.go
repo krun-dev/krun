@@ -129,17 +129,15 @@ func TestPostgresUsesSingleSchemaBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	var migrationLedger, legacyState, legacyArchive bool
-	if err := store.pool.QueryRow(ctx, `SELECT
-		to_regclass(current_schema() || '.krun_schema_migrations') IS NOT NULL,
-		to_regclass(current_schema() || '.krun_control_state') IS NOT NULL,
-		to_regclass(current_schema() || '.krun_control_state_legacy') IS NOT NULL`).Scan(
-		&migrationLedger, &legacyState, &legacyArchive); err != nil {
+	var baseline string
+	if err := store.pool.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='schema_baseline'`).Scan(&baseline); err != nil || baseline != bytesDigest([]byte(storeSchema)) {
+		t.Fatalf("baseline=%q err=%v", baseline, err)
+	}
+	reopened, err := OpenStore(ctx, u.String())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if migrationLedger || legacyState || legacyArchive {
-		t.Fatalf("compatibility tables exist: migrations=%t state=%t archive=%t", migrationLedger, legacyState, legacyArchive)
-	}
+	reopened.Close()
 	var poolColumns, placementTables int
 	if err := store.pool.QueryRow(ctx, `SELECT
 		(SELECT count(*) FROM information_schema.columns
@@ -187,9 +185,9 @@ func truncateControlTables(t *testing.T, store *Store) {
 			return
 		}
 	}
-	_, _ = store.pool.Exec(context.Background(), `DELETE FROM krun_meta WHERE key IN ('revision','bootstrapped','worker_config_head','worker_topology_generation')`)
+	_, _ = store.pool.Exec(context.Background(), `DELETE FROM krun_meta WHERE key IN ('revision','bootstrapped','worker_config_head')`)
 	_, _ = store.pool.Exec(context.Background(), `INSERT INTO krun_meta (key,value) VALUES
-		('worker_config_head','0'),('worker_topology_generation','0') ON CONFLICT (key) DO NOTHING`)
+		('worker_config_head','0') ON CONFLICT (key) DO NOTHING`)
 }
 
 func TestPostgresBrowserLoginSurvivesRestart(t *testing.T) {
@@ -308,5 +306,37 @@ func TestPostgresReconnectsBeforeMutation(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatal("state mutation retried")
+	}
+}
+
+// Existing application data must never be implicitly migrated or erased.
+func TestPostgresSchemaBaselineMismatchPreservesData(t *testing.T) {
+	store := postgresTestStore(t)
+	ctx := context.Background()
+	if _, err := store.pool.Exec(ctx, `INSERT INTO krun_users(user_id,source,subject,name,status) VALUES('baseline-survivor','local','baseline-survivor','Survivor','active')`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = store.pool.Exec(ctx, `INSERT INTO krun_meta(key,value) VALUES('schema_baseline',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, bytesDigest([]byte(storeSchema)))
+	})
+	for _, missing := range []bool{false, true} {
+		query := `UPDATE krun_meta SET value='different-baseline' WHERE key='schema_baseline'`
+		if missing {
+			query = `DELETE FROM krun_meta WHERE key='schema_baseline'`
+		}
+		if _, err := store.pool.Exec(ctx, query); err != nil {
+			t.Fatal(err)
+		}
+		rejected, err := OpenStore(ctx, store.pool.Config().ConnString())
+		if rejected != nil {
+			rejected.Close()
+		}
+		if err == nil {
+			t.Fatal("incompatible baseline accepted")
+		}
+		var count int
+		if err = store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_users WHERE user_id='baseline-survivor'`).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("existing row changed: count=%d err=%v", count, err)
+		}
 	}
 }

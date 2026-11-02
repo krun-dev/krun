@@ -56,7 +56,7 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 		t.Fatalf("relational bindings not reloaded: env=%v release=%v", environment.SecretVersions, loaded.Workers.Releases[release.ID].SecretVersions)
 	}
 	var topologyBefore, topologyAfter string
-	if err = store.pool.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='worker_topology_generation'`).Scan(&topologyBefore); err != nil {
+	if err = store.pool.QueryRow(ctx, `SELECT COALESCE(max(generation),0)::text FROM worker_config_dirty`).Scan(&topologyBefore); err != nil {
 		t.Fatal(err)
 	}
 	// PostgreSQL and the JSON snapshot clone may represent the same instant with
@@ -66,7 +66,7 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 	if err = store.Update(ctx, PartitionWorkers, func(*State) error { return nil }); err != nil {
 		t.Fatalf("unchanged secret metadata rejected: %v", err)
 	}
-	if err = store.pool.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='worker_topology_generation'`).Scan(&topologyAfter); err != nil {
+	if err = store.pool.QueryRow(ctx, `SELECT COALESCE(max(generation),0)::text FROM worker_config_dirty`).Scan(&topologyAfter); err != nil {
 		t.Fatal(err)
 	}
 	if topologyAfter != topologyBefore {

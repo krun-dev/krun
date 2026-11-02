@@ -107,6 +107,15 @@ task_api_endpoints="$(kubectl --kubeconfig "$KUBECONFIG" -n default get endpoint
 export KRUN_KUBE_API_IPS="${task_api_endpoints}${task_api_service}"
 python3 deploy/workers-kind/manifests.py
 kubectl --kubeconfig "$KUBECONFIG" apply -f deploy/workers-kind/generated/manifests.json
+# Test infrastructure uses a dedicated database. Never drop or upgrade an
+# existing database implicitly; an incompatible baseline must be reset explicitly.
+task_database="${KRUN_E2E_DATABASE:-krun_e2e}"
+if [[ ! "$task_database" =~ ^[a-z][a-z0-9_]{0,62}$ ]]; then echo "Invalid KRUN_E2E_DATABASE" >&2; exit 1; fi
+kubectl --kubeconfig "$KUBECONFIG" -n workers-mvp rollout status deployment/postgres --timeout=180s
+task_database_exists="$(kubectl --kubeconfig "$KUBECONFIG" -n workers-mvp exec deployment/postgres -- psql -U postgres -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$task_database'")"
+if [[ "$task_database_exists" != "1" ]]; then
+  kubectl --kubeconfig "$KUBECONFIG" -n workers-mvp exec deployment/postgres -- createdb -U postgres "$task_database"
+fi
 # Rebuilt tags are local to this lab. Restart to consume updated images/config.
 kubectl --kubeconfig "$KUBECONFIG" -n workers-mvp rollout restart deployment/backend deployment/git-mock deployment/runtime-default deployment/runtime-validator-default deployment/tester
 for task_deployment in postgres minio git-mock backend runtime-default runtime-validator-default tester; do

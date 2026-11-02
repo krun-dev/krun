@@ -91,15 +91,19 @@ globalThis.fetch = async (url) => {
 
 function platformFor(manifestConfig, fileList, rel, options = {}) {
   const changes = options.changes || [];
+  let route={host:"w-test.workers.test",path:"/",enabled:true,release:rel.id};
+  let revision=options.revision||1;
+  const releases=new Map([[rel.id,rel]]);
   return {
     async fetch(request) {
       const url = new URL(request.url);
       const path = url.pathname.replace('/api/internal/workers', '');
       if (path === '/config/snapshot') {
-        return Response.json({pool: 'default', config_revision: options.revision || 1, routes: [{host: 'w-test.workers.test', path: '/', enabled: true, release: rel.id}], releases: {[rel.id]: rel}});
+        return Response.json({pool:'default',config_revision:revision,lazy_routes:true,routes:[],releases:{}});
       }
+      if(path.startsWith('/config/routes/'))return Response.json({pool:"default",config_revision:revision,routes:[route],releases:Object.fromEntries(releases)});
       if (path.startsWith('/config/changes')) {
-        if (changes.length) return Response.json(changes.shift());
+        if (changes.length){const batch=changes.shift();revision=batch.to;for(const op of batch.ops){if(op.type==='release_put')releases.set(op.release.id,op.release);if(op.type==='route_upsert')route=op.route;}return Response.json(batch);}
         return new Response(null, {status: 204});
       }
       if (path === '/ack') return Response.json({ok: true});
@@ -270,22 +274,16 @@ await check('incremental op switches the route without a snapshot refetch', asyn
   }
   assert.ok(switched, 'route never switched to rel_plain');
 });
-await check('bootstrap reads latest and gzip snapshot from object storage', async () => {
-  const relId = 'rel_oss';
-  const snapshot = {config_revision: 7, pool: 'default', routes: [{host: 'w-test.workers.test', path: '/', enabled: true, release: relId}], releases: {[relId]: {...release, id: relId}}};
-  const compressed = gzipSync(Buffer.from(JSON.stringify(snapshot)));
-  configObjects.set('latest.json', encoder.encode(JSON.stringify({config_revision: 7, snapshot: 'snapshots/7.json.gz', sha256: await digest(new Uint8Array(compressed)), ops_floor: 1})));
-  configObjects.set('snapshots/7.json.gz', new Uint8Array(compressed));
-  const ossEnv = makeEnv(null, [], relId);
-  ossEnv.CONFIG_BASE = 'http://config.test';
-  const ossEntry = await freshEntry();
-  const oss = new ossEntry.Private(ossEnv, {});
-  const r = await call(oss, '/');
-  assert.equal(r.status, 200);
-  assert.equal((await r.json()).worker, true);
-  assert.equal(r.headers.get('x-krun-release'), relId);
-  assert(downloads.includes('config:latest.json'), 'latest.json was not fetched');
-  assert(downloads.includes('config:snapshots/7.json.gz'), 'snapshot was not fetched');
+await check('bootstrap reads a compact head without downloading a whole-pool snapshot', async () => {
+  const relId='rel_oss';
+  configObjects.set('latest.json',encoder.encode(JSON.stringify({config_revision:7,lazy_routes:true,snapshot:'',ops_floor:1})));
+  const env=makeEnv(null,[],relId);env.CONFIG_BASE='http://config.test';
+  const module=await freshEntry();const handler=new module.Private(env,{});
+  const response=await call(handler,'/');
+  assert.equal(response.status,200);assert.equal((await response.json()).worker,true);
+  assert.equal(response.headers.get('x-krun-release'),relId);
+  assert(downloads.includes('config:latest.json'));
+  assert(!downloads.some(key=>key.startsWith('config:snapshots/')));
 });
 await check('readiness starts the follow loop for an idle Pod', async () => {
   const plain = {...release, id: 'rel_idle'};
@@ -404,8 +402,8 @@ await check('prototype-magic asset binding names are rejected before WorkerLoade
 await check('asset binding cannot replace variables or reserved platform bindings', async () => {
   const module = 'export default {fetch(){return new Response("ok")}}';
   const moduleDigest = await digest(module);
-  const manifest = {schema_version: 1, profile: 'workerd-bundle-v2', compatibility_date: '2026-09-28', compatibility_flags: [], main_module: 'index.js', modules: [{name: 'index.js', path: 'modules/index.js', type: 'esm', sha256: moduleDigest, size_bytes: module.length}]};
-  // Schema 1 has no binding, so use a schema 2 artifact with one asset.
+  const manifest = {schema_version: 2, profile: 'workerd-bundle-v2', compatibility_date: '2026-09-28', compatibility_flags: [], main_module: 'index.js', modules: [{name: 'index.js', path: 'modules/index.js', type: 'esm', sha256: moduleDigest, size_bytes: module.length}]};
+  // Add an asset binding to the current artifact format.
   manifest.schema_version = 2;
   manifest.assets = {directory: 'public', binding: 'ASSETS', run_worker_first: ['/api/*'], not_found_handling: 'none', html_handling: 'none', files: [{path: 'index.html', sha256: meta['index.html'].sha256, size_bytes: meta['index.html'].size, content_type: meta['index.html'].type}]};
   const archive = artifactArchive(manifest, {'index.js': module}, {'index.html': files['index.html']});
@@ -422,7 +420,7 @@ await check('asset binding cannot replace variables or reserved platform binding
 await check('candidate validation rejects undeclared artifact entries', async () => {
   const module = 'export default {fetch(){return new Response("ok")}}';
   const moduleDigest = await digest(module);
-  const manifest = {schema_version: 1, profile: 'workerd-bundle-v2', compatibility_date: '2026-09-28', compatibility_flags: [], main_module: 'index.js', modules: [{name: 'index.js', path: 'modules/index.js', type: 'esm', sha256: moduleDigest, size_bytes: module.length}]};
+  const manifest = {schema_version: 2, profile: 'workerd-bundle-v2', compatibility_date: '2026-09-28', compatibility_flags: [], main_module: 'index.js', modules: [{name: 'index.js', path: 'modules/index.js', type: 'esm', sha256: moduleDigest, size_bytes: module.length}]};
   const parts = [tarFile('manifest.json', JSON.stringify(manifest)), tarFile('modules/index.js', module), tarFile('modules/undeclared.js', 'bad'), Buffer.alloc(1024)];
   const archive = new Uint8Array(gzipSync(Buffer.concat(parts)));
   artifactObjects.set('invalid.tar.gz', archive);
@@ -446,7 +444,7 @@ await check('candidate validation rejects malformed typed module payloads', asyn
   for (const item of malformed) {
     const bytes = typeof item.bytes === 'string' ? encoder.encode(item.bytes) : item.bytes;
     const manifest = {
-      schema_version: 1,
+      schema_version: 2,
       profile: 'workerd-bundle-v2',
       compatibility_date: '2026-09-28',
       compatibility_flags: [],

@@ -84,7 +84,8 @@ const server=createServer((request,response)=>{
   if(request.url==='/source'){response.writeHead(200,{'content-type':'application/gzip'});response.end(project);return;}
   if(request.url==='/upload'&&request.method==='PUT'){artifact=Buffer.concat(chunks);response.writeHead(200);response.end();return;}
   if(request.url==='/artifact'){artifactDownloads++;response.writeHead(200,{'content-type':'application/gzip','content-length':artifact.length});response.end(artifact);return;}
-  if(request.url==='/api/internal/workers/config/snapshot'){response.setHeader('content-type','application/json');response.end(JSON.stringify({pool:'default',config_revision:1,routes:[{host:'wrangler.test',path:'/',enabled:true,release:release.id}],releases:{[release.id]:release}}));return;}
+  if(request.url==='/api/internal/workers/config/snapshot'){response.setHeader('content-type','application/json');response.end(JSON.stringify({pool:'default',config_revision:1,lazy_routes:true,routes:[],releases:{}}));return;}
+  if(request.url==='/api/internal/workers/config/routes/wrangler.test'){response.setHeader('content-type','application/json');response.end(JSON.stringify({pool:'default',config_revision:1,routes:[{host:'wrangler.test',path:'/',enabled:true,release:release.id}],releases:{[release.id]:release}}));return;}
   if(request.url.startsWith('/api/internal/workers/config/changes')){response.writeHead(204);response.end();return;}
   if(request.url==='/api/internal/workers/ack'){response.setHeader('content-type','application/json');response.end('{"ok":true}');return;}
   if(request.url==='/api/internal/workers/artifacts/'+release.artifact_id){response.setHeader('content-type','application/json');response.end(JSON.stringify(descriptor));return;}

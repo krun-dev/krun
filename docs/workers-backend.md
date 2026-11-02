@@ -1,13 +1,13 @@
 # Workers 构建与发布后端
 
-实现位置：`internal/control/workers_*.go`、`workers/builder`、`workers/runtime`。复用现有 Go 控制服务的登录、API Key、Cedar 权限和 PostgreSQL 状态存储。后续已接入现有 React 控制台，体验入口与验证见 [Workers 控制台](workers-console.md)。kind 部署与验收入口见 [部署说明](../deploy/workers-kind/README.md)。
+实现位置：`internal/control/workers_*.go`、`workers/builder`、`workers/runtime`。复用现有 Go 控制服务的登录、API Key、Cedar 权限和 PostgreSQL 状态存储。界面集成在 React 控制台，体验入口与验证见 [Workers 控制台](workers-console.md)。kind 部署与验收入口见 [部署说明](../deploy/workers-kind/README.md)。
 
 Workers 与认证配置在同一个 YAML 文件，完整示例见 [config/example.yaml](../config/example.yaml) 的 `workers:` 段。配置该段即启用 Workers；省略时控制面仍正常启动，所有 Workers 接口返回 `503 WORKERS_NOT_CONFIGURED`，`/api/auth/me` 的 `workers_configured` 为 `false`，控制台显示“Workers 未配置”。
 
 对象存储可按网络视角配置三个地址：`s3_endpoint` 供控制面读写，
 `s3_builder_endpoint` 供构建器上传，`s3_runtime_endpoint` 供 runtime 冷加载制品和资产。
 三者必须指向同一个桶；完整集群部署通常相同，local-first 的 runtime 地址则应使用集群
-可达的 `static-assets` Service。后两项省略时会逐级回退，兼容原有配置。
+可达的开发机 MinIO 地址。后两项省略时使用主 endpoint，属于同一配置的地址默认值。
 
 ## 实际流程
 
@@ -32,7 +32,7 @@ sequenceDiagram
     A->>V: 在独立 validator 加载候选 Release（冷加载 + RPC）
     A->>A: CAS 提交 Release，Operation committed
     A->>A: 生成 config revision（routes + releases 的不可变投影）
-    A->>S: 按 pool 写 config/pools/{pool}/snapshots/{rev}.json.gz 与 latest.json
+    A->>S: 写入受影响的 host-hash shard checkpoint 与 compact latest.json
     W->>A: 增量长轮询 /config/changes?since=...
     A-->>W: ops batch（release_put / route_upsert / route_delete）
     W->>A: ack 已应用的 config revision
@@ -45,7 +45,7 @@ Kubernetes、S3 和 runtime HTTP 请求均在 IAM 状态事务外进行。执行
 
 ## 构建和制品
 
-内联小 Worker 继续使用固定 `esbuild` profile；仓库构建则要求项目根目录包含 `wrangler.jsonc`、`wrangler.json` 或 `wrangler.toml`，不启用 Wrangler 的框架自动改造。控制面把完整且经过边界检查的项目目录交给 builder，固定版本 Wrangler 以 `deploy --dry-run` 完成 JS / TS、`rules`、`find_additional_modules`、`no_bundle`、Text / Data / Wasm 和已配置 Vite/adapter 项目的构建。Python、Rust、legacy Service Worker 语法以及 Cloudflare 登录、资源管理和真实 deploy 不在当前范围。详细构建边界见 [Cloudflare Workers 构建兼容](workers-build-compatibility.md)；本地已构建产物通过 Wrangler / multipart 直传的计划见 [Cloudflare Workers API 兼容规范](cloudflare-api-compatibility.md)。该兼容 API 目前尚未实现。
+内联小 Worker 继续使用固定 `esbuild` profile；仓库构建则要求项目根目录包含 `wrangler.jsonc`、`wrangler.json` 或 `wrangler.toml`，不启用 Wrangler 的框架自动改造。控制面把完整且经过边界检查的项目目录交给 builder，固定版本 Wrangler 以 `deploy --dry-run` 完成 JS / TS、`rules`、`find_additional_modules`、`no_bundle`、Text / Data / Wasm 和已配置 Vite/adapter 项目的构建。Python、Rust、legacy Service Worker 语法以及 Cloudflare 登录、资源管理和真实 deploy 不在当前范围。详细构建边界见 [Cloudflare Workers 构建兼容](workers-build-compatibility.md)。krun 对外使用自身 API，不提供 Cloudflare deploy API。
 
 项目必须提交且只提交一种受支持的锁文件；builder 使用镜像内固定版本的 npm、pnpm、Yarn 或 Bun 执行 frozen install，不通过 Corepack 在线下载任意工具版本。仓库模式会安装构建所需的 devDependencies，并可能执行 lifecycle/custom build，所以它本质上是租户代码执行；内联 direct 模式仍走更窄的依赖和 esbuild 路径。
 
@@ -63,7 +63,7 @@ bundle.tar.gz
 └── assets/...
 ```
 
-Manifest profile 固定为 `workerd-bundle-v2`：无资产为 schema 1，有资产为 schema 2；同时固化 `compatibility_date`、排序后的 `compatibility_flags`、主模块和完整模块表。平台拒绝目录越界、PAX/GNU 扩展路径、符号链接、重复或未声明条目、超限大小、截断归档、类型不合法和 hash 不符的模块；Wasm magic、文本 UTF-8 与 source-map JSON 也会校验。构建 wrapper 保留原项目的命名导出，并增加 `KrunValidation` RPC 触发模块初始化和检查默认 `fetch`。
+Manifest profile 固定为 `workerd-bundle-v2`：统一使用 schema 2，静态资产字段可选；同时固化 `compatibility_date`、排序后的 `compatibility_flags`、主模块和完整模块表。平台拒绝目录越界、PAX/GNU 扩展路径、符号链接、重复或未声明条目、超限大小、截断归档、类型不合法和 hash 不符的模块；Wasm magic、文本 UTF-8 与 source-map JSON 也会校验。构建 wrapper 保留原项目的命名导出，并增加 `KrunValidation` RPC 触发模块初始化和检查默认 `fetch`。
 
 存储键：
 
@@ -72,7 +72,7 @@ Manifest profile 固定为 `workerd-bundle-v2`：无资产为 schema 1，有资�
 正式：v1/{organization_id}/sha256/{archive_sha256}/bundle.tar.gz
 ```
 
-Artifact 记录包含 `storage_location_id`、`bucket`、`object_key`、归档 / manifest / 模块的 SHA-256、归档大小、组织和创建时间。第一版仅配置一个 storage location；其 ID 必须稳定指向同一个存储位置。已有 location ID 不能直接改为另一个桶或 endpoint，需要显式迁移。
+Artifact 记录包含 `storage_location_id`、`bucket`、`object_key`、归档 / manifest / 模块的 SHA-256、归档大小、组织和创建时间。当前仅配置一个 storage location；其 ID 必须稳定指向同一个存储位置。已有 location ID 不能直接改为另一个桶或 endpoint，需要显式迁移。
 
 正式对象用条件 PUT 防止覆盖，已存在对象必须与本次内容完全一致。相同组织、相同归档复用 Artifact。Job 成功并不直接代表 Build 成功：只有平台完成验证和正式对象登记才标记 `succeeded`。成功 finalize 后删除临时对象。每次冷加载再次核验完整归档及元数据。
 
@@ -80,11 +80,11 @@ kind 使用 MinIO 验证真实 S3 协议；尚未验证阿里云 OSS 专用 API 
 
 ## 环境、发布和回滚
 
-每个服务默认启用 `test`、`production`，`staging` 默认关闭，可通过环境 API 开启。各自具有独立配置 revision、Release revision、Host 和历史。
+每个服务默认有 `production` 环境，可通过环境 API 创建和删除 preview。各自具有独立配置 revision、Release revision、Host 和历史。
 
 Build 是编译结果，不是某个环境的活动版本。同一个成功 Build 可发布到多个环境。构建请求的 `environment` 用于权限和构建记录，不会把生产变量写进制品。
 
-Release（曾用名 Deployment）固定引用 Artifact、目标环境、构建 profile、compatibility 配置、配置 revision、普通变量和 Secret version 集合。资源池由服务 placement 决定，不写进 Release。ID 由这些内容计算，发布之后不修改；回滚恢复历史 Release 的代码、变量和 Secret。环境 API 中的 `variables` 是下一次发布使用的配置，运行中配置以生效的 Release 为准。
+Release固定引用 Artifact、目标环境、构建 profile、compatibility 配置、配置 revision、普通变量和 Secret version 集合。资源池由服务 placement 决定，不写进 Release。ID 由这些内容计算，发布之后不修改；回滚恢复历史 Release 的代码、变量和 Secret。环境 API 中的 `variables` 是下一次发布使用的配置，运行中配置以生效的 Release 为准。
 
 Secret 的行为与 Cloudflare Worker 默认命令一致：`PUT`（新增或轮换）和 `DELETE` 都创建不可变 Release 并立即进入发布流程，但复用当前 Artifact，不重新构建代码。每个环境保存 name → secret version 的期望映射，每个 Release 再固定一份映射，因此轮换后仍能准确回滚。值以 AES-256-GCM 加密后入库，AAD 绑定组织、服务、环境、名称和版本；公开 API 只返回名称与创建时间。`workers.secrets_keys` 是带版本的 key ring，`secrets_active_key` 只用于新写入，仍被保留 Release 引用的旧 key 不得删除。生产 key 应由 KMS/Secret Manager 注入配置，而不是提交到仓库。
 
@@ -107,7 +107,7 @@ Secret 的行为与 Cloudflare Worker 默认命令一致：`PUT`（新增或轮�
 
 ```text
 kgateway 私网 listener :8080
-  → pool/domain 共享 HTTPRoute（shared_routing=true；旧模式按服务）
+  → pool/domain 共享 HTTPRoute
   → runtime-default Service :8081
   → Pod 内可信入口 Worker
   → Host 查找环境 Release
@@ -126,7 +126,7 @@ URI 路径、query、method、body 保留；网关和入口清除客户端伪造
 
 ### 边缘配置分发
 
-入口 Worker 不再每 500ms 轮询完整快照，而是“不可变快照 + 增量 ops + 内存视图”：
+入口 Worker 使用紧凑 head、不可变 shard checkpoint、增量 ops 和有界内存视图：
 
 1. **bootstrap**：读取 pool 的紧凑 `latest.json`；对象存储不可用时回退到内部 `config/snapshot` 获取同样的 lazy head，不下载全池路由。
 2. **cold host**：内部 `config/routes/{host}` 按主键解析一条 route/Release；控制面不可用时读取该 host hash 对应的 immutable shard checkpoint。Runtime 缓存最多 4096 个 host。
@@ -139,7 +139,9 @@ URI 路径、query、method、body 保留；网关和入口清除客户端伪造
 
 controller 不对 serving Pod 做候选管理 RPC。`/validate` 只在独立 validator 成员上冷加载并运行 `KrunValidation`；commit 后由配置流传播，controller 通过 `worker_runtime_acks` 观察收敛，`available` 表示当前 serving 成员都已上报该 revision。serving readiness 只要求配置视图已加载；Release 在首次请求时懒加载，避免 Pod 启动成本随服务数量线性增长。validator readiness 不启动配置跟随或 Ack，也没有业务 socket。
 
-实验仍只有单个 `default` pool；公网域名目录与 Gateway 路由已实现，多 pool、Service / DB bindings 和按 pool 的出口策略留待后续，详细方案见 [Workers 资源池与网络策略设计](workers-pools.md)。Secret binding 已支持；现有 runtime token 仍是 pool 内共享的受限凭证，生产应替换为可绑定 workload identity 的认证。隔离测试覆盖 HTTP、TCP 出口和凭证注入边界，没有宣称可阻止 V8 / workerd 原生漏洞逃逸。
+资源池和 Network Profile 来自主 YAML，使用有效 placement 限定路由和内部数据访问；
+当前模型见 [资源池配置](workers-pools.md)。Secret binding 已支持，Service/DB binding 不在当前范围。
+隔离测试覆盖 HTTP、TCP 出口和凭据注入边界。
 
 ## API
 
@@ -222,7 +224,7 @@ header 与该 pool 独立 token，不能只信任 header：
 
 `build.start` 控制构建，`service.publish` / `service.rollback` 控制目标环境发布；队列提交时及执行时均检查。控制台调用需要目标环境的 `service.invoke`，内置 developer / publisher 角色具有该动作；不转发平台 Cookie 或 Authorization。集合 API 支持只拥有某个环境权限的 Key，隐藏其他环境。
 
-## 第一版边界
+## 支持范围
 
 内联源码最多 512 文件 / 合计 2 MiB；仓库项目最多 4096 文件 / 合计 24 MiB / 单文件 8 MiB。静态资产最多 500 文件 / 合计 20 MiB / 单文件 5 MiB，含资产时归档上限 32 MiB；模块最多 512 个、单个 2 MiB、合计 8 MiB；日志最多 32 KiB；每服务保留至多 100 个 Build。配置最多 32 个普通变量 / 合计 16 KiB；Secret 最多 32 个、单值最多 16 KiB。变量与 Secret 使用大写 binding 名并禁止平台预留 `KRUN_` 前缀；资产 binding 允许标准 JS 标识符式名称，但不得覆盖变量、Secret 或平台保留 binding。
 

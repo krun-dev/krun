@@ -89,3 +89,10 @@ KRUN_UI_ORIGIN=http://127.0.0.1:4380 npm run test:ui
 扩展 E2E 覆盖同源静态入口、百站点游标分页、共享 HTTPRoute 数量、有界配置 head/shard，
 以及实际过期 Artifact 的 indexed GC，确认回收不会删除仍在服务的资产。
 百万 PostgreSQL 元数据测试及算法微基准见 [性能验证](../../docs/performance-scaling.md)。
+
+## 数据基线
+
+测试默认使用专用 PostgreSQL 数据库 `krun_e2e` 和对象桶 `krun-e2e`；部署和测试可同时
+设置 `KRUN_E2E_DATABASE` / `KRUN_E2E_BUCKET` 选择另一套专用数据。数据库与对象桶必须
+成对使用，避免从其他测试库读取配置 head。部署只创建不存在的测试库，不清空已有库。
+基线不匹配时应由测试环境所有者显式重建专用数据库，或选择新的库和桶。

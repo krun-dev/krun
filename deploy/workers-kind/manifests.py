@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import base64,json,pathlib,secrets,os,ipaddress,socket
+import base64,json,pathlib,secrets,os,ipaddress,socket,re
 root=pathlib.Path(__file__).resolve().parent
 out=root/'generated';out.mkdir(exist_ok=True)
 credential_file=out/'credentials.json'
@@ -15,10 +15,14 @@ git_mock_private_key=(out/'git-mock.key').read_text()
 git_mock_ca=(out/'git-mock-ca.crt').read_text()
 api_ips=[str(ipaddress.ip_address(x)) for x in os.environ['KRUN_KUBE_API_IPS'].split(',')]
 ns='workers-mvp';tag='20261013';items=[]
+database=os.environ.get('KRUN_E2E_DATABASE','krun_e2e')
+if not re.fullmatch(r'[a-z][a-z0-9_]{0,62}',database): raise SystemExit('Invalid KRUN_E2E_DATABASE')
+bucket=os.environ.get('KRUN_E2E_BUCKET','krun-e2e')
+if not re.fullmatch(r'[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]',bucket): raise SystemExit('Invalid KRUN_E2E_BUCKET')
 def resource(kind,name,**fields):
  return {'apiVersion':fields.pop('apiVersion','v1'),'kind':kind,'metadata':{'name':name,'namespace':ns},**fields}
 items.append({'apiVersion':'v1','kind':'Namespace','metadata':{'name':ns,'labels':{'lab':'krun-workers-mvp'}}})
-items.append(resource('Secret','workers-credentials',stringData={'KRUN_DATABASE_URL':f'postgres://postgres:{credentials["db_password"]}@postgres:5432/postgres?sslmode=disable','POSTGRES_PASSWORD':credentials['db_password'],'KRUN_S3_ACCESS':credentials['s3_access'],'KRUN_S3_SECRET':credentials['s3_secret'],'KRUN_RUNTIME_TOKEN':credentials['runtime_token'],'KRUN_MANAGEMENT_TOKEN':credentials['management_token'],'KRUN_WORKERS_SECRETS_KEY':credentials['worker_secrets_key'],'MINIO_ROOT_USER':credentials['s3_access'],'MINIO_ROOT_PASSWORD':credentials['s3_secret']}))
+items.append(resource('Secret','workers-credentials',stringData={'KRUN_DATABASE_URL':f'postgres://postgres:{credentials["db_password"]}@postgres:5432/{database}?sslmode=disable','POSTGRES_PASSWORD':credentials['db_password'],'KRUN_S3_ACCESS':credentials['s3_access'],'KRUN_S3_SECRET':credentials['s3_secret'],'KRUN_RUNTIME_TOKEN':credentials['runtime_token'],'KRUN_MANAGEMENT_TOKEN':credentials['management_token'],'KRUN_WORKERS_SECRETS_KEY':credentials['worker_secrets_key'],'MINIO_ROOT_USER':credentials['s3_access'],'MINIO_ROOT_PASSWORD':credentials['s3_secret']}))
 items.append(resource('Secret','git-mock-tls',type='kubernetes.io/tls',stringData={'tls.crt':git_mock_certificate,'tls.key':git_mock_private_key,'ca.crt':git_mock_ca}))
 def claim(name,size):items.append(resource('PersistentVolumeClaim',name,spec={'accessModes':['ReadWriteOnce'],'resources':{'requests':{'storage':size}}}))
 claim('postgres-data','1Gi');claim('minio-data','1Gi')
@@ -42,7 +46,6 @@ providers:
     type: dev
     name: kind 开发登录
 workers:
-  shared_routing: true
   reconcile_concurrency: 8
   namespace: workers-mvp
   builder_image: krun-worker-builder:20261013
@@ -149,6 +152,7 @@ workers:
       priority: 30
       base_url: https://gitlab.com
 '''
+config=config.replace('krun-artifacts',bucket)
 config=config.replace('public_url: http://127.0.0.1:4380','public_url: '+json.dumps(os.environ.get('KRUN_E2E_ORIGIN','http://127.0.0.1:4380')))
 
 items.append(resource('ConfigMap','control-config',data={'control.yaml':config}))
@@ -206,6 +210,7 @@ const config :W.Config = (
   (name="management",address="*:8083",http=(),service=(name="entry",entrypoint="Management"))
  ]
 );'''
+capnp=capnp.replace('krun-artifacts',bucket)
 items.append(resource('ConfigMap','runtime-config',data={'runtime.capnp':capnp}))
 items.append(resource('ConfigMap','validator-config',data={'runtime.capnp':validator_capnp}))
 deployment('runtime-default',[{'name':'workerd','image':f'krun-worker-runtime:{tag}','imagePullPolicy':'Never','securityContext':secure(),'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},{'name':'pod','mountPath':'/pod','readOnly':True},{'name':'secrets','mountPath':'/secrets','readOnly':True}],'readinessProbe':{'httpGet':{'path':'/ready','port':8083},'periodSeconds':1,'timeoutSeconds':5,'failureThreshold':2},'resources':limits('1Gi')}],replicas=2,labels={'role':'krun-runtime','pool':'default'},volumes=[{'name':'config','configMap':{'name':'runtime-config'}},{'name':'pod','downwardAPI':{'items':[{'path':'name','fieldRef':{'fieldPath':'metadata.name'}},{'path':'uid','fieldRef':{'fieldPath':'metadata.uid'}}]}},{'name':'secrets','secret':{'secretName':'workers-credentials','items':[{'key':n,'path':n} for n in ['KRUN_RUNTIME_TOKEN','KRUN_MANAGEMENT_TOKEN']]}}],terminationGracePeriodSeconds=10);service('runtime-default',[8081,8083])

@@ -491,13 +491,13 @@ func TestSyncEnvironmentHostsDerivesOneHostPerDomain(t *testing.T) {
 	env := WorkerEnvironment{Name: "production"}
 	s.syncEnvironmentHosts(&env, "org-a", "svc-a", []string{"internal", "external"})
 	slug := workerSlug("org-a", "svc-a")
-	want := []string{slug + "-production.workers.test", slug + "-production.workers-out.example.test"}
+	want := []string{slug + "-production." + c.poolHostSuffix("default", "workers.test"), slug + "-production." + c.poolHostSuffix("default", "workers-out.example.test")}
 	sort.Strings(env.Hosts)
 	sort.Strings(want)
 	if strings.Join(env.Hosts, ",") != strings.Join(want, ",") {
 		t.Fatalf("hosts: %v", env.Hosts)
 	}
-	if env.DisplayHosts["external"] != slug+"-production.workers-out.example.test" {
+	if env.DisplayHosts["external"] != slug+"-production."+c.poolHostSuffix("default", "workers-out.example.test") {
 		t.Fatalf("per-domain host: %q", env.DisplayHosts["external"])
 	}
 
@@ -645,12 +645,12 @@ func TestWorkerConfigProjectionCoversEveryDomain(t *testing.T) {
 	slug := workerSlug("org-a", "svc-a")
 	// Every selected domain yields one host per environment, in host order.
 	want := []string{
-		hostFor(slug, "empty", "workers-out.example.test"),
-		hostFor(slug, "empty", "workers.test"),
-		hostFor(slug, "preview", "workers-out.example.test"),
-		hostFor(slug, "preview", "workers.test"),
-		hostFor(slug, "production", "workers-out.example.test"),
-		hostFor(slug, "production", "workers.test"),
+		hostFor(slug, "empty", (&WorkersConfig{}).poolHostSuffix("default", "workers-out.example.test")),
+		hostFor(slug, "empty", (&WorkersConfig{}).poolHostSuffix("default", "workers.test")),
+		hostFor(slug, "preview", (&WorkersConfig{}).poolHostSuffix("default", "workers-out.example.test")),
+		hostFor(slug, "preview", (&WorkersConfig{}).poolHostSuffix("default", "workers.test")),
+		hostFor(slug, "production", (&WorkersConfig{}).poolHostSuffix("default", "workers-out.example.test")),
+		hostFor(slug, "production", (&WorkersConfig{}).poolHostSuffix("default", "workers.test")),
 	}
 	if strings.Join(hosts, ",") != strings.Join(want, ",") {
 		t.Fatalf("projection hosts: %v", hosts)
@@ -761,57 +761,6 @@ func (f *fakeKube) server(t *testing.T) *httptest.Server {
 	}))
 }
 
-func TestEnsureRoutesGroupsHostsByGateway(t *testing.T) {
-	fake := &fakeKube{routes: map[string]map[string]any{}, gateways: map[string]bool{}}
-	srv := fake.server(t)
-	defer srv.Close()
-	c := catalogConfig()
-	if err := c.validate(); err != nil {
-		t.Fatal(err)
-	}
-	k := &workerKubernetes{base: srv.URL, namespace: "workers-mvp", client: srv.Client()}
-	runtimeService := "runtime-private"
-	hosts := map[string][]string{
-		"internal": {"w-1-production.workers.test"},
-		"external": {"w-1-production.workers-out.example.test"},
-	}
-	if ready, err := k.ensureRoutes(context.Background(), c, "workers-abc", runtimeService, hosts); err != nil || ready {
-		t.Fatalf("creation pass: %v ready=%v", err, ready)
-	}
-	if ready, err := k.ensureRoutes(context.Background(), c, "workers-abc", runtimeService, hosts); err != nil || !ready {
-		t.Fatalf("ensureRoutes: %v ready=%v", err, ready)
-	}
-	// The first catalog Gateway keeps the base name; later ones are suffixed.
-	internal, ok := fake.routes["workers-abc"]
-	if !ok {
-		t.Fatal("internal route missing")
-	}
-	external, ok := fake.routes["workers-abc-external"]
-	if !ok {
-		t.Fatal("external route missing")
-	}
-	ip := internal["parentRefs"].([]any)[0].(map[string]any)
-	ep := external["parentRefs"].([]any)[0].(map[string]any)
-	if ip["name"] != "workers-mvp" || ip["sectionName"] != "private" {
-		t.Fatalf("internal route attached to %v", ip)
-	}
-	if ep["name"] != "workers-public" || ep["sectionName"] != "public" {
-		t.Fatalf("external route attached to %v", ep)
-	}
-	for route, spec := range map[string]map[string]any{"internal": internal, "external": external} {
-		rules := spec["rules"].([]any)
-		backend := rules[0].(map[string]any)["backendRefs"].([]any)[0].(map[string]any)
-		if backend["name"] != runtimeService {
-			t.Fatalf("%s route backend=%v", route, backend)
-		}
-	}
-	for _, raw := range external["hostnames"].([]any) {
-		if strings.HasSuffix(raw.(string), "."+c.Domains[0].Domain) {
-			t.Fatalf("internal host leaked onto the external route: %v", external["hostnames"])
-		}
-	}
-}
-
 func TestStaleWorkerRoutesPropagatesListFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
@@ -907,7 +856,7 @@ func TestProcessOperationStopsAfterCommitCASConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	controller := &workersController{
-		server: s, config: c, s3: s3, s3Builder: s3,
+		server: s, config: c, s3: s3, s3Builder: s3, s3Runtime: s3,
 		kube: &workerKubernetes{base: apiServer.URL, namespace: c.Namespace, client: apiServer.Client()},
 		http: apiServer.Client(), assetCache: map[string]workerCachedAssets{}, replica: "test",
 	}
@@ -927,37 +876,6 @@ func TestProcessOperationStopsAfterCommitCASConflict(t *testing.T) {
 	}
 	if latest != 0 {
 		t.Fatalf("commit CAS conflict still published edge config revision %d", latest)
-	}
-}
-
-func TestEnsureRoutesPrunesGatewayWithoutHosts(t *testing.T) {
-	fake := &fakeKube{routes: map[string]map[string]any{}, gateways: map[string]bool{}}
-	srv := fake.server(t)
-	defer srv.Close()
-	c := catalogConfig()
-	if err := c.validate(); err != nil {
-		t.Fatal(err)
-	}
-	k := &workerKubernetes{base: srv.URL, namespace: "workers-mvp", client: srv.Client()}
-	if _, err := k.ensureRoutes(context.Background(), c, "workers-abc", c.RuntimePools[0].RuntimeService, map[string][]string{
-		"internal": {"w-1-production.workers.test"},
-		"external": {"w-1-production.workers-out.example.test"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := k.ensureRoutes(context.Background(), c, "workers-abc", c.RuntimePools[0].RuntimeService, map[string][]string{
-		"internal": {"w-1-production.workers.test"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, name := range fake.deleted {
-		if name == "workers-abc-external" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("external route was not pruned: %v", fake.deleted)
 	}
 }
 

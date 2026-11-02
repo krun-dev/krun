@@ -284,9 +284,6 @@ func (s *Store) commitOperation(ctx context.Context, op WorkerOperation) (bool, 
 		}
 		return false, tx.Commit(ctx)
 	}
-	if err = bumpWorkerTopologyGeneration(ctx, tx); err != nil {
-		return false, err
-	}
 	// Supersede an earlier committed operation only after this release has won
 	// the environment CAS. A stale operation must not cancel live convergence.
 	if _, err = tx.Exec(ctx, `UPDATE krun_worker_operations

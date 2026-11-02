@@ -130,12 +130,6 @@ export function parseSelections(
     if (envs && [...envs].sort().join() !== [...environments].sort().join())
       return null;
     envs = environments;
-    if (
-      resource.kind === "system" &&
-      resource.all_in_system &&
-      statement.actions.includes("*")
-    )
-      return null;
     const choices = Object.entries(registry)
       .filter(([, kinds]) => kinds.includes(resource.kind))
       .map(([action]) => action);

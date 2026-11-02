@@ -37,7 +37,7 @@ async function loadArtifact(archive,descriptor){
  const manifestBytes=files.get('manifest.json');if(!manifestBytes)throw new Error('artifact manifest missing');
  let manifest;try{manifest=JSON.parse(strictDecoder.decode(manifestBytes));}catch{throw new Error('artifact manifest invalid');}
  if(!exactKeys(manifest,['schema_version','profile','compatibility_date','compatibility_flags','main_module','modules','assets'])
-  ||(manifest.schema_version!==1&&manifest.schema_version!==2)||manifest.profile!=='workerd-bundle-v2'
+  ||manifest.schema_version!==2||manifest.profile!=='workerd-bundle-v2'
   ||typeof manifest.compatibility_date!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(manifest.compatibility_date)||manifest.compatibility_date<'2021-11-02'||manifest.compatibility_date>'2026-09-28'
   ||(manifest.compatibility_flags!==undefined&&(!Array.isArray(manifest.compatibility_flags)||manifest.compatibility_flags.length>32||manifest.compatibility_flags.some(flag=>typeof flag!=='string'||!/^[a-z][a-z0-9_]{0,63}$/.test(flag))||new Set(manifest.compatibility_flags).size!==manifest.compatibility_flags.length))
   ||!safeModuleName(manifest.main_module)||!Array.isArray(manifest.modules)||manifest.modules.length===0||manifest.modules.length>512)throw new Error('artifact manifest unsupported');
@@ -68,8 +68,7 @@ async function loadArtifact(archive,descriptor){
   }catch{throw new Error('artifact text module invalid');}
  }
  if(!mainDigest||mainDigest!==descriptor.module_sha256)throw new Error('artifact main module mismatch');
- if(manifest.schema_version===1&&manifest.assets!==undefined)throw new Error('schema 1 cannot declare assets');
- if(manifest.schema_version===2){
+ if(manifest.assets!==undefined){
   const assets=manifest.assets;if(!exactKeys(assets,['directory','binding','run_worker_first','not_found_handling','html_handling','files'])||!Array.isArray(assets.files))throw new Error('artifact assets invalid');
   for(const file of assets.files){
    if(!exactKeys(file,['path','sha256','size_bytes','content_type'])||!safeModuleName(file.path,240,'assets/')||typeof file.sha256!=='string'||typeof file.content_type!=='string'||!Number.isInteger(file.size_bytes))throw new Error('artifact asset metadata invalid');
@@ -121,21 +120,15 @@ function applySnapshot(snapshot,pool='default'){
 async function bootstrap(env){
  if(env.CONFIG_BASE)try{
   const latest=await requestJSON(env.CONFIG_BASE+'/latest.json',5000);
-  if(latest?.lazy_routes){applySnapshot({...latest,pool:env.RUNTIME_POOL||'default',routes:[],releases:{}});return view;}
-  if(latest&&latest.snapshot){
-   const raw=await requestBytes(env.CONFIG_BASE+'/'+latest.snapshot,15000);
-   if(latest.sha256&&await sha256(raw)!==latest.sha256)throw new Error('snapshot digest mismatch');
-   const snapshot=JSON.parse(decoder.decode(await gunzip(raw)));
-   if(Number(snapshot.config_revision)!==Number(latest.config_revision))throw new Error('snapshot revision mismatch');
-   applySnapshot(snapshot,env.RUNTIME_POOL||'default');
-   return view;
-  }
+  if(latest?.lazy_routes!==true)throw new Error('unsupported config head');
+  applySnapshot({...latest,pool:env.RUNTIME_POOL||'default',routes:[],releases:{}});return view;
  }catch(e){console.error('config bootstrap from storage failed',e.message);}
- applySnapshot(await platform(env,'/config/snapshot'),env.RUNTIME_POOL||'default');
- return view;
+ return bootstrapFromControl(env);
 }
 async function bootstrapFromControl(env){
- applySnapshot(await platform(env,'/config/snapshot'),env.RUNTIME_POOL||'default');
+ const head=await platform(env,'/config/snapshot');
+ if(head?.lazy_routes!==true)throw new Error('unsupported config head');
+ applySnapshot(head,env.RUNTIME_POOL||'default');
  return view;
 }
 function ensureBootstrap(env){

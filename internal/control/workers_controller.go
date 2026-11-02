@@ -45,25 +45,13 @@ type workersController struct {
 	assetCache   map[string]workerCachedAssets
 	// Edge config publication is coordinated by a durable revision CAS; every
 	// replica may race without electing a process-wide leader.
-	configMu       sync.Mutex
-	configLoaded   bool
-	configDirty    bool
-	configBucket   bool
-	configLast     *workerConfigProjection
-	configRevision int64
-	configFloor    int64
-	// configTopologyGeneration gates the expensive edge read model. PostgreSQL
-	// mutations advance the durable generation in the same transaction as a
-	// topology change, so idle reconcile cycles need only read one meta row.
-	configTopologyGeneration  int64
-	configTopologyLoaded      bool
-	routingTopology           map[string]workerRoutingService
-	routingTopologyGeneration int64
-	routingTopologyLoaded     bool
-	routingReady              map[string]bool
-	routingChecked            time.Time
-	lastRouteGeneration       int64
-	objectGCAfter             map[string]string
+	configMu sync.Mutex
+
+	configBucket bool
+
+	routingReady   map[string]bool
+	routingChecked time.Time
+	objectGCAfter  map[string]string
 	// Local build executor state for builder_mode: local.
 	localMu     sync.Mutex
 	localBuilds map[string]*workerLocalBuild
@@ -198,23 +186,6 @@ func (w *workersController) reconcile(ctx context.Context) error {
 		failures = append(failures, e)
 	}
 
-	// The route reconciler repairs Kubernetes every cycle, but its desired
-	// topology changes far less often. Keep the compact read model behind the
-	// same durable generation used by config publication.
-	topology := w.routingTopology
-	generation, e := w.server.Store.WorkerTopologyGeneration(ctx)
-	if e != nil {
-		return e
-	}
-	if !w.config.SharedRouting && (!w.routingTopologyLoaded || generation < 0 || generation != w.routingTopologyGeneration) {
-		topology, generation, e = w.server.Store.WorkerRoutingTopology(ctx)
-		if e != nil {
-			return e
-		}
-		w.routingTopology = topology
-		w.routingTopologyGeneration = generation
-		w.routingTopologyLoaded = generation >= 0
-	}
 	pending, e := w.server.Store.pendingWork(context.WithValue(ctx, workerQueueReplicaKey{}, w.replica), 100)
 	if e != nil {
 		return e
@@ -252,15 +223,14 @@ func (w *workersController) reconcile(ctx context.Context) error {
 			break
 		}
 	}
-	if routesReady == nil || w.routingChecked.IsZero() || now().Sub(w.routingChecked) >= routeInterval || generation != w.lastRouteGeneration {
+	if routesReady == nil || w.routingChecked.IsZero() || now().Sub(w.routingChecked) >= routeInterval {
 		var routeErr error
-		routesReady, routeErr = w.reconcileRoutes(ctx, topology)
+		routesReady, routeErr = w.reconcileRoutes(ctx)
 		if routeErr != nil {
 			failures = append(failures, routeErr)
 		} else {
 			w.routingReady = routesReady
 			w.routingChecked = now()
-			w.lastRouteGeneration = generation
 		}
 	}
 
@@ -275,12 +245,11 @@ func (w *workersController) reconcile(ctx context.Context) error {
 			if err := w.server.Store.scheduleWorkerRetry(ctx, "operation", op.ID); err != nil {
 				return err
 			}
-			ready := routesReady[op.Service]
-			if w.config.SharedRouting {
-				if p, ok := activeWorkerPlacement(&pending, op.Service); ok {
-					ready = routesReady["pool:"+p.Pool]
-				}
+			ready := false
+			if p, ok := activeWorkerPlacement(&pending, op.Service); ok {
+				ready = routesReady["pool:"+p.Pool]
 			}
+
 			return w.processOperation(ctx, op, pending, ready)
 		}
 	}
@@ -313,7 +282,7 @@ func (w *workersController) reconcile(ctx context.Context) error {
 
 // The namespace inventory is read once, with pagination, and reused for every
 // stale-route check. Route repair is independent of the one-second work queue.
-func (w *workersController) reconcileRoutes(ctx context.Context, topology map[string]workerRoutingService) (map[string]bool, error) {
+func (w *workersController) reconcileRoutes(ctx context.Context) (map[string]bool, error) {
 	var failures []error
 	names, err := w.kube.listRoutes(ctx)
 	if err != nil {
@@ -353,80 +322,26 @@ func (w *workersController) reconcileRoutes(ctx context.Context, topology map[st
 	for name := range desiredStatic {
 		desiredRoutes[name] = true
 	}
-	if w.config.SharedRouting {
-		for _, pool := range w.config.configuredRuntimePools() {
-			ready := true
-			for _, domain := range w.config.Domains {
-				if !runtimePoolHasAccess(pool, domain.Access) {
-					continue
-				}
-				gateway, ok := w.config.gateway(domain.Gateway)
-				if !ok {
-					continue
-				}
-				name := "workers-shared-" + digest(pool.ID + "/" + domain.ID)[:24]
-				desiredRoutes[name] = true
-				adopted, err := w.kube.ensureRoute(ctx, name, pool.RuntimeService, gateway, []string{"*." + w.config.poolHostSuffix(pool.ID, domain.Domain)})
-				ready = ready && adopted && err == nil
-				if err != nil {
-					failures = append(failures, err)
-				}
-			}
-			routesReady["pool:"+pool.ID] = ready
-		}
-	} else {
-		// One HTTPRoute per (service, Gateway instance). Hosts are grouped by the
-		// Gateway their domain is bound to, so routes never carry a hostname the
-		// instance is not meant to serve.
-		for _, routing := range topology {
-			service := w.config.normalizeServiceNetwork(routing.Service)
-			if !w.config.poolAllowedForProfile(service.NetworkProfile, routing.Pool) {
-				failures = append(failures, fmt.Errorf("worker service %s placement %q is incompatible with network profile %q", service.Service, routing.Pool, service.NetworkProfile))
-				routesReady[service.Service] = false
+	for _, pool := range w.config.configuredRuntimePools() {
+		ready := true
+		for _, domain := range w.config.Domains {
+			if !runtimePoolHasAccess(pool, domain.Access) {
 				continue
 			}
-			pool, ok := w.config.runtimePool(routing.Pool)
+			gateway, ok := w.config.gateway(domain.Gateway)
 			if !ok {
-				failures = append(failures, fmt.Errorf("worker service %s references unknown runtime pool %q", service.Service, routing.Pool))
-				routesReady[service.Service] = false
 				continue
 			}
-			hostsByGateway := map[string][]string{}
-			selectedDomains := service.Domains
-			for _, env := range service.Environments {
-				if !env.Enabled {
-					continue
-				}
-				// Hosts are derived from the domain catalog, never persisted, so a
-				// catalog change cannot leave stale hosts behind.
-				for _, id := range selectedDomains {
-					d, ok := w.config.domain(id)
-					if !ok {
-						continue
-					}
-					host := hostFor(workerSlug(service.Organization, service.Service), env.Name, d.Domain)
-					if host == "" {
-						continue
-					}
-					hostsByGateway[d.Gateway] = append(hostsByGateway[d.Gateway], host)
-				}
-			}
-			baseName := "workers-" + digest(service.Organization + "/" + service.Service)[:24]
-			for i, gateway := range w.config.Gateways {
-				name := baseName
-				if i > 0 {
-					name += "-" + gateway.ID
-				}
-				desiredRoutes[name] = true
-			}
-			ready, routeError := w.kube.ensureRoutes(ctx, w.config, baseName, pool.RuntimeService, hostsByGateway)
-			routesReady[service.Service] = ready && routeError == nil
-			if routeError != nil {
-				failures = append(failures, routeError)
+			name := "workers-shared-" + digest(pool.ID + "/" + domain.ID)[:24]
+			desiredRoutes[name] = true
+			adopted, err := w.kube.ensureRoute(ctx, name, pool.RuntimeService, gateway, []string{"*." + w.config.poolHostSuffix(pool.ID, domain.Domain)})
+			ready = ready && adopted && err == nil
+			if err != nil {
+				failures = append(failures, err)
 			}
 		}
+		routesReady["pool:"+pool.ID] = ready
 	}
-
 	// A service that disappeared from IAM is not visited above. Remove its old
 	// HTTPRoutes explicitly rather than waiting for a future service write.
 	staleRoutes, staleErr := staleWorkerRoutes(ctx, w.kube, "workers-", desiredRoutes)
@@ -521,7 +436,7 @@ func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, pri
 			return w.failBuild(ctx, b.ID, err.Error(), private.Log)
 		}
 	}
-	// Legacy inline builds still arrive as a file map; move them onto the same
+	// Inline builds arrive as a file map; normalize them onto the same
 	// source-bundle path so the builder never receives files through a ConfigMap.
 	if private.SourceKey == "" && len(private.Files) > 0 {
 		bundle, err := workerSourceBundle(private.Files, nil)

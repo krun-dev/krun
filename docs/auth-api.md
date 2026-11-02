@@ -84,7 +84,7 @@ JSON DTO 拒绝未知字段和重复键，正文上限 1 MiB。资源/组/Key/As
 
 Key 创建：`{name, expires_in, policy}`。`expires_in` 必填，`0` 表示长期有效，返回 `expires_at: null`；正数为 60 秒至 90 天，有限期限到期后拒绝认证与策略更新。撤销、禁用用户、身份来源限制及实时角色检查同样适用于长期有效 Key。策略见 `config/key-policy.example.yaml`。只读资源、列表、版本、发布、删除分别授权，不存在 `write` 或隐式超级 Key。精确 Key 列表发现可显式加入组织选择器上的 service.list / model.list；返回条目仍逐资源过滤。
 
-所有用户可选择 `actions:["*"]`，按选择器兼容的动作目录展开。`resource.kind:"*"` 可配合 `all_in_organization:true` 与准确 `organization_id` 表示组织所有类型资源；`all_in_system:true` 仅用于跨工作空间 Key，允许所有用户创建自己的 Key，并不授予系统管理员权限。使用 service/model 等具体 kind 时仍限制该类型。为兼容初版，`kind:"system", all_in_system:true` 仍表示全部类型范围；新全类型策略推荐 `kind:"*"`。
+所有用户可选择 `actions:["*"]`，按选择器兼容的动作目录展开。`resource.kind:"*"` 可配合 `all_in_organization:true` 与准确 `organization_id` 表示组织所有类型资源；`all_in_system:true` 仅用于跨工作空间 Key，允许所有用户创建自己的 Key，并不授予系统管理员权限。使用 service/model 等具体 kind 时仍限制该类型。`kind:"system", all_in_system:true` 仅选择平台资源；全部资源类型统一使用 `kind:"*"`。
 
 策略是访问上限，可以勾选用户当前尚未获授的操作；精确 ID 仍须存在且属于选择器指定组织。每次请求严格计算“用户当前权限 ∩ Key 策略”，deny 优先；角色、成员和身份来源变化立即生效。组织范围 Key 始终不能跨组织。普通用户只可列出、读取、修改或撤销自己的跨工作空间 Key；其他系统管理接口仍按各自权限检查。
 
@@ -94,7 +94,7 @@ Key 创建：`{name, expires_in, policy}`。`expires_in` 必填，`0` 表示长�
 
 前端“只读”选择 `.read` / `.list`；“读写”增加创建、更新、删除、管理、授权、撤销、配置及绑定操作。发布 / 回滚 / 调用 / 执行需要单独勾选，或选择“全部 API”。预留领域动作在界面注明，不代表执行接口已实现。
 
-未实现版本上传/构建/发布/回滚执行 API；相应动作在固定注册表中为后续领域门面保留，权限检查可以验证这些动作，但不会执行工作负载。
+Workers 的构建、发布、回滚与调用接口见 [Workers 后端](workers-backend.md)。模型等未提供执行接口的资源只支持已注册的元数据操作；动作目录不代表执行能力。
 
 ## 审计分页与保留期
 

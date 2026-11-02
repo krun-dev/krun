@@ -1,18 +1,13 @@
 package control
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"sort"
 	"strings"
 	"testing"
-
-	"github.com/minio/minio-go/v7"
 )
 
 func workerConfigFixture() (*State, *Store) {
@@ -75,7 +70,7 @@ func TestWorkerConfigProjection(t *testing.T) {
 		t.Fatalf("routes: %+v", p.Routes)
 	}
 	slug := workerSlug("org-a", "svc-a")
-	wantHosts := []string{hostFor(slug, "empty", "workers.test"), hostFor(slug, "preview", "workers.test"), hostFor(slug, "production", "workers.test")}
+	wantHosts := []string{hostFor(slug, "empty", (&WorkersConfig{}).poolHostSuffix("default", "workers.test")), hostFor(slug, "preview", (&WorkersConfig{}).poolHostSuffix("default", "workers.test")), hostFor(slug, "production", (&WorkersConfig{}).poolHostSuffix("default", "workers.test"))}
 	sort.Strings(wantHosts)
 	for i, want := range wantHosts {
 		if p.Routes[i].Host != want {
@@ -116,7 +111,7 @@ func TestWorkerConfigDiffOrdering(t *testing.T) {
 	next := first
 	next.Routes = append([]workerConfigRoute(nil), first.Routes...)
 	next.Releases = map[string]WorkerRelease{"rel-1": first.Releases["rel-1"]}
-	prodHost := hostFor(workerSlug("org-a", "svc-a"), "production", "workers.test")
+	prodHost := hostFor(workerSlug("org-a", "svc-a"), "production", (&WorkersConfig{}).poolHostSuffix("default", "workers.test"))
 	for i := range next.Routes {
 		if next.Routes[i].Host == prodHost {
 			next.Routes[i].Release = "rel-2"
@@ -193,154 +188,6 @@ func TestConfigRevisionCASRejectsStalePublisher(t *testing.T) {
 	items, _, err := store.ConfigRevisionsSince(ctx, 0, 10)
 	if err != nil || len(items) != 1 || items[0].Digest != "first" {
 		t.Fatalf("stale publisher created a duplicate revision: %+v err=%v", items, err)
-	}
-}
-
-func TestLoadConfigFailsClosedOnDigestMismatch(t *testing.T) {
-	s, store := testServer(t)
-	projection := workerConfigProjection{
-		Routes:   []workerConfigRoute{{Host: "stale.workers.test", Path: "/", Enabled: true}},
-		Releases: map[string]WorkerRelease{},
-	}
-	_, payload, err := workerConfigDigest(projection)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if revision, _, appended, err := store.AppendConfigRevisionCAS(context.Background(), 0, "corrupt-digest", payload, []byte(`[]`), 10); err != nil || !appended || revision != 1 {
-		t.Fatalf("seed corrupt head: revision=%d appended=%v err=%v", revision, appended, err)
-	}
-	controller := &workersController{server: s, config: s.Config.Workers}
-	for attempt := 0; attempt < 2; attempt++ {
-		if err := controller.loadConfigLocked(context.Background()); err == nil {
-			t.Fatalf("attempt %d accepted a normalized head whose digest does not match", attempt+1)
-		}
-		if controller.configLoaded || controller.configLast != nil {
-			t.Fatalf("attempt %d left corrupt head loaded: loaded=%v projection=%+v", attempt+1, controller.configLoaded, controller.configLast)
-		}
-	}
-}
-
-func TestPublishConfigCASDoesNotReturnStaleWinner(t *testing.T) {
-	s, store := testServer(t)
-	s.Config.Workers = testWorkersConfig()
-	st, _, _ := fixture()
-	service := WorkerService{Service: "svc-a", Organization: "org-a", Domains: []string{"internal"}, Environments: map[string]WorkerEnvironment{
-		"production": {Name: "production", Enabled: true, Release: "rel-fresh"},
-	}}
-	st.Workers.Services[service.Service] = service
-	placed := now()
-	st.Workers.Placements[workerPlacementKey(service.Service, "default")] = WorkerPlacement{Service: service.Service, Organization: service.Organization, NetworkProfile: "default", Pool: "default", Role: "primary", State: "active", Revision: 1, Created: placed, Updated: placed}
-	st.Workers.Releases["rel-fresh"] = WorkerRelease{ID: "rel-fresh", Service: service.Service, Organization: service.Organization, Environment: "production", Artifact: "art-fresh"}
-	if err := store.Update(context.Background(), PartitionAll, func(current *State) error { *current = *st; return nil }); err != nil {
-		t.Fatal(err)
-	}
-
-	// Simulate another replica winning revision 1 from a projection it read
-	// before rel-fresh committed.
-	stale := workerConfigProjection{Routes: []workerConfigRoute{}, Releases: map[string]WorkerRelease{}}
-	staleDigest, stalePayload, err := workerConfigDigest(stale)
-	if err != nil {
-		t.Fatal(err)
-	}
-	staleOps, _ := json.Marshal(diffWorkerConfig(nil, stale))
-	if revision, _, appended, err := store.AppendConfigRevisionCAS(context.Background(), 0, staleDigest, stalePayload, staleOps, workerConfigOpsRetain); err != nil || !appended || revision != 1 {
-		t.Fatalf("seed stale winner: revision=%d appended=%v err=%v", revision, appended, err)
-	}
-
-	controller := &workersController{server: s, config: s.Config.Workers, configLoaded: true, configRevision: 0, assetCache: map[string]workerCachedAssets{}}
-	controller.putObject = func(_ context.Context, _, _ string, reader io.Reader, _ int64, _ minio.PutObjectOptions) (minio.UploadInfo, error) {
-		_, err := io.ReadAll(reader)
-		return minio.UploadInfo{}, err
-	}
-	revision, err := controller.publishConfig(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if revision != 2 {
-		t.Fatalf("publish returned stale revision %d, want fresh revision 2", revision)
-	}
-	latest, ok, err := store.LatestConfigRevision(context.Background())
-	if err != nil || !ok || latest.Revision != revision {
-		t.Fatalf("latest=%+v ok=%v err=%v", latest, ok, err)
-	}
-	var projection workerConfigProjection
-	if err := json.Unmarshal(latest.Payload, &projection); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := projection.Releases["rel-fresh"]; !ok {
-		t.Fatalf("returned revision does not contain fresh release: %+v", projection)
-	}
-}
-
-func TestPublishConfigCreatesRevisionsAndObjects(t *testing.T) {
-	s, store := testServer(t)
-	s.Config.Workers = testWorkersConfig()
-	controller := &workersController{server: s, config: s.Config.Workers, assetCache: map[string]workerCachedAssets{}}
-	objects := map[string][]byte{}
-	controller.putObject = func(ctx context.Context, bucket, key string, reader io.Reader, size int64, opts minio.PutObjectOptions) (minio.UploadInfo, error) {
-		raw, err := io.ReadAll(reader)
-		if err != nil {
-			return minio.UploadInfo{}, err
-		}
-		objects[key] = raw
-		return minio.UploadInfo{}, nil
-	}
-	st, _, _ := fixture()
-	ws := WorkerService{Service: "svc-a", Organization: "org-a", Domains: []string{"internal"}, Environments: map[string]WorkerEnvironment{"production": {Name: "production", Enabled: true, Release: "rel-1"}}}
-	st.Workers.Services["svc-a"] = ws
-	placed := now()
-	st.Workers.Placements[workerPlacementKey("svc-a", "default")] = WorkerPlacement{Service: "svc-a", Organization: "org-a", NetworkProfile: "default", Pool: "default", Role: "primary", State: "active", Revision: 1, Created: placed, Updated: placed}
-	st.Workers.Releases["rel-1"] = WorkerRelease{ID: "rel-1", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1"}
-	if err := store.Update(context.Background(), PartitionAll, func(state *State) error { *state = *st; return nil }); err != nil {
-		t.Fatal(err)
-	}
-	revision, err := controller.publishConfig(context.Background())
-	if err != nil || revision != 1 {
-		t.Fatalf("first publish: %d %v", revision, err)
-	}
-	raw, ok := objects[workerPoolConfigSnapshotKey("default", 1)]
-	if !ok {
-		t.Fatal("snapshot object missing")
-	}
-	gz, err := gzip.NewReader(bytes.NewReader(raw))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var snapshot workerConfigSnapshot
-	if err := json.NewDecoder(gz).Decode(&snapshot); err != nil {
-		t.Fatal(err)
-	}
-	prodHost := hostFor(workerSlug("org-a", "svc-a"), "production", "workers.test")
-	if snapshot.ConfigRevision != 1 || len(snapshot.Routes) != 1 || snapshot.Routes[0].Host != prodHost || snapshot.Releases["rel-1"].Artifact != "art-1" {
-		t.Fatalf("snapshot payload: %+v", snapshot)
-	}
-	if _, ok := objects[workerPoolConfigLatestKey("default")]; !ok {
-		t.Fatal("latest pointer missing")
-	}
-	before := len(objects)
-	if again, err := controller.publishConfig(context.Background()); err != nil || again != 1 || len(objects) != before {
-		t.Fatalf("unchanged projection must not republish: %d %v objects=%d", again, err, len(objects))
-	}
-	if err := store.Update(context.Background(), PartitionAll, func(state *State) error {
-		env := state.Workers.Services["svc-a"].Environments["production"]
-		env.Release = "rel-2"
-		service := state.Workers.Services["svc-a"]
-		service.Environments["production"] = env
-		state.Workers.Services["svc-a"] = service
-		state.Workers.Releases["rel-2"] = WorkerRelease{ID: "rel-2", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-2"}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if next, err := controller.publishConfig(context.Background()); err != nil || next != 2 {
-		t.Fatalf("second publish: %d %v", next, err)
-	}
-	var latest workerConfigLatest
-	if err := json.Unmarshal(objects[workerPoolConfigLatestKey("default")], &latest); err != nil {
-		t.Fatal(err)
-	}
-	if latest.ConfigRevision != 2 || latest.Snapshot != "snapshots/2.json.gz" || latest.SHA256 == "" {
-		t.Fatalf("latest pointer: %+v", latest)
 	}
 }
 
@@ -437,7 +284,7 @@ func TestMultiPoolRuntimeConfigIsolation(t *testing.T) {
 		return w
 	}
 	privateSnapshot := requestPool("private-a", strings.Repeat("p", 24), "/snapshot")
-	if privateSnapshot.Code != http.StatusOK || !strings.Contains(privateSnapshot.Body.String(), "private.workers.test") || strings.Contains(privateSnapshot.Body.String(), "public.workers.test") {
+	if privateSnapshot.Code != http.StatusOK || !strings.Contains(privateSnapshot.Body.String(), `"lazy_routes":true`) || strings.Contains(privateSnapshot.Body.String(), "workers.test") {
 		t.Fatalf("private snapshot isolation: %d %s", privateSnapshot.Code, privateSnapshot.Body.String())
 	}
 	privateChanges := requestPool("private-a", strings.Repeat("p", 24), "/changes?since=1&wait=1s")

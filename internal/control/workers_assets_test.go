@@ -120,12 +120,12 @@ func TestParseBuilderProducedArchive(t *testing.T) {
 	}
 }
 
-func TestSchemaOneArchiveStillParses(t *testing.T) {
+func TestArtifactWithoutAssets(t *testing.T) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 	code := []byte("export default {fetch(){return new Response('ok')}}")
-	manifest, _ := json.Marshal(map[string]any{"schema_version": 1, "profile": workerProfile, "compatibility_date": workerDefaultCompatibilityDate, "main_module": "index.js",
+	manifest, _ := json.Marshal(map[string]any{"schema_version": 2, "profile": workerProfile, "compatibility_date": workerDefaultCompatibilityDate, "main_module": "index.js",
 		"modules": []map[string]any{{"name": "index.js", "path": "modules/index.js", "type": "esm", "sha256": bytesDigest(code), "size_bytes": len(code)}}})
 	for name, data := range map[string][]byte{"manifest.json": manifest, "modules/index.js": code} {
 		_ = tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(data)), Typeflag: tar.TypeReg})
@@ -136,5 +136,31 @@ func TestSchemaOneArchiveStillParses(t *testing.T) {
 	parsed, _, err := parseWorkerArchive(buf.Bytes())
 	if err != nil || parsed.Assets != nil {
 		t.Fatal(parsed, err)
+	}
+}
+
+func TestArtifactRejectsObsoleteManifestSchema(t *testing.T) {
+	code := []byte("export default {fetch(){return new Response('ok')}}")
+	manifest := map[string]any{"schema_version": 1, "profile": workerProfile, "compatibility_date": workerDefaultCompatibilityDate, "main_module": "index.js", "modules": []map[string]any{{"name": "index.js", "path": "modules/index.js", "type": "esm", "sha256": bytesDigest(code), "size_bytes": len(code)}}}
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	raw, _ := json.Marshal(manifest)
+	for name, data := range map[string][]byte{"manifest.json": raw, "modules/index.js": code} {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0600, Size: int64(len(data)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := parseWorkerArchive(buf.Bytes()); err == nil {
+		t.Fatal("obsolete manifest schema accepted")
 	}
 }

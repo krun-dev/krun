@@ -205,7 +205,7 @@ func statementActions(s Statement) []string {
 			continue
 		}
 		for name, kinds := range actions {
-			if s.Resource.Kind == "*" || (s.Resource.AllSystem && s.Resource.Kind == "system") || contains(kinds, s.Resource.Kind) {
+			if s.Resource.Kind == "*" || contains(kinds, s.Resource.Kind) {
 				set[name] = true
 			}
 		}
@@ -230,12 +230,7 @@ func compileKey(k APIKey) (*cedar.PolicySet, error) {
 		if selector.Kind == "*" {
 			parts = []string{"true"}
 		}
-		if selector.AllSystem {
-			// Keep the original system selector compatible: it denotes all kinds.
-			if selector.Kind == "system" {
-				parts = []string{"true"}
-			}
-		} else {
+		if !selector.AllSystem {
 			if selector.Organization != "" {
 				parts = append(parts, "resource.organization == "+strconv.Quote(selector.Organization))
 			}
@@ -408,7 +403,7 @@ func validatePolicy(st *State, p Principal, org, scope string, policy Policy) er
 			}
 		}
 		for _, action := range s.Actions {
-			if action != "*" && (len(actions[action]) == 0 || (r.Kind != "*" && !(r.AllSystem && r.Kind == "system") && !contains(actions[action], r.Kind))) {
+			if action != "*" && (len(actions[action]) == 0 || (r.Kind != "*" && !contains(actions[action], r.Kind))) {
 				return problem(422, "POLICY_INVALID", "unknown action or incompatible resource kind")
 			}
 		}

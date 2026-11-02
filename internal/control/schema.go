@@ -3,6 +3,8 @@ package control
 import (
 	"context"
 	"errors"
+
+	"github.com/jackc/pgx/v5"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,14 +27,8 @@ CREATE SEQUENCE IF NOT EXISTS krun_revision_seq;
 INSERT INTO krun_meta (key, value) VALUES
 	('revision','0'),
 	('bootstrapped','0'),
-	('worker_config_head','0'),
-	('worker_topology_generation','0')
+	('worker_config_head','0')
 ON CONFLICT (key) DO NOTHING;
-SELECT setval(
-	'krun_revision_seq',
-	GREATEST((SELECT value::bigint FROM krun_meta WHERE key='revision'), 1),
-	(SELECT value::bigint > 0 FROM krun_meta WHERE key='revision')
-);
 
 CREATE TABLE IF NOT EXISTS krun_audits (
 	id              text PRIMARY KEY,
@@ -130,7 +126,6 @@ CREATE TABLE IF NOT EXISTS krun_resources (
 	name        text NOT NULL,
 	revision    integer NOT NULL DEFAULT 1
 );
-CREATE INDEX IF NOT EXISTS krun_resources_org ON krun_resources (org_id, kind);
 
 CREATE TABLE IF NOT EXISTS krun_api_keys (
 	key_id        text PRIMARY KEY,
@@ -361,14 +356,14 @@ CREATE TABLE IF NOT EXISTS krun_worker_builds (
 	error         text NOT NULL DEFAULT '',
 	repository    jsonb,
 	assets        jsonb,
+	started_at timestamptz,
+	reconcile_after timestamptz NOT NULL DEFAULT '-infinity',
 	created_at    timestamptz NOT NULL DEFAULT now(),
 	finished_at   timestamptz,
 	claimed_by    text NOT NULL DEFAULT '',
 	claimed_at    timestamptz
 );
 CREATE INDEX IF NOT EXISTS krun_worker_builds_service ON krun_worker_builds (service_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS krun_worker_builds_pending ON krun_worker_builds (created_at)
-	WHERE state NOT IN ('succeeded', 'failed');
 
 CREATE TABLE IF NOT EXISTS krun_worker_build_private (
 	build_id           text PRIMARY KEY,
@@ -456,14 +451,14 @@ CREATE TABLE IF NOT EXISTS krun_worker_operations (
 	actor_user_id      text NOT NULL DEFAULT '',
 	actor_key_id       text NOT NULL DEFAULT '',
 	actor_auth_version integer NOT NULL DEFAULT 0,
+	started_at timestamptz,
+	reconcile_after timestamptz NOT NULL DEFAULT '-infinity',
 	created_at         timestamptz NOT NULL DEFAULT now(),
 	finished_at        timestamptz,
 	claimed_by         text NOT NULL DEFAULT '',
 	claimed_at         timestamptz
 );
 CREATE INDEX IF NOT EXISTS krun_worker_operations_service ON krun_worker_operations (service_id, env_name, created_at DESC);
-CREATE INDEX IF NOT EXISTS krun_worker_operations_pending ON krun_worker_operations (created_at)
-	WHERE state NOT IN ('succeeded', 'failed', 'available', 'superseded');
 
 CREATE TABLE IF NOT EXISTS krun_worker_history (
 	service_id   text NOT NULL,
@@ -492,8 +487,8 @@ CREATE TABLE IF NOT EXISTS worker_config_revisions (
 );
 
 CREATE TABLE IF NOT EXISTS worker_config_routes (
- service_id text NOT NULL DEFAULT '',
- shard text NOT NULL DEFAULT '00',
+ service_id text NOT NULL,
+ shard text NOT NULL CHECK(shard ~ '^[0-9a-f]{2}$'),
 	host       text PRIMARY KEY,
 	pool       text NOT NULL,
 	path       text NOT NULL DEFAULT '',
@@ -524,8 +519,6 @@ CREATE TABLE IF NOT EXISTS worker_config_ops (
 	)
 );
 
-ALTER TABLE worker_config_routes ADD COLUMN IF NOT EXISTS service_id text NOT NULL DEFAULT '';
-ALTER TABLE worker_config_routes ADD COLUMN IF NOT EXISTS shard text NOT NULL DEFAULT '00';
 CREATE INDEX IF NOT EXISTS worker_config_routes_service ON worker_config_routes(service_id);
 CREATE INDEX IF NOT EXISTS worker_config_routes_release ON worker_config_routes(release_id,pool);
 CREATE INDEX IF NOT EXISTS worker_config_routes_shard ON worker_config_routes(pool,shard,host);
@@ -533,10 +526,6 @@ CREATE INDEX IF NOT EXISTS worker_config_ops_pool ON worker_config_ops(pool,conf
 CREATE INDEX IF NOT EXISTS krun_worker_releases_artifact ON krun_worker_releases(artifact_id,service_id);
 CREATE INDEX IF NOT EXISTS krun_resources_page ON krun_resources(org_id,kind,resource_id);
 CREATE INDEX IF NOT EXISTS krun_worker_idempotency_prefix ON krun_worker_idempotency(idem_key text_pattern_ops);
-ALTER TABLE krun_worker_builds ADD COLUMN IF NOT EXISTS started_at timestamptz;
-ALTER TABLE krun_worker_builds ADD COLUMN IF NOT EXISTS reconcile_after timestamptz NOT NULL DEFAULT '-infinity';
-ALTER TABLE krun_worker_operations ADD COLUMN IF NOT EXISTS started_at timestamptz;
-ALTER TABLE krun_worker_operations ADD COLUMN IF NOT EXISTS reconcile_after timestamptz NOT NULL DEFAULT '-infinity';
 CREATE INDEX IF NOT EXISTS krun_worker_builds_schedulable ON krun_worker_builds(reconcile_after,created_at) WHERE state NOT IN ('succeeded','failed');
 CREATE INDEX IF NOT EXISTS krun_worker_operations_schedulable ON krun_worker_operations(reconcile_after,created_at) WHERE state NOT IN ('succeeded','failed','available','superseded');
 CREATE TABLE IF NOT EXISTS worker_asset_objects(
@@ -552,10 +541,8 @@ BEGIN
  INSERT INTO worker_retention_scopes(service_id) VALUES(NEW.service_id) ON CONFLICT(service_id) DO UPDATE SET generation=nextval('worker_dirty_seq');
  RETURN NULL;
 END $$;
-DROP TRIGGER IF EXISTS worker_build_retention ON krun_worker_builds;
-CREATE TRIGGER worker_build_retention AFTER INSERT OR UPDATE OF state ON krun_worker_builds FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_retention();
-DROP TRIGGER IF EXISTS worker_history_retention ON krun_worker_history;
-CREATE TRIGGER worker_history_retention AFTER INSERT ON krun_worker_history FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_retention();
+CREATE OR REPLACE TRIGGER worker_build_retention AFTER INSERT OR UPDATE OF state ON krun_worker_builds FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_retention();
+CREATE OR REPLACE TRIGGER worker_history_retention AFTER INSERT ON krun_worker_history FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_retention();
 CREATE INDEX IF NOT EXISTS worker_retention_scopes_generation ON worker_retention_scopes(generation,service_id);
 CREATE INDEX IF NOT EXISTS krun_worker_releases_age ON krun_worker_releases(created_at);
 CREATE INDEX IF NOT EXISTS krun_worker_operations_age ON krun_worker_operations(created_at);
@@ -589,26 +576,17 @@ BEGIN
  END IF;
  RETURN NULL;
 END $$;
-DROP TRIGGER IF EXISTS worker_services_config_dirty ON krun_worker_services;
-CREATE TRIGGER worker_services_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_services FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
-DROP TRIGGER IF EXISTS worker_env_config_dirty ON krun_worker_environments;
-CREATE TRIGGER worker_env_config_dirty AFTER INSERT OR DELETE OR UPDATE OF enabled,release_id ON krun_worker_environments FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
-DROP TRIGGER IF EXISTS worker_domains_config_dirty ON krun_worker_service_domains;
-CREATE TRIGGER worker_domains_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_service_domains FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
-DROP TRIGGER IF EXISTS worker_placements_config_dirty ON krun_worker_service_placements;
-CREATE TRIGGER worker_placements_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_service_placements FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
+CREATE OR REPLACE TRIGGER worker_services_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_services FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
+CREATE OR REPLACE TRIGGER worker_env_config_dirty AFTER INSERT OR DELETE OR UPDATE OF enabled,release_id ON krun_worker_environments FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
+CREATE OR REPLACE TRIGGER worker_domains_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_service_domains FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
+CREATE OR REPLACE TRIGGER worker_placements_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_service_placements FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
 CREATE OR REPLACE FUNCTION krun_mark_resource_config_dirty() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF TG_OP<>'INSERT' AND OLD.kind='service' THEN INSERT INTO worker_retention_scopes(service_id) VALUES(OLD.resource_id) ON CONFLICT(service_id) DO UPDATE SET generation=nextval('worker_dirty_seq');INSERT INTO worker_config_dirty(service_id) VALUES(OLD.resource_id) ON CONFLICT(service_id) DO UPDATE SET generation=nextval('worker_dirty_seq');END IF;
  IF TG_OP<>'DELETE' AND NEW.kind='service' THEN INSERT INTO worker_config_dirty(service_id) VALUES(NEW.resource_id) ON CONFLICT(service_id) DO UPDATE SET generation=nextval('worker_dirty_seq');END IF;
  RETURN NULL;
 END $$;
-DROP TRIGGER IF EXISTS resource_config_dirty ON krun_resources;
-CREATE TRIGGER resource_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_resources FOR EACH ROW EXECUTE FUNCTION krun_mark_resource_config_dirty();
--- Initialize the bounded queue once for pre-release databases that already
--- contain sites. Subsequent startups do not scan the site catalogue.
-WITH initialized AS(INSERT INTO krun_meta(key,value) VALUES('worker_incremental_config_initialized','1') ON CONFLICT(key) DO NOTHING RETURNING key)
-INSERT INTO worker_config_dirty(service_id) SELECT s.service_id FROM krun_worker_services s CROSS JOIN initialized ON CONFLICT(service_id) DO UPDATE SET generation=nextval('worker_dirty_seq');
+CREATE OR REPLACE TRIGGER resource_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_resources FOR EACH ROW EXECUTE FUNCTION krun_mark_resource_config_dirty();
 CREATE TABLE IF NOT EXISTS worker_runtime_acks (
 	pod_uid    text PRIMARY KEY,
 	pool       text NOT NULL,
@@ -617,50 +595,42 @@ CREATE TABLE IF NOT EXISTS worker_runtime_acks (
 );
 `
 
+// The schema fingerprint identifies this source baseline, not an upgrade path.
+// An existing database must already match; initialization never rewrites it.
 func initializeStoreSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(context.Background())
+	defer tx.Rollback(ctx)
+	var exists bool
+	if err = tx.QueryRow(ctx, `SELECT to_regclass(current_schema() || '.krun_meta') IS NOT NULL`).Scan(&exists); err != nil {
+		return err
+	}
+	baseline := bytesDigest([]byte(storeSchema))
+	if exists {
+		var stored string
+		err = tx.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='schema_baseline'`).Scan(&stored)
+		if errors.Is(err, pgx.ErrNoRows) || err == nil && stored != baseline {
+			return errors.New("database does not match the current schema baseline; recreate the development/test database explicitly")
+		}
+		if err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+	var occupied bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_tables WHERE schemaname=current_schema() AND (tablename LIKE 'krun_%' OR tablename LIKE 'worker_%'))`).Scan(&occupied); err != nil {
+		return err
+	}
+	if occupied {
+		return errors.New("application tables exist without a schema baseline; initialize an empty development/test database explicitly")
+	}
 	if _, err = tx.Exec(ctx, storeSchema); err != nil {
 		return err
 	}
-	var incompatible bool
-	if err = tx.QueryRow(ctx, `SELECT
-		to_regclass(current_schema() || '.krun_schema_migrations') IS NOT NULL
-		OR to_regclass(current_schema() || '.krun_control_state') IS NOT NULL
-		OR to_regclass(current_schema() || '.krun_control_state_legacy') IS NOT NULL
-		OR EXISTS (
-			SELECT 1 FROM information_schema.columns
-			WHERE table_schema=current_schema()
-			  AND table_name IN ('krun_worker_services','krun_worker_releases')
-			  AND column_name='pool'
-		)
-		OR EXISTS (
-			SELECT 1 FROM information_schema.columns
-			WHERE table_schema=current_schema()
-			  AND table_name='worker_config_revisions'
-			  AND column_name IN ('payload','ops')
-		)
-		OR 8 <> (
-			SELECT count(*) FROM information_schema.columns
-			WHERE table_schema=current_schema()
-			  AND (table_name, column_name) IN (
-				('krun_worker_builds','compatibility_date'),
-				('krun_worker_builds','compatibility_flags'),
-				('krun_worker_artifacts','profile'),
-				('krun_worker_artifacts','compatibility_date'),
-				('krun_worker_artifacts','compatibility_flags'),
-				('krun_worker_releases','profile'),
-				('krun_worker_releases','compatibility_date'),
-				('krun_worker_releases','compatibility_flags')
-			  )
-		)`).Scan(&incompatible); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO krun_meta(key,value) VALUES('schema_baseline',$1)`, baseline); err != nil {
 		return err
-	}
-	if incompatible {
-		return errors.New("unsupported pre-release database schema; recreate the database")
 	}
 	return tx.Commit(ctx)
 }

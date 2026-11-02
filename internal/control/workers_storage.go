@@ -26,7 +26,7 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
-// Schema-1 modules may total 8 MiB. Incompressible payload plus manifest and
+// Artifact modules may total 8 MiB. Incompressible payload plus manifest and
 // tar/gzip framing is slightly larger, so the compressed envelope needs its
 // own headroom while the expanded module limit remains exact below.
 const workerArchiveMax = 9 << 20
@@ -221,7 +221,7 @@ func workerModuleTypeValid(kind string) bool {
 	}
 }
 
-// Parse the versioned profile. Schema 1 has no assets; schema 2 adds an assets/ tree.
+// Parse the current artifact profile, with an optional assets/ tree.
 // Paths, duplicates, links, sizes and all digests are checked before Loader sees code.
 func parseWorkerArchive(raw []byte) (workerCode, string, error) {
 	var out workerCode
@@ -281,7 +281,7 @@ func parseWorkerArchive(raw []byte) (workerCode, string, error) {
 	var m workerManifest
 	decoder := json.NewDecoder(bytes.NewReader(files["manifest.json"]))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&m) != nil || decoder.Decode(&struct{}{}) != io.EOF || (m.Schema != 1 && m.Schema != 2) || m.Profile != workerProfile || !workerModuleNameValid(m.MainModule) || len(m.Modules) == 0 || len(m.Modules) > workerModulesMax {
+	if decoder.Decode(&m) != nil || decoder.Decode(&struct{}{}) != io.EOF || m.Schema != 2 || m.Profile != workerProfile || !workerModuleNameValid(m.MainModule) || len(m.Modules) == 0 || len(m.Modules) > workerModulesMax {
 		return out, "", errors.New("unsupported manifest")
 	}
 	compatibilityDate, compatibilityFlags, compatibilityErr := normalizeWorkerCompatibility(m.CompatibilityDate, m.CompatibilityFlags)
@@ -342,17 +342,11 @@ func parseWorkerArchive(raw []byte) (workerCode, string, error) {
 		return out, "", errors.New("main module is not declared")
 	}
 	out = workerCode{ManifestRaw: append([]byte(nil), files["manifest.json"]...), Profile: m.Profile, Digest: mainDigest, ArchiveDigest: bytesDigest(raw), Size: modulesTotal, CompatibilityDate: m.CompatibilityDate, CompatibilityFlags: append([]string(nil), m.CompatibilityFlags...), MainModule: m.MainModule, Modules: modules}
-	if m.Schema == 1 {
-		if m.Assets != nil {
-			return out, "", errors.New("schema 1 cannot declare assets")
-		}
+	if m.Assets == nil {
 		if len(files) != len(m.Modules)+1 || len(raw) > max {
-			return out, "", errors.New("schema 1 artifact has unexpected entries")
+			return out, "", errors.New("artifact has unexpected entries")
 		}
 		return out, bytesDigest(files["manifest.json"]), nil
-	}
-	if m.Assets == nil {
-		return out, "", errors.New("schema 2 requires assets")
 	}
 	if e := validateWorkerAssets(&WorkerAssetsConfig{Directory: m.Assets.Directory, Binding: m.Assets.Binding, RunWorkerFirst: m.Assets.RunWorkerFirst, NotFoundHandling: m.Assets.NotFoundHandling, HTMLHandling: m.Assets.HTMLHandling}); e != nil {
 		return out, "", e
@@ -483,16 +477,6 @@ func (w *workersController) builderS3() *minio.Client {
 	return w.s3Builder
 }
 
-func (w *workersController) runtimeS3() *minio.Client {
-	// A few narrow controller tests construct the seam directly. Production
-	// always wires s3Runtime in newWorkersController; the fallback also keeps
-	// older embedded callers source-compatible.
-	if w.s3Runtime != nil {
-		return w.s3Runtime
-	}
-	return w.s3Builder
-}
-
 func (w *workersController) uploadURL(ctx context.Context, b WorkerBuild) (string, error) {
 	// Sign with the builder-visible endpoint so in-cluster Pods can reach (and verify) the URL.
 	u, e := w.builderS3().PresignedPutObject(ctx, w.config.S3Bucket, workerUploadKey(b), w.buildURLTTL())
@@ -520,7 +504,7 @@ func (w *workersController) downloadURL(ctx context.Context, a WorkerArtifact) (
 	if a.StorageLocation != w.config.S3LocationID || a.Bucket != w.config.S3Bucket {
 		return "", errors.New("artifact storage location mismatch")
 	}
-	u, e := w.runtimeS3().PresignedGetObject(ctx, w.config.S3Bucket, a.ObjectKey, 15*time.Minute, nil)
+	u, e := w.s3Runtime.PresignedGetObject(ctx, w.config.S3Bucket, a.ObjectKey, 15*time.Minute, nil)
 	if e != nil {
 		return "", e
 	}
@@ -803,26 +787,10 @@ func (w *workersController) collectWorkerObjects(ctx context.Context) error {
 			}
 		}
 	}
-	// Output bundles are never build inputs and may be removed by age. Unknown
-	// legacy source objects use a longer grace period and are checked against
-	// the metadata table before deletion; all new client sources are registered
-	// before their URL is issued.
+	// Source bundles are registered before upload. Only builder output objects
+	// need an object-listing age sweep; registered sources use metadata claims.
 	if err := w.removeWorkerObjects(ctx, "uploads/", func(key string, modified time.Time) bool {
-		if modified.IsZero() {
-			return false
-		}
-		if !strings.Contains(key, "/src/") {
-			return modified.Before(now().Add(-workerUploadRetain))
-		}
-		if !modified.Before(now().Add(-7 * 24 * time.Hour)) {
-			return false
-		}
-		known, knownErr := w.server.Store.workerSourceUploadKnown(ctx, key)
-		if knownErr != nil {
-			failures = append(failures, knownErr)
-			return false
-		}
-		return !known
+		return !strings.Contains(key, "/src/") && !modified.IsZero() && modified.Before(now().Add(-workerUploadRetain))
 	}); err != nil {
 		failures = append(failures, err)
 	}
@@ -857,14 +825,10 @@ func (w *workersController) collectWorkerObjects(ctx context.Context) error {
 			if protected[key] {
 				return false
 			}
-			_, name, found := strings.Cut(key, "/snapshots/")
-			if !found {
-				if !strings.Contains(key, "/shards/") {
-					return false
-				}
-				name = path.Base(key)
+			if !strings.Contains(key, "/shards/") {
+				return false
 			}
-			name = strings.TrimSuffix(name, ".json.gz")
+			name := strings.TrimSuffix(path.Base(key), ".json.gz")
 			revision, parseErr := strconv.ParseInt(name, 10, 64)
 			return parseErr == nil && revision < floor
 		}); err != nil {

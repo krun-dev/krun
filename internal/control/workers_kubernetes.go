@@ -443,42 +443,6 @@ func (k *workerKubernetes) buildLog(ctx context.Context, job string) string {
 	return safeWorkerLog(strings.Join(logs, "\n"))
 }
 
-// ensureRoutes reconciles one HTTPRoute per (worker, Gateway instance). Grouping
-// by Gateway rather than by a network concept is what makes the isolation
-// structural: an instance's route table only ever contains the hostnames of the
-// domains bound to it, so a forged Host cannot cross instances.
-// Gateways with no remaining hosts are pruned.
-func (k *workerKubernetes) ensureRoutes(ctx context.Context, c *WorkersConfig, name, runtimeService string, hostsByGateway map[string][]string) (bool, error) {
-	ready := true
-	desired := map[string]bool{}
-	for _, g := range c.Gateways {
-		hosts := hostsByGateway[g.ID]
-		route := name
-		if g.ID != c.Gateways[0].ID {
-			route = name + "-" + g.ID
-		}
-		desired[route] = true
-		ok, e := k.ensureRoute(ctx, route, runtimeService, g, hosts)
-		ready = ready && ok
-		if e != nil {
-			// One failing Gateway must not skip repairing the others.
-			return false, e
-		}
-	}
-	// Routes written under an older catalog naming (a Gateway id that no longer
-	// exists) would otherwise keep answering for hosts nobody selected.
-	stale, err := staleWorkerRoutes(ctx, k, name+"-", desired)
-	if err != nil {
-		return false, err
-	}
-	for _, n := range stale {
-		if e := k.deleteRoute(ctx, n); e != nil {
-			return false, e
-		}
-	}
-	return ready, nil
-}
-
 // listRoutes returns the names of HTTPRoutes in the workers namespace.
 type workerRouteInventoryKey struct{}
 

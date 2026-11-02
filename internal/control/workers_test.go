@@ -386,7 +386,7 @@ func TestWorkerEnvironmentScopedKeyCanReadCollections(t *testing.T) {
 }
 func workerArchive(t *testing.T, names []string, module string, link bool) []byte {
 	t.Helper()
-	manifest, _ := json.Marshal(workerManifest{Schema: 1, Profile: workerProfile, CompatibilityDate: workerDefaultCompatibilityDate, MainModule: "index.js", Modules: []workerManifestModule{{Name: "index.js", Path: "modules/index.js", Type: "esm", Digest: bytesDigest([]byte(module)), Size: len(module)}}})
+	manifest, _ := json.Marshal(workerManifest{Schema: 2, Profile: workerProfile, CompatibilityDate: workerDefaultCompatibilityDate, MainModule: "index.js", Modules: []workerManifestModule{{Name: "index.js", Path: "modules/index.js", Type: "esm", Digest: bytesDigest([]byte(module)), Size: len(module)}}})
 	var raw bytes.Buffer
 	gz := gzip.NewWriter(&raw)
 	tr := tar.NewWriter(gz)

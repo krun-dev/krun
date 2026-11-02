@@ -2,7 +2,7 @@
 
 控制面按**一实体一行**存放在 PostgreSQL。`State` 不再是持久化文档，而是「本次请求可能碰到的行」的工作副本：`Update` 只加载相关分区，执行回调，然后只写回发生变化的行。
 
-设计约束见 [AGENTS.md 第 9 节](../AGENTS.md)：不用外键、事务尽力而为、构建/发布状态最终一致、不留无界数据、热路径不写。完整方案见 [storage-redesign.md](storage-redesign.md)。
+设计约束见 [AGENTS.md 第 9 节](../AGENTS.md)：不用外键、事务尽力而为、构建/发布状态最终一致、不留无界数据、热路径不写。
 
 ## 分区
 
@@ -15,7 +15,7 @@ IAM 与 Workers 是两套独立分区，**不共享事务**：
 | 会话（不属于任何分区） | `krun_sessions`、`krun_browsers`、`krun_login_states`、`krun_email_logins`、`krun_device_codes` |
 | 旁路 | `krun_audits`、`worker_config_revisions`、`worker_config_routes`、`worker_config_releases`、`worker_config_ops`、`worker_config_dirty`、`worker_config_checkpoints`、`worker_asset_objects`、`worker_retention_scopes`、`worker_runtime_acks` |
 
-DDL 在 `internal/control/schema.go`，全部 `IF NOT EXISTS`，启动时幂等执行。
+完整 DDL 在 `internal/control/schema.go`。新库直接初始化；已有库校验 `schema_baseline` fingerprint，匹配时不重复执行 DDL。
 
 ## 读路径
 
@@ -56,7 +56,7 @@ UPDATE krun_worker_environments SET release_id=$4, release_revision=release_revi
 
 站点变更进入有界 dirty 队列，发布者只读取变更站点并写入 normalized delta；对象存储保存 compact head 与 host-hash shard checkpoint。Runtime 通过增量 feed 收敛，冷 host 按需读取，ACK 仍用于观察收敛。细节及保留/清理机制见 [百万站点改造](performance-scaling.md)。
 
-**Hosts 不再持久化。** 环境的主机名由域名目录 + 服务的域名选择现算，`normalizeService`、`reconcile` 的 HTTPRoute 生成、`workerConfigFromState` 共用同一套推导，因此三者不会漂移。
+**Hosts 不再持久化。** 环境的主机名由域名目录 + 服务的域名选择现算，`normalizeService`、`reconcile` 的 HTTPRoute 生成、边缘增量投影共用同一套推导，因此三者不会漂移。
 
 ## 认证数据
 
@@ -64,7 +64,7 @@ UPDATE krun_worker_environments SET release_id=$4, release_revision=release_revi
 
 ## 数据保留
 
-后台每分钟执行一次（`internal/control/retention.go`），取代原先挂在每个请求上的 `cleanup`：
+数据库 retention 每分钟执行一次，有 20 秒预算；对象 GC 独立运行，每 10 秒有 8 秒预算：
 
 | 表 | 保留 |
 | --- | --- |
@@ -81,13 +81,13 @@ UPDATE krun_worker_environments SET release_id=$4, release_revision=release_revi
 
 ## Schema 基线
 
-项目尚未发布，`OpenStore` 直接在一个事务中创建 `schema.go` 定义的唯一基线。当前没有
-版本迁移表、旧快照导入器、双写或兼容读取路径；模型变化后开发和测试数据库直接重建。
-正式发布前如需演练升级，再从届时冻结的首个生产 schema 开始建立迁移账本。
+`OpenStore` 只支持当前完整基线。新库在一个事务中创建表、索引、触发器和
+`schema_baseline` fingerprint；再次启动只校验 fingerprint。已有库不匹配时返回明确错误，
+不执行 ALTER、回填、导入或自动删除。开发/测试库由所有者显式重建；不改写任意已有数据库。
 
 ## 已知限制
 
-- 组织 / 资源列表仍在内存中过滤，没有分页下推。
+- 站点列表已按组织/资源 ID 游标下推，默认 100 条、最多 200 条；批量 IAM 管理仍有独立的加载语义。
 - `ensureAdmin`（至少保留一个系统管理员）是「先写、再查、不满足就写回」的补偿，并发降级可能短暂出现零管理员，需要人工 `krun-server bootstrap` 恢复。
-- 授权每次请求加载完整 IAM 快照（约 0.2 ms），未按主体裁剪。
+- 常用身份与站点路径按主体裁剪授权上下文，权限缓存仅限单次只读请求。
 - 数据库集成测试需要 `KRUN_TEST_POSTGRES_URL`，未提供时跳过。

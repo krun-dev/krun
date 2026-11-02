@@ -92,7 +92,7 @@ func TestPostgresDeltaPublisherOnlyWritesChangedSite(t *testing.T) {
 	seedPerformanceSites(t, s, 20)
 	ctx := context.Background()
 	config := workerProjectionConfig([]WorkerDomain{{ID: "internal", Domain: "workers.test"}})
-	config.SharedRouting = true
+
 	controller := &workersController{server: &Server{Store: s}, config: config}
 	rev, err := controller.publishConfig(ctx)
 	if err != nil || rev != 1 {

@@ -2,7 +2,21 @@
 
 项目使用 Go 自动化测试、前端权限与国际化测试，以及浏览器联调验证认证和授权流程。测试数据使用独立 PostgreSQL 数据库，不使用生产数据。
 
-Workers 后端另有独立 kind 端到端验收，覆盖真实构建 Job、S3 制品、workerd 加载、发布与回滚。见 [Workers 验证报告](workers-kind-verification.md)。
+Workers 后端另有独立 kind 端到端验收，覆盖真实构建 Job、S3 制品、workerd 加载、发布与回滚。运行入口见 [kind E2E](../deploy/workers-kind/README.md)，规模验证见 [性能验证](performance-scaling.md)。
+
+## 当前基线验收
+
+2026-11-02 在新的专用 PostgreSQL 数据库与对象桶上验证：
+
+- `make test` 全部通过，包含真实 PostgreSQL、Go race/vet、前端权限和国际化、builder、真实 workerd / Wrangler 制品 smoke。
+- 完整 kind E2E 31/31，通过真实构建、发布、回滚、重启恢复、网络与权限隔离、共享路由、shard checkpoint 和资产 GC。
+- Playwright UI 7/7，覆盖桌面与移动端、106 站点分页、页外深链接、仓库 HEAD 构建、发布调用、配置发布与回滚；浏览器 JavaScript 异常检查通过。
+- 百万站点元数据回归通过；单站点查询仅加载目标站点，登录和组织导航不加载站点目录。
+- 静态产物、密钥检查及文档链接检查通过。
+
+基线校验覆盖空库初始化、重复启动，以及 fingerprint 不匹配或缺失时保留原数据并拒绝启动。
+旧 manifest schema 被拒绝；平台 API Key 的 `kind:"system"` 只匹配平台资源，不扩展为其他类型。
+专用测试栈结束后恢复 local-first 拓扑；现有开发数据不做隐式迁移。
 
 ## 运行检查
 

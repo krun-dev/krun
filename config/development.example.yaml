@@ -24,4 +24,4 @@ providers:
   # 真实 key 只放 .data/dev.yaml 或由其中的环境变量占位符展开。
   # 省略 workers: 段时服务仍可启动，Workers 接口返回 WORKERS_NOT_CONFIGURED，控制台显示“Workers 未配置”。
 
-# 完整 workers: 配置启用 shared_routing: true、reconcile_concurrency: 8。
+# 完整 workers: 配置启用 reconcile_concurrency: 8。

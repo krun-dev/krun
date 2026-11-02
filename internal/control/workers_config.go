@@ -8,7 +8,6 @@ import (
 	"errors"
 	"reflect"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -63,15 +62,6 @@ func workerPoolConfigPrefix(pool string) string { return workerConfigPoolsDir + 
 func workerPoolConfigLatestKey(pool string) string {
 	return workerPoolConfigPrefix(pool) + "latest.json"
 }
-func workerPoolConfigSnapshotKey(pool string, revision int64) string {
-	return workerPoolConfigPrefix(pool) + "snapshots/" + strconv.FormatInt(revision, 10) + ".json.gz"
-}
-
-// The pointer stores a path relative to config_base_url (which already ends in
-// /config/pools/<pool>), while the object key includes that prefix for bucket layout.
-func workerConfigSnapshotRel(revision int64) string {
-	return "snapshots/" + strconv.FormatInt(revision, 10) + ".json.gz"
-}
 
 // workerConfigFromState includes the baseline and preview environments of every
 // live service. Disabled environments stay in the projection so the runtime can
@@ -112,7 +102,7 @@ func workerConfigFromState(st *State, config *WorkersConfig) workerConfigProject
 		hosts := serviceHostPatterns(ws, domains)
 		for name, env := range ws.Environments {
 			// The map key is authoritative: Environment.Name is a denormalised
-			// copy that older rows may not carry.
+			// copy; the key defines the environment identity.
 			if name == "" {
 				continue
 			}
@@ -132,25 +122,6 @@ func workerConfigFromState(st *State, config *WorkersConfig) workerConfigProject
 		}
 	}
 	sort.Slice(out.Routes, func(i, j int) bool { return out.Routes[i].Host < out.Routes[j].Host })
-	return out
-}
-
-func workerConfigForPool(in workerConfigProjection, pool string) workerConfigProjection {
-	out := workerConfigProjection{Routes: []workerConfigRoute{}, Releases: map[string]WorkerRelease{}}
-	needed := map[string]bool{}
-	for _, route := range in.Routes {
-		if route.Pool == pool {
-			out.Routes = append(out.Routes, route)
-			if route.Release != "" {
-				needed[route.Release] = true
-			}
-		}
-	}
-	for id, release := range in.Releases {
-		if needed[id] {
-			out.Releases[id] = release
-		}
-	}
 	return out
 }
 
@@ -315,208 +286,53 @@ type workerConfigLatest struct {
 	Snapshot       string `json:"snapshot"`
 	SHA256         string `json:"sha256"`
 	OpsFloor       int64  `json:"ops_floor"`
-	GeneratedAt    string `json:"generated_at"`
 }
 
-// publishConfig materialises the current edge projection into an immutable
-// revision. Replicas race on the durable head CAS. A digest match is a no-op;
-// a failed object-store write leaves configDirty set so the next cycle retries
-// the snapshot without creating another revision.
+// publishConfig serializes local publication; PostgreSQL coordinates replicas
+// through the per-service dirty queue and revision CAS.
 func (w *workersController) publishConfig(ctx context.Context) (int64, error) {
 	w.configMu.Lock()
 	defer w.configMu.Unlock()
-	if w.server.Store.pool != nil && w.config != nil {
+	if w.server.Store.pool != nil {
 		return w.publishConfigDelta(ctx)
 	}
-	if err := w.loadConfigLocked(ctx); err != nil {
+	// OpenStore requires PostgreSQL. This adapter is only used by memory fixtures.
+	s := w.server.Store
+	var next workerConfigProjection
+	if err := s.View(ctx, PartitionAll, func(st *State) error { next = workerConfigFromState(st, w.config); return nil }); err != nil {
 		return 0, err
 	}
-	if w.configTopologyLoaded && !w.configDirty {
-		generation, err := w.server.Store.WorkerTopologyGeneration(ctx)
-		if err != nil {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	var previous *workerConfigProjection
+	if len(s.configRevs) > 0 {
+		previous = &workerConfigProjection{}
+		if err := json.Unmarshal(s.configRevs[len(s.configRevs)-1].Payload, previous); err != nil {
 			return 0, err
 		}
-		if generation >= 0 && generation == w.configTopologyGeneration {
-			return w.configRevision, nil
-		}
 	}
-	next, topologyGeneration, err := w.server.Store.WorkerConfigProjection(ctx, w.config)
-	if err != nil {
-		return 0, err
+	ops := diffWorkerConfig(previous, next)
+	if len(ops) == 0 {
+		return s.configSeq, nil
 	}
 	digest, payload, err := workerConfigDigest(next)
 	if err != nil {
 		return 0, err
 	}
-	if w.configLast != nil {
-		previous, _, err := workerConfigDigest(*w.configLast)
-		if err != nil {
-			return 0, err
-		}
-		if previous == digest {
-			if !w.configDirty {
-				w.configTopologyGeneration = topologyGeneration
-				w.configTopologyLoaded = topologyGeneration >= 0
-				return w.configRevision, nil
-			}
-			if err := w.writeConfigRevision(ctx, w.configRevision, next); err != nil {
-				return w.configRevision, err
-			}
-			w.configDirty = false
-			w.configTopologyGeneration = topologyGeneration
-			w.configTopologyLoaded = topologyGeneration >= 0
-			return w.configRevision, nil
-		}
-	}
-	for attempts := 0; attempts < 8; attempts++ {
-		ops := diffWorkerConfig(w.configLast, next)
-		opsRaw, marshalErr := json.Marshal(ops)
-		if marshalErr != nil {
-			return 0, marshalErr
-		}
-		revision, floor, appended, appendErr := w.server.Store.AppendConfigRevisionCAS(ctx, w.configRevision, digest, payload, opsRaw, workerConfigOpsRetain)
-		if appendErr != nil {
-			return 0, appendErr
-		}
-		if appended {
-			w.configRevision = revision
-			w.configFloor = floor
-			w.configLast = &next
-			w.configDirty = true
-			w.server.Store.SignalConfig()
-			if err := w.writeConfigRevision(ctx, revision, next); err != nil {
-				return revision, err
-			}
-			w.configDirty = false
-			w.configTopologyGeneration = topologyGeneration
-			w.configTopologyLoaded = topologyGeneration >= 0
-			return revision, nil
-		}
-
-		// Another replica advanced the head. A winner with the same digest is
-		// sufficient for this caller; a different digest is not. Adopt and repair
-		// the winner, then reload current DB state and CAS the desired projection
-		// from that head in this call. Returning the stale winner would let an
-		// operation accept its ack before its own release was published.
-		latest, ok, loadErr := w.server.Store.LatestConfigRevision(ctx)
-		if loadErr != nil {
-			return 0, loadErr
-		}
-		if !ok || latest.Revision != revision {
-			w.configLoaded = false
-			return revision, errors.New("edge config head changed without a matching revision")
-		}
-		won, decodeErr := decodePublishedWorkerConfig(latest.Payload)
-		if decodeErr != nil {
-			w.configLoaded = false
-			return revision, decodeErr
-		}
-		winnerDigest, _, digestErr := workerConfigDigest(won)
-		if digestErr != nil {
-			w.configLoaded = false
-			return revision, digestErr
-		}
-		if winnerDigest != latest.Digest {
-			w.configLoaded = false
-			return revision, errors.New("edge config head digest does not match normalized projection")
-		}
-		w.configRevision = latest.Revision
-		w.configFloor = floor
-		w.configLast = &won
-		w.configDirty = true
-		if err := w.writeConfigRevision(ctx, latest.Revision, won); err != nil {
-			return latest.Revision, err
-		}
-		w.configDirty = false
-		if latest.Digest == digest {
-			w.configTopologyGeneration = topologyGeneration
-			w.configTopologyLoaded = topologyGeneration >= 0
-			return latest.Revision, nil
-		}
-		next, topologyGeneration, err = w.server.Store.WorkerConfigProjection(ctx, w.config)
-		if err != nil {
-			return 0, err
-		}
-		digest, payload, err = workerConfigDigest(next)
-		if err != nil {
-			return 0, err
-		}
-		if digest == latest.Digest {
-			w.configTopologyGeneration = topologyGeneration
-			w.configTopologyLoaded = topologyGeneration >= 0
-			return latest.Revision, nil
-		}
-	}
-	return w.configRevision, errors.New("edge config head changed repeatedly")
-}
-
-func (w *workersController) loadConfigLocked(ctx context.Context) error {
-	if w.configLoaded {
-		return nil
-	}
-	latest, ok, err := w.server.Store.LatestConfigRevision(ctx)
+	raw, err := json.Marshal(ops)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if !ok {
-		w.configLoaded = true
-		return nil
+	s.configSeq++
+	s.configRevs = append(s.configRevs, workerConfigRevision{Revision: s.configSeq, Digest: digest, Payload: payload, Ops: raw, Created: now()})
+	if len(s.configRevs) > workerConfigOpsRetain {
+		s.configRevs = append([]workerConfigRevision(nil), s.configRevs[len(s.configRevs)-workerConfigOpsRetain:]...)
 	}
-	projection, err := decodePublishedWorkerConfig(latest.Payload)
-	if err != nil {
-		// Fail closed. Diffing from nil would emit only upserts and could leave a
-		// deleted route alive on runtimes that already applied the prior head.
-		return err
+	if s.configCh != nil {
+		close(s.configCh)
 	}
-	digest, _, err := workerConfigDigest(projection)
-	if err != nil {
-		return err
-	}
-	if digest != latest.Digest {
-		return errors.New("edge config head digest does not match normalized projection")
-	}
-	w.configLoaded = true
-	w.configRevision = latest.Revision
-	w.configLast = &projection
-	if _, floor, err := w.server.Store.ConfigState(ctx); err == nil {
-		w.configFloor = floor
-	}
-	// Repair a missing or stale object-store snapshot after a control-plane
-	// restart without creating a new revision.
-	w.configDirty = true
-	return nil
-}
-
-func (w *workersController) writeConfigRevision(ctx context.Context, revision int64, projection workerConfigProjection) error {
-	// The config prefix lives in the same bucket as artifacts. Create the bucket
-	// and its anonymous-read policy before the first publish so a fresh cluster
-	// can bootstrap without waiting for a build.
-	if w.s3 != nil && !w.configBucket {
-		if err := w.ensureBucket(ctx); err != nil {
-			return err
-		}
-		w.configBucket = true
-	}
-	for _, pool := range w.config.configuredRuntimePools() {
-		filtered := workerConfigForPool(projection, pool.ID)
-		raw, err := encodeWorkerConfigSnapshot(pool.ID, revision, filtered)
-		if err != nil {
-			return err
-		}
-		key := workerPoolConfigSnapshotKey(pool.ID, revision)
-		if w.s3 != nil {
-			if err := w.putImmutable(ctx, key, raw); err != nil {
-				return err
-			}
-		} else if err := w.putBytes(ctx, key, raw, minio.PutObjectOptions{ContentType: "application/gzip", CacheControl: "no-store"}); err != nil {
-			return err
-		}
-		latest := workerConfigLatest{ConfigRevision: revision, Snapshot: workerConfigSnapshotRel(revision), SHA256: bytesDigest(raw), OpsFloor: w.configFloor, GeneratedAt: now().UTC().Format(time.RFC3339)}
-		if err := w.writeConfigLatest(ctx, workerPoolConfigLatestKey(pool.ID), latest); err != nil {
-			return err
-		}
-	}
-	return nil
+	s.configCh = make(chan struct{})
+	return s.configSeq, nil
 }
 
 func (w *workersController) writeConfigLatest(ctx context.Context, key string, next workerConfigLatest) error {

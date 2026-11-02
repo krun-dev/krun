@@ -148,12 +148,3 @@ func (s *Store) deleteGarbageWorkerSourceUpload(ctx context.Context, key, replic
 		  AND NOT EXISTS (SELECT 1 FROM krun_worker_build_private p WHERE p.source_key=u.object_key)`, key, replica)
 	return err
 }
-
-func (s *Store) workerSourceUploadKnown(ctx context.Context, key string) (bool, error) {
-	if s.pool == nil {
-		return false, nil
-	}
-	var known bool
-	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM krun_worker_source_uploads WHERE object_key=$1)`, key).Scan(&known)
-	return known, err
-}
