@@ -1,13 +1,17 @@
 # 存储层
 
-`control → storage → domain`，同时 `control → domain`。本包不依赖 HTTP、控制器、部署配置或对象存储客户端。业务代码只调用有明确用途的存储方法；连接池、SQL、行映射与事务留在包内。
+HTTP 与业务入口调用本包，所有层共享 `domain`。本包不依赖 HTTP、控制器、部署配置或对象存储客户端。业务代码只调用有明确用途的存储方法；连接池、SQL、行映射与事务留在包内。
 
 | 查找内容 | 入口 |
 | --- | --- |
 | 完整表结构、索引与触发器 | `schema.sql` |
 | 初始化及 schema fingerprint | `schema.go` |
 | 连接池、工作副本与分区提交 | `store.go` |
-| IAM 读取 / 写入 | `iam_read.go` / `iam.go` |
+| IAM 读取 / 事务编排 | `iam_read.go` / `iam.go` |
+| IAM 按实体的 ORM 写入 | `iam_users.go` / `iam_organizations.go` / `iam_groups.go` / `iam_permissions.go` / `iam_keys.go` / `iam_identity.go` |
+| 数据库行模型 / 生成入口 | `models/*_gen.go` / `models/generate.go` |
+| ORM 连接、事务及 CAS | `orm.go` |
+| 会话 / 仓库的 ORM 映射与查询 | `orm_rows.go` / `orm_repository.go` |
 | Session、Browser、API Key 摘要查找 | `auth_session.go` |
 | OAuth 登录与邮件挑战 | `auth_login.go` |
 | CLI 设备授权 | `auth_device.go` |
@@ -24,7 +28,7 @@
 | 审计与限流 | `audit.go` / `rate_limit.go` |
 | 保留期与清理 | `policy.go` / `retention.go` / `retention_scoped.go` |
 
-共享实体只有 `internal/domain` 一份定义。改字段时检查 `schema.sql`、对应 domain 类型、上表中相关读写文件及数据库测试。`State` 是请求工作副本，数据库仍按一实体一行保存。
+共享实体定义在 `internal/domain`，数据库行模型在 `models`。改表时修改 `schema.sql`，运行 `go generate ./internal/storage/models`，再检查对应 domain 类型、读写方法和数据库测试。`State` 是请求工作副本，数据库仍按一实体一行保存。
 
 跨表不变量由存储方法持有事务：调用方不能传入连接或自行拼事务。IAM 与 Workers 分区独立提交；HTTP、OAuth、Kubernetes 和对象存储调用不进入数据库事务。CAS、dirty generation 条件确认、保留期和幂等清理也由本层实现。
 
@@ -39,3 +43,5 @@ go vet ./...
 ```
 
 数据库测试需要专用、可写的测试数据库；存储包为每个数据库用例创建并清理独立 schema。`architecture_test.go` 阻止 SQL/驱动进入业务层以及下层导入控制器或 HTTP/对象存储依赖。
+
+Bun 负责常规实体映射和读写，专用 pgx 批量/CAS 语句保留。ORM 复用原连接池；业务层接触不到 Bun、`database/sql`、pgx 或连接。没有 ORM 建表、迁移、关联保存或级联。模型用法参考 [Bun models](https://bun.uptrace.dev/guide/models.html) 和 [transactions](https://bun.uptrace.dev/guide/transactions.html)。

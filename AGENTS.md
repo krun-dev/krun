@@ -168,3 +168,6 @@ fingerprint；已有库与基线不一致时拒绝启动，由开发者显式重
 - 业务模块为 `auth`、`iam`、`authorization`、`workers`、`repository`、`runtimeconfig` 和 `audit`；不得导入 HTTP、数据库驱动或基础设施 SDK，不得接收 `http.Request`。源码与制品校验在 `artifact`，配置在 `config`。
 - 身份提供商、Git/仓库 OAuth、Kubernetes、S3、邮件、本地 builder、Runtime 管理和控制台调用实现统一放在 `internal/adapters/*`；适配器不得反向导入 HTTP 入口或包含数据库语句。
 - HTTP handler 不得直接修改 `State` 实体或 revision。读取所需范围、传递类型化输入、连接权限/审计和映射业务结果属于入口职责。
+
+- ORM 使用 Bun，仅允许在 `internal/storage` 及其子包中导入。数据库行模型在 `internal/storage/models`，由 `schema.sql` 生成；改表后运行 `go generate ./internal/storage/models`，提交前 `make check-storage-models` 必须通过。
+- 不使用 ORM 自动建表、迁移、关联保存、软删除或级联。更新显式指定列，CAS 显式校验 revision 和影响行数；标准 CRUD 用模型，批量投影、租约、队列及清理允许保留专用 SQL。ORM 与原生 pgx 复用同一连接池。

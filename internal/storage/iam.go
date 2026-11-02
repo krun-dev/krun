@@ -2,14 +2,11 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
+	models "github.com/krun-dev/krun/internal/storage/models"
+
 	"reflect"
 	"sort"
-	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/krun-dev/krun/internal/domain"
 )
 
@@ -19,7 +16,7 @@ import (
 // whole-document rewrite and never containing network calls.
 func (s *Store) persistIAM(ctx context.Context, before, after *domain.State, audits []domain.Audit) error {
 
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.beginORMTransaction(ctx)
 	if err != nil {
 		return err
 	}
@@ -64,23 +61,22 @@ func (s *Store) persistIAM(ctx context.Context, before, after *domain.State, aud
 	}
 	if login := after.PendingLogin; login != nil {
 		if login.DeleteSessionHash != "" {
-			if _, err = tx.Exec(ctx, `DELETE FROM krun_sessions WHERE session_hash=$1`, login.DeleteSessionHash); err != nil {
+			row := models.Session{SessionHash: login.DeleteSessionHash}
+			if _, err = tx.orm.NewDelete().Model(&row).WherePK().Exec(ctx); err != nil {
 				return err
 			}
 		}
-		session := login.Session
-		if _, err = tx.Exec(ctx, `INSERT INTO krun_sessions
-			(session_hash, user_id, csrf, auth_version, cli, created_at, seen_at, absolute_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, session.Hash, session.User, session.CSRF,
-			session.AuthVersion, session.CLI, session.Created, session.Seen, session.Absolute); err != nil {
+		row := sessionModel(login.Session.Hash, login.Session)
+		if _, err = tx.orm.NewInsert().Model(&row).Returning("NULL").Exec(ctx); err != nil {
 			return err
 		}
 	}
+
 	if revisionChanged {
 		// nextval is monotonic but transactions may commit out of order. Keep the
 		// visible high-water mark from ever moving backwards.
-		if _, err = tx.Exec(ctx, `INSERT INTO krun_meta (key, value) VALUES ('revision',$1)
-			ON CONFLICT (key) DO UPDATE SET value=GREATEST(krun_meta.value::bigint, excluded.value::bigint)::text`, Itoa(after.Revision)); err != nil {
+		row := models.Meta{Key: "revision", Value: Itoa(after.Revision)}
+		if _, err = tx.orm.NewInsert().Model(&row).On("CONFLICT (key) DO UPDATE").Set("value = GREATEST(krun_meta.value::bigint, EXCLUDED.value::bigint)::text").Returning("NULL").Exec(ctx); err != nil {
 			return err
 		}
 	}
@@ -90,7 +86,7 @@ func (s *Store) persistIAM(ctx context.Context, before, after *domain.State, aud
 	return tx.Commit(ctx)
 }
 
-func writeIAMDiff(ctx context.Context, tx pgx.Tx, before, after *domain.State) error {
+func writeIAMDiff(ctx context.Context, tx ormTransaction, before, after *domain.State) error {
 	if err := writeIdentitySources(ctx, tx, before, after); err != nil {
 		return err
 	}
@@ -159,92 +155,9 @@ func boolValue(v bool) string {
 	return "0"
 }
 
-func execRevisionCAS(ctx context.Context, tx pgx.Tx, message, query string, args ...any) error {
-	tag, err := tx.Exec(ctx, query, args...)
-	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return domain.Problem(409, "REVISION_CONFLICT", message)
-		}
-		return err
-	}
-	if tag.RowsAffected() != 1 {
-		return domain.Problem(409, "REVISION_CONFLICT", message)
-	}
-	return nil
-}
-
 // writeIdentitySources persists the three-key Sources map as two tables. A
 // provider id may only ever bind one source; a namespace may only ever bind
 // one source; a source may be shared by several providers.
-func writeIdentitySources(ctx context.Context, tx pgx.Tx, before, after *domain.State) error {
-	for _, source := range sortedKeys(after.Sources) {
-		fingerprint := after.Sources[source]
-		if isProviderKey(source) {
-			continue
-		}
-		if old, ok := before.Sources[source]; ok && old == fingerprint && !isProviderKey(source) {
-			continue
-		}
-		tag, err := tx.Exec(ctx, `INSERT INTO krun_identity_sources (source, fingerprint) VALUES ($1,$2) ON CONFLICT (source) DO NOTHING`, source, fingerprint)
-		if err != nil {
-			return err
-		}
-		if tag.RowsAffected() == 0 {
-			var actual string
-			if err = tx.QueryRow(ctx, `SELECT fingerprint FROM krun_identity_sources WHERE source=$1`, source).Scan(&actual); err != nil {
-				return err
-			}
-			if actual != fingerprint {
-				return domain.Problem(409, "REVISION_CONFLICT", "Identity source cannot be reassigned")
-			}
-		}
-	}
-	for _, key := range sortedKeys(after.Sources) {
-		value := after.Sources[key]
-		providerID, ok := providerIDFromKey(key)
-		if !ok {
-			continue
-		}
-		old, existed := before.Sources[key]
-		if existed && old == value {
-			continue
-		}
-		namespace := ""
-		// The provider→namespace binding is derived from the flat keys the
-		// registration path writes ("provider:<id>" and "namespace:<ns>").
-		for _, candidate := range sortedKeys(after.Sources) {
-			source := after.Sources[candidate]
-			if ns, ok := namespaceFromKey(candidate); ok && source == value {
-				namespace = ns
-				break
-			}
-		}
-		tag, err := tx.Exec(ctx, `INSERT INTO krun_identity_providers (provider_id, source, namespace) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, providerID, value, namespace)
-		if err != nil {
-			return err
-		}
-		if tag.RowsAffected() == 0 {
-			var actualSource, actualNamespace string
-			if err = tx.QueryRow(ctx, `SELECT source, namespace FROM krun_identity_providers WHERE provider_id=$1`, providerID).Scan(&actualSource, &actualNamespace); err != nil {
-				if err == pgx.ErrNoRows {
-					return domain.Problem(409, "REVISION_CONFLICT", "Identity namespace already registered")
-				}
-				return err
-			}
-			if actualSource != value || actualNamespace != namespace {
-				return domain.Problem(409, "REVISION_CONFLICT", "Identity provider cannot be reassigned")
-			}
-		}
-	}
-	for _, key := range sortedKeys(before.Sources) {
-		if _, ok := after.Sources[key]; ok {
-			continue
-		}
-		return domain.Problem(409, "REVISION_CONFLICT", "Identity source registrations are permanent")
-	}
-	return nil
-}
 
 func sortedKeys[V any](values map[string]V) []string {
 	keys := make([]string, 0, len(values))
@@ -277,246 +190,6 @@ func namespaceFromKey(key string) (string, bool) {
 		return "", false
 	}
 	return key[len(prefix):], true
-}
-
-func writeUsers(ctx context.Context, tx pgx.Tx, before, after map[string]domain.User) error {
-	for id, u := range after {
-		old, existed := before[id]
-		if existed && old == u {
-			continue
-		}
-		if !existed {
-			if err := execRevisionCAS(ctx, tx, "Identity was created concurrently", `INSERT INTO krun_users (user_id, source, subject, name, email, status, auth_version) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`, id, u.Source, u.Subject, u.Name, u.Email, u.Status, u.AuthVersion); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := execRevisionCAS(ctx, tx, "User changed", `UPDATE krun_users SET source=$2, subject=$3, name=$4, email=$5, status=$6, auth_version=$7, updated_at=now()
-			WHERE user_id=$1 AND auth_version=$8 AND source=$9 AND subject=$10 AND name=$11 AND email=$12 AND status=$13`, id, u.Source, u.Subject, u.Name, u.Email, u.Status, u.AuthVersion, old.AuthVersion, old.Source, old.Subject, old.Name, old.Email, old.Status); err != nil {
-			return err
-		}
-	}
-	for id, old := range before {
-		if _, ok := after[id]; !ok {
-			if err := execRevisionCAS(ctx, tx, "User changed", `DELETE FROM krun_users WHERE user_id=$1 AND auth_version=$2 AND source=$3 AND subject=$4 AND name=$5 AND email=$6 AND status=$7`, id, old.AuthVersion, old.Source, old.Subject, old.Name, old.Email, old.Status); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func writeOrganizations(ctx context.Context, tx pgx.Tx, before, after map[string]domain.Organization) error {
-	for id, o := range after {
-		old, existed := before[id]
-		if existed && old.Name == o.Name && old.Revision == o.Revision && sameStrings(old.Sources, o.Sources) {
-			continue
-		}
-		if !existed {
-			if err := execRevisionCAS(ctx, tx, "Organization changed", `INSERT INTO krun_organizations (org_id, name, revision) VALUES ($1,$2,$3) ON CONFLICT (org_id) DO NOTHING`, id, o.Name, o.Revision); err != nil {
-				return err
-			}
-		} else if err := execRevisionCAS(ctx, tx, "Organization changed", `UPDATE krun_organizations SET name=$2, revision=$3 WHERE org_id=$1 AND revision=$4`, id, o.Name, o.Revision, old.Revision); err != nil {
-			return err
-		}
-		if !existed || !sameStrings(old.Sources, o.Sources) {
-			if _, err := tx.Exec(ctx, `DELETE FROM krun_org_sources WHERE org_id=$1`, id); err != nil {
-				return err
-			}
-			for _, source := range o.Sources {
-				if _, err := tx.Exec(ctx, `INSERT INTO krun_org_sources (org_id, source) VALUES ($1,$2) ON CONFLICT DO NOTHING`, id, source); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	for id, old := range before {
-		if _, ok := after[id]; !ok {
-			if err := execRevisionCAS(ctx, tx, "Organization changed", `DELETE FROM krun_organizations WHERE org_id=$1 AND revision=$2`, id, old.Revision); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(ctx, `DELETE FROM krun_org_sources WHERE org_id=$1`, id); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func writeMembers(ctx context.Context, tx pgx.Tx, before, after map[string]domain.Member) error {
-	for key, m := range after {
-		if _, ok := before[key]; ok {
-			continue
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO krun_members (org_id, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, m.Organization, m.User); err != nil {
-			return err
-		}
-	}
-	for key, m := range before {
-		if _, ok := after[key]; ok {
-			continue
-		}
-		if _, err := tx.Exec(ctx, `DELETE FROM krun_members WHERE org_id=$1 AND user_id=$2`, m.Organization, m.User); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func writeGroups(ctx context.Context, tx pgx.Tx, before, after map[string]domain.Group) error {
-	for id, g := range after {
-		old, existed := before[id]
-		if existed && old.ScopeKind == g.ScopeKind && old.ScopeID == g.ScopeID && old.Name == g.Name && old.Revision == g.Revision && sameStrings(old.Members, g.Members) {
-			continue
-		}
-		if !existed {
-			if err := execRevisionCAS(ctx, tx, "Group changed", `INSERT INTO krun_groups (group_id, scope_kind, scope_id, name, revision) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (group_id) DO NOTHING`, id, g.ScopeKind, g.ScopeID, g.Name, g.Revision); err != nil {
-				return err
-			}
-		} else if err := execRevisionCAS(ctx, tx, "Group changed", `UPDATE krun_groups SET scope_kind=$2, scope_id=$3, name=$4, revision=$5 WHERE group_id=$1 AND revision=$6`, id, g.ScopeKind, g.ScopeID, g.Name, g.Revision, old.Revision); err != nil {
-			return err
-		}
-		if !existed || !sameStrings(old.Members, g.Members) {
-			if _, err := tx.Exec(ctx, `DELETE FROM krun_group_members WHERE group_id=$1`, id); err != nil {
-				return err
-			}
-			for _, user := range g.Members {
-				if _, err := tx.Exec(ctx, `INSERT INTO krun_group_members (group_id, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, id, user); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	for id, old := range before {
-		if _, ok := after[id]; !ok {
-			if err := execRevisionCAS(ctx, tx, "Group changed", `DELETE FROM krun_groups WHERE group_id=$1 AND revision=$2`, id, old.Revision); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(ctx, `DELETE FROM krun_group_members WHERE group_id=$1`, id); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func writeAssignments(ctx context.Context, tx pgx.Tx, before, after map[string]domain.Assignment) error {
-	for id, a := range after {
-		old, existed := before[id]
-		if existed && sameAssignment(old, a) {
-			continue
-		}
-		conditions, err := json.Marshal(a.Conditions)
-		if err != nil {
-			return err
-		}
-		if !existed {
-			if err = execRevisionCAS(ctx, tx, "Assignment changed", `INSERT INTO krun_assignments (assignment_id, subject_kind, subject_id, role, scope_kind, scope_id, conditions, revision) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (assignment_id) DO NOTHING`, id, a.SubjectKind, a.SubjectID, a.Role, a.ScopeKind, a.ScopeID, conditions, a.Revision); err != nil {
-				return err
-			}
-		} else if err = execRevisionCAS(ctx, tx, "Assignment changed", `UPDATE krun_assignments SET subject_kind=$2, subject_id=$3, role=$4, scope_kind=$5, scope_id=$6, conditions=$7, revision=$8 WHERE assignment_id=$1 AND revision=$9`, id, a.SubjectKind, a.SubjectID, a.Role, a.ScopeKind, a.ScopeID, conditions, a.Revision, old.Revision); err != nil {
-			return err
-		}
-	}
-	for id, old := range before {
-		if _, ok := after[id]; !ok {
-			if err := execRevisionCAS(ctx, tx, "Assignment changed", `DELETE FROM krun_assignments WHERE assignment_id=$1 AND revision=$2`, id, old.Revision); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func writeResources(ctx context.Context, tx pgx.Tx, before, after map[string]domain.Resource) error {
-	for id, r := range after {
-		old, existed := before[id]
-		if existed && old == r {
-			continue
-		}
-		if !existed {
-			if err := execRevisionCAS(ctx, tx, "Resource changed", `INSERT INTO krun_resources (resource_id, kind, org_id, name, revision) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (resource_id) DO NOTHING`, id, r.Kind, r.Organization, r.Name, r.Revision); err != nil {
-				return err
-			}
-		} else if err := execRevisionCAS(ctx, tx, "Resource changed", `UPDATE krun_resources SET kind=$2, org_id=$3, name=$4, revision=$5 WHERE resource_id=$1 AND revision=$6`, id, r.Kind, r.Organization, r.Name, r.Revision, old.Revision); err != nil {
-			return err
-		}
-	}
-	for id, old := range before {
-		if _, ok := after[id]; !ok {
-			if err := execRevisionCAS(ctx, tx, "Resource changed", `DELETE FROM krun_resources WHERE resource_id=$1 AND revision=$2`, id, old.Revision); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// writeAPIKeys keeps the authentication hash in its own table so metadata
-// queries never read it.
-func writeAPIKeys(ctx context.Context, tx pgx.Tx, before, after *domain.State) error {
-	for id, k := range after.Keys {
-		old, existed := before.Keys[id]
-		if existed && sameAPIKey(old, k) {
-			continue
-		}
-		policy, err := json.Marshal(k.Policy)
-		if err != nil {
-			return err
-		}
-		if !existed {
-			if err = execRevisionCAS(ctx, tx, "Key changed", `INSERT INTO krun_api_keys (key_id, owner_user_id, org_id, scope_kind, name, prefix, policy, expires_at, revoked, revision) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (key_id) DO NOTHING`, id, k.Owner, k.Organization, k.ScopeKind, k.Name, k.Prefix, policy, k.Expires, k.Revoked, k.Revision); err != nil {
-				return err
-			}
-		} else if err = execRevisionCAS(ctx, tx, "Key changed", `UPDATE krun_api_keys SET owner_user_id=$2, org_id=$3, scope_kind=$4, name=$5, prefix=$6, policy=$7, expires_at=$8, revoked=$9, revision=$10 WHERE key_id=$1 AND revision=$11`, id, k.Owner, k.Organization, k.ScopeKind, k.Name, k.Prefix, policy, k.Expires, k.Revoked, k.Revision, old.Revision); err != nil {
-			return err
-		}
-	}
-	for id, old := range before.Keys {
-		if _, ok := after.Keys[id]; !ok {
-			if err := execRevisionCAS(ctx, tx, "Key changed", `DELETE FROM krun_api_keys WHERE key_id=$1 AND revision=$2`, id, old.Revision); err != nil {
-				return err
-			}
-			// Hashes are deliberately absent from generic IAM snapshots. Delete
-			// the private row from the metadata deletion signal instead of relying
-			// on a KeyHashes before-image that the request never loaded.
-			if _, err := tx.Exec(ctx, `DELETE FROM krun_api_key_hashes WHERE key_id=$1`, id); err != nil {
-				return err
-			}
-		}
-	}
-	for id, hash := range after.KeyHashes {
-		if old, ok := before.KeyHashes[id]; ok && old == hash {
-			continue
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO krun_api_key_hashes (key_id, hash) VALUES ($1,$2) ON CONFLICT (key_id) DO UPDATE SET hash=excluded.hash`, id, hash); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func writeInvitations(ctx context.Context, tx pgx.Tx, before, after map[string]time.Time) error {
-	for key, expires := range after {
-		old, ok := before[key]
-		if ok && old.Equal(expires) {
-			continue
-		}
-		source, subject := splitNulKey(key)
-		if _, err := tx.Exec(ctx, `INSERT INTO krun_invitations (source, subject, expires_at) VALUES ($1,$2,$3) ON CONFLICT (source, subject) DO UPDATE SET expires_at=excluded.expires_at`, source, subject, expires); err != nil {
-			return err
-		}
-	}
-	for key := range before {
-		if _, ok := after[key]; ok {
-			continue
-		}
-		source, subject := splitNulKey(key)
-		if _, err := tx.Exec(ctx, `DELETE FROM krun_invitations WHERE source=$1 AND subject=$2`, source, subject); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // splitNulKey splits the composite keys the in-memory maps use ("a\x00b").

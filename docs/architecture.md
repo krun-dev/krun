@@ -15,7 +15,7 @@
 | `internal/artifact` | 制品 manifest、归档、源码路径、资产和 Wrangler 配置校验 |
 | `internal/config` | 唯一应用配置的加载、默认值、校验和部署目录解析 |
 | `internal/adapters/*` | 身份提供商、仓库 OAuth、Git、Kubernetes、S3、本地 builder、邮件、Runtime 管理与控制台调用 |
-| `internal/storage` | SQL、连接池、行映射、事务、CAS、租约、保留和清理 |
+| `internal/storage` | Bun 行模型与常规 CRUD、专用 SQL、连接池、事务、CAS、租约、保留和清理 |
 | `internal/domain` | 共享实体、请求工作副本、待提交命令与不可变发布数据 |
 | `internal/securetoken` | 随机凭据、ID 和 SHA-256 摘要 |
 
@@ -41,5 +41,7 @@
 ## 自动化约束
 
 `internal/storage/architecture_test.go` 递归检查全部模块：SQL、数据库驱动和 ORM 仅属于存储层；业务包不依赖 HTTP 或外部客户端 SDK；下层不能反向导入 HTTP 包。检查还禁止 HTTP handler 直接修改实体和 revision。
+
+Bun 模型从 DDL 生成，ORM 和驱动只存在于存储层。业务对象不携带 ORM 标签，模型不负责自动建表或关联保存。
 
 数据库 schema 仍只有 `internal/storage/schema.sql` 一份，不通过拆包增加迁移、回填、外键或自动级联。前端保持静态 SPA，所有请求仍使用同源 `/api/*`。

@@ -12,6 +12,18 @@ HTTP 入口位于 `internal/control`，认证、IAM、Workers、仓库、Runtime
 
 `control/models.go` 和 `control/storage.go` 保留命令入口使用的类型转接。表结构与查询的定位入口见 [storage 包说明](../internal/storage/README.md)。边界测试递归检查全部模块的依赖，并禁止 HTTP handler 直接修改实体。
 
+## ORM 与表模型
+
+Bun 只在存储层使用，连接适配复用现有 pgx 连接池；原生批量查询与 ORM 共用连接上限，不额外创建独立业务连接池。
+
+- `internal/storage/models/*_gen.go` 为全部基线表提供类型化行模型，包含列名、主键、JSONB、数组和可空时间映射。共享 domain 类型不带 ORM 标签。
+- 模型由唯一 DDL 生成：`go generate ./internal/storage/models`；`make check-storage-models` 和 `make test` 会检查模型是否过期。不能手改生成文件来变更表结构。
+- IAM 实体及关联、身份来源、会话和浏览器、登录挑战、仓库连接的普通读写，以及 ORM 事务内的审计写入使用模型。写入显式指定更新列，空字符串、`false` 和 `NULL` 都能被正确保存。
+- revision 校验、唯一键冲突和影响行数仍显式处理。没有通用 `Save`、自动关联保存、级联删除、自动建表或迁移。
+- 有范围的批量读取、Workers 条件状态迁移、刷新租约、队列认领、配置增量和清理继续使用专用 PostgreSQL 语句。ORM 与这些语句的边界集中在存储层，不扩散到业务包。
+
+ORM 的映射测试对照真实数据库列集，并验证后续 CAS 失败会回滚前面的写入、零值和空值不会被忽略、连接被及时归还。数据库 DDL 与 fingerprint 没有因引入 ORM 改变。
+
 ## 分区
 
 IAM 与 Workers 是两套独立分区，**不共享事务**：

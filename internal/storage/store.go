@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/krun-dev/krun/internal/domain"
+	"github.com/uptrace/bun"
 )
 
 // Store persists the control plane as one row per entity.
@@ -20,6 +21,7 @@ import (
 // No upstream HTTP calls may run inside Update.
 type Store struct {
 	pool   *pgxpool.Pool
+	orm    *bun.DB
 	mu     sync.Mutex
 	memory *domain.State
 	// memoryAudits backs the in-memory store used by tests.
@@ -81,10 +83,13 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 		pool.Close()
 		return nil, err
 	}
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool, orm: newORM(pool)}, nil
 }
 
 func (s *Store) Close() {
+	if s.orm != nil {
+		_ = s.orm.Close()
+	}
 	if s.pool != nil {
 		s.pool.Close()
 	}

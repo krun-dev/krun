@@ -2,9 +2,10 @@ package storage
 
 import (
 	"context"
+	sql "database/sql"
 	"errors"
+	models "github.com/krun-dev/krun/internal/storage/models"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -15,12 +16,12 @@ func (s *Store) APIKeyOwner(ctx context.Context, key string) (string, bool, erro
 		value, ok := s.memState().Keys[key]
 		return value.Owner, ok, nil
 	}
-	var owner string
-	err := s.pool.QueryRow(ctx, `SELECT owner_user_id FROM krun_api_keys WHERE key_id=$1`, key).Scan(&owner)
-	if errors.Is(err, pgx.ErrNoRows) {
+	var row models.APIKey
+	err := s.orm.NewSelect().Model(&row).Column("owner_user_id").Where("key_id = ?", key).Limit(1).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
-	return owner, err == nil, err
+	return row.OwnerUserID, err == nil, err
 }
 
 func ValidateDSN(dsn string) error { _, err := pgxpool.ParseConfig(dsn); return err }

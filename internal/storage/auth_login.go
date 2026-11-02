@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	sql "database/sql"
 	"errors"
+	models "github.com/krun-dev/krun/internal/storage/models"
 	"sort"
 	"time"
 
@@ -166,15 +168,15 @@ func (s *Store) LoginState(ctx context.Context, hash string) (domain.Login, bool
 		login, ok := s.memState().Logins[hash]
 		return login, ok, nil
 	}
-	var out domain.Login
-	err := s.pool.QueryRow(ctx, `SELECT provider, browser_hash, fingerprint, verifier, nonce, return_to, generation, expires_at, consumed FROM krun_login_states WHERE state_hash=$1`, hash).Scan(&out.Provider, &out.Browser, &out.Fingerprint, &out.Verifier, &out.Nonce, &out.ReturnTo, &out.Generation, &out.Expires, &out.Consumed)
-	if errors.Is(err, pgx.ErrNoRows) {
+	var row models.LoginState
+	err := s.orm.NewSelect().Model(&row).Where("state_hash = ?", hash).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Login{}, false, nil
 	}
 	if err != nil {
 		return domain.Login{}, false, err
 	}
-	return out, true, nil
+	return domain.Login{Provider: row.Provider, Browser: row.BrowserHash, Fingerprint: row.Fingerprint, Verifier: row.Verifier, Nonce: row.Nonce, ReturnTo: row.ReturnTo, Generation: row.Generation, Expires: row.ExpiresAt, Consumed: row.Consumed}, true, nil
 }
 
 func (s *Store) insertLoginState(ctx context.Context, hash string, login domain.Login) error {
@@ -184,7 +186,8 @@ func (s *Store) insertLoginState(ctx context.Context, hash string, login domain.
 		}
 		return nil
 	}
-	_, err := s.pool.Exec(ctx, `INSERT INTO krun_login_states (state_hash, provider, browser_hash, fingerprint, verifier, nonce, return_to, generation, expires_at, consumed) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, hash, login.Provider, login.Browser, login.Fingerprint, login.Verifier, login.Nonce, login.ReturnTo, login.Generation, login.Expires, login.Consumed)
+	row := models.LoginState{StateHash: hash, Provider: login.Provider, BrowserHash: login.Browser, Fingerprint: login.Fingerprint, Verifier: login.Verifier, Nonce: login.Nonce, ReturnTo: login.ReturnTo, Generation: login.Generation, ExpiresAt: login.Expires, Consumed: login.Consumed}
+	_, err := s.orm.NewInsert().Model(&row).Returning("NULL").Exec(ctx)
 	return err
 }
 
@@ -227,15 +230,15 @@ func (s *Store) EmailLogin(ctx context.Context, hash string) (domain.EmailLogin,
 		login, ok := s.memState().EmailLogins[hash]
 		return login, ok, nil
 	}
-	var out domain.EmailLogin
-	err := s.pool.QueryRow(ctx, `SELECT provider, browser_hash, fingerprint, email, code_hash, return_to, ip, generation, attempts, sent_at, expires_at, consumed FROM krun_email_logins WHERE challenge_hash=$1`, hash).Scan(&out.Provider, &out.Browser, &out.Fingerprint, &out.Email, &out.CodeHash, &out.ReturnTo, &out.IP, &out.Generation, &out.Attempts, &out.Sent, &out.Expires, &out.Consumed)
-	if errors.Is(err, pgx.ErrNoRows) {
+	var row models.EmailLogin
+	err := s.orm.NewSelect().Model(&row).Where("challenge_hash = ?", hash).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
 		return domain.EmailLogin{}, false, nil
 	}
 	if err != nil {
 		return domain.EmailLogin{}, false, err
 	}
-	return out, true, nil
+	return domain.EmailLogin{Provider: row.Provider, Browser: row.BrowserHash, Fingerprint: row.Fingerprint, Email: row.Email, CodeHash: row.CodeHash, ReturnTo: row.ReturnTo, IP: row.IP, Generation: row.Generation, Attempts: row.Attempts, Sent: row.SentAt, Expires: row.ExpiresAt, Consumed: row.Consumed}, true, nil
 }
 
 func (s *Store) insertEmailLogin(ctx context.Context, hash string, login domain.EmailLogin) error {
@@ -245,7 +248,8 @@ func (s *Store) insertEmailLogin(ctx context.Context, hash string, login domain.
 		}
 		return nil
 	}
-	_, err := s.pool.Exec(ctx, `INSERT INTO krun_email_logins (challenge_hash, provider, browser_hash, fingerprint, email, code_hash, return_to, ip, generation, attempts, sent_at, expires_at, consumed) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, hash, login.Provider, login.Browser, login.Fingerprint, login.Email, login.CodeHash, login.ReturnTo, login.IP, login.Generation, login.Attempts, login.Sent, login.Expires, login.Consumed)
+	row := models.EmailLogin{ChallengeHash: hash, Provider: login.Provider, BrowserHash: login.Browser, Fingerprint: login.Fingerprint, Email: login.Email, CodeHash: login.CodeHash, ReturnTo: login.ReturnTo, IP: login.IP, Generation: login.Generation, Attempts: login.Attempts, SentAt: login.Sent, ExpiresAt: login.Expires, Consumed: login.Consumed}
+	_, err := s.orm.NewInsert().Model(&row).Returning("NULL").Exec(ctx)
 	return err
 }
 

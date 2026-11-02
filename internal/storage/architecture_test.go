@@ -61,16 +61,21 @@ func TestStorageLayerBoundaries(t *testing.T) {
 					}
 				}
 			}
-			if layer == "storage" {
-				continue
-			}
 			ast.Inspect(file, func(node ast.Node) bool {
+				if call, ok := node.(*ast.CallExpr); ok {
+					if method, ok := call.Fun.(*ast.SelectorExpr); ok {
+						switch method.Sel.Name {
+						case "AutoMigrate", "NewCreateTable", "NewDropTable", "NewAddColumn", "NewDropColumn", "NewCreateIndex", "NewDropIndex", "NewTruncateTable":
+							t.Errorf("%s uses automatic ORM schema management", set.Position(call.Pos()))
+						}
+					}
+				}
 				literal, ok := node.(*ast.BasicLit)
 				if !ok || literal.Kind != token.STRING {
 					return true
 				}
 				value, _ := strconv.Unquote(literal.Value)
-				if sql.MatchString(value) {
+				if layer != "storage" && sql.MatchString(value) {
 					t.Errorf("%s contains SQL outside storage", set.Position(literal.Pos()))
 				}
 				return true

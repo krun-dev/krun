@@ -1,4 +1,4 @@
-.PHONY: build test check-secrets check-static check-static-build dev dev-down runtime-image runtime-config clean
+.PHONY: build test check-secrets check-static check-static-build check-storage-models dev dev-down runtime-image runtime-config clean
 build:
 	npm ci
 	npm run build
@@ -14,7 +14,11 @@ check-static:
 check-static-build:
 	python3 scripts/check-static-console.py --dist
 
+check-storage-models:
+	python3 scripts/gen-storage-models.py --check
+
 test:
+	python3 scripts/gen-storage-models.py --check
 	./scripts/check-secrets.sh
 	python3 scripts/check-static-console.py
 	go test -race ./...

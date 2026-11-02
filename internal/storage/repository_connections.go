@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	sql "database/sql"
 	"errors"
+	models "github.com/krun-dev/krun/internal/storage/models"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -17,7 +19,7 @@ func (s *Store) UpsertRepositoryConnectState(ctx context.Context, state string, 
 		}
 		return nil
 	}
-	_, err := s.pool.Exec(ctx, `INSERT INTO krun_repository_connect_states (state, user_id, provider_id, org_id, browser_hash, expires_at) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (state) DO UPDATE SET user_id=excluded.user_id, provider_id=excluded.provider_id, org_id=excluded.org_id, browser_hash=excluded.browser_hash, expires_at=excluded.expires_at`, state, pending.User, pending.Provider, pending.Organization, pending.Browser, pending.Expires)
+	_, err := repositoryConnectUpsert(s.orm, state, pending).Exec(ctx)
 	return err
 }
 
@@ -66,18 +68,7 @@ func (s *Store) UpsertRepositoryConnection(ctx context.Context, connection domai
 		}
 		return nil
 	}
-	_, err := s.pool.Exec(ctx, `INSERT INTO krun_repository_connections
-		(user_id, provider_id, access_token, token_type, refresh_token, expires_at, token_revision,
-		 refresh_state, refresh_claimed_at, reconnect_required, connected_at)
-		VALUES ($1,$2,$3,$4,$5,$6,1,'ready',NULL,false,$7)
-		ON CONFLICT (user_id, provider_id) DO UPDATE SET
-		access_token=excluded.access_token, token_type=excluded.token_type,
-		refresh_token=excluded.refresh_token, expires_at=excluded.expires_at,
-		token_revision=krun_repository_connections.token_revision+1,
-		refresh_state='ready', refresh_claimed_at=NULL, reconnect_required=false,
-		connected_at=excluded.connected_at`, connection.User, connection.Provider,
-		connection.AccessToken, connection.TokenType, connection.RefreshToken,
-		repositoryTokenExpiry(connection.ExpiresAt), connection.ConnectedAt)
+	_, err := repositoryConnectionUpsert(s.orm, connection).Exec(ctx)
 	return err
 }
 
@@ -88,7 +79,8 @@ func (s *Store) DeleteRepositoryConnection(ctx context.Context, user, provider s
 		}
 		return nil
 	}
-	_, err := s.pool.Exec(ctx, `DELETE FROM krun_repository_connections WHERE user_id=$1 AND provider_id=$2`, user, provider)
+	row := models.RepositoryConnection{UserID: user, ProviderID: provider}
+	_, err := s.orm.NewDelete().Model(&row).WherePK().Exec(ctx)
 	return err
 }
 
@@ -99,14 +91,20 @@ func (s *Store) RepositoryConnection(ctx context.Context, user, provider string)
 		connection, ok := s.memState().RepositoryConnections[user+"\x00"+provider]
 		return connection, ok, nil
 	}
-	out, err := scanRepositoryConnection(s.pool.QueryRow(ctx, `SELECT access_token, token_type, refresh_token,
-		expires_at, token_revision, refresh_state, refresh_claimed_at, reconnect_required, connected_at
-		FROM krun_repository_connections WHERE user_id=$1 AND provider_id=$2`, user, provider), user, provider)
-	if errors.Is(err, pgx.ErrNoRows) {
+	var row models.RepositoryConnection
+	err := s.orm.NewSelect().Model(&row).Where("user_id = ?", user).Where("provider_id = ?", provider).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
 		return domain.WorkerRepositoryConnection{}, false, nil
 	}
 	if err != nil {
 		return domain.WorkerRepositoryConnection{}, false, err
+	}
+	out := domain.WorkerRepositoryConnection{User: row.UserID, Provider: row.ProviderID, AccessToken: row.AccessToken, TokenType: row.TokenType, RefreshToken: row.RefreshToken, TokenRevision: row.TokenRevision, RefreshState: row.RefreshState, ReconnectRequired: row.ReconnectRequired, ConnectedAt: row.ConnectedAt}
+	if row.ExpiresAt != nil {
+		out.ExpiresAt = *row.ExpiresAt
+	}
+	if row.RefreshClaimedAt != nil {
+		out.RefreshClaimedAt = *row.RefreshClaimedAt
 	}
 	return out, true, nil
 }
@@ -241,36 +239,27 @@ func (s *Store) ConnectedRepositoryProviders(ctx context.Context, user string) (
 		}
 		return out, nil
 	}
-	rows, err := s.pool.Query(ctx, `SELECT provider_id FROM krun_repository_connections
-		WHERE user_id=$1 AND access_token <> '' AND reconnect_required=false
-		  AND (expires_at IS NULL OR expires_at > now() OR refresh_token <> '')`, user)
+	var providers []string
+	err := s.orm.NewSelect().Model((*models.RepositoryConnection)(nil)).Column("provider_id").Where("user_id = ?", user).Where("access_token <> ''").Where("reconnect_required = false").Where("(expires_at IS NULL OR expires_at > now() OR refresh_token <> '')").Scan(ctx, &providers)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var provider string
-		if err = rows.Scan(&provider); err != nil {
-			return nil, err
-		}
+	for _, provider := range providers {
 		out[provider] = true
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) UpsertRepositoryConnectStateAudited(ctx context.Context, state string, pending domain.WorkerRepositoryConnectState, audits []domain.Audit) error {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.beginORMTransaction(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `INSERT INTO krun_repository_connect_states
-		(state, user_id, provider_id, org_id, browser_hash, expires_at) VALUES ($1,$2,$3,$4,$5,$6)
-		ON CONFLICT (state) DO UPDATE SET user_id=excluded.user_id, provider_id=excluded.provider_id,
-		org_id=excluded.org_id, browser_hash=excluded.browser_hash, expires_at=excluded.expires_at`,
-		state, pending.User, pending.Provider, pending.Organization, pending.Browser, pending.Expires); err != nil {
+	if _, err = repositoryConnectUpsert(tx.orm, state, pending).Exec(ctx); err != nil {
 		return err
 	}
+
 	if err = insertAudits(ctx, tx, audits); err != nil {
 		return err
 	}
@@ -278,25 +267,15 @@ func (s *Store) UpsertRepositoryConnectStateAudited(ctx context.Context, state s
 }
 
 func (s *Store) UpsertRepositoryConnectionAudited(ctx context.Context, connection domain.WorkerRepositoryConnection, audits []domain.Audit) error {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.beginORMTransaction(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `INSERT INTO krun_repository_connections
-		(user_id, provider_id, access_token, token_type, refresh_token, expires_at, token_revision,
-		 refresh_state, refresh_claimed_at, reconnect_required, connected_at)
-		VALUES ($1,$2,$3,$4,$5,$6,1,'ready',NULL,false,$7)
-		ON CONFLICT (user_id, provider_id) DO UPDATE SET
-		access_token=excluded.access_token, token_type=excluded.token_type,
-		refresh_token=excluded.refresh_token, expires_at=excluded.expires_at,
-		token_revision=krun_repository_connections.token_revision+1,
-		refresh_state='ready', refresh_claimed_at=NULL, reconnect_required=false,
-		connected_at=excluded.connected_at`, connection.User, connection.Provider,
-		connection.AccessToken, connection.TokenType, connection.RefreshToken,
-		repositoryTokenExpiry(connection.ExpiresAt), connection.ConnectedAt); err != nil {
+	if _, err = repositoryConnectionUpsert(tx.orm, connection).Exec(ctx); err != nil {
 		return err
 	}
+
 	if err = insertAudits(ctx, tx, audits); err != nil {
 		return err
 	}
@@ -304,14 +283,15 @@ func (s *Store) UpsertRepositoryConnectionAudited(ctx context.Context, connectio
 }
 
 func (s *Store) DeleteRepositoryConnectionAudited(ctx context.Context, user, provider string, audits []domain.Audit) error {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.beginORMTransaction(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `DELETE FROM krun_repository_connections WHERE user_id=$1 AND provider_id=$2`, user, provider); err != nil {
+	if _, err = tx.orm.NewDelete().Model(&models.RepositoryConnection{UserID: user, ProviderID: provider}).WherePK().Exec(ctx); err != nil {
 		return err
 	}
+
 	if err = insertAudits(ctx, tx, audits); err != nil {
 		return err
 	}

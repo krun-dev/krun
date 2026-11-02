@@ -3,10 +3,11 @@ package storage
 import (
 	"context"
 	"crypto/subtle"
+	sql "database/sql"
 	"errors"
+	models "github.com/krun-dev/krun/internal/storage/models"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/krun-dev/krun/internal/domain"
 )
 
@@ -32,15 +33,12 @@ func (s *Store) APIKeyIDByHash(ctx context.Context, hash string) (string, bool, 
 		}
 		return "", false, nil
 	}
-	var id string
-	err := s.pool.QueryRow(ctx, `SELECT key_id FROM krun_api_key_hashes WHERE hash=$1 LIMIT 1`, hash).Scan(&id)
-	if errors.Is(err, pgx.ErrNoRows) {
+	var row models.APIKeyHash
+	err := s.orm.NewSelect().Model(&row).Column("key_id").Where("hash = ?", hash).Limit(1).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
-	if err != nil {
-		return "", false, err
-	}
-	return id, true, nil
+	return row.KeyID, err == nil, err
 }
 
 func (s *Store) SessionByHash(ctx context.Context, hash string) (domain.Session, bool, error) {
@@ -51,15 +49,15 @@ func (s *Store) SessionByHash(ctx context.Context, hash string) (domain.Session,
 		session, ok := s.memState().Sessions[hash]
 		return session, ok, nil
 	}
-	var out domain.Session
-	err := s.pool.QueryRow(ctx, `SELECT session_hash, user_id, csrf, auth_version, cli, created_at, seen_at, absolute_at FROM krun_sessions WHERE session_hash=$1`, hash).Scan(&out.Hash, &out.User, &out.CSRF, &out.AuthVersion, &out.CLI, &out.Created, &out.Seen, &out.Absolute)
-	if errors.Is(err, pgx.ErrNoRows) {
+	var row models.Session
+	err := s.orm.NewSelect().Model(&row).Where("session_hash = ?", hash).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Session{}, false, nil
 	}
 	if err != nil {
 		return domain.Session{}, false, err
 	}
-	return out, true, nil
+	return domain.Session{Hash: row.SessionHash, User: row.UserID, CSRF: row.CSRF, AuthVersion: row.AuthVersion, CLI: row.CLI, Created: row.CreatedAt, Seen: row.SeenAt, Absolute: row.AbsoluteAt}, true, nil
 }
 
 // touchSession refreshes seen_at only when the stored value is older than the
@@ -74,7 +72,7 @@ func (s *Store) TouchSession(ctx context.Context, hash string) error {
 		}
 		return nil
 	}
-	_, err := s.pool.Exec(ctx, `UPDATE krun_sessions SET seen_at=now() WHERE session_hash=$1 AND seen_at < now() - $2::interval`, hash, seenThrottle.String())
+	_, err := s.orm.NewUpdate().Model((*models.Session)(nil)).Set("seen_at = now()").Where("session_hash = ?", hash).Where("seen_at < now() - ?::interval", seenThrottle.String()).Exec(ctx)
 	return err
 }
 
@@ -85,7 +83,8 @@ func (s *Store) InsertSession(ctx context.Context, token string, session domain.
 		}
 		return nil
 	}
-	_, err := s.pool.Exec(ctx, `INSERT INTO krun_sessions (session_hash, user_id, csrf, auth_version, cli, created_at, seen_at, absolute_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, digest(token), session.User, session.CSRF, session.AuthVersion, session.CLI, session.Created, session.Seen, session.Absolute)
+	row := sessionModel(digest(token), session)
+	_, err := s.orm.NewInsert().Model(&row).Returning("NULL").Exec(ctx)
 	return err
 }
 
@@ -99,7 +98,8 @@ func (s *Store) DeleteSession(ctx context.Context, hash string) error {
 		}
 		return nil
 	}
-	_, err := s.pool.Exec(ctx, `DELETE FROM krun_sessions WHERE session_hash=$1`, hash)
+	row := models.Session{SessionHash: hash}
+	_, err := s.orm.NewDelete().Model(&row).WherePK().Exec(ctx)
 	return err
 }
 
@@ -113,15 +113,15 @@ func (s *Store) BrowserFor(ctx context.Context, hash string) (domain.Browser, bo
 		browser, ok := s.memState().Browsers[hash]
 		return browser, ok, nil
 	}
-	var out domain.Browser
-	err := s.pool.QueryRow(ctx, `SELECT csrf, generation, expires_at FROM krun_browsers WHERE browser_hash=$1`, hash).Scan(&out.CSRF, &out.Generation, &out.Expires)
-	if errors.Is(err, pgx.ErrNoRows) {
+	var row models.Browser
+	err := s.orm.NewSelect().Model(&row).Where("browser_hash = ?", hash).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Browser{}, false, nil
 	}
 	if err != nil {
 		return domain.Browser{}, false, err
 	}
-	return out, true, nil
+	return domain.Browser{CSRF: row.CSRF, Generation: row.Generation, Expires: row.ExpiresAt}, true, nil
 }
 
 func (s *Store) UpsertBrowser(ctx context.Context, hash string, browser domain.Browser) error {
@@ -131,7 +131,8 @@ func (s *Store) UpsertBrowser(ctx context.Context, hash string, browser domain.B
 		}
 		return nil
 	}
-	_, err := s.pool.Exec(ctx, `INSERT INTO krun_browsers (browser_hash, csrf, generation, expires_at) VALUES ($1,$2,$3,$4) ON CONFLICT (browser_hash) DO UPDATE SET csrf=excluded.csrf, generation=excluded.generation, expires_at=excluded.expires_at`, hash, browser.CSRF, browser.Generation, browser.Expires)
+	row := models.Browser{BrowserHash: hash, CSRF: browser.CSRF, Generation: browser.Generation, ExpiresAt: browser.Expires}
+	_, err := s.orm.NewInsert().Model(&row).On("CONFLICT (browser_hash) DO UPDATE").Set("csrf = EXCLUDED.csrf").Set("generation = EXCLUDED.generation").Set("expires_at = EXCLUDED.expires_at").Returning("NULL").Exec(ctx)
 	return err
 }
 
@@ -145,7 +146,8 @@ func (s *Store) deleteBrowser(ctx context.Context, hash string) error {
 		}
 		return nil
 	}
-	_, err := s.pool.Exec(ctx, `DELETE FROM krun_browsers WHERE browser_hash=$1`, hash)
+	row := models.Browser{BrowserHash: hash}
+	_, err := s.orm.NewDelete().Model(&row).WherePK().Exec(ctx)
 	return err
 }
 
