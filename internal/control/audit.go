@@ -1,37 +1,14 @@
 package control
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"os"
 	"strconv"
 	"time"
 
 	"github.com/krun-dev/krun/internal/configfile"
-	"github.com/krun-dev/krun/internal/localize"
 )
-
-const auditRetention = 7 * 24 * time.Hour
-
-// Retention runs against the dedicated audit table; the state blob no longer
-// carries audit history.
-func (s *Store) retainAudits(ctx context.Context, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if err := s.deleteAuditsBefore(ctx, now().Add(-auditRetention)); err != nil && ctx.Err() == nil {
-				fmt.Fprintln(os.Stderr, localize.Text(localize.Language(ctx), "krun audit retention cleanup failed:"), localize.Error(localize.Language(ctx), err))
-			}
-		}
-	}
-}
 
 type auditCursor struct {
 	Scope  string     `json:"scope"`
@@ -107,7 +84,7 @@ func (s *Server) auditList(st *State, p Principal, r *http.Request) (any, int, e
 		scope = t.ID
 	}
 	cutoff := at.Add(-auditRetention)
-	entries, err := s.Store.readAudits(r.Context(), cutoff, scope, 5000)
+	entries, err := s.Store.ReadAudits(r.Context(), cutoff, scope, 5000)
 	if err != nil {
 		return nil, 0, problem(503, "AUTHORIZATION_UNAVAILABLE", "Control service unavailable")
 	}

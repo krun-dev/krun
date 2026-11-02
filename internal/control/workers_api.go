@@ -229,7 +229,7 @@ func workerIdempotencyKey(t Target, p Principal, kind, env, key string) string {
 }
 func workerRemember(st *State, key string, in any, id string) {
 	raw, _ := json.Marshal(in)
-	st.Workers.Idempotency[key] = WorkerIdempotency{bytesDigest(raw), id}
+	st.Workers.Idempotency[key] = WorkerIdempotency{Digest: bytesDigest(raw), ID: id}
 }
 
 // JSON escaping can expand a source byte to six wire bytes (for example, a
@@ -422,7 +422,7 @@ func (s *Server) workerBuildLogs(st *State, p Principal, r *http.Request) (any, 
 	if e != nil {
 		return nil, 0, e
 	}
-	private, ok, e := s.Store.workerBuildPrivate(r.Context(), b.ID)
+	private, ok, e := s.Store.WorkerBuildPrivate(r.Context(), b.ID)
 	if e != nil {
 		return nil, 0, e
 	}
@@ -436,7 +436,7 @@ func (s *Server) workerBuildSource(st *State, p Principal, r *http.Request) (any
 	if e != nil {
 		return nil, 0, e
 	}
-	private, ok, e := s.Store.workerBuildPrivate(r.Context(), b.ID)
+	private, ok, e := s.Store.WorkerBuildPrivate(r.Context(), b.ID)
 	if e != nil {
 		return nil, 0, e
 	}
@@ -930,9 +930,9 @@ func (s *Server) workerReleaseCreate(st *State, p Principal, r *http.Request, ki
 		release = d
 	}
 	id = randomID("op")
-	op := WorkerOperation{ID: id, Kind: kind, Organization: t.Organization, Service: t.ID, Environment: env, State: "queued", Build: in.Build, Release: release.ID, ExpectedRevision: current.Revision, ConfigRevision: current.ConfigRevision, Steps: []WorkerStep{{"artifact", "pending", ""}, {"candidate", "pending", ""}, {"commit", "pending", ""}, {"synchronize", "pending", ""}}, Created: now()}
+	op := WorkerOperation{ID: id, Kind: kind, Organization: t.Organization, Service: t.ID, Environment: env, State: "queued", Build: in.Build, Release: release.ID, ExpectedRevision: current.Revision, ConfigRevision: current.ConfigRevision, Steps: []WorkerStep{{Name: "artifact", State: "pending"}, {Name: "candidate", State: "pending"}, {Name: "commit", State: "pending"}, {Name: "synchronize", State: "pending"}}, Created: now()}
 	st.Workers.Operations[id] = op
-	st.Workers.OperationPrivate[id] = WorkerOperationPrivate{workerActor(p)}
+	st.Workers.OperationPrivate[id] = WorkerOperationPrivate{Actor: workerActor(p)}
 	workerRemember(st, key, in, id)
 	return op, 202, nil
 }
@@ -992,7 +992,7 @@ func (s *Server) workerAuthorizeActor(st *State, a WorkerActor, service, env, ac
 	p := Principal{User: user}
 	if a.Key != "" {
 		key, ok := st.Keys[a.Key]
-		if !ok || !key.active() || key.Owner != a.User {
+		if !ok || !key.Active() || key.Owner != a.User {
 			return forbidden()
 		}
 		p.Key = &key

@@ -107,7 +107,7 @@ func workerReplicaID() string {
 // but resolve() looks the service up in krun_resources, which is Workers.
 func (w *workersController) authorizeActor(ctx context.Context, actor WorkerActor, service, env, action string) (error, error) {
 	var denied error
-	ctx, err := w.server.Store.actorScope(ctx, actor, service)
+	ctx, err := w.server.Store.ActorScope(ctx, actor, service)
 	if err != nil {
 		if _, ok := err.(*APIError); ok {
 			return err, nil
@@ -159,7 +159,7 @@ func (w *workersController) run(ctx context.Context) {
 			w.localWG.Wait()
 			return
 		case <-ticker.C:
-			if w.server.Store.pool == nil {
+			if !w.server.Store.Persistent() {
 				continue
 			}
 			// No leader election: each cycle claims individual operations and
@@ -186,7 +186,7 @@ func (w *workersController) reconcile(ctx context.Context) error {
 		failures = append(failures, e)
 	}
 
-	pending, e := w.server.Store.pendingWork(context.WithValue(ctx, workerQueueReplicaKey{}, w.replica), 100)
+	pending, e := w.server.Store.PendingWork(context.WithValue(ctx, workerQueueReplicaKey{}, w.replica), 100)
 	if e != nil {
 		return e
 	}
@@ -203,11 +203,11 @@ func (w *workersController) reconcile(ctx context.Context) error {
 	for _, b := range builds {
 		b := b
 		work <- func() error {
-			claimed, err := w.server.Store.claimBuild(ctx, b.ID, w.replica)
+			claimed, err := w.server.Store.ClaimBuild(ctx, b.ID, w.replica)
 			if err != nil || !claimed {
 				return err
 			}
-			if err = w.server.Store.scheduleWorkerRetry(ctx, "build", b.ID); err != nil {
+			if err = w.server.Store.ScheduleWorkerRetry(ctx, "build", b.ID); err != nil {
 				return err
 			}
 			b.State = "building"
@@ -242,7 +242,7 @@ func (w *workersController) reconcile(ctx context.Context) error {
 	for _, op := range ops {
 		op := op
 		work <- func() error {
-			if err := w.server.Store.scheduleWorkerRetry(ctx, "operation", op.ID); err != nil {
+			if err := w.server.Store.ScheduleWorkerRetry(ctx, "operation", op.ID); err != nil {
 				return err
 			}
 			ready := false
@@ -369,7 +369,7 @@ func (w *workersController) processClaimedBuild(ctx context.Context, b WorkerBui
 			case <-workCtx.Done():
 				return
 			case <-ticker.C:
-				owned, err := w.server.Store.renewBuildClaim(workCtx, b.ID, w.replica)
+				owned, err := w.server.Store.RenewBuildClaim(workCtx, b.ID, w.replica)
 				if err == nil && owned {
 					continue
 				}
@@ -401,7 +401,7 @@ func (w *workersController) processClaimedBuild(ctx context.Context, b WorkerBui
 }
 
 func (w *workersController) failBuild(ctx context.Context, id, message, log string) error {
-	return w.server.Store.finishClaimedBuild(ctx, id, w.replica, "failed", message, "", safeWorkerLog(log))
+	return w.server.Store.FinishClaimedBuild(ctx, id, w.replica, "failed", message, "", safeWorkerLog(log))
 }
 func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, private WorkerBuildPrivate) error {
 	denied, e := w.authorizeActor(ctx, private.Actor, b.Service, b.Environment, "build.start")
@@ -411,7 +411,7 @@ func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, pri
 	if denied != nil {
 		return w.failBuild(ctx, b.ID, "Build permission revoked", "")
 	}
-	started, startErr := w.server.Store.workerExecutionStarted(ctx, "build", b.ID, b.Created)
+	started, startErr := w.server.Store.WorkerExecutionStarted(ctx, "build", b.ID, b.Created)
 	if startErr != nil {
 		return startErr
 	}
@@ -452,7 +452,7 @@ func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, pri
 		}
 		private.SourceKey = key
 		private.Files = nil
-		if e := w.server.Store.setBuildSource(ctx, b.ID, key); e != nil {
+		if e := w.server.Store.SetBuildSource(ctx, b.ID, key); e != nil {
 			return e
 		}
 	}
@@ -503,17 +503,17 @@ func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, pri
 	if denied != nil {
 		return w.failBuild(ctx, b.ID, "Build permission revoked", log)
 	}
-	e = w.server.Store.finishClaimedBuildWithArtifact(ctx, b.ID, w.replica, "succeeded", "", artifact, log)
+	e = w.server.Store.FinishClaimedBuildWithArtifact(ctx, b.ID, w.replica, "succeeded", "", artifact, log)
 	if e == nil {
 		_ = w.s3.RemoveObject(ctx, w.config.S3Bucket, workerUploadKey(b), minio.RemoveObjectOptions{})
 	}
 	return e
 }
 func (w *workersController) failOperation(ctx context.Context, id, message string) error {
-	return w.server.Store.failOperation(ctx, id, message)
+	return w.server.Store.FailOperation(ctx, id, message)
 }
 func (w *workersController) noteOperation(ctx context.Context, id, message string) error {
-	return w.server.Store.noteOperationMessage(ctx, id, message)
+	return w.server.Store.NoteOperationMessage(ctx, id, message)
 }
 func (w *workersController) management(ctx context.Context, pool WorkerRuntimePool, pod workerPod, baseOverride, path string, payload any) (map[string]any, int, error) {
 	raw, _ := json.Marshal(payload)
@@ -546,7 +546,7 @@ func workerMemberIDs(pods []workerPod) string {
 	return strings.Join(ids, ",")
 }
 func (w *workersController) processOperation(ctx context.Context, op WorkerOperation, state WorkerState, routesReady bool) error {
-	started, startErr := w.server.Store.workerExecutionStarted(ctx, "operation", op.ID, op.Created)
+	started, startErr := w.server.Store.WorkerExecutionStarted(ctx, "operation", op.ID, op.Created)
 	if startErr != nil {
 		return startErr
 	}
@@ -569,12 +569,12 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 	if op.State != "committed" {
 		// Claim the queued operation; losing the race means another replica owns
 		// it and this cycle simply skips it.
-		claimed, e := w.server.Store.claimOperation(ctx, op.ID, w.replica)
+		claimed, e := w.server.Store.ClaimOperation(ctx, op.ID, w.replica)
 		if e != nil {
 			return e
 		}
 		if !claimed {
-			claimed, e = w.server.Store.claimStaleOperation(ctx, op.ID, w.replica)
+			claimed, e = w.server.Store.ClaimStaleOperation(ctx, op.ID, w.replica)
 			if e != nil {
 				return e
 			}
@@ -659,7 +659,7 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 		if auth != nil {
 			return w.failOperation(ctx, op.ID, "Release permission revoked")
 		}
-		committed, e := w.server.Store.commitOperation(ctx, op)
+		committed, e := w.server.Store.CommitOperation(ctx, op)
 		if e != nil {
 			return e
 		}
@@ -676,7 +676,7 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 		if e != nil {
 			return w.noteOperation(ctx, op.ID, "Committed; waiting for configuration publication")
 		}
-		revision, e = w.server.Store.setOperationEdgeRevision(ctx, op.ID, revision)
+		revision, e = w.server.Store.SetOperationEdgeRevision(ctx, op.ID, revision)
 		if e != nil {
 			return e
 		}
@@ -710,7 +710,7 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 			return nil
 		}
 	}
-	return w.server.Store.confirmOperation(ctx, op)
+	return w.server.Store.ConfirmOperation(ctx, op)
 }
 
 // An infrastructure error after commit leaves a durable committed operation to retry; it does not silently undo the Release.
@@ -762,7 +762,7 @@ func (w *workersController) runLocalBuild(b WorkerBuild, private WorkerBuildPriv
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				owned, err := w.server.Store.renewBuildClaim(ctx, b.ID, w.replica)
+				owned, err := w.server.Store.RenewBuildClaim(ctx, b.ID, w.replica)
 				if err == nil && owned {
 					continue
 				}
@@ -803,7 +803,7 @@ func (w *workersController) runLocalBuild(b WorkerBuild, private WorkerBuildPriv
 		_ = w.failBuild(ctx, b.ID, "Build permission revoked", log)
 		return
 	}
-	e = w.server.Store.finishClaimedBuildWithArtifact(ctx, b.ID, w.replica, "succeeded", "", artifact, safeWorkerLog(private.Log+log))
+	e = w.server.Store.FinishClaimedBuildWithArtifact(ctx, b.ID, w.replica, "succeeded", "", artifact, safeWorkerLog(private.Log+log))
 	if e == nil {
 		_ = w.s3.RemoveObject(ctx, w.config.S3Bucket, workerUploadKey(b), minio.RemoveObjectOptions{})
 	}

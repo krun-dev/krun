@@ -2,7 +2,7 @@
 
 本目录仅记录已实现行为、运行契约与复现方式。主配置以
 [config/example.yaml](../config/example.yaml) 为准，数据库以
-[internal/control/schema.go](../internal/control/schema.go) 为唯一建表定义。
+[internal/storage/schema.sql](../internal/storage/schema.sql) 为唯一建表定义。
 项目尚未上线；模型变化直接更新完整基线，不维护升级链或旧格式兼容。
 
 | 内容 | 入口 |

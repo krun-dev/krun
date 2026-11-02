@@ -1,18 +1,20 @@
-package control
+package storage
 
 import (
 	"context"
 	"time"
+
+	"github.com/krun-dev/krun/internal/domain"
 )
 
 // ConfigRevisionsSince returns the contiguous batch after since and the oldest
 // retained revision. A caller whose since is below the floor must resync.
-func (s *Store) ConfigRevisionsSince(ctx context.Context, since int64, limit int) ([]workerConfigRevision, int64, error) {
+func (s *Store) ConfigRevisionsSince(ctx context.Context, since int64, limit int) ([]domain.WorkerConfigRevision, int64, error) {
 	if limit < 1 {
 		limit = 1
 	}
 	if s.pool != nil {
-		pool, _ := ctx.Value(workerRuntimeFeedPoolKey{}).(string)
+		pool, _ := ctx.Value(WorkerRuntimeFeedPoolKey{}).(string)
 		rows, err := s.pool.Query(ctx, `SELECT revision.config_revision, revision.digest,
 			COALESCE((SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
 				'type', op.op_type,
@@ -29,9 +31,9 @@ func (s *Store) ConfigRevisionsSince(ctx context.Context, since int64, limit int
 			return nil, 0, err
 		}
 		defer rows.Close()
-		out := []workerConfigRevision{}
+		out := []domain.WorkerConfigRevision{}
 		for rows.Next() {
-			var item workerConfigRevision
+			var item domain.WorkerConfigRevision
 			var ops []byte
 			if err := rows.Scan(&item.Revision, &item.Digest, &ops, &item.Created); err != nil {
 				return nil, 0, err
@@ -50,7 +52,7 @@ func (s *Store) ConfigRevisionsSince(ctx context.Context, since int64, limit int
 	}
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
-	out := []workerConfigRevision{}
+	out := []domain.WorkerConfigRevision{}
 	for _, item := range s.configRevs {
 		if item.Revision > since && len(out) < limit {
 			out = append(out, item)
@@ -103,7 +105,7 @@ func (s *Store) SignalConfig() {
 
 // RecordAck stores a runtime heartbeat. Acks are per Pod and deliberately do
 // not live in the IAM snapshot.
-func (s *Store) RecordAck(ctx context.Context, ack WorkerAck) error {
+func (s *Store) RecordAck(ctx context.Context, ack domain.WorkerAck) error {
 	if ack.Time.IsZero() {
 		ack.Time = now()
 	}
@@ -120,7 +122,7 @@ func (s *Store) RecordAck(ctx context.Context, ack WorkerAck) error {
 	s.ackMu.Lock()
 	defer s.ackMu.Unlock()
 	if s.acks == nil {
-		s.acks = map[string]WorkerAck{}
+		s.acks = map[string]domain.WorkerAck{}
 	}
 	if previous, ok := s.acks[ack.UID]; ok && previous.Revision > ack.Revision {
 		ack.Revision = previous.Revision
@@ -135,16 +137,16 @@ func (s *Store) RecordAck(ctx context.Context, ack WorkerAck) error {
 }
 
 // ReadAcks returns the current per-Pod revision map.
-func (s *Store) ReadAcks(ctx context.Context) (map[string]WorkerAck, error) {
+func (s *Store) ReadAcks(ctx context.Context) (map[string]domain.WorkerAck, error) {
 	if s.pool != nil {
 		rows, err := s.pool.Query(ctx, `SELECT pod_uid, pool, revision, updated_at FROM worker_runtime_acks`)
 		if err != nil {
 			return nil, err
 		}
 		defer rows.Close()
-		out := map[string]WorkerAck{}
+		out := map[string]domain.WorkerAck{}
 		for rows.Next() {
-			var ack WorkerAck
+			var ack domain.WorkerAck
 			if err := rows.Scan(&ack.UID, &ack.Pool, &ack.Revision, &ack.Time); err != nil {
 				return nil, err
 			}
@@ -154,11 +156,11 @@ func (s *Store) ReadAcks(ctx context.Context) (map[string]WorkerAck, error) {
 	}
 	s.ackMu.Lock()
 	defer s.ackMu.Unlock()
-	out := make(map[string]WorkerAck, len(s.acks))
+	out := make(map[string]domain.WorkerAck, len(s.acks))
 	for id, ack := range s.acks {
 		out[id] = ack
 	}
 	return out, nil
 }
 
-type workerRuntimeFeedPoolKey struct{}
+type WorkerRuntimeFeedPoolKey struct{}

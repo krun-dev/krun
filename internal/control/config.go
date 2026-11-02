@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/krun-dev/krun/internal/configfile"
+	"github.com/krun-dev/krun/internal/storage"
 )
 
 type UserInfoConfig struct {
@@ -137,7 +137,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("invalid trusted_proxy_cidrs entry %q", cidr)
 		}
 	}
-	if _, err := pgxpool.ParseConfig(c.DB); err != nil {
+	if err := storage.ValidateDSN(c.DB); err != nil {
 		return errors.New("invalid PostgreSQL db connection string")
 	}
 

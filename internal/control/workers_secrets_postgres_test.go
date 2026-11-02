@@ -24,7 +24,7 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 	}
 	if err = store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.SecretVersions[encrypted.Version.ID] = encrypted.Version
-		st.pendingWorkerSecrets = map[string]encryptedWorkerSecret{encrypted.Version.ID: encrypted}
+		st.PendingWorkerSecrets = map[string]encryptedWorkerSecret{encrypted.Version.ID: encrypted}
 		st.Workers.Services[release.Service] = WorkerService{
 			Service: release.Service, Organization: release.Organization,
 			Environments: map[string]WorkerEnvironment{
@@ -41,7 +41,7 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 	}
 
 	var ciphertext []byte
-	if err = store.pool.QueryRow(ctx, `SELECT ciphertext FROM krun_worker_secret_versions WHERE secret_version_id=$1`, encrypted.Version.ID).Scan(&ciphertext); err != nil {
+	if err = postgresTestPool(store).QueryRow(ctx, `SELECT ciphertext FROM krun_worker_secret_versions WHERE secret_version_id=$1`, encrypted.Version.ID).Scan(&ciphertext); err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(ciphertext, []byte("database-must-not-see-plaintext")) {
@@ -56,7 +56,7 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 		t.Fatalf("relational bindings not reloaded: env=%v release=%v", environment.SecretVersions, loaded.Workers.Releases[release.ID].SecretVersions)
 	}
 	var topologyBefore, topologyAfter string
-	if err = store.pool.QueryRow(ctx, `SELECT COALESCE(max(generation),0)::text FROM worker_config_dirty`).Scan(&topologyBefore); err != nil {
+	if err = postgresTestPool(store).QueryRow(ctx, `SELECT COALESCE(max(generation),0)::text FROM worker_config_dirty`).Scan(&topologyBefore); err != nil {
 		t.Fatal(err)
 	}
 	// PostgreSQL and the JSON snapshot clone may represent the same instant with
@@ -66,13 +66,13 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 	if err = store.Update(ctx, PartitionWorkers, func(*State) error { return nil }); err != nil {
 		t.Fatalf("unchanged secret metadata rejected: %v", err)
 	}
-	if err = store.pool.QueryRow(ctx, `SELECT COALESCE(max(generation),0)::text FROM worker_config_dirty`).Scan(&topologyAfter); err != nil {
+	if err = postgresTestPool(store).QueryRow(ctx, `SELECT COALESCE(max(generation),0)::text FROM worker_config_dirty`).Scan(&topologyAfter); err != nil {
 		t.Fatal(err)
 	}
 	if topologyAfter != topologyBefore {
 		t.Fatalf("unchanged placement advanced topology generation: before=%s after=%s", topologyBefore, topologyAfter)
 	}
-	digest, values, err := store.encryptedReleaseSecrets(ctx, release.ID, "default")
+	digest, values, err := store.EncryptedReleaseSecrets(ctx, release.ID, "default")
 	if err != nil || digest != release.SecretDigest || len(values) != 1 {
 		t.Fatalf("runtime lookup: digest=%q values=%d err=%v", digest, len(values), err)
 	}

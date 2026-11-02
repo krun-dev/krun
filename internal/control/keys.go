@@ -87,7 +87,7 @@ func (s *Server) keyUpdate(st *State, p Principal, r *http.Request) (any, int, e
 		return nil, 0, e
 	}
 	k := st.Keys[t.ID]
-	if !k.active() {
+	if !k.Active() {
 		return nil, 0, problem(409, "KEY_INACTIVE", "Key inactive")
 	}
 	var in struct {

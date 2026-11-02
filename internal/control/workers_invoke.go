@@ -165,7 +165,7 @@ func (s *Server) workerInvokeTarget(r *http.Request) (string, string, error) {
 		return "", "", appErr
 	}
 	if c.hasSession {
-		_ = s.Store.touchSession(r.Context(), c.sessionHash)
+		_ = s.Store.TouchSession(r.Context(), c.sessionHash)
 	}
 	return host, gatewayID, nil
 }

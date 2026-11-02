@@ -13,7 +13,7 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 	if err != nil {
 		return build, private, fmt.Errorf("Repository provider or repository is no longer enabled for this build")
 	}
-	owned, err := w.server.Store.setClaimedBuildState(ctx, build.ID, w.replica, "building", "fetching")
+	owned, err := w.server.Store.SetClaimedBuildState(ctx, build.ID, w.replica, "building", "fetching")
 	if err != nil {
 		return build, private, err
 	}
@@ -35,7 +35,7 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 		source.Commit = commit
 		build.Repository = &source
 		// Pin the commit before downloading; retries must not follow a moving branch.
-		owned, err := w.server.Store.setClaimedBuildRepository(ctx, build.ID, w.replica, source)
+		owned, err := w.server.Store.SetClaimedBuildRepository(ctx, build.ID, w.replica, source)
 		if err != nil {
 			return build, private, err
 		}
@@ -136,6 +136,6 @@ func (w *workersController) prepareRepositoryBuild(ctx context.Context, build Wo
 	if denied != nil {
 		return build, private, fmt.Errorf("Build permission revoked")
 	}
-	err = w.server.Store.storeClaimedRepositoryBuild(ctx, build.ID, w.replica, build, private)
+	err = w.server.Store.StoreClaimedRepositoryBuild(ctx, build.ID, w.replica, build, private)
 	return build, private, err
 }

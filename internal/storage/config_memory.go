@@ -1,6 +1,11 @@
-package control
+package storage
 
-import "context"
+import (
+	"context"
+	"errors"
+
+	"github.com/krun-dev/krun/internal/domain"
+)
 
 // Synthetic feed fixtures; production publishes only normalized deltas.
 func (s *Store) AppendConfigRevision(ctx context.Context, digest string, payload, ops []byte, retain int) (int64, int64, error) {
@@ -21,6 +26,9 @@ func (s *Store) AppendConfigRevision(ctx context.Context, digest string, payload
 }
 
 func (s *Store) AppendConfigRevisionCAS(ctx context.Context, expected int64, digest string, payload, ops []byte, retain int) (revision int64, floor int64, appended bool, err error) {
+	if s.pool != nil {
+		return 0, 0, false, errors.New("snapshot config revisions require the memory backend")
+	}
 	if retain < 1 {
 		retain = 1
 	}
@@ -36,7 +44,7 @@ func (s *Store) AppendConfigRevisionCAS(ctx context.Context, expected int64, dig
 	}
 	s.configSeq = expected + 1
 	revision = s.configSeq
-	s.configRevs = append(s.configRevs, workerConfigRevision{Revision: revision, Digest: digest, Payload: payload, Ops: ops, Created: now()})
+	s.configRevs = append(s.configRevs, domain.WorkerConfigRevision{Revision: revision, Digest: digest, Payload: payload, Ops: ops, Created: now()})
 	floor = revision - int64(retain) + 1
 	if floor < 1 {
 		floor = 1
@@ -46,17 +54,20 @@ func (s *Store) AppendConfigRevisionCAS(ctx context.Context, expected int64, dig
 		cut++
 	}
 	if cut > 0 {
-		s.configRevs = append([]workerConfigRevision(nil), s.configRevs[cut:]...)
+		s.configRevs = append([]domain.WorkerConfigRevision(nil), s.configRevs[cut:]...)
 	}
 	return revision, floor, true, nil
 }
 
-func (s *Store) LatestConfigRevision(ctx context.Context) (workerConfigRevision, bool, error) {
+func (s *Store) LatestConfigRevision(ctx context.Context) (domain.WorkerConfigRevision, bool, error) {
+	if s.pool != nil {
+		return domain.WorkerConfigRevision{}, false, errors.New("snapshot config revisions require the memory backend")
+	}
 
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
 	if len(s.configRevs) == 0 {
-		return workerConfigRevision{}, false, nil
+		return domain.WorkerConfigRevision{}, false, nil
 	}
 	last := s.configRevs[len(s.configRevs)-1]
 	return last, true, nil

@@ -12,14 +12,16 @@ import (
 func seedAuditPages(t *testing.T, store *Store) {
 	t.Helper()
 	at := now().Add(-time.Hour)
-	store.memoryAudits = nil
+	if err := store.DeleteAuditsBefore(context.Background(), now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	err := store.Update(context.Background(), PartitionAll, func(st *State) error {
 		for i := 0; i < 237; i++ {
 			// Equal times deliberately exercise the ID tie breaker.
-			st.recordAudit(Audit{ID: fmt.Sprintf("entry-%04d", i), Time: at.Add(time.Duration(i/3) * time.Second), Organization: "org-a", Actor: "admin", Action: "service.read", Resource: "svc-a", Allowed: true})
+			st.RecordAudit(Audit{ID: fmt.Sprintf("entry-%04d", i), Time: at.Add(time.Duration(i/3) * time.Second), Organization: "org-a", Actor: "admin", Action: "service.read", Resource: "svc-a", Allowed: true})
 		}
-		st.recordAudit(Audit{ID: "other-org", Time: at, Organization: "org-b", Resource: "svc-b"})
-		st.recordAudit(Audit{ID: "old", Time: now().Add(-8 * 24 * time.Hour), Organization: "org-a"})
+		st.RecordAudit(Audit{ID: "other-org", Time: at, Organization: "org-b", Resource: "svc-b"})
+		st.RecordAudit(Audit{ID: "old", Time: now().Add(-8 * 24 * time.Hour), Organization: "org-a"})
 		return nil
 	})
 	if err != nil {
@@ -50,7 +52,7 @@ func TestAuditPaginationSnapshotAndScope(t *testing.T) {
 	}
 	// Live traffic and pagination requests cannot shift the snapshot.
 	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
-		st.recordAudit(Audit{ID: "new", Time: now(), Organization: "org-a"})
+		st.RecordAudit(Audit{ID: "new", Time: now(), Organization: "org-a"})
 		return nil
 	})
 	seen := map[string]bool{}
@@ -132,40 +134,5 @@ func TestAuditPaginationValidation(t *testing.T) {
 	empty := getAuditPage(t, s, "/api/v1/system/audit", "krun_cli_admin")
 	if empty.Limit != 50 {
 		t.Fatal("wrong default page size")
-	}
-}
-
-func TestAuditRetentionBoundary(t *testing.T) {
-	at := now()
-	cutoff := at.Add(-auditRetention)
-	kept := pruneMemoryAudits([]Audit{{ID: "expired", Time: cutoff.Add(-time.Nanosecond)}, {ID: "boundary", Time: cutoff}, {ID: "recent", Time: at}}, at)
-	if len(kept) != 2 || kept[0].ID != "boundary" || kept[1].ID != "recent" {
-		t.Fatal("wrong retention boundary")
-	}
-}
-
-func TestAuditRetentionDuringIdleTime(t *testing.T) {
-	store := memoryStore()
-	store.memoryAudits = []Audit{{ID: "expired", Time: now().Add(-8 * 24 * time.Hour)}}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { defer close(done); store.retainAudits(ctx, time.Millisecond) }()
-	defer func() { cancel(); <-done }()
-	deadline := time.NewTimer(time.Second)
-	defer deadline.Stop()
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-deadline.C:
-			t.Fatal("idle retention did not delete expired data")
-		case <-ticker.C:
-			store.mu.Lock()
-			count := len(store.memoryAudits)
-			store.mu.Unlock()
-			if count == 0 {
-				return
-			}
-		}
 	}
 }

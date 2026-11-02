@@ -5,7 +5,6 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"github.com/jackc/pgx/v5"
 	"net/http"
 	"sort"
 	"strconv"
@@ -134,7 +133,7 @@ func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, forbidden())
 		return
 	}
-	out, e := s.Store.runtimeArtifact(r.Context(), r.PathValue("artifact"), pool.ID)
+	out, e := s.Store.RuntimeArtifact(r.Context(), r.PathValue("artifact"), pool.ID)
 
 	if e != nil {
 		s.writeError(w, r, e)
@@ -167,7 +166,7 @@ func (s *Server) workerRuntimeReleaseSecrets(w http.ResponseWriter, r *http.Requ
 		s.writeError(w, r, forbidden())
 		return
 	}
-	digest, encrypted, err := s.Store.encryptedReleaseSecrets(r.Context(), r.PathValue("release"), pool.ID)
+	digest, encrypted, err := s.Store.EncryptedReleaseSecrets(r.Context(), r.PathValue("release"), pool.ID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -231,7 +230,7 @@ type workerReleaseAssets struct {
 
 func (w *workersController) releaseAssets(ctx context.Context, releaseID, pool string) (workerReleaseAssets, error) {
 	var out workerReleaseAssets
-	rel, art, e := w.server.Store.runtimeRelease(ctx, releaseID, pool)
+	rel, art, e := w.server.Store.RuntimeRelease(ctx, releaseID, pool)
 	out.Release, out.Artifact = rel, art
 
 	if e != nil {
@@ -355,36 +354,15 @@ func (s *Server) workerRuntimeConfigRoute(w http.ResponseWriter, r *http.Request
 		s.writeError(w, r, forbidden())
 		return
 	}
-	var route workerConfigRoute
-	var raw []byte
-	var revision int64
 	host := strings.ToLower(r.PathValue("host"))
 	if len(host) > 253 || strings.ContainsAny(host, "/\\: ") {
 		s.writeError(w, r, notFound())
 		return
 	}
-	if s.Store.pool == nil {
-		s.writeError(w, r, notFound())
-		return
-	}
-	err := s.Store.pool.QueryRow(r.Context(), `SELECT r.service_id,r.host,r.pool,r.path,r.enabled,r.release_id,c.payload,COALESCE((SELECT value::bigint FROM krun_meta WHERE key='worker_config_head'),0)
- FROM worker_config_routes r LEFT JOIN worker_config_releases c ON c.release_id=r.release_id AND c.pool=r.pool WHERE r.host=$1 AND r.pool=$2`, host, pool.ID).Scan(&route.Service, &route.Host, &route.Pool, &route.Path, &route.Enabled, &route.Release, &raw, &revision)
-	if err == pgx.ErrNoRows {
-		s.writeError(w, r, notFound())
-		return
-	}
+	projection, revision, err := s.Store.RuntimeConfigRoute(r.Context(), host, pool.ID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	releases := map[string]WorkerRelease{}
-	if len(raw) > 0 {
-		var rel WorkerRelease
-		if err = json.Unmarshal(raw, &rel); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		releases[rel.ID] = rel
-	}
-	s.json(w, 200, workerConfigSnapshot{Pool: pool.ID, ConfigRevision: revision, Routes: []workerConfigRoute{route}, Releases: releases})
+	s.json(w, 200, workerConfigSnapshot{Pool: pool.ID, ConfigRevision: revision, Routes: projection.Routes, Releases: projection.Releases})
 }

@@ -1,4 +1,4 @@
-package control
+package storage
 
 import (
 	"context"
@@ -10,20 +10,21 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/krun-dev/krun/internal/domain"
 )
 
 // persistIAM writes only the rows that differ between before and after.
 // Per AGENTS.md section 9 this is a best-effort guarantee: a handful of
 // statements grouped so the metadata cannot contradict itself, never a
 // whole-document rewrite and never containing network calls.
-func (s *Store) persistIAM(ctx context.Context, before, after *State, audits []Audit) error {
+func (s *Store) persistIAM(ctx context.Context, before, after *domain.State, audits []domain.Audit) error {
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if login := after.pendingLogin; login != nil && login.BrowserHash != "" {
+	if login := after.PendingLogin; login != nil && login.BrowserHash != "" {
 		tag, updateErr := tx.Exec(ctx, `UPDATE krun_browsers SET generation=generation+1
 			WHERE browser_hash=$1 AND generation=$2 AND expires_at > now()`, login.BrowserHash, login.ExpectedGeneration)
 		if updateErr != nil {
@@ -31,9 +32,9 @@ func (s *Store) persistIAM(ctx context.Context, before, after *State, audits []A
 		}
 		if tag.RowsAffected() != 1 {
 			if login.EmailChallengeHash != "" {
-				return problem(400, "EMAIL_CODE_INVALID", "Invalid or expired verification code")
+				return domain.Problem(400, "EMAIL_CODE_INVALID", "Invalid or expired verification code")
 			}
-			return problem(403, "AUTH_STATE_INVALID", "Login state changed")
+			return domain.Problem(403, "AUTH_STATE_INVALID", "Login state changed")
 		}
 	}
 	revisionChanged := after.Revision != before.Revision
@@ -47,21 +48,21 @@ func (s *Store) persistIAM(ctx context.Context, before, after *State, audits []A
 			audits[i].Revision = after.Revision
 		}
 	}
-	if after.pendingLogin != nil && after.pendingLogin.EmailChallengeHash != "" {
+	if after.PendingLogin != nil && after.PendingLogin.EmailChallengeHash != "" {
 		tag, consumeErr := tx.Exec(ctx, `UPDATE krun_email_logins
 			SET attempts=attempts+1, consumed=true
-			WHERE challenge_hash=$1 AND consumed=false AND attempts < 5 AND expires_at > now()`, after.pendingLogin.EmailChallengeHash)
+			WHERE challenge_hash=$1 AND consumed=false AND attempts < 5 AND expires_at > now()`, after.PendingLogin.EmailChallengeHash)
 		if consumeErr != nil {
 			return consumeErr
 		}
 		if tag.RowsAffected() != 1 {
-			return problem(400, "EMAIL_CODE_INVALID", "Invalid or expired verification code")
+			return domain.Problem(400, "EMAIL_CODE_INVALID", "Invalid or expired verification code")
 		}
 	}
 	if err = writeIAMDiff(ctx, tx, before, after); err != nil {
 		return err
 	}
-	if login := after.pendingLogin; login != nil {
+	if login := after.PendingLogin; login != nil {
 		if login.DeleteSessionHash != "" {
 			if _, err = tx.Exec(ctx, `DELETE FROM krun_sessions WHERE session_hash=$1`, login.DeleteSessionHash); err != nil {
 				return err
@@ -79,7 +80,7 @@ func (s *Store) persistIAM(ctx context.Context, before, after *State, audits []A
 		// nextval is monotonic but transactions may commit out of order. Keep the
 		// visible high-water mark from ever moving backwards.
 		if _, err = tx.Exec(ctx, `INSERT INTO krun_meta (key, value) VALUES ('revision',$1)
-			ON CONFLICT (key) DO UPDATE SET value=GREATEST(krun_meta.value::bigint, excluded.value::bigint)::text`, itoa(after.Revision)); err != nil {
+			ON CONFLICT (key) DO UPDATE SET value=GREATEST(krun_meta.value::bigint, excluded.value::bigint)::text`, Itoa(after.Revision)); err != nil {
 			return err
 		}
 	}
@@ -89,7 +90,7 @@ func (s *Store) persistIAM(ctx context.Context, before, after *State, audits []A
 	return tx.Commit(ctx)
 }
 
-func writeIAMDiff(ctx context.Context, tx pgx.Tx, before, after *State) error {
+func writeIAMDiff(ctx context.Context, tx pgx.Tx, before, after *domain.State) error {
 	if err := writeIdentitySources(ctx, tx, before, after); err != nil {
 		return err
 	}
@@ -132,14 +133,14 @@ func writeIAMDiff(ctx context.Context, tx pgx.Tx, before, after *State) error {
 				return err
 			}
 			if tag.RowsAffected() == 0 {
-				return problem(409, "REVISION_CONFLICT", "Bootstrap state changed")
+				return domain.Problem(409, "REVISION_CONFLICT", "Bootstrap state changed")
 			}
 		}
 	}
 	return nil
 }
 
-func itoa(n int) string {
+func Itoa(n int) string {
 	if n == 0 {
 		return "0"
 	}
@@ -163,12 +164,12 @@ func execRevisionCAS(ctx context.Context, tx pgx.Tx, message, query string, args
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return problem(409, "REVISION_CONFLICT", message)
+			return domain.Problem(409, "REVISION_CONFLICT", message)
 		}
 		return err
 	}
 	if tag.RowsAffected() != 1 {
-		return problem(409, "REVISION_CONFLICT", message)
+		return domain.Problem(409, "REVISION_CONFLICT", message)
 	}
 	return nil
 }
@@ -176,7 +177,7 @@ func execRevisionCAS(ctx context.Context, tx pgx.Tx, message, query string, args
 // writeIdentitySources persists the three-key Sources map as two tables. A
 // provider id may only ever bind one source; a namespace may only ever bind
 // one source; a source may be shared by several providers.
-func writeIdentitySources(ctx context.Context, tx pgx.Tx, before, after *State) error {
+func writeIdentitySources(ctx context.Context, tx pgx.Tx, before, after *domain.State) error {
 	for _, source := range sortedKeys(after.Sources) {
 		fingerprint := after.Sources[source]
 		if isProviderKey(source) {
@@ -195,7 +196,7 @@ func writeIdentitySources(ctx context.Context, tx pgx.Tx, before, after *State) 
 				return err
 			}
 			if actual != fingerprint {
-				return problem(409, "REVISION_CONFLICT", "Identity source cannot be reassigned")
+				return domain.Problem(409, "REVISION_CONFLICT", "Identity source cannot be reassigned")
 			}
 		}
 	}
@@ -227,12 +228,12 @@ func writeIdentitySources(ctx context.Context, tx pgx.Tx, before, after *State) 
 			var actualSource, actualNamespace string
 			if err = tx.QueryRow(ctx, `SELECT source, namespace FROM krun_identity_providers WHERE provider_id=$1`, providerID).Scan(&actualSource, &actualNamespace); err != nil {
 				if err == pgx.ErrNoRows {
-					return problem(409, "REVISION_CONFLICT", "Identity namespace already registered")
+					return domain.Problem(409, "REVISION_CONFLICT", "Identity namespace already registered")
 				}
 				return err
 			}
 			if actualSource != value || actualNamespace != namespace {
-				return problem(409, "REVISION_CONFLICT", "Identity provider cannot be reassigned")
+				return domain.Problem(409, "REVISION_CONFLICT", "Identity provider cannot be reassigned")
 			}
 		}
 	}
@@ -240,7 +241,7 @@ func writeIdentitySources(ctx context.Context, tx pgx.Tx, before, after *State) 
 		if _, ok := after.Sources[key]; ok {
 			continue
 		}
-		return problem(409, "REVISION_CONFLICT", "Identity source registrations are permanent")
+		return domain.Problem(409, "REVISION_CONFLICT", "Identity source registrations are permanent")
 	}
 	return nil
 }
@@ -278,7 +279,7 @@ func namespaceFromKey(key string) (string, bool) {
 	return key[len(prefix):], true
 }
 
-func writeUsers(ctx context.Context, tx pgx.Tx, before, after map[string]User) error {
+func writeUsers(ctx context.Context, tx pgx.Tx, before, after map[string]domain.User) error {
 	for id, u := range after {
 		old, existed := before[id]
 		if existed && old == u {
@@ -305,7 +306,7 @@ func writeUsers(ctx context.Context, tx pgx.Tx, before, after map[string]User) e
 	return nil
 }
 
-func writeOrganizations(ctx context.Context, tx pgx.Tx, before, after map[string]Organization) error {
+func writeOrganizations(ctx context.Context, tx pgx.Tx, before, after map[string]domain.Organization) error {
 	for id, o := range after {
 		old, existed := before[id]
 		if existed && old.Name == o.Name && old.Revision == o.Revision && sameStrings(old.Sources, o.Sources) {
@@ -342,7 +343,7 @@ func writeOrganizations(ctx context.Context, tx pgx.Tx, before, after map[string
 	return nil
 }
 
-func writeMembers(ctx context.Context, tx pgx.Tx, before, after map[string]Member) error {
+func writeMembers(ctx context.Context, tx pgx.Tx, before, after map[string]domain.Member) error {
 	for key, m := range after {
 		if _, ok := before[key]; ok {
 			continue
@@ -362,7 +363,7 @@ func writeMembers(ctx context.Context, tx pgx.Tx, before, after map[string]Membe
 	return nil
 }
 
-func writeGroups(ctx context.Context, tx pgx.Tx, before, after map[string]Group) error {
+func writeGroups(ctx context.Context, tx pgx.Tx, before, after map[string]domain.Group) error {
 	for id, g := range after {
 		old, existed := before[id]
 		if existed && old.ScopeKind == g.ScopeKind && old.ScopeID == g.ScopeID && old.Name == g.Name && old.Revision == g.Revision && sameStrings(old.Members, g.Members) {
@@ -399,7 +400,7 @@ func writeGroups(ctx context.Context, tx pgx.Tx, before, after map[string]Group)
 	return nil
 }
 
-func writeAssignments(ctx context.Context, tx pgx.Tx, before, after map[string]Assignment) error {
+func writeAssignments(ctx context.Context, tx pgx.Tx, before, after map[string]domain.Assignment) error {
 	for id, a := range after {
 		old, existed := before[id]
 		if existed && sameAssignment(old, a) {
@@ -427,7 +428,7 @@ func writeAssignments(ctx context.Context, tx pgx.Tx, before, after map[string]A
 	return nil
 }
 
-func writeResources(ctx context.Context, tx pgx.Tx, before, after map[string]Resource) error {
+func writeResources(ctx context.Context, tx pgx.Tx, before, after map[string]domain.Resource) error {
 	for id, r := range after {
 		old, existed := before[id]
 		if existed && old == r {
@@ -453,7 +454,7 @@ func writeResources(ctx context.Context, tx pgx.Tx, before, after map[string]Res
 
 // writeAPIKeys keeps the authentication hash in its own table so metadata
 // queries never read it.
-func writeAPIKeys(ctx context.Context, tx pgx.Tx, before, after *State) error {
+func writeAPIKeys(ctx context.Context, tx pgx.Tx, before, after *domain.State) error {
 	for id, k := range after.Keys {
 		old, existed := before.Keys[id]
 		if existed && sameAPIKey(old, k) {
@@ -528,13 +529,13 @@ func splitNulKey(key string) (string, string) {
 	return key, ""
 }
 
-func sameAssignment(a, b Assignment) bool {
+func sameAssignment(a, b domain.Assignment) bool {
 	return a.ID == b.ID && a.SubjectKind == b.SubjectKind && a.SubjectID == b.SubjectID &&
 		a.Role == b.Role && a.ScopeKind == b.ScopeKind && a.ScopeID == b.ScopeID &&
 		a.Revision == b.Revision && reflect.DeepEqual(a.Conditions, b.Conditions)
 }
 
-func sameAPIKey(a, b APIKey) bool {
+func sameAPIKey(a, b domain.APIKey) bool {
 	if (a.Expires == nil) != (b.Expires == nil) {
 		return false
 	}

@@ -1,4 +1,4 @@
-package control
+package storage
 
 import (
 	"context"
@@ -6,11 +6,12 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/krun-dev/krun/internal/domain"
 )
 
 const workerSourceGCLease = "10 minutes"
 
-type workerSourceUpload struct {
+type SourceUpload struct {
 	Key          string
 	Organization string
 	UseRevision  int64
@@ -19,7 +20,7 @@ type workerSourceUpload struct {
 // issueWorkerSourceUpload records the capability before its presigned URL is
 // returned. Builds only accept keys present here, so an old arbitrary object
 // cannot be introduced while object GC is deciding whether to delete it.
-func (s *Store) issueWorkerSourceUpload(ctx context.Context, key, organization string) error {
+func (s *Store) IssueWorkerSourceUpload(ctx context.Context, key, organization string) error {
 	if s.pool == nil {
 		return nil
 	}
@@ -40,12 +41,12 @@ func reserveWorkerSourceUpload(ctx context.Context, tx pgx.Tx, key, organization
 		SET state='reserved', build_id=$3, use_revision=use_revision+1,
 		    gc_claimed_by='', gc_claimed_at=NULL
 		WHERE object_key=$1 AND org_id=$2 AND state='issued'
-		  AND created_at > now() - $4::interval`, key, organization, build, workerUploadRetain.String())
+		  AND created_at > now() - $4::interval`, key, organization, build, WorkerUploadRetain.String())
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() != 1 {
-		return problem(422, "WORKER_SOURCE_UPLOAD_INVALID", "Source upload is missing, expired, or already used")
+		return domain.Problem(422, "WORKER_SOURCE_UPLOAD_INVALID", "Source upload is missing, expired, or already used")
 	}
 	return nil
 }
@@ -96,7 +97,7 @@ func registerGeneratedBuildSourceTx(ctx context.Context, tx pgx.Tx, build, organ
 	return nil
 }
 
-func (s *Store) garbageWorkerSourceUploads(ctx context.Context, cutoff time.Time, limit int) ([]workerSourceUpload, error) {
+func (s *Store) GarbageWorkerSourceUploads(ctx context.Context, cutoff time.Time, limit int) ([]SourceUpload, error) {
 	if s.pool == nil {
 		return nil, nil
 	}
@@ -111,9 +112,9 @@ func (s *Store) garbageWorkerSourceUploads(ctx context.Context, cutoff time.Time
 		return nil, err
 	}
 	defer rows.Close()
-	out := []workerSourceUpload{}
+	out := []SourceUpload{}
 	for rows.Next() {
-		var item workerSourceUpload
+		var item SourceUpload
 		if err = rows.Scan(&item.Key, &item.Organization, &item.UseRevision); err != nil {
 			return nil, err
 		}
@@ -122,7 +123,7 @@ func (s *Store) garbageWorkerSourceUploads(ctx context.Context, cutoff time.Time
 	return out, rows.Err()
 }
 
-func (s *Store) claimGarbageWorkerSourceUpload(ctx context.Context, key, replica string, expectedRevision int64) (bool, error) {
+func (s *Store) ClaimGarbageWorkerSourceUpload(ctx context.Context, key, replica string, expectedRevision int64) (bool, error) {
 	if s.pool == nil {
 		return false, nil
 	}
@@ -139,7 +140,7 @@ func (s *Store) claimGarbageWorkerSourceUpload(ctx context.Context, key, replica
 	return tag.RowsAffected() == 1, nil
 }
 
-func (s *Store) deleteGarbageWorkerSourceUpload(ctx context.Context, key, replica string) error {
+func (s *Store) DeleteGarbageWorkerSourceUpload(ctx context.Context, key, replica string) error {
 	if s.pool == nil {
 		return nil
 	}

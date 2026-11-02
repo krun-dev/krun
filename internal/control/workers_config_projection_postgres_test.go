@@ -26,7 +26,7 @@ func TestPostgresConfigDeltaStoresNormalizedEntitiesAndShards(t *testing.T) {
 		t.Fatalf("head=%d err=%v", head, err)
 	}
 	var routes, ops int
-	if err = store.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM worker_config_routes),(SELECT count(*) FROM worker_config_ops)`).Scan(&routes, &ops); err != nil || routes != 4 || ops != 4 {
+	if err = postgresTestPool(store).QueryRow(ctx, `SELECT (SELECT count(*) FROM worker_config_routes),(SELECT count(*) FROM worker_config_ops)`).Scan(&routes, &ops); err != nil || routes != 4 || ops != 4 {
 		t.Fatalf("routes=%d ops=%d err=%v", routes, ops, err)
 	}
 	var latest workerConfigLatest
@@ -34,7 +34,7 @@ func TestPostgresConfigDeltaStoresNormalizedEntitiesAndShards(t *testing.T) {
 		t.Fatalf("compact head=%+v err=%v", latest, err)
 	}
 	var checkpoints int
-	if err = store.pool.QueryRow(ctx, `SELECT count(*) FROM worker_config_checkpoints WHERE revision=published_revision`).Scan(&checkpoints); err != nil || checkpoints < 1 {
+	if err = postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM worker_config_checkpoints WHERE revision=published_revision`).Scan(&checkpoints); err != nil || checkpoints < 1 {
 		t.Fatalf("checkpoints=%d err=%v", checkpoints, err)
 	}
 	revisions, _, err := store.ConfigRevisionsSince(ctx, 0, 10)
@@ -54,11 +54,11 @@ func TestPostgresWorkerConfigProjectionUsesCompactReadModel(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	seedPerformanceSites(t, store, 4)
-	if _, err := store.pool.Exec(ctx, `INSERT INTO krun_worker_operations(operation_id,kind,org_id,service_id,env_name,state,steps,created_at) VALUES('broken','publish','tenant','site-000002','production','failed','{}'::jsonb,now())`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_worker_operations(operation_id,kind,org_id,service_id,env_name,state,steps,created_at) VALUES('broken','publish','tenant','site-000002','production','failed','{}'::jsonb,now())`); err != nil {
 		t.Fatal(err)
 	}
 	config := workerProjectionConfig([]WorkerDomain{{ID: "internal", Domain: "workers.test"}})
-	projection, err := store.WorkerConfigProjection(context.WithValue(ctx, workerProjectionScopeKey{}, []string{"site-000002"}), config)
+	projection, err := loadWorkerConfigProjection(ctx, store, []string{"site-000002"}, config)
 	if err != nil || len(projection.Routes) != 1 || projection.Routes[0].Service != "site-000002" {
 		t.Fatalf("projection=%+v err=%v", projection, err)
 	}
@@ -67,7 +67,7 @@ func TestPostgresWorkerConfigProjectionUsesCompactReadModel(t *testing.T) {
 	if _, err = controller.publishConfig(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.pool.Exec(ctx, `UPDATE krun_worker_environments SET variables='[]'::jsonb`); err != nil {
+	if _, err = postgresTestPool(store).Exec(ctx, `UPDATE krun_worker_environments SET variables='[]'::jsonb`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = controller.publishConfig(ctx); err != nil {
@@ -79,7 +79,7 @@ func TestPostgresDirtyQueueCoversProjectionChanges(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	seedPerformanceSites(t, store, 4)
-	if _, err := store.pool.Exec(ctx, `DELETE FROM worker_config_dirty`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `DELETE FROM worker_config_dirty`); err != nil {
 		t.Fatal(err)
 	}
 	changes := []string{
@@ -90,21 +90,21 @@ func TestPostgresDirtyQueueCoversProjectionChanges(t *testing.T) {
 		`DELETE FROM krun_resources WHERE resource_id='site-000002'`,
 	}
 	for _, query := range changes {
-		if _, err := store.pool.Exec(ctx, query); err != nil {
+		if _, err := postgresTestPool(store).Exec(ctx, query); err != nil {
 			t.Fatal(err)
 		}
-		dirty, err := store.dirtyWorkerServices(ctx)
+		dirty, err := store.DirtyWorkerServices(ctx)
 		if err != nil || len(dirty) != 1 || dirty[0].ID != "site-000002" {
 			t.Fatalf("query=%s dirty=%+v err=%v", query, dirty, err)
 		}
-		if _, err = store.pool.Exec(ctx, `DELETE FROM worker_config_dirty`); err != nil {
+		if _, err = postgresTestPool(store).Exec(ctx, `DELETE FROM worker_config_dirty`); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.pool.Exec(ctx, `UPDATE krun_worker_environments SET variables='{"A":"B"}'::jsonb WHERE service_id='site-000004'`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `UPDATE krun_worker_environments SET variables='{"A":"B"}'::jsonb WHERE service_id='site-000004'`); err != nil {
 		t.Fatal(err)
 	}
-	if dirty, err := store.dirtyWorkerServices(ctx); err != nil || len(dirty) != 0 {
+	if dirty, err := store.DirtyWorkerServices(ctx); err != nil || len(dirty) != 0 {
 		t.Fatalf("unpublished variables affected runtime config: %+v %v", dirty, err)
 	}
 }

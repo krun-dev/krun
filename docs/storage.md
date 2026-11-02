@@ -4,6 +4,14 @@
 
 设计约束见 [AGENTS.md 第 9 节](../AGENTS.md)：不用外键、事务尽力而为、构建/发布状态最终一致、不留无界数据、热路径不写。
 
+## 代码分层
+
+- `internal/control`：HTTP、授权与业务编排，通过 `storage.Store` 调用持久化操作，不包含 SQL 或数据库驱动。配置投影、对象存储上传与数据库事务分别执行。
+- `internal/domain`：共享实体、请求工作副本与存储命令的数据类型。`State` 的待提交登录、审计、密文和授权缓存都排除在 JSON 之外。
+- `internal/storage`：连接池、SQL、行映射、事务、CAS、保留期和清理。数据库驱动类型与连接池保持包内私有。
+
+`control/models.go` 和 `control/storage.go` 只转接共享类型及存储入口，不重复定义模型或实现持久化。存储文件按领域组织，定位表结构与查询的入口见 [storage 包说明](../internal/storage/README.md)。`TestStorageLayerBoundaries` 检查业务层无 SQL/驱动以及下层无反向业务依赖。
+
 ## 分区
 
 IAM 与 Workers 是两套独立分区，**不共享事务**：
@@ -15,11 +23,11 @@ IAM 与 Workers 是两套独立分区，**不共享事务**：
 | 会话（不属于任何分区） | `krun_sessions`、`krun_browsers`、`krun_login_states`、`krun_email_logins`、`krun_device_codes` |
 | 旁路 | `krun_audits`、`worker_config_revisions`、`worker_config_routes`、`worker_config_releases`、`worker_config_ops`、`worker_config_dirty`、`worker_config_checkpoints`、`worker_asset_objects`、`worker_retention_scopes`、`worker_runtime_acks` |
 
-完整 DDL 在 `internal/control/schema.go`。新库直接初始化；已有库校验 `schema_baseline` fingerprint，匹配时不重复执行 DDL。
+完整 DDL 在 `internal/storage/schema.sql`，由同目录 `schema.go` 通过 `go:embed` 原样嵌入。新库直接初始化；已有库校验 `schema_baseline` fingerprint，匹配时不重复执行 DDL。
 
 ## 读路径
 
-- 认证：会话/API Key 按键查询；登录只加载当前 identity 和邀请，常用请求按 actor / organization / service 过滤；批量行解码复用 `pgx.Batch`，不读取全平台站点。
+- 认证：会话/API Key 按键查询；登录只加载当前 identity 和邀请，常用请求按 actor / organization / service 过滤；批量行解码复用 `pgx.Batch`，不读取全平台站点。边缘配置投影显式接收 service ID 列表，不通过修改 SQL 文本插入过滤条件。
 - `seen_at` 用**节流写**：`UPDATE ... WHERE seen_at < now() - interval '30 seconds'`，不是每请求都写。读请求本身不持久化任何状态。
 - 站点列表与详情在分区内进一步按资源范围过滤；资源列表默认每页 100 条，以 `next_after` 翻页。Runtime 元数据按 Release/Artifact 定向读取。
 
@@ -90,4 +98,4 @@ UPDATE krun_worker_environments SET release_id=$4, release_revision=release_revi
 - 站点列表已按组织/资源 ID 游标下推，默认 100 条、最多 200 条；批量 IAM 管理仍有独立的加载语义。
 - `ensureAdmin`（至少保留一个系统管理员）是「先写、再查、不满足就写回」的补偿，并发降级可能短暂出现零管理员，需要人工 `krun-server bootstrap` 恢复。
 - 常用身份与站点路径按主体裁剪授权上下文，权限缓存仅限单次只读请求。
-- 数据库集成测试需要 `KRUN_TEST_POSTGRES_URL`，未提供时跳过。
+- 数据库集成测试需要 `KRUN_TEST_POSTGRES_URL`，未提供时跳过。存储包的数据库测试使用独立 schema，控制层集成测试通过独立测试连接布置数据，不开放生产连接池。

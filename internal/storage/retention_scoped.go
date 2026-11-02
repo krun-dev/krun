@@ -1,4 +1,4 @@
-package control
+package storage
 
 import (
 	"context"
@@ -17,6 +17,7 @@ func boundedRetentionDelete(query string) string {
 	}
 	return "DELETE FROM " + parts[0] + " WHERE ctid IN (SELECT ctid FROM " + parts[0] + " WHERE " + parts[1] + " LIMIT 1000)"
 }
+
 func (s *Store) retainWorkerScopes(ctx context.Context) error {
 	rows, err := s.pool.Query(ctx, `SELECT service_id,generation FROM worker_retention_scopes ORDER BY generation LIMIT 256`)
 	if err != nil {
@@ -45,12 +46,12 @@ func (s *Store) retainWorkerScopes(ctx context.Context) error {
 		// Each window is restricted to one dirty service, using the existing
 		// (service,environment,created_at) and (service,created_at) indexes.
 		tag, e := s.pool.Exec(ctx, `DELETE FROM krun_worker_history WHERE (service_id,env_name,revision) IN (
-   SELECT service_id,env_name,revision FROM (SELECT service_id,env_name,revision,row_number() OVER(PARTITION BY env_name ORDER BY created_at DESC,revision DESC) n FROM krun_worker_history WHERE service_id=$1) ranked WHERE n>$2 LIMIT 1000)`, v.id, workerHistoryRetainPerEnv)
+   SELECT service_id,env_name,revision FROM (SELECT service_id,env_name,revision,row_number() OVER(PARTITION BY env_name ORDER BY created_at DESC,revision DESC) n FROM krun_worker_history WHERE service_id=$1) ranked WHERE n>$2 LIMIT 1000)`, v.id, WorkerHistoryRetainPerEnv)
 		if e != nil {
 			return e
 		}
 		more = more || tag.RowsAffected() == 1000
-		tag, e = s.pool.Exec(ctx, `WITH victims AS MATERIALIZED(SELECT build_id FROM krun_worker_builds WHERE service_id=$1 AND state IN('succeeded','failed') ORDER BY created_at DESC,build_id DESC OFFSET $2 LIMIT 1000), private AS(DELETE FROM krun_worker_build_private WHERE build_id IN(SELECT build_id FROM victims)) DELETE FROM krun_worker_builds WHERE build_id IN(SELECT build_id FROM victims)`, v.id, workerBuildRetainPerService)
+		tag, e = s.pool.Exec(ctx, `WITH victims AS MATERIALIZED(SELECT build_id FROM krun_worker_builds WHERE service_id=$1 AND state IN('succeeded','failed') ORDER BY created_at DESC,build_id DESC OFFSET $2 LIMIT 1000), private AS(DELETE FROM krun_worker_build_private WHERE build_id IN(SELECT build_id FROM victims)) DELETE FROM krun_worker_builds WHERE build_id IN(SELECT build_id FROM victims)`, v.id, WorkerBuildRetainPerService)
 		if e != nil {
 			return e
 		}

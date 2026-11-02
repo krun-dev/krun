@@ -280,11 +280,6 @@ func evaluate(ps *cedar.PolicySet, kind, id, action string, t Target) (bool, err
 	return decision == cedar.Allow, nil
 }
 
-type authorizationCache struct {
-	users map[string]*cedar.PolicySet
-	keys  map[string]*cedar.PolicySet
-}
-
 func Authorize(st *State, p Principal, action string, t Target) (Decision, error) {
 	d := Decision{Revision: st.Revision, KeyAllowed: p.Key == nil, Reason: "PERMISSION_DENIED"}
 	if !contains(actions[action], t.Kind) || !environmentValid(t.Environment) || p.User.Status != "active" || !sourceAllowed(st, p.User, t.Organization) {
@@ -292,13 +287,13 @@ func Authorize(st *State, p Principal, action string, t Target) (Decision, error
 	}
 	var ps *cedar.PolicySet
 	var e error
-	if st.authorization != nil {
-		ps = st.authorization.users[p.User.ID]
+	if st.Authorization != nil {
+		ps = st.Authorization.Users[p.User.ID]
 	}
 	if ps == nil {
 		ps, e = compileUser(st, p.User)
-		if e == nil && st.authorization != nil {
-			st.authorization.users[p.User.ID] = ps
+		if e == nil && st.Authorization != nil {
+			st.Authorization.Users[p.User.ID] = ps
 		}
 	}
 	if e != nil {
@@ -313,13 +308,13 @@ func Authorize(st *State, p Principal, action string, t Target) (Decision, error
 			return d, nil
 		}
 		ps = nil
-		if st.authorization != nil {
-			ps = st.authorization.keys[p.Key.ID]
+		if st.Authorization != nil {
+			ps = st.Authorization.Keys[p.Key.ID]
 		}
 		if ps == nil {
 			ps, e = compileKey(*p.Key)
-			if e == nil && st.authorization != nil {
-				st.authorization.keys[p.Key.ID] = ps
+			if e == nil && st.Authorization != nil {
+				st.Authorization.Keys[p.Key.ID] = ps
 			}
 		}
 		if e != nil {

@@ -43,7 +43,6 @@ const workerAssetsTotalMax = 20 << 20
 const workerAssetsFilesMax = 500
 const workerSourceMax = 32 << 20
 const workerProfile = "workerd-bundle-v2"
-const workerUploadRetain = 24 * time.Hour
 
 type workerManifest struct {
 	Schema             int                    `json:"schema_version"`
@@ -527,7 +526,7 @@ func validWorkerSourceUpload(organization, key string) bool {
 func (w *workersController) sourceUploadURL(ctx context.Context, organization string) (string, string, error) {
 	id := randomID("src")
 	key := workerSourceUploadKey(organization, id)
-	if e := w.server.Store.issueWorkerSourceUpload(ctx, key, organization); e != nil {
+	if e := w.server.Store.IssueWorkerSourceUpload(ctx, key, organization); e != nil {
 		return "", "", e
 	}
 	u, e := w.s3.PresignedPutObject(ctx, w.config.S3Bucket, key, 15*time.Minute)
@@ -625,7 +624,7 @@ func (w *workersController) putAssetObjects(ctx context.Context, b WorkerBuild, 
 			keys = append(keys, workerAssetObjectKey(prefix, b.Organization, b.Service, a.ArchiveDigest, name))
 		}
 	}
-	if err := w.server.Store.registerAssetObjects(ctx, a.ID, keys); err != nil {
+	if err := w.server.Store.RegisterAssetObjects(ctx, a.ID, keys); err != nil {
 		return err
 	}
 	tasks := make(chan string, len(keys))
@@ -670,7 +669,7 @@ func (w *workersController) finalizeBuild(ctx context.Context, b WorkerBuild) (W
 		return WorkerArtifact{}, errors.New("artifact build profile does not match requested compatibility")
 	}
 	a := WorkerArtifact{ID: "art_" + digest(b.Organization+"/"+code.ArchiveDigest), Organization: b.Organization, State: "finalized", Profile: code.Profile, StorageLocation: w.config.S3LocationID, Bucket: w.config.S3Bucket, ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: append([]string(nil), code.CompatibilityFlags...), Size: len(raw), ObjectKey: "v1/" + b.Organization + "/sha256/" + code.ArchiveDigest + "/bundle.tar.gz", Created: now()}
-	if e := w.server.Store.reserveBuildArtifact(ctx, b.ID, w.replica, a); e != nil {
+	if e := w.server.Store.ReserveBuildArtifact(ctx, b.ID, w.replica, a); e != nil {
 		return a, e
 	}
 	if e := w.putImmutable(ctx, a.ObjectKey, raw); e != nil {
@@ -712,14 +711,14 @@ func (w *workersController) artifactCode(ctx context.Context, a WorkerArtifact) 
 // publication. Metadata for artifacts is removed only after S3 cleanup
 // succeeds, retaining enough information to retry after an outage.
 func (w *workersController) collectWorkerObjects(ctx context.Context) error {
-	artifacts, err := w.server.Store.garbageArtifacts(ctx, now().Add(-workerArtifactRetain), 256)
+	artifacts, err := w.server.Store.GarbageArtifacts(ctx, now().Add(-workerArtifactRetain), 256)
 	if err != nil {
 		return err
 	}
 	var failures []error
 	for _, artifact := range artifacts {
 		if artifact.StorageLocation != w.config.S3LocationID || artifact.Bucket != w.config.S3Bucket {
-			blocked, blockErr := w.server.Store.blockGarbageArtifact(ctx, artifact.ID, w.replica, artifact.UseRevision)
+			blocked, blockErr := w.server.Store.BlockGarbageArtifact(ctx, artifact.ID, w.replica, artifact.UseRevision)
 			if blockErr != nil {
 				failures = append(failures, blockErr)
 			} else if blocked {
@@ -727,7 +726,7 @@ func (w *workersController) collectWorkerObjects(ctx context.Context) error {
 			}
 			continue
 		}
-		claimed, err := w.server.Store.claimGarbageArtifact(ctx, artifact.ID, w.replica, artifact.UseRevision)
+		claimed, err := w.server.Store.ClaimGarbageArtifact(ctx, artifact.ID, w.replica, artifact.UseRevision)
 		if err != nil {
 			failures = append(failures, err)
 			continue
@@ -754,7 +753,7 @@ func (w *workersController) collectWorkerObjects(ctx context.Context) error {
 			continue
 		}
 
-		if err := w.server.Store.deleteGarbageArtifact(ctx, artifact.ID, w.replica); err != nil {
+		if err := w.server.Store.DeleteGarbageArtifact(ctx, artifact.ID, w.replica); err != nil {
 			failures = append(failures, err)
 			continue
 		}
@@ -765,12 +764,12 @@ func (w *workersController) collectWorkerObjects(ctx context.Context) error {
 	// Source uploads have their own reservation/lease metadata. The build CAS
 	// and this GC claim share use_revision, so a stale listing can never delete
 	// a bundle that a build just accepted.
-	sources, sourceErr := w.server.Store.garbageWorkerSourceUploads(ctx, now().Add(-workerUploadRetain), 64)
+	sources, sourceErr := w.server.Store.GarbageWorkerSourceUploads(ctx, now().Add(-workerUploadRetain), 64)
 	if sourceErr != nil {
 		failures = append(failures, sourceErr)
 	} else {
 		for _, source := range sources {
-			claimed, claimErr := w.server.Store.claimGarbageWorkerSourceUpload(ctx, source.Key, w.replica, source.UseRevision)
+			claimed, claimErr := w.server.Store.ClaimGarbageWorkerSourceUpload(ctx, source.Key, w.replica, source.UseRevision)
 			if claimErr != nil {
 				failures = append(failures, claimErr)
 				continue
@@ -782,7 +781,7 @@ func (w *workersController) collectWorkerObjects(ctx context.Context) error {
 				failures = append(failures, removeErr)
 				continue
 			}
-			if deleteErr := w.server.Store.deleteGarbageWorkerSourceUpload(ctx, source.Key, w.replica); deleteErr != nil {
+			if deleteErr := w.server.Store.DeleteGarbageWorkerSourceUpload(ctx, source.Key, w.replica); deleteErr != nil {
 				failures = append(failures, deleteErr)
 			}
 		}
@@ -801,25 +800,12 @@ func (w *workersController) collectWorkerObjects(ctx context.Context) error {
 		failures = append(failures, err)
 	} else if floor > 0 {
 		protected := map[string]bool{}
-		if w.server.Store.pool != nil {
-			rows, e := w.server.Store.pool.Query(ctx, `SELECT pool,shard,published_revision FROM worker_config_checkpoints WHERE published_revision>0`)
-			if e != nil {
-				return e
-			}
-			for rows.Next() {
-				var pool, shard string
-				var revision int64
-				if e = rows.Scan(&pool, &shard, &revision); e != nil {
-					rows.Close()
-					return e
-				}
-				protected[workerPoolConfigPrefix(pool)+"shards/"+shard+"/"+strconv.FormatInt(revision, 10)+".json.gz"] = true
-			}
-			e = rows.Err()
-			rows.Close()
-			if e != nil {
-				return e
-			}
+		checkpoints, e := w.server.Store.PublishedConfigCheckpoints(ctx)
+		if e != nil {
+			return e
+		}
+		for _, checkpoint := range checkpoints {
+			protected[workerPoolConfigPrefix(checkpoint.Pool)+"shards/"+checkpoint.Shard+"/"+strconv.FormatInt(checkpoint.PublishedRevision, 10)+".json.gz"] = true
 		}
 		if err := w.removeWorkerObjects(ctx, workerConfigPoolsDir, func(key string, _ time.Time) bool {
 			if protected[key] {

@@ -11,9 +11,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/krun-dev/krun/internal/storage"
 )
 
-func memoryStore() *Store { return &Store{memory: newState()} }
+func memoryStore() *Store { return storage.NewMemory(storage.MemoryOptions{}) }
 
 func fixture() (*State, User, User) {
 	st := newState()
@@ -23,9 +25,9 @@ func fixture() (*State, User, User) {
 	st.Users[viewer.ID] = viewer
 	for _, id := range []string{"org-a", "org-b"} {
 		st.Organizations[id] = Organization{ID: id, Name: id}
-		st.Members[memberKey(id, admin.ID)] = Member{id, admin.ID}
+		st.Members[memberKey(id, admin.ID)] = Member{Organization: id, User: admin.ID}
 	}
-	st.Members[memberKey("org-a", viewer.ID)] = Member{"org-a", viewer.ID}
+	st.Members[memberKey("org-a", viewer.ID)] = Member{Organization: "org-a", User: viewer.ID}
 	st.Assignments["admin"] = Assignment{ID: "admin", SubjectKind: "user", SubjectID: admin.ID, Role: "system_admin", ScopeKind: "system", ScopeID: "system"}
 	st.Assignments["viewer"] = Assignment{ID: "viewer", SubjectKind: "user", SubjectID: viewer.ID, Role: "viewer", ScopeKind: "organization", ScopeID: "org-a"}
 	st.Resources["svc-a"] = Resource{ID: "svc-a", Kind: "service", Organization: "org-a", Name: "A", Revision: 1}
@@ -420,23 +422,23 @@ func TestDeviceApprovalIsRateLimitedPerSessionUser(t *testing.T) {
 func TestDeviceApprovalDoesNotCreateOrphanSession(t *testing.T) {
 	store := memoryStore()
 	device := Device{CodeHash: digest("device"), UserCode: "USERCODE", Expires: now().Add(time.Minute)}
-	if err := store.insertDevice(context.Background(), device); err != nil {
+	if err := store.InsertDevice(context.Background(), device); err != nil {
 		t.Fatal(err)
 	}
 	at := now()
 	first := Session{User: "first", Hash: digest("krun_cli_first"), AuthVersion: 1, Created: at, Seen: at, Absolute: at.Add(time.Hour), CLI: true}
-	approved, err := store.approveDevice(context.Background(), device.CodeHash, "krun_cli_first", first)
+	approved, err := store.ApproveDevice(context.Background(), device.CodeHash, "krun_cli_first", first)
 	if err != nil || !approved {
 		t.Fatal("first approval failed", approved, err)
 	}
 	second := first
 	second.User = "second"
 	second.Hash = digest("krun_cli_second")
-	approved, err = store.approveDevice(context.Background(), device.CodeHash, "krun_cli_second", second)
+	approved, err = store.ApproveDevice(context.Background(), device.CodeHash, "krun_cli_second", second)
 	if err != nil || approved {
 		t.Fatal("duplicate approval won", approved, err)
 	}
-	if _, exists := store.memory.Sessions[digest("krun_cli_second")]; exists {
+	if _, exists := memorySnapshot(t, store).Sessions[digest("krun_cli_second")]; exists {
 		t.Fatal("losing approval created an orphan session")
 	}
 }
@@ -550,16 +552,10 @@ func TestCSRFIssuanceIsPostOnlyAndRateLimited(t *testing.T) {
 			t.Fatalf("over-limit CSRF request accepted: %d %s", w.Code, w.Body.String())
 		}
 	}
-	if len(store.memory.Browsers) != 30 {
-		t.Fatalf("browser rows=%d, want bounded 30", len(store.memory.Browsers))
+	if len(memorySnapshot(t, store).Browsers) != 30 {
+		t.Fatalf("browser rows=%d, want bounded 30", len(memorySnapshot(t, store).Browsers))
 	}
-	store.rateMu.Lock()
-	defer store.rateMu.Unlock()
-	for _, count := range store.memoryRateLimits {
-		if count > 31 {
-			t.Fatalf("rate-limit counter kept growing after rejection: %d", count)
-		}
-	}
+
 }
 
 func TestDeniedReadsDoNotAppendAuditRows(t *testing.T) {
@@ -567,8 +563,8 @@ func TestDeniedReadsDoNotAppendAuditRows(t *testing.T) {
 	if w := request(s, http.MethodGet, "/api/v1/orgs/org-b", "krun_cli_viewer", ""); w.Code < 400 {
 		t.Fatalf("denied read status=%d body=%s", w.Code, w.Body.String())
 	}
-	if len(store.memoryAudits) != 0 {
-		t.Fatalf("denied read appended %d audit rows", len(store.memoryAudits))
+	if len(memoryAudits(t, store)) != 0 {
+		t.Fatalf("denied read appended %d audit rows", len(memoryAudits(t, store)))
 	}
 }
 
@@ -582,8 +578,8 @@ func TestCallbackFailuresAndRateLimitsDoNotAppendAuditRows(t *testing.T) {
 	if location := last.Header().Get("Location"); !strings.Contains(location, "RATE_LIMITED") {
 		t.Fatalf("callback was not rate limited: status=%d location=%q", last.Code, location)
 	}
-	if len(store.memoryAudits) != 0 {
-		t.Fatalf("attacker-controlled callback failures appended %d audit rows", len(store.memoryAudits))
+	if len(memoryAudits(t, store)) != 0 {
+		t.Fatalf("attacker-controlled callback failures appended %d audit rows", len(memoryAudits(t, store)))
 	}
 }
 

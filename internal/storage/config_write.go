@@ -1,4 +1,4 @@
-package control
+package storage
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/krun-dev/krun/internal/domain"
 )
 
 type workerConfigShardKey struct {
@@ -14,7 +15,7 @@ type workerConfigShardKey struct {
 	shard string
 }
 
-func affectedWorkerConfig(ctx context.Context, tx pgx.Tx, ops []workerConfigOp) ([]workerConfigShardKey, []string, error) {
+func affectedWorkerConfig(ctx context.Context, tx pgx.Tx, ops []domain.WorkerConfigOp) ([]workerConfigShardKey, []string, error) {
 	hosts := []string{}
 	shards := map[workerConfigShardKey]bool{}
 	releases := map[string]bool{}
@@ -71,7 +72,7 @@ func affectedWorkerConfig(ctx context.Context, tx pgx.Tx, ops []workerConfigOp) 
 
 // Batch saves round trips; these are ordinary statements executed in order
 // inside the caller's transaction. An error still rolls back the entire delta.
-func applyWorkerConfigOps(ctx context.Context, tx pgx.Tx, revision int64, ops []workerConfigOp) error {
+func applyWorkerConfigOps(ctx context.Context, tx pgx.Tx, revision int64, ops []domain.WorkerConfigOp) error {
 	batch := &pgx.Batch{}
 	for ordinal, op := range ops {
 		var releaseID string
@@ -155,7 +156,7 @@ func pruneWorkerConfig(ctx context.Context, tx pgx.Tx, revision int64, releases 
 		)`, releases); err != nil {
 		return fmt.Errorf("prune unreferenced config releases: %w", err)
 	}
-	floor := revision - workerConfigOpsRetain + 1
+	floor := revision - WorkerConfigOpsRetain + 1
 	if _, err := tx.Exec(ctx, `DELETE FROM worker_config_ops WHERE config_revision<$1`, floor); err != nil {
 		return fmt.Errorf("prune config operations: %w", err)
 	}

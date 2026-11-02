@@ -11,7 +11,7 @@ func TestPostgresDeviceApprovalAndConsumptionAreAtomic(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	device := Device{CodeHash: digest("postgres-device"), UserCode: "PGDEVICE", Expires: now().Add(time.Minute)}
-	if err := store.insertDevice(ctx, device); err != nil {
+	if err := store.InsertDevice(ctx, device); err != nil {
 		t.Fatal(err)
 	}
 
@@ -28,7 +28,7 @@ func TestPostgresDeviceApprovalAndConsumptionAreAtomic(t *testing.T) {
 			defer wg.Done()
 			at := now()
 			session := Session{User: token, Hash: digest(token), AuthVersion: 1, Created: at, Seen: at, Absolute: at.Add(time.Hour), CLI: true}
-			won, err := store.approveDevice(ctx, device.CodeHash, token, session)
+			won, err := store.ApproveDevice(ctx, device.CodeHash, token, session)
 			approvals <- approval{token: token, won: won, err: err}
 		}(token)
 	}
@@ -50,7 +50,7 @@ func TestPostgresDeviceApprovalAndConsumptionAreAtomic(t *testing.T) {
 		t.Fatal("no device approval won")
 	}
 	var sessionCount int
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_sessions WHERE session_hash IN ($1,$2)`, digest("krun_cli_pg_one"), digest("krun_cli_pg_two")).Scan(&sessionCount); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_sessions WHERE session_hash IN ($1,$2)`, digest("krun_cli_pg_one"), digest("krun_cli_pg_two")).Scan(&sessionCount); err != nil {
 		t.Fatal(err)
 	}
 	if sessionCount != 1 {
@@ -67,7 +67,7 @@ func TestPostgresDeviceApprovalAndConsumptionAreAtomic(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			token, won, err := store.consumeDevice(ctx, device.CodeHash)
+			token, won, err := store.ConsumeDevice(ctx, device.CodeHash)
 			collections <- collection{token: token, won: won, err: err}
 		}()
 	}

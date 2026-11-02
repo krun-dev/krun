@@ -11,7 +11,7 @@ import (
 
 func secondPostgresStore(t *testing.T) *Store {
 	t.Helper()
-	store, err := OpenStore(context.Background(), os.Getenv("KRUN_TEST_POSTGRES_URL"))
+	store, err := openStoreForTest(t, context.Background(), os.Getenv("KRUN_TEST_POSTGRES_URL"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestPostgresIAMRevisionCASRejectsLostUpdate(t *testing.T) {
 				resource.Revision++
 				st.Resources[resource.ID] = resource
 				st.Revision++
-				st.recordAudit(Audit{ID: []string{"audit-cas-first", "audit-cas-second"}[i], Time: now(), Allowed: true})
+				st.RecordAudit(Audit{ID: []string{"audit-cas-first", "audit-cas-second"}[i], Time: now(), Allowed: true})
 				return nil
 			})
 		}()
@@ -79,7 +79,7 @@ func TestPostgresIAMRevisionCASRejectsLostUpdate(t *testing.T) {
 		t.Fatalf("resource revision=%d, want 2", got)
 	}
 	var audits int
-	if err = store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_audits WHERE id IN ('audit-cas-first','audit-cas-second')`).Scan(&audits); err != nil {
+	if err = postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_audits WHERE id IN ('audit-cas-first','audit-cas-second')`).Scan(&audits); err != nil {
 		t.Fatal(err)
 	}
 	if audits != 1 {
@@ -203,7 +203,7 @@ func TestPostgresConcurrentJITIdentityIsRetryable(t *testing.T) {
 		t.Fatal(err)
 	}
 	var count int
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_users WHERE source='jit-source' AND subject='stable-subject'`).Scan(&count); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_users WHERE source='jit-source' AND subject='stable-subject'`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
@@ -320,7 +320,7 @@ func TestPostgresIAMRevisionsAndAuditsAreRequestLocal(t *testing.T) {
 				resource.Revision++
 				st.Resources[id] = resource
 				st.Revision++
-				st.recordAudit(Audit{ID: "audit-" + id, Time: now(), Allowed: true})
+				st.RecordAudit(Audit{ID: "audit-" + id, Time: now(), Allowed: true})
 				return nil
 			})
 		}()
@@ -334,7 +334,7 @@ func TestPostgresIAMRevisionsAndAuditsAreRequestLocal(t *testing.T) {
 		}
 	}
 
-	rows, err := store.pool.Query(ctx, `SELECT revision FROM krun_audits WHERE id IN ('audit-svc-one','audit-svc-two') ORDER BY revision`)
+	rows, err := postgresTestPool(store).Query(ctx, `SELECT revision FROM krun_audits WHERE id IN ('audit-svc-one','audit-svc-two') ORDER BY revision`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,7 +366,7 @@ func TestPostgresDeniedAuditSurvivesReadError(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	err := store.Mutate(ctx, PartitionIAM, 0, func(st *State) error {
-		st.recordAudit(Audit{ID: "audit-denied-read", Time: now(), Allowed: false})
+		st.RecordAudit(Audit{ID: "audit-denied-read", Time: now(), Allowed: false})
 		return forbidden()
 	})
 	var apiErr *APIError
@@ -374,7 +374,7 @@ func TestPostgresDeniedAuditSurvivesReadError(t *testing.T) {
 		t.Fatalf("got %v, want original permission denial", err)
 	}
 	var count int
-	if err = store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_audits WHERE id='audit-denied-read' AND allowed=false`).Scan(&count); err != nil {
+	if err = postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_audits WHERE id='audit-denied-read' AND allowed=false`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
@@ -400,11 +400,11 @@ func TestPostgresAPIKeyHashLookupDoesNotHydrateIAMSnapshot(t *testing.T) {
 	if len(st.KeyHashes) != 0 {
 		t.Fatalf("IAM snapshot loaded %d credential hashes", len(st.KeyHashes))
 	}
-	id, ok, err := store.apiKeyIDByHash(ctx, digest(secret))
+	id, ok, err := store.APIKeyIDByHash(ctx, digest(secret))
 	if err != nil || !ok || id != "key-direct" {
 		t.Fatalf("lookup=(%q,%v,%v), want key-direct", id, ok, err)
 	}
-	if _, ok, err = store.apiKeyIDByHash(ctx, digest("krun_key_unknown")); err != nil || ok {
+	if _, ok, err = store.APIKeyIDByHash(ctx, digest("krun_key_unknown")); err != nil || ok {
 		t.Fatalf("unknown lookup=(%v,%v), want missing", ok, err)
 	}
 }
@@ -449,7 +449,7 @@ func TestPostgresDistributedRateLimitIsAtomic(t *testing.T) {
 		t.Fatalf("exceeded=%d, want %d", exceeded, requests-limit)
 	}
 	var count int
-	if err := store.pool.QueryRow(ctx, `SELECT count FROM krun_rate_limits WHERE scope='login'`).Scan(&count); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count FROM krun_rate_limits WHERE scope='login'`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	// Once a bucket is over limit, further rejected requests must not keep
@@ -478,12 +478,12 @@ func TestPostgresRepositoryConnectStateConsumedOnce(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	pending := WorkerRepositoryConnectState{User: "user-one", Provider: "github", Browser: "browser-one", Expires: now().Add(time.Minute)}
-	if err := store.upsertRepositoryConnectState(ctx, "oauth-state", pending); err != nil {
+	if err := store.UpsertRepositoryConnectState(ctx, "oauth-state", pending); err != nil {
 		t.Fatal(err)
 	}
 	// A callback from another browser must neither win nor destroy the valid
 	// browser's one-shot state.
-	if _, consumed, err := store.consumeRepositoryConnectState(ctx, "oauth-state", "wrong-browser"); err != nil || consumed {
+	if _, consumed, err := store.ConsumeRepositoryConnectState(ctx, "oauth-state", "wrong-browser"); err != nil || consumed {
 		t.Fatalf("wrong browser consumed state: consumed=%v err=%v", consumed, err)
 	}
 
@@ -493,7 +493,7 @@ func TestPostgresRepositoryConnectStateConsumedOnce(t *testing.T) {
 		wg.Add(1)
 		go func(replica string) {
 			defer wg.Done()
-			got, consumed, err := store.consumeRepositoryConnectState(ctx, "oauth-state", "browser-one")
+			got, consumed, err := store.ConsumeRepositoryConnectState(ctx, "oauth-state", "browser-one")
 			if err != nil {
 				t.Error(err)
 				return
@@ -536,7 +536,7 @@ func TestPostgresWorkersSnapshotExcludesSecretsAndBuildBlobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	connection := WorkerRepositoryConnection{User: "user", Provider: "github", AccessToken: "secret-token", ConnectedAt: now()}
-	if err := store.upsertRepositoryConnection(ctx, connection); err != nil {
+	if err := store.UpsertRepositoryConnection(ctx, connection); err != nil {
 		t.Fatal(err)
 	}
 
@@ -547,11 +547,11 @@ func TestPostgresWorkersSnapshotExcludesSecretsAndBuildBlobs(t *testing.T) {
 	if len(state.Workers.BuildPrivate) != 0 || len(state.RepositoryConnections) != 0 {
 		t.Fatalf("generic Workers snapshot loaded sensitive rows: private=%d connections=%d", len(state.Workers.BuildPrivate), len(state.RepositoryConnections))
 	}
-	private, ok, err := store.workerBuildPrivate(ctx, "build-private")
+	private, ok, err := store.WorkerBuildPrivate(ctx, "build-private")
 	if err != nil || !ok || private.Log != "large log" || private.Files["index.js"] != "secret source" {
 		t.Fatalf("keyed private-row lookup failed: ok=%v private=%+v err=%v", ok, private, err)
 	}
-	got, ok, err := store.repositoryConnection(ctx, "user", "github")
+	got, ok, err := store.RepositoryConnection(ctx, "user", "github")
 	if err != nil || !ok || got.AccessToken != "secret-token" {
 		t.Fatalf("keyed repository credential lookup failed: ok=%v connection=%+v err=%v", ok, got, err)
 	}

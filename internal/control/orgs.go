@@ -41,7 +41,7 @@ func (s *Server) orgCreate(st *State, p Principal, r *http.Request) (any, int, e
 	}
 	org := Organization{ID: randomID("org"), Name: in.Name, Sources: []string{}, Revision: 1}
 	st.Organizations[org.ID] = org
-	st.Members[memberKey(org.ID, p.User.ID)] = Member{org.ID, p.User.ID}
+	st.Members[memberKey(org.ID, p.User.ID)] = Member{Organization: org.ID, User: p.User.ID}
 	id := randomID("role")
 	st.Assignments[id] = Assignment{ID: id, SubjectKind: "user", SubjectID: p.User.ID, Role: "org_admin", ScopeKind: "organization", ScopeID: org.ID, Revision: 1}
 	st.Revision++

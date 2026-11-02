@@ -15,7 +15,7 @@ import (
 func TestPostgresBuildClaimIsExclusive(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
-	if _, err := store.pool.Exec(ctx, `INSERT INTO krun_worker_services (service_id, org_id) VALUES ('svc-1','org-1')`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_worker_services (service_id, org_id) VALUES ('svc-1','org-1')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
@@ -30,7 +30,7 @@ func TestPostgresBuildClaimIsExclusive(t *testing.T) {
 		wg.Add(1)
 		go func(replica string) {
 			defer wg.Done()
-			claimed, err := store.claimBuild(ctx, "bld-1", replica)
+			claimed, err := store.ClaimBuild(ctx, "bld-1", replica)
 			if err != nil {
 				t.Error(err)
 				return
@@ -48,16 +48,16 @@ func TestPostgresBuildClaimIsExclusive(t *testing.T) {
 	}
 	var owner string
 	winners.Range(func(key, _ any) bool { owner = key.(string); return false })
-	if claimed, err := store.claimBuild(ctx, "bld-1", owner); err != nil || !claimed {
+	if claimed, err := store.ClaimBuild(ctx, "bld-1", owner); err != nil || !claimed {
 		t.Fatalf("owner could not refresh its build lease: claimed=%v err=%v", claimed, err)
 	}
-	if claimed, err := store.claimBuild(ctx, "bld-1", "replica-new"); err != nil || claimed {
+	if claimed, err := store.ClaimBuild(ctx, "bld-1", "replica-new"); err != nil || claimed {
 		t.Fatalf("fresh build lease was stolen: claimed=%v err=%v", claimed, err)
 	}
-	if _, err := store.pool.Exec(ctx, `UPDATE krun_worker_builds SET claimed_at=now()-interval '5 minutes' WHERE build_id='bld-1'`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `UPDATE krun_worker_builds SET claimed_at=now()-interval '5 minutes' WHERE build_id='bld-1'`); err != nil {
 		t.Fatal(err)
 	}
-	if claimed, err := store.claimBuild(ctx, "bld-1", "replica-new"); err != nil || !claimed {
+	if claimed, err := store.ClaimBuild(ctx, "bld-1", "replica-new"); err != nil || !claimed {
 		t.Fatalf("expired build lease was not taken over: claimed=%v err=%v", claimed, err)
 	}
 }
@@ -65,7 +65,7 @@ func TestPostgresBuildClaimIsExclusive(t *testing.T) {
 func TestPostgresWorkerIdempotencyClaimIsAtomic(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
-	if _, err := store.pool.Exec(ctx, `INSERT INTO krun_worker_services (service_id, org_id) VALUES ('svc-1','org-1')`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_worker_services (service_id, org_id) VALUES ('svc-1','org-1')`); err != nil {
 		t.Fatal(err)
 	}
 	ready := make(chan struct{}, 2)
@@ -313,7 +313,7 @@ func TestPostgresWorkerPreviewSetCASPreventsConcurrentLimitOverflow(t *testing.T
 func workerDirtyGenerationForTest(t *testing.T, store *Store) int64 {
 	t.Helper()
 	var generation int64
-	if err := store.pool.QueryRow(context.Background(), `SELECT last_value FROM worker_dirty_seq`).Scan(&generation); err != nil {
+	if err := postgresTestPool(store).QueryRow(context.Background(), `SELECT last_value FROM worker_dirty_seq`).Scan(&generation); err != nil {
 		t.Fatal(err)
 	}
 	return generation
@@ -340,10 +340,10 @@ func assertOneWorkerCASWinner(t *testing.T, errs <-chan error) {
 func TestPostgresConfigRevisionCASIsExclusive(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
-	if _, err := store.pool.Exec(ctx, `INSERT INTO worker_config_dirty(service_id) VALUES('site-cas')`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_dirty(service_id) VALUES('site-cas')`); err != nil {
 		t.Fatal(err)
 	}
-	dirty, err := store.dirtyWorkerServices(ctx)
+	dirty, err := store.DirtyWorkerServices(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestPostgresConfigRevisionCASIsExclusive(t *testing.T) {
 	for range 2 {
 		go func() {
 			<-start
-			_, won, err := store.appendConfigDelta(ctx, 0, dirty, []workerConfigOp{{Type: "route_upsert", Pool: "default", Host: "site.workers.test", Route: &workerConfigRoute{Service: "site-cas", Host: "site.workers.test", Pool: "default"}}})
+			_, won, err := store.AppendConfigDelta(ctx, 0, dirty, []workerConfigOp{{Type: "route_upsert", Pool: "default", Host: "site.workers.test", Route: &workerConfigRoute{Service: "site-cas", Host: "site.workers.test", Pool: "default"}}})
 			results <- result{won, err}
 		}()
 	}
@@ -396,7 +396,7 @@ func TestPostgresOperationClaimIsExclusive(t *testing.T) {
 		wg.Add(1)
 		go func(replica string) {
 			defer wg.Done()
-			claimed, err := store.claimOperation(ctx, "op-1", replica)
+			claimed, err := store.ClaimOperation(ctx, "op-1", replica)
 			if err != nil {
 				t.Error(err)
 				return
@@ -413,17 +413,17 @@ func TestPostgresOperationClaimIsExclusive(t *testing.T) {
 		t.Fatalf("expected exactly one claimer, got %d", count)
 	}
 	// A stale claim on a validating row can be taken over by another replica.
-	claimed, err := store.claimStaleOperation(ctx, "op-1", "replica-c")
+	claimed, err := store.ClaimStaleOperation(ctx, "op-1", "replica-c")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if claimed {
 		t.Error("a fresh claim must not be stolen")
 	}
-	if _, err := store.pool.Exec(ctx, `UPDATE krun_worker_operations SET claimed_at = now() - interval '5 minutes' WHERE operation_id='op-1'`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `UPDATE krun_worker_operations SET claimed_at = now() - interval '5 minutes' WHERE operation_id='op-1'`); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err = store.claimStaleOperation(ctx, "op-1", "replica-c")
+	claimed, err = store.ClaimStaleOperation(ctx, "op-1", "replica-c")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,7 +447,7 @@ func TestPostgresCommitRequiresMatchingRevision(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	committed, err := store.commitOperation(ctx, WorkerOperation{ID: "op-1", Service: "svc-1", Environment: "production", Release: "rel-1", ExpectedRevision: 2})
+	committed, err := store.CommitOperation(ctx, WorkerOperation{ID: "op-1", Service: "svc-1", Environment: "production", Release: "rel-1", ExpectedRevision: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,19 +472,19 @@ func TestPostgresSessionTouchIsThrottled(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	at := now()
-	if err := store.insertSession(ctx, "token-1", Session{User: "user-1", CSRF: "csrf", AuthVersion: 1, Created: at, Seen: at, Absolute: at.Add(time.Hour)}); err != nil {
+	if err := store.InsertSession(ctx, "token-1", Session{User: "user-1", CSRF: "csrf", AuthVersion: 1, Created: at, Seen: at, Absolute: at.Add(time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
 	var before time.Time
-	if err := store.pool.QueryRow(ctx, `SELECT seen_at FROM krun_sessions`).Scan(&before); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT seen_at FROM krun_sessions`).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
 	// Inside the throttle window nothing changes.
-	if err := store.touchSession(ctx, digest("token-1")); err != nil {
+	if err := store.TouchSession(ctx, digest("token-1")); err != nil {
 		t.Fatal(err)
 	}
 	var after time.Time
-	if err := store.pool.QueryRow(ctx, `SELECT seen_at FROM krun_sessions`).Scan(&after); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT seen_at FROM krun_sessions`).Scan(&after); err != nil {
 		t.Fatal(err)
 	}
 	if !after.Equal(before) {
@@ -492,14 +492,14 @@ func TestPostgresSessionTouchIsThrottled(t *testing.T) {
 	}
 	// An aged row is refreshed.
 	var aged time.Time
-	if err := store.pool.QueryRow(ctx, `UPDATE krun_sessions SET seen_at = now() - interval '5 minutes' RETURNING seen_at`).Scan(&aged); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `UPDATE krun_sessions SET seen_at = now() - interval '5 minutes' RETURNING seen_at`).Scan(&aged); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.touchSession(ctx, digest("token-1")); err != nil {
+	if err := store.TouchSession(ctx, digest("token-1")); err != nil {
 		t.Fatal(err)
 	}
 	var refreshed time.Time
-	if err := store.pool.QueryRow(ctx, `SELECT seen_at FROM krun_sessions`).Scan(&refreshed); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT seen_at FROM krun_sessions`).Scan(&refreshed); err != nil {
 		t.Fatal(err)
 	}
 	if !refreshed.After(aged) {
@@ -530,10 +530,10 @@ func TestPostgresDeleteCascadesExplicitly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var members, assignments int
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_members WHERE org_id='org-1'`).Scan(&members); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_members WHERE org_id='org-1'`).Scan(&members); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_assignments WHERE scope_id='org-1'`).Scan(&assignments); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_assignments WHERE scope_id='org-1'`).Scan(&assignments); err != nil {
 		t.Fatal(err)
 	}
 	if members != 0 || assignments != 0 {
@@ -567,40 +567,40 @@ func TestPostgresRetentionPrunesBuildsAndSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := now()
-	if _, err := store.pool.Exec(ctx, `UPDATE krun_worker_builds SET created_at = $1`, at.Add(-40*24*time.Hour)); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `UPDATE krun_worker_builds SET created_at = $1`, at.Add(-40*24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.insertSession(ctx, "t1", Session{User: "u", CSRF: "c", Created: at.Add(-time.Hour), Seen: at.Add(-time.Hour), Absolute: at.Add(-time.Minute)}); err != nil {
+	if err := store.InsertSession(ctx, "t1", Session{User: "u", CSRF: "c", Created: at.Add(-time.Hour), Seen: at.Add(-time.Hour), Absolute: at.Add(-time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.retainExpired(ctx); err != nil {
+	if err := store.RetainExpired(ctx); err != nil {
 		t.Fatal(err)
 	}
 	var sessions int
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_sessions`).Scan(&sessions); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_sessions`).Scan(&sessions); err != nil {
 		t.Fatal(err)
 	}
 	if sessions != 0 {
 		t.Errorf("expired session not removed: %d", sessions)
 	}
 	var builds int
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_worker_builds`).Scan(&builds); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_worker_builds`).Scan(&builds); err != nil {
 		t.Fatal(err)
 	}
 	if builds != 5 {
 		t.Errorf("builds under the per-service cap must be kept, got %d", builds)
 	}
 	var releases, artifacts int
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_worker_releases WHERE release_id='rel-old'`).Scan(&releases); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_worker_releases WHERE release_id='rel-old'`).Scan(&releases); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_worker_artifacts WHERE artifact_id='art-old'`).Scan(&artifacts); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_worker_artifacts WHERE artifact_id='art-old'`).Scan(&artifacts); err != nil {
 		t.Fatal(err)
 	}
 	if releases != 0 || artifacts != 1 {
 		t.Fatalf("release/artifact GC handoff broken: releases=%d artifacts=%d", releases, artifacts)
 	}
-	candidates, err := store.garbageArtifacts(ctx, at.Add(-workerArtifactRetain), 10)
+	candidates, err := store.GarbageArtifacts(ctx, at.Add(-workerArtifactRetain), 10)
 	if err != nil || len(candidates) != 1 || candidates[0].ID != "art-old" {
 		t.Fatalf("artifact was not retained for object-store GC: %+v err=%v", candidates, err)
 	}
@@ -630,17 +630,17 @@ func TestPostgresRetentionReconcilesDeletedWorkerService(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.retainExpired(ctx); err != nil {
+	if err := store.RetainExpired(ctx); err != nil {
 		t.Fatal(err)
 	}
 	var services, builds, private int
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_worker_services WHERE service_id='orphan-service'`).Scan(&services); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_worker_services WHERE service_id='orphan-service'`).Scan(&services); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_worker_builds WHERE service_id='orphan-service'`).Scan(&builds); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_worker_builds WHERE service_id='orphan-service'`).Scan(&builds); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_worker_build_private WHERE build_id='orphan-build'`).Scan(&private); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_worker_build_private WHERE build_id='orphan-build'`).Scan(&private); err != nil {
 		t.Fatal(err)
 	}
 	if services != 0 || builds != 0 || private != 0 {
@@ -659,17 +659,17 @@ func TestPostgresArtifactGCWaitsForRetainedBuild(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	candidates, err := store.garbageArtifacts(ctx, now().Add(-workerArtifactRetain), 10)
+	candidates, err := store.GarbageArtifacts(ctx, now().Add(-workerArtifactRetain), 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(candidates) != 0 {
 		t.Fatalf("artifact referenced by a retained build became collectible: %+v", candidates)
 	}
-	if _, err := store.pool.Exec(ctx, `DELETE FROM krun_worker_builds WHERE build_id='build-held'`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `DELETE FROM krun_worker_builds WHERE build_id='build-held'`); err != nil {
 		t.Fatal(err)
 	}
-	candidates, err = store.garbageArtifacts(ctx, now().Add(-workerArtifactRetain), 10)
+	candidates, err = store.GarbageArtifacts(ctx, now().Add(-workerArtifactRetain), 10)
 	if err != nil || len(candidates) != 1 || candidates[0].ID != "art-held" {
 		t.Fatalf("artifact did not become collectible after build removal: %+v err=%v", candidates, err)
 	}
@@ -696,7 +696,7 @@ func TestPostgresPendingWorkIncludesBuildActor(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	pending, err := store.pendingWork(ctx, 10)
+	pending, err := store.PendingWork(ctx, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -737,7 +737,7 @@ func TestPostgresCommitMarksStepsDone(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	committed, err := store.commitOperation(ctx, WorkerOperation{ID: "op1", Service: "s1", Environment: "production", Release: "r1", ExpectedRevision: 0})
+	committed, err := store.CommitOperation(ctx, WorkerOperation{ID: "op1", Service: "s1", Environment: "production", Release: "r1", ExpectedRevision: 0})
 	if err != nil {
 		t.Fatal(err)
 	}

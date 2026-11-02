@@ -178,7 +178,7 @@ func (s *Server) workerRepositoryProviders(st *State, p Principal, r *http.Reque
 	if err := s.require(st, p, r, "service.list", target); err != nil {
 		return nil, 0, err
 	}
-	connected, err := s.Store.connectedRepositoryProviders(r.Context(), p.User.ID)
+	connected, err := s.Store.ConnectedRepositoryProviders(r.Context(), p.User.ID)
 	if err != nil {
 		return nil, 0, err
 	}

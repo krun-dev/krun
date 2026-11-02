@@ -1,25 +1,27 @@
-package control
+package storage
 
 import (
 	"context"
+
 	"github.com/jackc/pgx/v5"
+	"github.com/krun-dev/krun/internal/domain"
 )
 
 // Runtime cold paths use indexed entity reads; they must not load IAM, build
 // history, or any other tenant's metadata.
-func (s *Store) runtimeRelease(ctx context.Context, id, pool string) (WorkerRelease, WorkerArtifact, error) {
-	state := newWorkerState()
+func (s *Store) RuntimeRelease(ctx context.Context, id, pool string) (domain.WorkerRelease, domain.WorkerArtifact, error) {
+	state := domain.NewWorkerState()
 	if s.pool == nil {
-		var rel WorkerRelease
-		var art WorkerArtifact
-		err := s.View(ctx, PartitionAll, func(st *State) error {
+		var rel domain.WorkerRelease
+		var art domain.WorkerArtifact
+		err := s.View(ctx, PartitionAll, func(st *domain.State) error {
 			r, ok := st.Workers.Releases[id]
-			if !ok || !workerServiceAvailableInPool(st.Workers, r.Service, pool) || st.Resources[r.Service].ID == "" {
-				return notFound()
+			if !ok || !domain.WorkerServiceAvailableInPool(st.Workers, r.Service, pool) || st.Resources[r.Service].ID == "" {
+				return domain.NotFound()
 			}
 			a, ok := st.Workers.Artifacts[r.Artifact]
 			if !ok || a.State != "finalized" {
-				return notFound()
+				return domain.NotFound()
 			}
 			rel, art = r, a
 			return nil
@@ -31,36 +33,37 @@ func (s *Store) runtimeRelease(ctx context.Context, id, pool string) (WorkerRele
  SELECT 1 FROM krun_worker_service_placements p JOIN krun_resources r ON r.resource_id=p.service_id AND r.kind='service' AND r.org_id=p.org_id
  WHERE p.service_id=rel.service_id AND p.org_id=rel.org_id AND p.pool_id=$2 AND p.state IN ('preparing','ready','active'))`, id, pool)
 	if err != nil {
-		return WorkerRelease{}, WorkerArtifact{}, err
+		return domain.WorkerRelease{}, domain.WorkerArtifact{}, err
 	}
 	err = readReleaseRows(rows, state)
 	rows.Close()
 	if err != nil {
-		return WorkerRelease{}, WorkerArtifact{}, err
+		return domain.WorkerRelease{}, domain.WorkerArtifact{}, err
 	}
 	rel, ok := state.Releases[id]
 	if !ok {
-		return rel, WorkerArtifact{}, notFound()
+		return rel, domain.WorkerArtifact{}, domain.NotFound()
 	}
-	art, err := s.runtimeArtifact(ctx, rel.Artifact, pool)
+	art, err := s.RuntimeArtifact(ctx, rel.Artifact, pool)
 	return rel, art, err
 }
-func (s *Store) runtimeArtifact(ctx context.Context, id, pool string) (WorkerArtifact, error) {
-	state := newWorkerState()
+
+func (s *Store) RuntimeArtifact(ctx context.Context, id, pool string) (domain.WorkerArtifact, error) {
+	state := domain.NewWorkerState()
 	if s.pool == nil {
-		var art WorkerArtifact
-		err := s.View(ctx, PartitionAll, func(st *State) error {
+		var art domain.WorkerArtifact
+		err := s.View(ctx, PartitionAll, func(st *domain.State) error {
 			a, ok := st.Workers.Artifacts[id]
 			if !ok || a.State != "finalized" {
-				return notFound()
+				return domain.NotFound()
 			}
 			for _, r := range st.Workers.Releases {
-				if r.Artifact == id && workerServiceAvailableInPool(st.Workers, r.Service, pool) && st.Resources[r.Service].ID != "" {
+				if r.Artifact == id && domain.WorkerServiceAvailableInPool(st.Workers, r.Service, pool) && st.Resources[r.Service].ID != "" {
 					art = a
 					return nil
 				}
 			}
-			return forbidden()
+			return domain.Forbidden()
 		})
 		return art, err
 	}
@@ -70,32 +73,32 @@ func (s *Store) runtimeArtifact(ctx context.Context, id, pool string) (WorkerArt
  JOIN krun_resources r ON r.resource_id=p.service_id AND r.kind='service' AND r.org_id=p.org_id
  WHERE rel.artifact_id=a.artifact_id AND p.pool_id=$2 AND p.state IN ('preparing','ready','active'))`, id, pool)
 	if err != nil {
-		return WorkerArtifact{}, err
+		return domain.WorkerArtifact{}, err
 	}
 	err = readArtifactRows(rows, state)
 	rows.Close()
 	if err != nil {
-		return WorkerArtifact{}, err
+		return domain.WorkerArtifact{}, err
 	}
 	art, ok := state.Artifacts[id]
 	if !ok {
-		return art, notFound()
+		return art, domain.NotFound()
 	}
 	return art, nil
 }
 
 // actorScope is shared by asynchronous re-authorization and request reads.
-func (s *Store) actorScope(ctx context.Context, actor WorkerActor, service string) (context.Context, error) {
+func (s *Store) ActorScope(ctx context.Context, actor domain.WorkerActor, service string) (context.Context, error) {
 	if s.pool == nil {
 		return ctx, nil
 	}
 	var org string
 	err := s.pool.QueryRow(ctx, `SELECT org_id FROM krun_resources WHERE resource_id=$1 AND kind='service'`, service).Scan(&org)
 	if err == pgx.ErrNoRows {
-		return ctx, notFound()
+		return ctx, domain.NotFound()
 	}
 	if err != nil {
 		return ctx, err
 	}
-	return withStateScope(ctx, stateReadScope{User: actor.User, Key: actor.Key, Organization: org, Service: service, Kind: "service", Limit: 1}), nil
+	return WithReadScope(ctx, ReadScope{User: actor.User, Key: actor.Key, Organization: org, Service: service, Kind: "service", Limit: 1}), nil
 }

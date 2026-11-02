@@ -168,7 +168,7 @@ func (s *Server) emailCodeHandler(w http.ResponseWriter, r *http.Request) {
 	id := randomToken()
 	browserHash := digest(s.cookie(r, "browser"))
 	ip := s.clientIP(r)
-	browser, ok, err := s.Store.browserFor(r.Context(), browserHash)
+	browser, ok, err := s.Store.BrowserFor(r.Context(), browserHash)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -178,7 +178,7 @@ func (s *Server) emailCodeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	challenge := EmailLogin{Provider: p.config.ID, Browser: browserHash, Fingerprint: loginFingerprint(p.config), Email: email, CodeHash: digest(id + "\x00" + code), ReturnTo: returnTo, IP: ip, Sent: now(), Expires: now().Add(10 * time.Minute)}
-	if _, err = s.Store.beginEmailLogin(r.Context(), browserHash, browser, digest(id), challenge, time.Minute, 10); err != nil {
+	if _, err = s.Store.BeginEmailLogin(r.Context(), browserHash, browser, digest(id), challenge, time.Minute, 10); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -186,7 +186,7 @@ func (s *Server) emailCodeHandler(w http.ResponseWriter, r *http.Request) {
 		// Retain the cooldown while making an undelivered code unusable.
 		cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 		defer cancel()
-		_ = s.Store.invalidateEmailLogin(cleanupContext, digest(id))
+		_ = s.Store.InvalidateEmailLogin(cleanupContext, digest(id))
 		s.writeError(w, r, problem(503, "EMAIL_DELIVERY_FAILED", "Unable to send the verification email. Try again later"))
 		return
 	}
@@ -213,7 +213,7 @@ func (s *Server) emailVerifyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	sessionToken := randomToken()
 	browserHash := digest(s.cookie(r, "browser"))
-	browser, hasBrowser, err := s.Store.browserFor(r.Context(), browserHash)
+	browser, hasBrowser, err := s.Store.BrowserFor(r.Context(), browserHash)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -223,7 +223,7 @@ func (s *Server) emailVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := digest(input.Challenge)
-	challenge, found, err := s.Store.emailLogin(r.Context(), key)
+	challenge, found, err := s.Store.EmailLogin(r.Context(), key)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -236,7 +236,7 @@ func (s *Server) emailVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		// Persist the failed attempt so the retry counter cannot be reset by
 		// reconnecting. The store applies the increment conditionally so
 		// concurrent failures cannot overwrite one another.
-		if _, e := s.Store.failEmailLogin(r.Context(), key); e != nil {
+		if _, e := s.Store.FailEmailLogin(r.Context(), key); e != nil {
 			s.writeError(w, r, e)
 			return
 		}

@@ -27,7 +27,7 @@ func seedPerformanceSites(t *testing.T, s *Store, n int) {
 		if query == statements[4] {
 			args = []any{n}
 		}
-		if _, err := s.pool.Exec(ctx, query, args...); err != nil {
+		if _, err := postgresTestPool(s).Exec(ctx, query, args...); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -99,10 +99,10 @@ func TestPostgresDeltaPublisherOnlyWritesChangedSite(t *testing.T) {
 		t.Fatalf("initial delta: %d %v", rev, err)
 	}
 	var before string
-	if err = s.pool.QueryRow(ctx, `SELECT xmin::text FROM worker_config_routes WHERE service_id='site-000004'`).Scan(&before); err != nil {
+	if err = postgresTestPool(s).QueryRow(ctx, `SELECT xmin::text FROM worker_config_routes WHERE service_id='site-000004'`).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.pool.Exec(ctx, `UPDATE krun_worker_environments SET enabled=false WHERE service_id='site-000002'`); err != nil {
+	if _, err = postgresTestPool(s).Exec(ctx, `UPDATE krun_worker_environments SET enabled=false WHERE service_id='site-000002'`); err != nil {
 		t.Fatal(err)
 	}
 	rev, err = controller.publishConfig(ctx)
@@ -111,21 +111,21 @@ func TestPostgresDeltaPublisherOnlyWritesChangedSite(t *testing.T) {
 	}
 	var after string
 	var count int
-	if err = s.pool.QueryRow(ctx, `SELECT xmin::text FROM worker_config_routes WHERE service_id='site-000004'`).Scan(&after); err != nil {
+	if err = postgresTestPool(s).QueryRow(ctx, `SELECT xmin::text FROM worker_config_routes WHERE service_id='site-000004'`).Scan(&after); err != nil {
 		t.Fatal(err)
 	}
 	if before != after {
 		t.Fatal("unrelated route was rewritten")
 	}
-	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM worker_config_ops WHERE config_revision=2`).Scan(&count); err != nil || count != 1 {
+	if err = postgresTestPool(s).QueryRow(ctx, `SELECT count(*) FROM worker_config_ops WHERE config_revision=2`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("single-route delta has %d ops: %v", count, err)
 	}
-	dirty, err := s.dirtyWorkerServices(ctx)
+	dirty, err := s.DirtyWorkerServices(ctx)
 	if err != nil || len(dirty) != 0 {
 		t.Fatalf("queue not acknowledged: %+v %v", dirty, err)
 	}
 	var route workerConfigRoute
-	row := s.pool.QueryRow(ctx, `SELECT host FROM worker_config_routes WHERE service_id='site-000002'`)
+	row := postgresTestPool(s).QueryRow(ctx, `SELECT host FROM worker_config_routes WHERE service_id='site-000002'`)
 	if err = row.Scan(&route.Host); err != nil {
 		t.Fatal(err)
 	}
@@ -148,19 +148,19 @@ func TestPostgresDeltaPublisherOnlyWritesChangedSite(t *testing.T) {
 func TestPostgresWorkQueueRotatesPastFirstHundred(t *testing.T) {
 	s := postgresTestStore(t)
 	ctx := context.Background()
-	if _, err := s.pool.Exec(ctx, `INSERT INTO krun_worker_builds(build_id,org_id,service_id,env_name,state,created_at) SELECT 'b-'||lpad(i::text,4,'0'),'org','site','production','queued',now()-'1 day'::interval FROM generate_series(1,250)i`); err != nil {
+	if _, err := postgresTestPool(s).Exec(ctx, `INSERT INTO krun_worker_builds(build_id,org_id,service_id,env_name,state,created_at) SELECT 'b-'||lpad(i::text,4,'0'),'org','site','production','queued',now()-'1 day'::interval FROM generate_series(1,250)i`); err != nil {
 		t.Fatal(err)
 	}
-	first, err := s.pendingWork(ctx, 100)
+	first, err := s.PendingWork(ctx, 100)
 	if err != nil || len(first.Builds) != 100 {
 		t.Fatal(err)
 	}
 	for id := range first.Builds {
-		if err = s.scheduleWorkerRetry(ctx, "build", id); err != nil {
+		if err = s.ScheduleWorkerRetry(ctx, "build", id); err != nil {
 			t.Fatal(err)
 		}
 	}
-	second, err := s.pendingWork(ctx, 100)
+	second, err := s.PendingWork(ctx, 100)
 	if err != nil || len(second.Builds) != 100 {
 		t.Fatal(err)
 	}
@@ -170,11 +170,11 @@ func TestPostgresWorkQueueRotatesPastFirstHundred(t *testing.T) {
 		}
 	}
 	for id := range second.Builds {
-		ok, err := s.claimBuild(ctx, id, "replica")
+		ok, err := s.ClaimBuild(ctx, id, "replica")
 		if err != nil || !ok {
 			t.Fatal(err)
 		}
-		started, err := s.workerExecutionStarted(ctx, "build", id, time.Time{})
+		started, err := s.WorkerExecutionStarted(ctx, "build", id, time.Time{})
 		if err != nil || time.Since(started) > time.Second {
 			t.Fatalf("queue age consumed execution timeout: %v %v", started, err)
 		}
@@ -186,18 +186,18 @@ func TestPostgresStaleDirtyGenerationCannotPublishOrDropNewerWork(t *testing.T) 
 	s := postgresTestStore(t)
 	seedPerformanceSites(t, s, 2)
 	ctx := context.Background()
-	dirty, err := s.dirtyWorkerServices(ctx)
+	dirty, err := s.DirtyWorkerServices(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.pool.Exec(ctx, `UPDATE krun_worker_environments SET enabled=false WHERE service_id=$1`, dirty[0].ID); err != nil {
+	if _, err = postgresTestPool(s).Exec(ctx, `UPDATE krun_worker_environments SET enabled=false WHERE service_id=$1`, dirty[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	_, won, err := s.appendConfigDelta(ctx, 0, dirty, []workerConfigOp{{Type: "route_delete", Pool: "default", Host: "stale.test"}})
+	_, won, err := s.AppendConfigDelta(ctx, 0, dirty, []workerConfigOp{{Type: "route_delete", Pool: "default", Host: "stale.test"}})
 	if err != nil || won {
 		t.Fatalf("stale projection won=%v err=%v", won, err)
 	}
-	remaining, err := s.dirtyWorkerServices(ctx)
+	remaining, err := s.DirtyWorkerServices(ctx)
 	if err != nil || len(remaining) != 2 {
 		t.Fatalf("new mutation was lost: %v %v", remaining, err)
 	}
@@ -208,7 +208,7 @@ func TestPostgresStaleDirtyGenerationCannotPublishOrDropNewerWork(t *testing.T) 
 	}
 	// A no-op publisher must return the current head, never its stale expected
 	// head, or an operation could accept an ack that predates its publication.
-	revision, won, err = s.appendConfigDelta(ctx, 0, nil, nil)
+	revision, won, err = s.AppendConfigDelta(ctx, 0, nil, nil)
 	if err != nil || !won || revision != 1 {
 		t.Fatalf("no-op returned stale acknowledgement target: %d %v %v", revision, won, err)
 	}
@@ -230,7 +230,7 @@ func TestPostgresLoginAndStartupDoNotLoadSiteCatalogue(t *testing.T) {
 		t.Fatal(err)
 	}
 	var sites int
-	if err = store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_resources`).Scan(&sites); err != nil || sites != 1000 {
+	if err = postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_resources`).Scan(&sites); err != nil || sites != 1000 {
 		t.Fatalf("provider registration changed site metadata: %d %v", sites, err)
 	}
 }

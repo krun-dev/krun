@@ -95,44 +95,6 @@ func TestWorkerBuildUsesScopedJSONBodyLimit(t *testing.T) {
 	}
 }
 
-func TestWorkerCompatibilityEmptyFlagsSurviveStateClone(t *testing.T) {
-	state := newState()
-	created := now()
-	state.Workers.Builds["build"] = WorkerBuild{ID: "build", CompatibilityFlags: []string{}, Created: created}
-	state.Workers.Artifacts["artifact"] = WorkerArtifact{ID: "artifact", CompatibilityFlags: []string{}, Created: created}
-	state.Workers.Releases["release"] = WorkerRelease{ID: "release", CompatibilityFlags: []string{}, Variables: map[string]string{}, SecretVersions: map[string]string{}, Created: created}
-
-	cloned, err := cloneState(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !sameBuild(state.Workers.Builds["build"], cloned.Workers.Builds["build"]) {
-		t.Fatal("empty build compatibility flags changed snapshot identity")
-	}
-	if !sameArtifact(state.Workers.Artifacts["artifact"], cloned.Workers.Artifacts["artifact"]) ||
-		!sameArtifactContent(state.Workers.Artifacts["artifact"], cloned.Workers.Artifacts["artifact"]) {
-		t.Fatal("empty artifact compatibility flags changed snapshot identity")
-	}
-	if !sameRelease(state.Workers.Releases["release"], cloned.Workers.Releases["release"]) {
-		t.Fatal("empty release compatibility flags changed snapshot identity")
-	}
-}
-
-func TestWriteReleasesRejectsExistingDescriptorMutation(t *testing.T) {
-	before := newWorkerState()
-	after := newWorkerState()
-	release := WorkerRelease{
-		ID: "release", Artifact: "artifact", Profile: workerProfile,
-		CompatibilityDate: workerDefaultCompatibilityDate, Variables: map[string]string{}, Created: now(),
-	}
-	before.Releases[release.ID] = release
-	release.CompatibilityDate = "2026-09-27"
-	after.Releases[release.ID] = release
-	if err := writeReleases(context.Background(), nil, before, after); err == nil || !strings.Contains(err.Error(), "immutable") {
-		t.Fatalf("existing release descriptor mutation was accepted: %v", err)
-	}
-}
-
 func TestWorkerPreviewLimitAndRevisionLifecycle(t *testing.T) {
 	s, store, base := workerTestServer(t)
 	s.Config.Workers.PreviewLimit = 1

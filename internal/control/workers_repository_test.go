@@ -346,7 +346,7 @@ func TestRepositoryOAuthGETCallbackStoresConnectionAndReturnsToWorkspace(t *test
 	s.routes()
 	browserToken := "repository-browser"
 	state := "repository-state"
-	if err := store.upsertRepositoryConnectState(context.Background(), state, WorkerRepositoryConnectState{
+	if err := store.UpsertRepositoryConnectState(context.Background(), state, WorkerRepositoryConnectState{
 		User: "admin", Provider: "gitlab", Organization: "org-a",
 		Browser: digest(browserToken), Expires: now().Add(time.Minute),
 	}); err != nil {
@@ -365,7 +365,7 @@ func TestRepositoryOAuthGETCallbackStoresConnectionAndReturnsToWorkspace(t *test
 	if err != nil || location.Query().Get("page") != "workers" || location.Query().Get("workspace") != "org-a" || location.Query().Get("repository_status") != "connected" {
 		t.Fatalf("callback location=%q err=%v", res.Header().Get("Location"), err)
 	}
-	connection, ok, err := store.repositoryConnection(context.Background(), "admin", "gitlab")
+	connection, ok, err := store.RepositoryConnection(context.Background(), "admin", "gitlab")
 	if err != nil || !ok || connection.AccessToken != "user-token" || connection.RefreshToken != "refresh-token" || connection.TokenType != "bearer" || connection.ExpiresAt.IsZero() {
 		t.Fatalf("connection=%+v ok=%v err=%v", connection, ok, err)
 	}
@@ -402,7 +402,7 @@ func TestRepositoryOAuthCallbackRejectsTokenEndpointRedirect(t *testing.T) {
 	s.routes()
 	browserToken := "redirect-browser"
 	state := "redirect-state"
-	if err := store.upsertRepositoryConnectState(context.Background(), state, WorkerRepositoryConnectState{
+	if err := store.UpsertRepositoryConnectState(context.Background(), state, WorkerRepositoryConnectState{
 		User: "admin", Provider: "gitlab", Organization: "org-a",
 		Browser: digest(browserToken), Expires: now().Add(time.Minute),
 	}); err != nil {
@@ -421,7 +421,7 @@ func TestRepositoryOAuthCallbackRejectsTokenEndpointRedirect(t *testing.T) {
 	if location.Query().Get("repository_status") != "error" {
 		t.Fatalf("unexpected callback location %q", res.Header().Get("Location"))
 	}
-	if _, ok, err := store.repositoryConnection(context.Background(), "admin", "gitlab"); err != nil || ok {
+	if _, ok, err := store.RepositoryConnection(context.Background(), "admin", "gitlab"); err != nil || ok {
 		t.Fatalf("redirected OAuth callback stored a connection: ok=%v err=%v", ok, err)
 	}
 }
@@ -496,7 +496,7 @@ func TestRepositoryCredentialRefreshRotatesGrantWithoutSharedPATFallback(t *test
 		Token: "shared-pat", AllowedRepositories: []string{"team/repository"},
 	}
 	if err := store.Update(context.Background(), PartitionWorkers, func(*State) error {
-		return store.upsertRepositoryConnection(context.Background(), WorkerRepositoryConnection{
+		return store.UpsertRepositoryConnection(context.Background(), WorkerRepositoryConnection{
 			User: "admin", Provider: "gitlab", AccessToken: "expired-access",
 			TokenType: "bearer", RefreshToken: "old-refresh",
 			ExpiresAt: now().Add(-time.Minute), ConnectedAt: now(),
@@ -511,7 +511,7 @@ func TestRepositoryCredentialRefreshRotatesGrantWithoutSharedPATFallback(t *test
 	var connection WorkerRepositoryConnection
 	var ok bool
 	if err = store.View(context.Background(), PartitionWorkers, func(*State) error {
-		connection, ok, err = store.repositoryConnection(context.Background(), "admin", "gitlab")
+		connection, ok, err = store.RepositoryConnection(context.Background(), "admin", "gitlab")
 		return err
 	}); err != nil || !ok {
 		t.Fatal(err)
@@ -539,7 +539,7 @@ func TestRepositoryCredentialRejectedRefreshRequiresReconnect(t *testing.T) {
 		Token: "shared-pat", AllowedRepositories: []string{"team/repository"},
 	}
 	if err := store.Update(context.Background(), PartitionWorkers, func(*State) error {
-		return store.upsertRepositoryConnection(context.Background(), WorkerRepositoryConnection{
+		return store.UpsertRepositoryConnection(context.Background(), WorkerRepositoryConnection{
 			User: "admin", Provider: "gitlab", AccessToken: "expired-access",
 			RefreshToken: "rejected-refresh", ExpiresAt: now().Add(-time.Minute), ConnectedAt: now(),
 		})
@@ -552,7 +552,7 @@ func TestRepositoryCredentialRejectedRefreshRequiresReconnect(t *testing.T) {
 	}
 	var connected map[string]bool
 	if viewErr := store.View(context.Background(), PartitionWorkers, func(*State) error {
-		connected, err = store.connectedRepositoryProviders(context.Background(), "admin")
+		connected, err = store.ConnectedRepositoryProviders(context.Background(), "admin")
 		return err
 	}); viewErr != nil {
 		t.Fatal(viewErr)

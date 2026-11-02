@@ -8,27 +8,9 @@ import (
 	"errors"
 	"reflect"
 	"sort"
-	"time"
 
 	"github.com/minio/minio-go/v7"
 )
-
-// Edge configuration is intentionally small: routes and the immutable release
-// descriptors they reference. Build logs, operations and IAM state never enter
-// this stream.
-type workerConfigRoute struct {
-	Service string `json:"service_id,omitempty"`
-	Host    string `json:"host"`
-	Path    string `json:"path,omitempty"`
-	Enabled bool   `json:"enabled"`
-	Release string `json:"release"`
-	Pool    string `json:"pool"`
-}
-
-type workerConfigProjection struct {
-	Routes   []workerConfigRoute      `json:"routes"`
-	Releases map[string]WorkerRelease `json:"releases"`
-}
 
 type workerConfigSnapshot struct {
 	ConfigRevision int64                    `json:"config_revision"`
@@ -37,25 +19,8 @@ type workerConfigSnapshot struct {
 	Releases       map[string]WorkerRelease `json:"releases"`
 }
 
-type workerConfigOp struct {
-	Type    string             `json:"type"`
-	Pool    string             `json:"pool"`
-	Host    string             `json:"host,omitempty"`
-	Route   *workerConfigRoute `json:"route,omitempty"`
-	Release *WorkerRelease     `json:"release,omitempty"`
-}
-
-type workerConfigRevision struct {
-	Revision int64
-	Digest   string
-	Payload  []byte
-	Ops      []byte
-	Created  time.Time
-}
-
 const (
-	workerConfigOpsRetain = 512
-	workerConfigPoolsDir  = "config/pools/"
+	workerConfigPoolsDir = "config/pools/"
 )
 
 func workerPoolConfigPrefix(pool string) string { return workerConfigPoolsDir + pool + "/" }
@@ -293,7 +258,7 @@ type workerConfigLatest struct {
 func (w *workersController) publishConfig(ctx context.Context) (int64, error) {
 	w.configMu.Lock()
 	defer w.configMu.Unlock()
-	if w.server.Store.pool != nil {
+	if w.server.Store.Persistent() {
 		return w.publishConfigDelta(ctx)
 	}
 	// OpenStore requires PostgreSQL. This adapter is only used by memory fixtures.
@@ -302,37 +267,40 @@ func (w *workersController) publishConfig(ctx context.Context) (int64, error) {
 	if err := s.View(ctx, PartitionAll, func(st *State) error { next = workerConfigFromState(st, w.config); return nil }); err != nil {
 		return 0, err
 	}
-	s.configMu.Lock()
-	defer s.configMu.Unlock()
-	var previous *workerConfigProjection
-	if len(s.configRevs) > 0 {
-		previous = &workerConfigProjection{}
-		if err := json.Unmarshal(s.configRevs[len(s.configRevs)-1].Payload, previous); err != nil {
+	for attempt := 0; attempt < 8; attempt++ {
+		previous, found, err := s.LatestConfigRevision(ctx)
+		if err != nil {
 			return 0, err
 		}
+		var baseline *workerConfigProjection
+		if found {
+			baseline = &workerConfigProjection{}
+			if err = json.Unmarshal(previous.Payload, baseline); err != nil {
+				return 0, err
+			}
+		}
+		ops := diffWorkerConfig(baseline, next)
+		if len(ops) == 0 {
+			return previous.Revision, nil
+		}
+		digest, payload, err := workerConfigDigest(next)
+		if err != nil {
+			return 0, err
+		}
+		raw, err := json.Marshal(ops)
+		if err != nil {
+			return 0, err
+		}
+		revision, _, won, err := s.AppendConfigRevisionCAS(ctx, previous.Revision, digest, payload, raw, workerConfigOpsRetain)
+		if err != nil {
+			return 0, err
+		}
+		if won {
+			s.SignalConfig()
+			return revision, nil
+		}
 	}
-	ops := diffWorkerConfig(previous, next)
-	if len(ops) == 0 {
-		return s.configSeq, nil
-	}
-	digest, payload, err := workerConfigDigest(next)
-	if err != nil {
-		return 0, err
-	}
-	raw, err := json.Marshal(ops)
-	if err != nil {
-		return 0, err
-	}
-	s.configSeq++
-	s.configRevs = append(s.configRevs, workerConfigRevision{Revision: s.configSeq, Digest: digest, Payload: payload, Ops: raw, Created: now()})
-	if len(s.configRevs) > workerConfigOpsRetain {
-		s.configRevs = append([]workerConfigRevision(nil), s.configRevs[len(s.configRevs)-workerConfigOpsRetain:]...)
-	}
-	if s.configCh != nil {
-		close(s.configCh)
-	}
-	s.configCh = make(chan struct{})
-	return s.configSeq, nil
+	return 0, errors.New("edge config publisher CAS contention")
 }
 
 func (w *workersController) writeConfigLatest(ctx context.Context, key string, next workerConfigLatest) error {

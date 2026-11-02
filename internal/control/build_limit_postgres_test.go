@@ -10,12 +10,12 @@ import (
 func TestPostgresActiveBuildLimitIsExclusive(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
-	if _, err := store.pool.Exec(ctx, `INSERT INTO krun_worker_services
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_worker_services
 		(service_id, org_id, active_build_count) VALUES ('svc-limit','org-limit',99)`); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < workerActiveBuildLimit-1; i++ {
-		if _, err := store.pool.Exec(ctx, `INSERT INTO krun_worker_builds
+		if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_worker_builds
 			(build_id, org_id, service_id, env_name, state, created_at)
 			VALUES ($1,'org-limit','svc-limit','production','queued',now())`, fmt.Sprintf("seed-%03d", i)); err != nil {
 			t.Fatal(err)
@@ -60,10 +60,10 @@ func TestPostgresActiveBuildLimitIsExclusive(t *testing.T) {
 		t.Fatalf("succeeded=%d limited=%d", succeeded, limited)
 	}
 	var counter, rows int
-	if err := store.pool.QueryRow(ctx, `SELECT active_build_count FROM krun_worker_services WHERE service_id='svc-limit'`).Scan(&counter); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT active_build_count FROM krun_worker_services WHERE service_id='svc-limit'`).Scan(&counter); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_worker_builds
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_worker_builds
 		WHERE service_id='svc-limit' AND state NOT IN ('succeeded','failed')`).Scan(&rows); err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestPostgresActiveBuildLimitIsExclusive(t *testing.T) {
 func TestPostgresBuildFinishDecrementsLimitOnce(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
-	if _, err := store.pool.Exec(ctx, `INSERT INTO krun_worker_services
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_worker_services
 		(service_id, org_id) VALUES ('svc-finish','org-finish')`); err != nil {
 		t.Fatal(err)
 	}
@@ -86,12 +86,12 @@ func TestPostgresBuildFinishDecrementsLimitOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if err := store.finishBuild(ctx, "build-finish", "failed", "expected", "", "log"); err != nil {
+		if err := store.FinishBuild(ctx, "build-finish", "failed", "expected", "", "log"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	var counter int
-	if err := store.pool.QueryRow(ctx, `SELECT active_build_count FROM krun_worker_services WHERE service_id='svc-finish'`).Scan(&counter); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT active_build_count FROM krun_worker_services WHERE service_id='svc-finish'`).Scan(&counter); err != nil {
 		t.Fatal(err)
 	}
 	if counter != 0 {

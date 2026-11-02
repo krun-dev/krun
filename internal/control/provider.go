@@ -322,7 +322,7 @@ func (s *Server) loginHandler(w http.ResponseWriter, r *http.Request) {
 	verifier := oauth2.GenerateVerifier()
 	nonce := randomToken()
 	browserHash := digest(s.cookie(r, "browser"))
-	browser, ok, e := s.Store.browserFor(r.Context(), browserHash)
+	browser, ok, e := s.Store.BrowserFor(r.Context(), browserHash)
 	if e != nil {
 		s.writeError(w, r, e)
 		return
@@ -332,7 +332,7 @@ func (s *Server) loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	login := Login{Provider: p.config.ID, Browser: browserHash, Fingerprint: loginFingerprint(p.config), Verifier: verifier, Nonce: nonce, ReturnTo: returnTo, Expires: now().Add(5 * time.Minute)}
-	if _, e = s.Store.beginLoginState(r.Context(), browserHash, browser, digest(state), login); e != nil {
+	if _, e = s.Store.BeginLoginState(r.Context(), browserHash, browser, digest(state), login); e != nil {
 		s.writeError(w, r, e)
 		return
 	}
@@ -359,12 +359,12 @@ func (s *Server) callbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stateHash := digest(r.URL.Query().Get("state"))
-	login, ok, e := s.Store.loginState(r.Context(), stateHash)
+	login, ok, e := s.Store.LoginState(r.Context(), stateHash)
 	if e != nil {
 		s.callbackError(w, r, "AUTH_STATE_INVALID")
 		return
 	}
-	browser, hasBrowser, e := s.Store.browserFor(r.Context(), login.Browser)
+	browser, hasBrowser, e := s.Store.BrowserFor(r.Context(), login.Browser)
 	if e != nil {
 		s.callbackError(w, r, "AUTH_STATE_INVALID")
 		return
@@ -376,7 +376,7 @@ func (s *Server) callbackHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// Consuming the transaction is the single point that makes a replayed
 	// callback lose, so it happens before any upstream call.
-	if consumed, e := s.Store.consumeLoginState(r.Context(), stateHash); e != nil || !consumed {
+	if consumed, e := s.Store.ConsumeLoginState(r.Context(), stateHash); e != nil || !consumed {
 		s.callbackError(w, r, "AUTH_STATE_INVALID")
 		return
 	}
@@ -399,7 +399,7 @@ func (s *Server) callbackHandler(w http.ResponseWriter, r *http.Request) {
 	sessionToken := randomToken()
 	// The browser generation may have moved while the upstream call was in
 	// flight; a superseded login must not create a session.
-	if current, ok, e := s.Store.browserFor(r.Context(), tx.Browser); e != nil || !ok || current.Generation != tx.Generation || !now().Before(tx.Expires) {
+	if current, ok, e := s.Store.BrowserFor(r.Context(), tx.Browser); e != nil || !ok || current.Generation != tx.Generation || !now().Before(tx.Expires) {
 		s.callbackError(w, r, "AUTH_STATE_INVALID")
 		return
 	}
@@ -428,7 +428,7 @@ func (s *Server) finishEmailLogin(ctx context.Context, r *http.Request, p *provi
 }
 
 func (s *Server) finishLoginCommit(ctx context.Context, r *http.Request, p *provider, browserHash string, expectedGeneration int, id identity, sessionToken, challengeHash string) error {
-	if s.Store.pool != nil {
+	if s.Store.Persistent() {
 		ctx = context.WithValue(ctx, loginReadScopeKey{}, loginReadScope{Source: p.config.Source, Subject: id.Subject})
 	}
 
@@ -436,7 +436,7 @@ func (s *Server) finishLoginCommit(ctx context.Context, r *http.Request, p *prov
 	session := Session{Hash: digest(sessionToken), CSRF: randomToken(), Created: at, Seen: at, Absolute: at.Add(8 * time.Hour)}
 	for attempt := 0; ; attempt++ {
 		err := s.Store.Update(ctx, PartitionIAM, func(st *State) error {
-			if s.Store.pool == nil {
+			if !s.Store.Persistent() {
 				browser, ok := st.Browsers[browserHash]
 				if !ok || browser.Generation != expectedGeneration || !now().Before(browser.Expires) {
 					return problem(403, "AUTH_STATE_INVALID", "Login state changed")
@@ -476,7 +476,7 @@ func (s *Server) finishLoginCommit(ctx context.Context, r *http.Request, p *prov
 			if old := s.cookie(r, "session"); old != "" {
 				oldSessionHash = digest(old)
 			}
-			if s.Store.pool == nil {
+			if !s.Store.Persistent() {
 				if challengeHash != "" {
 					challenge := st.EmailLogins[challengeHash]
 					challenge.Attempts++
@@ -491,7 +491,7 @@ func (s *Server) finishLoginCommit(ctx context.Context, r *http.Request, p *prov
 				browser.Generation++
 				st.Browsers[browserHash] = browser
 			} else {
-				st.pendingLogin = &pendingLoginCommit{Session: session, DeleteSessionHash: oldSessionHash, BrowserHash: browserHash, ExpectedGeneration: expectedGeneration, EmailChallengeHash: challengeHash}
+				st.PendingLogin = &pendingLoginCommit{Session: session, DeleteSessionHash: oldSessionHash, BrowserHash: browserHash, ExpectedGeneration: expectedGeneration, EmailChallengeHash: challengeHash}
 			}
 			s.audit(st, Principal{User: user, Kind: "session"}, r, "auth.login", user.ID, true)
 			return nil
@@ -538,7 +538,7 @@ func (s *Server) deviceStart(w http.ResponseWriter, r *http.Request) {
 		// attacker despite the short lifetime.
 		rawUserCode := strings.ToUpper(digest(randomToken())[:14])
 		user = rawUserCode[:7] + "-" + rawUserCode[7:]
-		e := s.Store.insertDevice(r.Context(), Device{CodeHash: digest(device), UserCode: user, Expires: now().Add(5 * time.Minute)})
+		e := s.Store.InsertDevice(r.Context(), Device{CodeHash: digest(device), UserCode: user, Expires: now().Add(5 * time.Minute)})
 		if e == nil {
 			break
 		}
@@ -567,7 +567,7 @@ func (s *Server) devicePoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hash := digest(input.Code)
-	device, ok, e := s.Store.deviceByCode(r.Context(), hash)
+	device, ok, e := s.Store.DeviceByCode(r.Context(), hash)
 	if e != nil {
 		s.writeError(w, r, e)
 		return
@@ -580,7 +580,7 @@ func (s *Server) devicePoll(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, problem(409, "AUTHORIZATION_PENDING", "Waiting for browser approval"))
 		return
 	}
-	token, collected, e := s.Store.consumeDevice(r.Context(), hash)
+	token, collected, e := s.Store.ConsumeDevice(r.Context(), hash)
 	if e != nil {
 		s.writeError(w, r, e)
 		return
@@ -617,7 +617,7 @@ func (s *Server) deviceApprove(st *State, p Principal, r *http.Request) (any, in
 	if e := body(r, &input); e != nil {
 		return nil, 0, e
 	}
-	device, ok, e := s.Store.deviceByUserCode(r.Context(), input.Code)
+	device, ok, e := s.Store.DeviceByUserCode(r.Context(), input.Code)
 	if e != nil {
 		return nil, 0, e
 	}
@@ -632,12 +632,12 @@ func (s *Server) deviceApprove(st *State, p Principal, r *http.Request) (any, in
 	session := Session{User: p.User.ID, Hash: digest(token), AuthVersion: p.User.AuthVersion, Created: at, Seen: at, Absolute: at.Add(time.Hour), CLI: true}
 	s.audit(st, p, r, "auth.cli.approve", p.User.ID, true)
 	var approved bool
-	if s.Store.pool != nil {
-		audits := append([]Audit(nil), st.pendingAudits...)
-		st.pendingAudits = nil
-		approved, e = s.Store.approveDeviceAudited(r.Context(), device.CodeHash, token, session, audits)
+	if s.Store.Persistent() {
+		audits := append([]Audit(nil), st.PendingAudits...)
+		st.PendingAudits = nil
+		approved, e = s.Store.ApproveDeviceAudited(r.Context(), device.CodeHash, token, session, audits)
 	} else {
-		approved, e = s.Store.approveDevice(r.Context(), device.CodeHash, token, session)
+		approved, e = s.Store.ApproveDevice(r.Context(), device.CodeHash, token, session)
 	}
 	if e != nil {
 		return nil, 0, e

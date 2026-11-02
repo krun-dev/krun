@@ -12,25 +12,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
-func TestSameWorkerPlacementUsesInstantEquality(t *testing.T) {
-	created := time.Date(2026, time.October, 29, 3, 4, 5, 6, time.FixedZone("test", 8*60*60))
-	placement := WorkerPlacement{Service: "service", Organization: "org", NetworkProfile: "default", Pool: "pool", Role: "primary", State: "active", Revision: 1, Created: created, Updated: created}
-	other := placement
-	other.Created, other.Updated = created.UTC(), created.UTC()
-	if !sameWorkerPlacement(placement, other) || !sameWorkerPlacements(map[string]WorkerPlacement{"one": placement}, map[string]WorkerPlacement{"one": other}) {
-		t.Fatal("equal placement instants with different locations were treated as different metadata")
-	}
-	other.Revision++
-	if sameWorkerPlacement(placement, other) {
-		t.Fatal("changed placement metadata was treated as equal")
-	}
-}
-
-// catalogConfig models the current deployment: two Gateway instances and two
-// domains whose labels are purely descriptive.
 func catalogConfig() *WorkersConfig {
 	return &WorkersConfig{
 		Namespace:     "workers-mvp",

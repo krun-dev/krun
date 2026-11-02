@@ -161,13 +161,13 @@ func (s *Server) workerRepositoryConnect(st *State, p Principal, r *http.Request
 	}
 	state := randomToken()
 	pending := WorkerRepositoryConnectState{User: p.User.ID, Provider: provider.ID, Organization: target.ID, Browser: digest(s.cookie(r, "browser")), Expires: now().Add(10 * time.Minute)}
-	st.recordAudit(s.repositoryAudit(p, r, "workers.repository.connect.start", provider.ID, target.ID, true))
-	if s.Store.pool != nil {
-		audits := append([]Audit(nil), st.pendingAudits...)
-		st.pendingAudits = nil
-		err = s.Store.upsertRepositoryConnectStateAudited(r.Context(), state, pending, audits)
+	st.RecordAudit(s.repositoryAudit(p, r, "workers.repository.connect.start", provider.ID, target.ID, true))
+	if s.Store.Persistent() {
+		audits := append([]Audit(nil), st.PendingAudits...)
+		st.PendingAudits = nil
+		err = s.Store.UpsertRepositoryConnectStateAudited(r.Context(), state, pending, audits)
 	} else {
-		err = s.Store.upsertRepositoryConnectState(r.Context(), state, pending)
+		err = s.Store.UpsertRepositoryConnectState(r.Context(), state, pending)
 	}
 	if err != nil {
 		return nil, 0, err
@@ -201,13 +201,13 @@ func (s *Server) workerRepositoryCallback(w http.ResponseWriter, r *http.Request
 	var pending WorkerRepositoryConnectState
 	var consumed bool
 	var e error
-	if s.Store.pool == nil {
-		e = s.Store.Update(r.Context(), PartitionWorkers, func(*State) error {
-			pending, consumed, e = s.Store.consumeRepositoryConnectState(r.Context(), in.State, browser)
+	if !s.Store.Persistent() {
+		e = s.Store.Update(r.Context(), PartitionWorkers, func(st *State) error {
+			pending, consumed, e = s.Store.ConsumeRepositoryConnectState(r.Context(), in.State, browser)
 			return e
 		})
 	} else {
-		pending, consumed, e = s.Store.consumeRepositoryConnectState(r.Context(), in.State, browser)
+		pending, consumed, e = s.Store.ConsumeRepositoryConnectState(r.Context(), in.State, browser)
 	}
 	if e != nil {
 		s.repositoryCallbackFailure(w, r, e, "")
@@ -261,16 +261,16 @@ func (s *Server) workerRepositoryCallback(w http.ResponseWriter, r *http.Request
 		ConnectedAt: now(), RefreshState: "ready",
 	}
 	audit := Audit{ID: randomID("audit"), Time: now(), Actor: pending.User, Credential: "session", Action: "workers.repository.connect", Resource: pending.Provider, Organization: pending.Organization, Allowed: true, RequestID: r.Header.Get("X-Krun-Request-ID")}
-	if s.Store.pool == nil {
-		e = s.Store.Update(r.Context(), PartitionWorkers, func(*State) error {
-			if err := s.Store.upsertRepositoryConnection(r.Context(), connection); err != nil {
+	if !s.Store.Persistent() {
+		e = s.Store.Update(r.Context(), PartitionWorkers, func(st *State) error {
+			if err := s.Store.UpsertRepositoryConnection(r.Context(), connection); err != nil {
 				return err
 			}
-			s.Store.memState().recordAudit(audit)
+			st.RecordAudit(audit)
 			return nil
 		})
 	} else {
-		e = s.Store.upsertRepositoryConnectionAudited(r.Context(), connection, []Audit{audit})
+		e = s.Store.UpsertRepositoryConnectionAudited(r.Context(), connection, []Audit{audit})
 	}
 	if e != nil {
 		s.repositoryCallbackFailure(w, r, e, pending.Organization)
@@ -313,13 +313,13 @@ func (s *Server) workerRepositoryDisconnect(st *State, p Principal, r *http.Requ
 	if _, err = s.repositoryProvider(providerID, r.PathValue("org")); err != nil {
 		return nil, 0, err
 	}
-	st.recordAudit(s.repositoryAudit(p, r, "workers.repository.disconnect", providerID, target.ID, true))
-	if s.Store.pool != nil {
-		audits := append([]Audit(nil), st.pendingAudits...)
-		st.pendingAudits = nil
-		err = s.Store.deleteRepositoryConnectionAudited(r.Context(), p.User.ID, providerID, audits)
+	st.RecordAudit(s.repositoryAudit(p, r, "workers.repository.disconnect", providerID, target.ID, true))
+	if s.Store.Persistent() {
+		audits := append([]Audit(nil), st.PendingAudits...)
+		st.PendingAudits = nil
+		err = s.Store.DeleteRepositoryConnectionAudited(r.Context(), p.User.ID, providerID, audits)
 	} else {
-		err = s.Store.deleteRepositoryConnection(r.Context(), p.User.ID, providerID)
+		err = s.Store.DeleteRepositoryConnection(r.Context(), p.User.ID, providerID)
 	}
 	if err != nil {
 		return nil, 0, err
@@ -336,7 +336,7 @@ func (s *Server) repositoryAudit(p Principal, r *http.Request, action, provider,
 }
 
 func (s *Server) recordRepositoryAudit(r *http.Request, pending WorkerRepositoryConnectState, action string, allowed bool) {
-	_ = s.Store.appendAudits(r.Context(), []Audit{{ID: randomID("audit"), Time: now(), Actor: pending.User, Credential: "session", Action: action, Resource: pending.Provider, Organization: pending.Organization, Allowed: allowed, RequestID: r.Header.Get("X-Krun-Request-ID")}})
+	_ = s.Store.AppendAudits(r.Context(), []Audit{{ID: randomID("audit"), Time: now(), Actor: pending.User, Credential: "session", Action: action, Resource: pending.Provider, Organization: pending.Organization, Allowed: allowed, RequestID: r.Header.Get("X-Krun-Request-ID")}})
 }
 
 type repositoryConnectionInfo struct {

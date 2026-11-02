@@ -73,14 +73,14 @@ func (s *Server) repositoryCredential(ctx context.Context, provider WorkerReposi
 }
 
 func (s *Server) readRepositoryConnection(ctx context.Context, user, provider string) (WorkerRepositoryConnection, bool, error) {
-	if s.Store.pool != nil {
-		return s.Store.repositoryConnection(ctx, user, provider)
+	if s.Store.Persistent() {
+		return s.Store.RepositoryConnection(ctx, user, provider)
 	}
 	var connection WorkerRepositoryConnection
 	var ok bool
 	var err error
 	err = s.Store.View(ctx, PartitionWorkers, func(*State) error {
-		connection, ok, err = s.Store.repositoryConnection(ctx, user, provider)
+		connection, ok, err = s.Store.RepositoryConnection(ctx, user, provider)
 		return err
 	})
 	return connection, ok, err
@@ -91,39 +91,39 @@ func (s *Server) claimRepositoryCredentialRefresh(ctx context.Context, connectio
 	if expected == 0 {
 		expected = 1
 	}
-	if s.Store.pool != nil {
-		return s.Store.claimRepositoryConnectionRefresh(ctx, connection.User, connection.Provider, expected, now())
+	if s.Store.Persistent() {
+		return s.Store.ClaimRepositoryConnectionRefresh(ctx, connection.User, connection.Provider, expected, now())
 	}
 	var claimed WorkerRepositoryConnection
 	var ok bool
 	var err error
 	err = s.Store.Update(ctx, PartitionWorkers, func(*State) error {
-		claimed, ok, err = s.Store.claimRepositoryConnectionRefresh(ctx, connection.User, connection.Provider, expected, now())
+		claimed, ok, err = s.Store.ClaimRepositoryConnectionRefresh(ctx, connection.User, connection.Provider, expected, now())
 		return err
 	})
 	return claimed, ok, err
 }
 
 func (s *Server) completeRepositoryCredentialRefresh(ctx context.Context, connection WorkerRepositoryConnection, claimRevision int64) (bool, error) {
-	if s.Store.pool != nil {
-		return s.Store.completeRepositoryConnectionRefresh(ctx, connection, claimRevision)
+	if s.Store.Persistent() {
+		return s.Store.CompleteRepositoryConnectionRefresh(ctx, connection, claimRevision)
 	}
 	var completed bool
 	var err error
 	err = s.Store.Update(ctx, PartitionWorkers, func(*State) error {
-		completed, err = s.Store.completeRepositoryConnectionRefresh(ctx, connection, claimRevision)
+		completed, err = s.Store.CompleteRepositoryConnectionRefresh(ctx, connection, claimRevision)
 		return err
 	})
 	return completed, err
 }
 
 func (s *Server) failRepositoryCredentialRefresh(ctx context.Context, connection WorkerRepositoryConnection, claimRevision int64, reconnect bool) error {
-	if s.Store.pool != nil {
-		_, err := s.Store.failRepositoryConnectionRefresh(ctx, connection.User, connection.Provider, claimRevision, reconnect)
+	if s.Store.Persistent() {
+		_, err := s.Store.FailRepositoryConnectionRefresh(ctx, connection.User, connection.Provider, claimRevision, reconnect)
 		return err
 	}
 	return s.Store.Update(ctx, PartitionWorkers, func(*State) error {
-		_, err := s.Store.failRepositoryConnectionRefresh(ctx, connection.User, connection.Provider, claimRevision, reconnect)
+		_, err := s.Store.FailRepositoryConnectionRefresh(ctx, connection.User, connection.Provider, claimRevision, reconnect)
 		return err
 	})
 }

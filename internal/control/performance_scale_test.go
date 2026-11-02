@@ -49,7 +49,7 @@ func TestPostgresMillionSiteReadBound(t *testing.T) {
 	q := parsed.Query()
 	q.Set("search_path", name)
 	parsed.RawQuery = q.Encode()
-	store, err := OpenStore(ctx, parsed.String())
+	store, err := openStoreForTest(t, ctx, parsed.String())
 	if err != nil {
 		t.Fatal(err)
 	}

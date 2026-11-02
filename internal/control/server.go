@@ -22,16 +22,6 @@ import (
 	"github.com/krun-dev/krun/internal/localize"
 )
 
-type APIError struct {
-	Status        int
-	Code, Message string
-}
-
-func (e *APIError) Error() string                    { return e.Code }
-func problem(status int, code, message string) error { return &APIError{status, code, message} }
-func forbidden() error                               { return problem(403, "PERMISSION_DENIED", "Permission denied") }
-func notFound() error                                { return problem(404, "RESOURCE_NOT_FOUND", "Resource not found") }
-
 const apiJSONBodyMax = 1 << 20
 
 func body(r *http.Request, value any) error {
@@ -89,7 +79,7 @@ func NewServer(ctx context.Context, c Config, store *Store) (*Server, error) {
 		s.providers[pc.ID] = p
 	}
 	registrationCtx := ctx
-	if store.pool != nil {
+	if store.Persistent() {
 		registrationCtx = withStateScope(ctx, stateReadScope{ActorOnly: true})
 	}
 	if e := store.Update(registrationCtx, PartitionIAM, func(st *State) error {
@@ -115,7 +105,7 @@ func NewServer(ctx context.Context, c Config, store *Store) (*Server, error) {
 		return nil, e
 	}
 	if c.Workers != nil {
-		if err := store.ensureWorkerConfigCatalogue(ctx, c.Workers); err != nil {
+		if err := ensureWorkerConfigCatalogue(ctx, store, c.Workers); err != nil {
 			return nil, err
 		}
 		var err error
@@ -225,7 +215,7 @@ func (s *Server) json(w http.ResponseWriter, status int, v any) {
 	}
 }
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, e error) {
-	a := &APIError{503, "AUTHORIZATION_UNAVAILABLE", "Control service unavailable"}
+	a := &APIError{Status: 503, Code: "AUTHORIZATION_UNAVAILABLE", Message: "Control service unavailable"}
 	var target *APIError
 	if errors.As(e, &target) {
 		a = target
@@ -302,7 +292,7 @@ func (s *Server) readCredentials(r *http.Request) (authCredentials, error) {
 	switch {
 	case strings.HasPrefix(token, "krun_key_"):
 		c.isKey = true
-		keyID, ok, err := s.Store.apiKeyIDByHash(r.Context(), digest(token))
+		keyID, ok, err := s.Store.APIKeyIDByHash(r.Context(), digest(token))
 		if err != nil {
 			return c, err
 		}
@@ -310,7 +300,7 @@ func (s *Server) readCredentials(r *http.Request) (authCredentials, error) {
 			c.keyID = keyID
 		}
 	case token != "":
-		session, ok, err := s.Store.sessionByHash(r.Context(), digest(token))
+		session, ok, err := s.Store.SessionByHash(r.Context(), digest(token))
 		if err != nil {
 			return c, err
 		}
@@ -326,7 +316,7 @@ func (s *Server) readCredentials(r *http.Request) (authCredentials, error) {
 func (s *Server) authenticate(st *State, c authCredentials, r *http.Request) (Principal, error) {
 	p := Principal{}
 	if c.isKey {
-		if k, ok := st.Keys[c.keyID]; ok && k.active() {
+		if k, ok := st.Keys[c.keyID]; ok && k.Active() {
 			p.User = st.Users[k.Owner]
 			p.Kind = "api_key"
 			p.Key = &k
@@ -448,7 +438,7 @@ func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, b
 		// Last-seen is best-effort and throttled; it must never turn a read into
 		// a failure, and it is skipped for API-key requests.
 		if c.hasSession {
-			if e := s.Store.touchSession(r.Context(), c.sessionHash); e != nil && r.Context().Err() == nil {
+			if e := s.Store.TouchSession(r.Context(), c.sessionHash); e != nil && r.Context().Err() == nil {
 				slog.Warn("session touch failed", "error", e)
 			}
 		}
@@ -473,7 +463,7 @@ func (s *Server) audit(st *State, p Principal, r *http.Request, action, target s
 	if key, ok := st.Keys[target]; ok {
 		org = key.Organization
 	}
-	st.recordAudit(Audit{ID: randomID("audit"), Time: now(), Actor: p.User.ID, Credential: p.Kind, KeyID: key, Action: action, Resource: target, Organization: org, Allowed: allowed, RequestID: r.Header.Get("X-Krun-Request-ID"), Revision: st.Revision})
+	st.RecordAudit(Audit{ID: randomID("audit"), Time: now(), Actor: p.User.ID, Credential: p.Kind, KeyID: key, Action: action, Resource: target, Organization: org, Allowed: allowed, RequestID: r.Header.Get("X-Krun-Request-ID"), Revision: st.Revision})
 }
 func (s *Server) require(st *State, p Principal, r *http.Request, action string, t Target) error {
 	d, e := Authorize(st, p, action, t)
@@ -551,22 +541,22 @@ func (s *Server) me(st *State, p Principal, r *http.Request) (any, int, error) {
 func (s *Server) logout(st *State, p Principal, r *http.Request) (any, int, error) {
 	browserHash := digest(s.cookie(r, "browser"))
 	s.audit(st, p, r, "auth.logout", p.User.ID, true)
-	if s.Store.pool != nil {
-		audits := append([]Audit(nil), st.pendingAudits...)
-		st.pendingAudits = nil
-		if e := s.Store.logoutSessionAudited(r.Context(), p.SessionHash, browserHash, audits); e != nil {
+	if s.Store.Persistent() {
+		audits := append([]Audit(nil), st.PendingAudits...)
+		st.PendingAudits = nil
+		if e := s.Store.LogoutSessionAudited(r.Context(), p.SessionHash, browserHash, audits); e != nil {
 			return nil, 0, e
 		}
 		return nil, 204, nil
 	}
-	if e := s.Store.deleteSession(r.Context(), p.SessionHash); e != nil {
+	if e := s.Store.DeleteSession(r.Context(), p.SessionHash); e != nil {
 		return nil, 0, e
 	}
-	if browser, ok, e := s.Store.browserFor(r.Context(), browserHash); e != nil {
+	if browser, ok, e := s.Store.BrowserFor(r.Context(), browserHash); e != nil {
 		return nil, 0, e
 	} else if ok {
 		browser.Generation++
-		if e = s.Store.upsertBrowser(r.Context(), browserHash, browser); e != nil {
+		if e = s.Store.UpsertBrowser(r.Context(), browserHash, browser); e != nil {
 			return nil, 0, e
 		}
 	}
@@ -591,7 +581,7 @@ func (s *Server) csrfHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionHash := digest(s.cookie(r, "session"))
-	if session, ok, e := s.Store.sessionByHash(r.Context(), sessionHash); e != nil {
+	if session, ok, e := s.Store.SessionByHash(r.Context(), sessionHash); e != nil {
 		s.writeError(w, r, e)
 		return
 	} else if ok && now().Before(session.Absolute) && now().Sub(session.Seen) < 30*time.Minute {
@@ -600,7 +590,7 @@ func (s *Server) csrfHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	browserToken := ""
 	browserHash := digest(s.cookie(r, "browser"))
-	browser, ok, e := s.Store.browserFor(r.Context(), browserHash)
+	browser, ok, e := s.Store.BrowserFor(r.Context(), browserHash)
 	if e != nil {
 		s.writeError(w, r, e)
 		return
@@ -618,7 +608,7 @@ func (s *Server) csrfHandler(w http.ResponseWriter, r *http.Request) {
 		browserToken = randomToken()
 		browserHash = digest(browserToken)
 		browser = Browser{CSRF: randomToken(), Expires: now().Add(15 * time.Minute)}
-		if e = s.Store.upsertBrowser(r.Context(), browserHash, browser); e != nil {
+		if e = s.Store.UpsertBrowser(r.Context(), browserHash, browser); e != nil {
 			s.writeError(w, r, e)
 			return
 		}
@@ -655,7 +645,7 @@ func Serve(ctx context.Context, c Config) error {
 		defer close(retentionDone)
 		// Session / login expiry and every per-build, per-release row is pruned
 		// here instead of on the request path.
-		store.retain(retentionCtx, time.Minute)
+		retain(retentionCtx, store, time.Minute)
 	}()
 	server := &http.Server{Addr: c.Listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 25 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 	servers := []*http.Server{server}

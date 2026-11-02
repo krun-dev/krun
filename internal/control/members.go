@@ -38,7 +38,7 @@ func (s *Server) memberAdd(st *State, p Principal, r *http.Request) (any, int, e
 	if !ok || u.Status != "active" {
 		return nil, 0, problem(422, "INVALID_REQUEST", "Existing active local user_id required")
 	}
-	m := Member{t.ID, u.ID}
+	m := Member{Organization: t.ID, User: u.ID}
 	st.Members[memberKey(t.ID, u.ID)] = m
 	st.Revision++
 	return m, 201, nil
