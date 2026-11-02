@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	appconfig "github.com/krun-dev/krun/internal/config"
 )
 
 func secondPostgresStore(t *testing.T) *Store {
@@ -527,7 +529,7 @@ func TestPostgresWorkersSnapshotExcludesSecretsAndBuildBlobs(t *testing.T) {
 	}
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Services["service"] = WorkerService{Service: "service", Organization: "org", Environments: map[string]WorkerEnvironment{
-			workerBaseline: {Name: workerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{}},
+			appconfig.WorkerBaseline: {Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{}},
 		}}
 		st.Workers.Builds["build-private"] = WorkerBuild{ID: "build-private", Organization: "org", Service: "service", Environment: "production", State: "queued", Created: now()}
 		st.Workers.BuildPrivate["build-private"] = WorkerBuildPrivate{Actor: WorkerActor{User: "user"}, Files: map[string]string{"index.js": "secret source"}, Log: "large log"}

@@ -12,31 +12,36 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	kubernetes "github.com/krun-dev/krun/internal/adapters/kubernetes"
+	workerartifact "github.com/krun-dev/krun/internal/artifact"
+	appconfig "github.com/krun-dev/krun/internal/config"
+	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
-func catalogConfig() *WorkersConfig {
-	return &WorkersConfig{
+func catalogConfig() *appconfig.WorkersConfig {
+	return &appconfig.WorkersConfig{
 		Namespace:     "workers-mvp",
 		BuilderMode:   "local",
 		BuilderScript: "workers/builder/build-worker.mjs",
-		RuntimePools: []WorkerRuntimePool{{
+		RuntimePools: []appconfig.WorkerRuntimePool{{
 			ID: "default", Access: []string{"public", "private"}, PrivateEgress: "direct", PublicEgress: "direct",
 			RuntimeService: "runtime-default", ValidatorService: "runtime-validator-default", RuntimeToken: strings.Repeat("r", 24),
 			ManagementToken: strings.Repeat("m", 24), Default: true,
 		}},
-		NetworkProfiles: []WorkerNetworkProfile{{
+		NetworkProfiles: []appconfig.WorkerNetworkProfile{{
 			ID: "default", Name: "Default", Default: true, Approval: "none", Visibility: "public",
-			Requirements: WorkerNetworkRequirements{Ingress: []string{"public", "private"}, PrivateEgress: "direct", PublicEgress: "direct"},
+			Requirements: appconfig.WorkerNetworkRequirements{Ingress: []string{"public", "private"}, PrivateEgress: "direct", PublicEgress: "direct"},
 		}},
 		S3Endpoint:  "http://127.0.0.1:9000",
 		S3Bucket:    "krun-artifacts",
 		S3AccessKey: "access",
 		S3SecretKey: "secret",
-		Gateways: []WorkerGateway{
+		Gateways: []appconfig.WorkerGateway{
 			{ID: "internal", Name: "workers-mvp", Namespace: "kgateway-system", Section: "private", Base: "http://127.0.0.1:38080"},
 			{ID: "external", Name: "workers-public", Namespace: "kgateway-system", Section: "public", Base: "http://127.0.0.1:38081"},
 		},
-		Domains: []WorkerDomain{
+		Domains: []appconfig.WorkerDomain{
 			{ID: "internal", Domain: "workers.test", Label: "办公网络", Access: "private", Gateway: "internal", Labels: map[string]string{"exposure": "internal"}, Default: true},
 			{ID: "external", Domain: "workers-out.example.test", Label: "互联网", Access: "public", Gateway: "external", Labels: map[string]string{"exposure": "external"}},
 		},
@@ -45,7 +50,7 @@ func catalogConfig() *WorkersConfig {
 
 func TestCatalogValidationAndDefaults(t *testing.T) {
 	c := catalogConfig()
-	if err := c.validate(); err != nil {
+	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	if c.Domains[0].StaticDomain != "static.workers.test" {
@@ -60,15 +65,15 @@ func TestCatalogValidationAndDefaults(t *testing.T) {
 	if c.BuilderTimeoutSeconds != 600 {
 		t.Fatalf("builder timeout default: %d", c.BuilderTimeoutSeconds)
 	}
-	if got := c.defaultDomains(); len(got) != 1 || got[0] != "internal" {
+	if got := c.DefaultDomains(); len(got) != 1 || got[0] != "internal" {
 		t.Fatalf("default domains: %v", got)
 	}
 	// Labels are inert: routing only depends on the Gateway binding.
 	c.Domains[1].Label = "办公网"
-	if err := c.validate(); err != nil {
+	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if d, ok := c.domainForHost("w-abc-production.workers-out.example.test"); !ok || d.ID != "external" {
+	if d, ok := c.DomainForHost("w-abc-production.workers-out.example.test"); !ok || d.ID != "external" {
 		t.Fatalf("host must resolve to the external domain: %+v", d)
 	}
 }
@@ -76,32 +81,32 @@ func TestCatalogValidationAndDefaults(t *testing.T) {
 func TestRuntimePoolRequiresIsolatedValidatorService(t *testing.T) {
 	missing := catalogConfig()
 	missing.RuntimePools[0].ValidatorService = ""
-	if err := missing.validate(); err == nil {
+	if err := missing.Validate(); err == nil {
 		t.Fatal("runtime pool without validator service was accepted")
 	}
 	same := catalogConfig()
 	same.RuntimePools[0].ValidatorService = same.RuntimePools[0].RuntimeService
-	if err := same.validate(); err == nil || !strings.Contains(err.Error(), "distinct") {
+	if err := same.Validate(); err == nil || !strings.Contains(err.Error(), "distinct") {
 		t.Fatalf("serving runtime accepted as validator: %v", err)
 	}
 }
 
-func multiPoolCatalogConfig() *WorkersConfig {
+func multiPoolCatalogConfig() *appconfig.WorkersConfig {
 	c := catalogConfig()
-	c.RuntimePools = []WorkerRuntimePool{
+	c.RuntimePools = []appconfig.WorkerRuntimePool{
 		{ID: "private-a", Access: []string{"private"}, Labels: map[string]string{"zone": "internal"}, RuntimeService: "runtime-private", ValidatorService: "validator-private", RuntimeToken: strings.Repeat("p", 24), ManagementToken: strings.Repeat("q", 24), Default: true},
 		{ID: "public-b", Access: []string{"public"}, Labels: map[string]string{"zone": "external"}, RuntimeService: "runtime-public", ValidatorService: "validator-public", RuntimeToken: strings.Repeat("u", 24), ManagementToken: strings.Repeat("v", 24)},
 	}
-	c.NetworkProfiles = []WorkerNetworkProfile{
-		{ID: "internal-service", Name: "Internal service", Description: "Reachable from the deployment's internal network.", DomainSelector: map[string]string{"exposure": "internal"}, PoolSelector: map[string]string{"zone": "internal"}, Requirements: WorkerNetworkRequirements{Ingress: []string{"private"}, PrivateEgress: "direct", PublicEgress: "deny"}, Default: true},
-		{ID: "external-service", Name: "External service", Description: "Reachable through the deployment's external entry.", DomainSelector: map[string]string{"exposure": "external"}, PoolSelector: map[string]string{"zone": "external"}, Requirements: WorkerNetworkRequirements{Ingress: []string{"public"}, PrivateEgress: "deny", PublicEgress: "direct"}},
+	c.NetworkProfiles = []appconfig.WorkerNetworkProfile{
+		{ID: "internal-service", Name: "Internal service", Description: "Reachable from the deployment's internal network.", DomainSelector: map[string]string{"exposure": "internal"}, PoolSelector: map[string]string{"zone": "internal"}, Requirements: appconfig.WorkerNetworkRequirements{Ingress: []string{"private"}, PrivateEgress: "direct", PublicEgress: "deny"}, Default: true},
+		{ID: "external-service", Name: "External service", Description: "Reachable through the deployment's external entry.", DomainSelector: map[string]string{"exposure": "external"}, PoolSelector: map[string]string{"zone": "external"}, Requirements: appconfig.WorkerNetworkRequirements{Ingress: []string{"public"}, PrivateEgress: "deny", PublicEgress: "direct"}},
 	}
 	return c
 }
 
 func TestRuntimePoolsExposeOnlyProductNetworkProfiles(t *testing.T) {
 	c := multiPoolCatalogConfig()
-	if err := c.validate(); err != nil {
+	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	s, store, base := workerTestServer(t)
@@ -113,7 +118,7 @@ func TestRuntimePoolsExposeOnlyProductNetworkProfiles(t *testing.T) {
 		t.Fatalf("internal placement leaked through network profiles: %d %s", profiles.Code, profiles.Body.String())
 	}
 	var response struct {
-		Items []WorkerNetworkProfileView `json:"items"`
+		Items []workerapp.WorkerNetworkProfileView `json:"items"`
 	}
 	if err := json.Unmarshal(profiles.Body.Bytes(), &response); err != nil || len(response.Items) != 2 || response.Items[0].ID != "internal-service" || response.Items[1].ID != "external-service" {
 		t.Fatalf("product profiles: %+v err=%v", response.Items, err)
@@ -146,12 +151,12 @@ func TestRuntimePoolsExposeOnlyProductNetworkProfiles(t *testing.T) {
 
 func TestRuntimePoolsAllowMultiplePlacementsPerProfile(t *testing.T) {
 	c := multiPoolCatalogConfig()
-	c.RuntimePools = append(c.RuntimePools, WorkerRuntimePool{ID: "public-c", Access: []string{"public"}, Labels: map[string]string{"zone": "external"}, RuntimeService: "runtime-public-2", ValidatorService: "validator-public-2", RuntimeToken: strings.Repeat("x", 24), ManagementToken: strings.Repeat("y", 24)})
-	if err := c.validate(); err != nil {
+	c.RuntimePools = append(c.RuntimePools, appconfig.WorkerRuntimePool{ID: "public-c", Access: []string{"public"}, Labels: map[string]string{"zone": "external"}, RuntimeService: "runtime-public-2", ValidatorService: "validator-public-2", RuntimeToken: strings.Repeat("x", 24), ManagementToken: strings.Repeat("y", 24)})
+	if err := c.Validate(); err != nil {
 		t.Fatalf("multiple compatible runtime pools rejected: %v", err)
 	}
-	first, ok := c.selectPoolForService("external-service", "service-a")
-	second, okAgain := c.selectPoolForService("external-service", "service-a")
+	first, ok := c.SelectPoolForService("external-service", "service-a")
+	second, okAgain := c.SelectPoolForService("external-service", "service-a")
 	if !ok || !okAgain || first.ID != second.ID || (first.ID != "public-b" && first.ID != "public-c") {
 		t.Fatalf("unstable profile placement: first=%+v second=%+v", first, second)
 	}
@@ -161,7 +166,7 @@ func TestNetworkProfileApprovalAndPublishedPlacementLock(t *testing.T) {
 	t.Run("approval", func(t *testing.T) {
 		c := multiPoolCatalogConfig()
 		c.NetworkProfiles[1].Approval = "required"
-		if err := c.validate(); err != nil {
+		if err := c.Validate(); err != nil {
 			t.Fatal(err)
 		}
 		s, _, base := workerTestServer(t)
@@ -180,7 +185,7 @@ func TestNetworkProfileApprovalAndPublishedPlacementLock(t *testing.T) {
 
 	t.Run("published", func(t *testing.T) {
 		c := multiPoolCatalogConfig()
-		if err := c.validate(); err != nil {
+		if err := c.Validate(); err != nil {
 			t.Fatal(err)
 		}
 		s, store, base := workerTestServer(t)
@@ -188,9 +193,9 @@ func TestNetworkProfileApprovalAndPublishedPlacementLock(t *testing.T) {
 		s.routes()
 		if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
 			service := s.workerService(st, Target{ID: "svc-a", Organization: "org-a"})
-			env := service.Environments[workerBaseline]
+			env := service.Environments[appconfig.WorkerBaseline]
 			env.Release = "release-existing"
-			service.Environments[workerBaseline] = env
+			service.Environments[appconfig.WorkerBaseline] = env
 			st.Workers.Services[service.Service] = service
 			return nil
 		}); err != nil {
@@ -206,27 +211,27 @@ func TestNetworkProfileApprovalAndPublishedPlacementLock(t *testing.T) {
 func TestCatalogRejectsBrokenReferences(t *testing.T) {
 	c := catalogConfig()
 	c.Domains[1].Gateway = "missing"
-	if err := c.validate(); err == nil {
+	if err := c.Validate(); err == nil {
 		t.Fatal("domain referencing an unknown gateway accepted")
 	}
 	c = catalogConfig()
 	c.Domains[1].Domain = c.Domains[0].Domain
-	if err := c.validate(); err == nil {
+	if err := c.Validate(); err == nil {
 		t.Fatal("duplicate domain accepted")
 	}
 	c = catalogConfig()
 	c.Domains[1].Access = "partner"
-	if err := c.validate(); err == nil {
+	if err := c.Validate(); err == nil {
 		t.Fatal("unknown portable access class accepted")
 	}
 	c = catalogConfig()
 	c.Gateways = nil
-	if err := c.validate(); err == nil {
+	if err := c.Validate(); err == nil {
 		t.Fatal("empty gateway list accepted")
 	}
 	c = catalogConfig()
 	c.Domains = nil
-	if err := c.validate(); err == nil {
+	if err := c.Validate(); err == nil {
 		t.Fatal("empty domain list accepted")
 	}
 }
@@ -235,7 +240,7 @@ func TestRuntimeStorageEndpointValidation(t *testing.T) {
 	c := catalogConfig()
 	c.S3BuilderEndpoint = "http://builder.storage.test:9000"
 	c.S3RuntimeEndpoint = "http://static-assets.workers-mvp.svc:9000"
-	if err := c.validate(); err != nil {
+	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	if c.S3RuntimeEndpoint != "http://static-assets.workers-mvp.svc:9000" {
@@ -244,7 +249,7 @@ func TestRuntimeStorageEndpointValidation(t *testing.T) {
 
 	c = catalogConfig()
 	c.S3RuntimeEndpoint = "file:///tmp/storage"
-	if err := c.validate(); err == nil || !strings.Contains(err.Error(), "runtime endpoint") {
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "runtime endpoint") {
 		t.Fatalf("invalid runtime endpoint accepted: %v", err)
 	}
 }
@@ -252,13 +257,13 @@ func TestRuntimeStorageEndpointValidation(t *testing.T) {
 func TestNPMRegistryValidation(t *testing.T) {
 	c := catalogConfig()
 	c.NPMRegistry = "https://npm.example.test/company"
-	if err := c.validate(); err != nil || c.NPMRegistry != "https://npm.example.test/company/" {
+	if err := c.Validate(); err != nil || c.NPMRegistry != "https://npm.example.test/company/" {
 		t.Fatalf("registry normalization: %q %v", c.NPMRegistry, err)
 	}
 	for _, value := range []string{"http://npm.example.test/", "https://user:secret@npm.example.test/", "https://npm.example.test/?token=secret"} {
 		c = catalogConfig()
 		c.NPMRegistry = value
-		if err := c.validate(); err == nil {
+		if err := c.Validate(); err == nil {
 			t.Fatalf("invalid npm registry accepted: %s", value)
 		}
 	}
@@ -268,17 +273,17 @@ func TestBuilderIsolationConfigurationValidation(t *testing.T) {
 	c := catalogConfig()
 	c.BuilderRuntimeClass = "gvisor.production"
 	c.BuilderTimeoutSeconds = 900
-	if err := c.validate(); err != nil {
+	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	for _, mutate := range []func(*WorkersConfig){
-		func(c *WorkersConfig) { c.BuilderRuntimeClass = "Bad_Runtime_Class" },
-		func(c *WorkersConfig) { c.BuilderTimeoutSeconds = 59 },
-		func(c *WorkersConfig) { c.BuilderTimeoutSeconds = 1801 },
+	for _, mutate := range []func(*appconfig.WorkersConfig){
+		func(c *appconfig.WorkersConfig) { c.BuilderRuntimeClass = "Bad_Runtime_Class" },
+		func(c *appconfig.WorkersConfig) { c.BuilderTimeoutSeconds = 59 },
+		func(c *appconfig.WorkersConfig) { c.BuilderTimeoutSeconds = 1801 },
 	} {
 		c = catalogConfig()
 		mutate(c)
-		if err := c.validate(); err == nil {
+		if err := c.Validate(); err == nil {
 			t.Fatal("invalid builder isolation configuration accepted")
 		}
 	}
@@ -313,15 +318,15 @@ func captureBuildJob(t *testing.T, build WorkerBuild) (map[string]any, map[strin
 	}))
 	defer srv.Close()
 
-	k := &workerKubernetes{base: srv.URL, namespace: "workers-mvp", npmRegistry: "https://npm.example.test/", client: srv.Client()}
-	if err := k.ensureBuildJob(context.Background(), build, WorkerBuildPrivate{}, "https://source.example.test/source", "https://storage.example.test/upload", "builder:test", "Never"); err != nil {
+	k := &kubernetes.Client{Base: srv.URL, Namespace: "workers-mvp", NpmRegistry: "https://npm.example.test/", Client: srv.Client()}
+	if err := k.EnsureBuildJob(context.Background(), build, WorkerBuildPrivate{}, "https://source.example.test/source", "https://storage.example.test/upload", "builder:test", "Never"); err != nil {
 		t.Fatal(err)
 	}
 	return submitted, inputSecret
 }
 
 func TestBuildJobBoundsEphemeralStorage(t *testing.T) {
-	build := WorkerBuild{ID: "build", Job: "krun-build-direct", Entrypoint: "index.js", CompatibilityDate: workerDefaultCompatibilityDate}
+	build := WorkerBuild{ID: "build", Job: "krun-build-direct", Entrypoint: "index.js", CompatibilityDate: workerartifact.WorkerDefaultCompatibilityDate}
 	submitted, inputSecret := captureBuildJob(t, build)
 
 	jobSpec := submitted["spec"].(map[string]any)
@@ -334,7 +339,7 @@ func TestBuildJobBoundsEphemeralStorage(t *testing.T) {
 	resources := container["resources"].(map[string]any)
 	requests := resources["requests"].(map[string]any)
 	limits := resources["limits"].(map[string]any)
-	if requests["ephemeral-storage"] != workerBuilderEphemeralRequest || limits["ephemeral-storage"] != workerBuilderEphemeralLimit {
+	if requests["ephemeral-storage"] != kubernetes.WorkerBuilderEphemeralRequest || limits["ephemeral-storage"] != kubernetes.WorkerBuilderEphemeralLimit {
 		t.Fatalf("ephemeral storage resources: requests=%v limits=%v", requests, limits)
 	}
 
@@ -345,7 +350,7 @@ func TestBuildJobBoundsEphemeralStorage(t *testing.T) {
 			sizes[volume["name"].(string)], _ = empty["sizeLimit"].(string)
 		}
 	}
-	if sizes["work"] != workerBuilderWorkSize || sizes["build-tmp"] != workerBuilderTmpSize {
+	if sizes["work"] != kubernetes.WorkerBuilderWorkSize || sizes["build-tmp"] != kubernetes.WorkerBuilderTmpSize {
 		t.Fatalf("emptyDir size limits: %v", sizes)
 	}
 	data := inputSecret["stringData"].(map[string]any)
@@ -370,7 +375,7 @@ func TestRepositoryBuildJobSeparatesBuildAndPackCapabilities(t *testing.T) {
 		ID:                "build",
 		Job:               "krun-build-repository",
 		Entrypoint:        "index.js",
-		CompatibilityDate: workerDefaultCompatibilityDate,
+		CompatibilityDate: workerartifact.WorkerDefaultCompatibilityDate,
 		Repository:        &WorkerBuildRepository{ConfigPath: "wrangler.jsonc"},
 		// Repository configuration, not a stale service snapshot, is
 		// authoritative for assets.
@@ -425,9 +430,9 @@ func TestBuildJobCleansInputSecretWhenJobCreationFails(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	k := &workerKubernetes{base: srv.URL, namespace: "workers-mvp", client: srv.Client()}
-	build := WorkerBuild{Job: "krun-build-cleanup", Entrypoint: "index.js", CompatibilityDate: workerDefaultCompatibilityDate}
-	if err := k.ensureBuildJob(context.Background(), build, WorkerBuildPrivate{}, "https://source.test/source", "https://storage.test/upload", "builder:test", "Never"); err == nil {
+	k := &kubernetes.Client{Base: srv.URL, Namespace: "workers-mvp", Client: srv.Client()}
+	build := WorkerBuild{Job: "krun-build-cleanup", Entrypoint: "index.js", CompatibilityDate: workerartifact.WorkerDefaultCompatibilityDate}
+	if err := k.EnsureBuildJob(context.Background(), build, WorkerBuildPrivate{}, "https://source.test/source", "https://storage.test/upload", "builder:test", "Never"); err == nil {
 		t.Fatal("job creation failure was ignored")
 	}
 	if !deleted {
@@ -455,9 +460,9 @@ func TestBuildJobReattachesRecreatedInputSecret(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	k := &workerKubernetes{base: srv.URL, namespace: "workers-mvp", client: srv.Client()}
-	build := WorkerBuild{Job: "krun-build-reattach", Entrypoint: "index.js", CompatibilityDate: workerDefaultCompatibilityDate}
-	if err := k.ensureBuildJob(context.Background(), build, WorkerBuildPrivate{}, "https://source.test/source", "https://storage.test/upload", "builder:test", "Never"); err != nil {
+	k := &kubernetes.Client{Base: srv.URL, Namespace: "workers-mvp", Client: srv.Client()}
+	build := WorkerBuild{Job: "krun-build-reattach", Entrypoint: "index.js", CompatibilityDate: workerartifact.WorkerDefaultCompatibilityDate}
+	if err := k.EnsureBuildJob(context.Background(), build, WorkerBuildPrivate{}, "https://source.test/source", "https://storage.test/upload", "builder:test", "Never"); err != nil {
 		t.Fatal(err)
 	}
 	if !secretPatched || jobPatched {
@@ -467,20 +472,20 @@ func TestBuildJobReattachesRecreatedInputSecret(t *testing.T) {
 
 func TestSyncEnvironmentHostsDerivesOneHostPerDomain(t *testing.T) {
 	c := catalogConfig()
-	if err := c.validate(); err != nil {
+	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{Config: Config{Workers: c}}
+	s := &Server{Config: appconfig.Config{Workers: c}}
 	env := WorkerEnvironment{Name: "production"}
 	s.syncEnvironmentHosts(&env, "org-a", "svc-a", []string{"internal", "external"})
-	slug := workerSlug("org-a", "svc-a")
-	want := []string{slug + "-production." + c.poolHostSuffix("default", "workers.test"), slug + "-production." + c.poolHostSuffix("default", "workers-out.example.test")}
+	slug := appconfig.WorkerSlug("org-a", "svc-a")
+	want := []string{slug + "-production." + c.PoolHostSuffix("default", "workers.test"), slug + "-production." + c.PoolHostSuffix("default", "workers-out.example.test")}
 	sort.Strings(env.Hosts)
 	sort.Strings(want)
 	if strings.Join(env.Hosts, ",") != strings.Join(want, ",") {
 		t.Fatalf("hosts: %v", env.Hosts)
 	}
-	if env.DisplayHosts["external"] != slug+"-production."+c.poolHostSuffix("default", "workers-out.example.test") {
+	if env.DisplayHosts["external"] != slug+"-production."+c.PoolHostSuffix("default", "workers-out.example.test") {
 		t.Fatalf("per-domain host: %q", env.DisplayHosts["external"])
 	}
 
@@ -502,7 +507,7 @@ func TestSyncEnvironmentHostsDerivesOneHostPerDomain(t *testing.T) {
 func TestServiceDomainsUpdateAddsAndRemovesHosts(t *testing.T) {
 	s, store, base := workerTestServer(t)
 	s.Config.Workers = catalogConfig()
-	if err := s.Config.Workers.validate(); err != nil {
+	if err := s.Config.Workers.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	s.routes()
@@ -552,7 +557,7 @@ func TestServiceDomainsUpdateAddsAndRemovesHosts(t *testing.T) {
 func TestServiceDomainsRejectInvalidSelection(t *testing.T) {
 	s, _, base := workerTestServer(t)
 	s.Config.Workers = catalogConfig()
-	if err := s.Config.Workers.validate(); err != nil {
+	if err := s.Config.Workers.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	s.routes()
@@ -571,7 +576,7 @@ func TestServiceDomainsRejectInvalidSelection(t *testing.T) {
 func TestServiceDomainsReadReturnsCatalog(t *testing.T) {
 	s, _, base := workerTestServer(t)
 	s.Config.Workers = catalogConfig()
-	if err := s.Config.Workers.validate(); err != nil {
+	if err := s.Config.Workers.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	s.routes()
@@ -580,9 +585,9 @@ func TestServiceDomainsReadReturnsCatalog(t *testing.T) {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	var out struct {
-		Selected []string           `json:"selected"`
-		Catalog  []WorkerDomainView `json:"catalog"`
-		Revision int                `json:"revision"`
+		Selected []string                     `json:"selected"`
+		Catalog  []workerapp.WorkerDomainView `json:"catalog"`
+		Revision int                          `json:"revision"`
 	}
 	_ = json.Unmarshal(r.Body.Bytes(), &out)
 	if len(out.Selected) != 1 || out.Selected[0] != "internal" {
@@ -599,7 +604,7 @@ func TestServiceDomainsReadReturnsCatalog(t *testing.T) {
 func TestServiceDomainsRequiresCurrentRevision(t *testing.T) {
 	s, _, base := workerTestServer(t)
 	s.Config.Workers = catalogConfig()
-	if err := s.Config.Workers.validate(); err != nil {
+	if err := s.Config.Workers.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	s.routes()
@@ -616,7 +621,7 @@ func TestWorkerConfigProjectionCoversEveryDomain(t *testing.T) {
 	ws := st.Workers.Services["svc-a"]
 	ws.Domains = []string{"internal", "external"}
 	st.Workers.Services["svc-a"] = ws
-	p := workerConfigFromState(st, workerProjectionConfig([]WorkerDomain{
+	p := workerapp.WorkerConfigFromState(st, workerProjectionConfig([]appconfig.WorkerDomain{
 		{ID: "internal", Domain: "workers.test", Access: "private"},
 		{ID: "external", Domain: "workers-out.example.test", Access: "public"},
 	}))
@@ -625,15 +630,15 @@ func TestWorkerConfigProjectionCoversEveryDomain(t *testing.T) {
 		hosts = append(hosts, route.Host)
 	}
 	sort.Strings(hosts)
-	slug := workerSlug("org-a", "svc-a")
+	slug := appconfig.WorkerSlug("org-a", "svc-a")
 	// Every selected domain yields one host per environment, in host order.
 	want := []string{
-		hostFor(slug, "empty", (&WorkersConfig{}).poolHostSuffix("default", "workers-out.example.test")),
-		hostFor(slug, "empty", (&WorkersConfig{}).poolHostSuffix("default", "workers.test")),
-		hostFor(slug, "preview", (&WorkersConfig{}).poolHostSuffix("default", "workers-out.example.test")),
-		hostFor(slug, "preview", (&WorkersConfig{}).poolHostSuffix("default", "workers.test")),
-		hostFor(slug, "production", (&WorkersConfig{}).poolHostSuffix("default", "workers-out.example.test")),
-		hostFor(slug, "production", (&WorkersConfig{}).poolHostSuffix("default", "workers.test")),
+		appconfig.HostFor(slug, "empty", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers-out.example.test")),
+		appconfig.HostFor(slug, "empty", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers.test")),
+		appconfig.HostFor(slug, "preview", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers-out.example.test")),
+		appconfig.HostFor(slug, "preview", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers.test")),
+		appconfig.HostFor(slug, "production", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers-out.example.test")),
+		appconfig.HostFor(slug, "production", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers.test")),
 	}
 	if strings.Join(hosts, ",") != strings.Join(want, ",") {
 		t.Fatalf("projection hosts: %v", hosts)
@@ -648,11 +653,11 @@ func TestWorkerConfigProjectionRequiresDurablePlacement(t *testing.T) {
 	st.Workers.Services[service.Service] = service
 	st.Workers.Placements = map[string]WorkerPlacement{}
 	config := multiPoolCatalogConfig()
-	if err := config.validate(); err != nil {
+	if err := config.Validate(); err != nil {
 		t.Fatal(err)
 	}
 
-	projection := workerConfigFromState(st, config)
+	projection := workerapp.WorkerConfigFromState(st, config)
 	if len(projection.Routes) != 0 || len(projection.Releases) != 0 {
 		t.Fatalf("service without placement entered runtime projection: %+v", projection)
 	}
@@ -749,8 +754,8 @@ func TestStaleWorkerRoutesPropagatesListFailure(t *testing.T) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
-	k := &workerKubernetes{base: srv.URL, namespace: "workers-mvp", client: srv.Client()}
-	if _, err := staleWorkerRoutes(context.Background(), k, "workers-", map[string]bool{}); err == nil {
+	k := &kubernetes.Client{Base: srv.URL, Namespace: "workers-mvp", Client: srv.Client()}
+	if _, err := kubernetes.StaleWorkerRoutes(context.Background(), k, "workers-", map[string]bool{}); err == nil {
 		t.Fatal("route list failure was hidden")
 	}
 }
@@ -766,13 +771,13 @@ func TestKubernetesClientReloadsRotatedBearerToken(t *testing.T) {
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer srv.Close()
-	k := &workerKubernetes{base: srv.URL, tokenFile: tokenPath, namespace: "workers-mvp", client: srv.Client()}
+	k := &kubernetes.Client{Base: srv.URL, TokenFile: tokenPath, Namespace: "workers-mvp", Client: srv.Client()}
 	for _, token := range []string{"token-one", "token-two"} {
 		if err := os.WriteFile(tokenPath, []byte(token), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		var response map[string]any
-		if err := k.call(context.Background(), http.MethodGet, "/version", nil, &response); err != nil {
+		if err := k.Call(context.Background(), http.MethodGet, "/version", nil, &response); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -784,7 +789,7 @@ func TestKubernetesClientReloadsRotatedBearerToken(t *testing.T) {
 func TestProcessOperationStopsAfterCommitCASConflict(t *testing.T) {
 	s, store, _ := workerTestServer(t)
 	raw := workerArchive(t, []string{"manifest.json", "modules/index.js"}, "export default {}", false)
-	code, manifest, err := parseWorkerArchive(raw)
+	code, manifest, err := workerartifact.ParseWorkerArchive(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -834,14 +839,14 @@ func TestProcessOperationStopsAfterCommitCASConflict(t *testing.T) {
 	c.RuntimePools[0].ValidatorManagementBase = apiServer.URL
 	c.RuntimePools[0].ManagementToken = strings.Repeat("m", 24)
 	s.Config.Workers = c
-	s3, err := newWorkerS3(c)
+	s3, err := workerapp.NewWorkerS3(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	controller := &workersController{
-		server: s, config: c, s3: s3, s3Builder: s3, s3Runtime: s3,
-		kube: &workerKubernetes{base: apiServer.URL, namespace: c.Namespace, client: apiServer.Client()},
-		http: apiServer.Client(), assetCache: map[string]workerCachedAssets{}, replica: "test",
+	controller := &workerapp.Controller{
+		Service: s.workerApplication(nil), Config: c, S3: s3, S3Builder: s3, S3Runtime: s3,
+		Kube: &kubernetes.Client{Base: apiServer.URL, Namespace: c.Namespace, Client: apiServer.Client()},
+		Http: apiServer.Client(), AssetCache: map[string]workerapp.WorkerCachedAssets{}, Replica: "test",
 	}
 	release := WorkerRelease{ID: "rel-cas", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-cas", ArchiveDigest: code.ArchiveDigest, ModuleDigest: code.Digest}
 	artifact := WorkerArtifact{ID: "art-cas", Organization: "org-a", State: "finalized", Profile: code.Profile, ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: code.CompatibilityFlags, Size: len(raw), ObjectKey: "v1/org-a/archive.tar.gz", StorageLocation: "test", Bucket: "artifacts", Created: now()}
@@ -850,7 +855,7 @@ func TestProcessOperationStopsAfterCommitCASConflict(t *testing.T) {
 		Releases: map[string]WorkerRelease{release.ID: release}, Artifacts: map[string]WorkerArtifact{artifact.ID: artifact},
 		Operations: map[string]WorkerOperation{op.ID: op}, OperationPrivate: map[string]WorkerOperationPrivate{op.ID: {Actor: WorkerActor{User: "admin", AuthVersion: 1}}},
 	}
-	if err := controller.processOperation(context.Background(), op, state, true); err != nil {
+	if err := controller.ProcessOperation(context.Background(), op, state, true); err != nil {
 		t.Fatal(err)
 	}
 	latest, _, err := store.ConfigState(context.Background())
@@ -867,12 +872,12 @@ func TestStaticRoutesFollowDomainGatewayBinding(t *testing.T) {
 	srv := fake.server(t)
 	defer srv.Close()
 	c := catalogConfig()
-	if err := c.validate(); err != nil {
+	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	k := &workerKubernetes{base: srv.URL, namespace: "workers-mvp", client: srv.Client()}
+	k := &kubernetes.Client{Base: srv.URL, Namespace: "workers-mvp", Client: srv.Client()}
 	for _, d := range c.Domains {
-		if err := k.ensureStaticRoute(context.Background(), c, d.ID, "assets"); err != nil {
+		if err := k.EnsureStaticRoute(context.Background(), c, d.ID, "assets"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -901,7 +906,7 @@ func TestStaticRoutesFollowDomainGatewayBinding(t *testing.T) {
 func TestDomainCatalogAPIExposesLabels(t *testing.T) {
 	s, _, _ := workerTestServer(t)
 	s.Config.Workers = catalogConfig()
-	if err := s.Config.Workers.validate(); err != nil {
+	if err := s.Config.Workers.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	s.routes()
@@ -910,7 +915,7 @@ func TestDomainCatalogAPIExposesLabels(t *testing.T) {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	var list struct {
-		Items []WorkerDomainView `json:"items"`
+		Items []workerapp.WorkerDomainView `json:"items"`
 	}
 	_ = json.Unmarshal(r.Body.Bytes(), &list)
 	if len(list.Items) != 2 {

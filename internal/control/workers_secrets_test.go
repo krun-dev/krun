@@ -12,6 +12,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	appconfig "github.com/krun-dev/krun/internal/config"
+	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
 func testWorkerSecretsKey() string {
@@ -32,7 +35,7 @@ func TestSameWorkerSecretVersionUsesInstantEquality(t *testing.T) {
 	}
 }
 
-func enableWorkerSecrets(config *WorkersConfig) {
+func enableWorkerSecrets(config *appconfig.WorkersConfig) {
 	config.SecretsActiveKey = "test-v1"
 	config.SecretsKeys = map[string]string{"test-v1": testWorkerSecretsKey()}
 }
@@ -71,7 +74,7 @@ func seedPublishedWorker(t *testing.T, store *Store) WorkerRelease {
 func TestWorkerSecretEncryptionAuthenticatesScope(t *testing.T) {
 	config := testWorkersConfig()
 	enableWorkerSecrets(config)
-	encrypted, err := encryptWorkerSecret(config, "org", "service", "production", "API_TOKEN", "user", "super-secret")
+	encrypted, err := workerapp.EncryptWorkerSecret(config, "org", "service", "production", "API_TOKEN", "user", "super-secret")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,13 +85,13 @@ func TestWorkerSecretEncryptionAuthenticatesScope(t *testing.T) {
 	if encrypted.Version.ValueDigest == hex.EncodeToString(plainDigest[:]) {
 		t.Fatal("secret metadata exposes a plain SHA-256 oracle")
 	}
-	plain, err := decryptWorkerSecret(config, encrypted)
+	plain, err := workerapp.DecryptWorkerSecret(config, encrypted)
 	if err != nil || plain != "super-secret" {
 		t.Fatalf("round trip: %q %v", plain, err)
 	}
 	tampered := encrypted
 	tampered.Version.Service = "other-service"
-	if _, err = decryptWorkerSecret(config, tampered); err == nil {
+	if _, err = workerapp.DecryptWorkerSecret(config, tampered); err == nil {
 		t.Fatal("ciphertext was reusable in another service scope")
 	}
 }
@@ -96,16 +99,16 @@ func TestWorkerSecretEncryptionAuthenticatesScope(t *testing.T) {
 func TestWorkerSecretKeyRingValidation(t *testing.T) {
 	valid := testWorkersConfig()
 	enableWorkerSecrets(valid)
-	if err := valid.validateSecretKeys(); err != nil {
+	if err := valid.ValidateSecretKeys(); err != nil {
 		t.Fatal("valid key ring rejected:", err)
 	}
-	for name, mutate := range map[string]func(*WorkersConfig){
-		"missing active version": func(config *WorkersConfig) { config.SecretsActiveKey = "missing" },
-		"short key": func(config *WorkersConfig) {
+	for name, mutate := range map[string]func(*appconfig.WorkersConfig){
+		"missing active version": func(config *appconfig.WorkersConfig) { config.SecretsActiveKey = "missing" },
+		"short key": func(config *appconfig.WorkersConfig) {
 			config.SecretsKeys["test-v1"] = base64.StdEncoding.EncodeToString([]byte("short"))
 		},
-		"invalid base64": func(config *WorkersConfig) { config.SecretsKeys["test-v1"] = "not-base64" },
-		"invalid version": func(config *WorkersConfig) {
+		"invalid base64": func(config *appconfig.WorkersConfig) { config.SecretsKeys["test-v1"] = "not-base64" },
+		"invalid version": func(config *appconfig.WorkersConfig) {
 			config.SecretsActiveKey = "bad version"
 			config.SecretsKeys["bad version"] = config.SecretsKeys["test-v1"]
 		},
@@ -114,7 +117,7 @@ func TestWorkerSecretKeyRingValidation(t *testing.T) {
 			config := testWorkersConfig()
 			enableWorkerSecrets(config)
 			mutate(config)
-			if err := config.validateSecretKeys(); err == nil {
+			if err := config.ValidateSecretKeys(); err == nil {
 				t.Fatal("invalid key ring accepted")
 			}
 		})
@@ -178,7 +181,7 @@ func TestWorkerSecretPutCreatesAndDeploysImmutableRelease(t *testing.T) {
 	}
 	authorized := httptest.NewRecorder()
 	authorizedRequest := httptest.NewRequest(http.MethodGet, "/api/internal/workers/releases/"+release.ID+"/secrets", nil)
-	authorizedRequest.Header.Set("Authorization", "Bearer "+server.Config.Workers.defaultRuntimePool().RuntimeToken)
+	authorizedRequest.Header.Set("Authorization", "Bearer "+server.Config.Workers.DefaultRuntimePool().RuntimeToken)
 	authorizedRequest.Header.Set("X-Runtime-Pool", "default")
 	server.serveInternal(authorized, authorizedRequest)
 	if authorized.Code != http.StatusOK || !strings.Contains(authorized.Body.String(), "secret-value-never-return") || !strings.Contains(authorized.Body.String(), release.SecretDigest) {

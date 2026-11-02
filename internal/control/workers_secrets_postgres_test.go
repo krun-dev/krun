@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"testing"
+
+	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
 func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
@@ -11,7 +13,7 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 	ctx := context.Background()
 	config := testWorkersConfig()
 	enableWorkerSecrets(config)
-	encrypted, err := encryptWorkerSecret(config, "org-secret", "svc-secret", "production", "API_TOKEN", "admin", "database-must-not-see-plaintext")
+	encrypted, err := workerapp.EncryptWorkerSecret(config, "org-secret", "svc-secret", "production", "API_TOKEN", "admin", "database-must-not-see-plaintext")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,7 +21,7 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 	release := WorkerRelease{
 		ID: "rel-secret-postgres", Organization: "org-secret", Service: "svc-secret", Environment: "production",
 		Artifact: "art-secret-postgres", ArchiveDigest: "archive", ModuleDigest: "module",
-		ConfigRevision: 2, Variables: map[string]string{}, SecretDigest: workerSecretsDigest(refs),
+		ConfigRevision: 2, Variables: map[string]string{}, SecretDigest: workerapp.WorkerSecretsDigest(refs),
 		SecretVersions: refs, Created: now(),
 	}
 	if err = store.Update(ctx, PartitionWorkers, func(st *State) error {
@@ -76,7 +78,7 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 	if err != nil || digest != release.SecretDigest || len(values) != 1 {
 		t.Fatalf("runtime lookup: digest=%q values=%d err=%v", digest, len(values), err)
 	}
-	plain, err := decryptWorkerSecret(config, values[0])
+	plain, err := workerapp.DecryptWorkerSecret(config, values[0])
 	if err != nil || plain != "database-must-not-see-plaintext" {
 		t.Fatalf("decrypt persisted secret: %q %v", plain, err)
 	}

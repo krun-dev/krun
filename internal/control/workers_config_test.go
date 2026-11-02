@@ -8,6 +8,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	appconfig "github.com/krun-dev/krun/internal/config"
+	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
 func workerConfigFixture() (*State, *Store) {
@@ -29,7 +32,7 @@ func workerConfigFixture() (*State, *Store) {
 	return st, store
 }
 
-func workerProjectionConfig(domains []WorkerDomain) *WorkersConfig {
+func workerProjectionConfig(domains []appconfig.WorkerDomain) *appconfig.WorkersConfig {
 	access := []string{}
 	privateEgress, publicEgress := "deny", "deny"
 	for i := range domains {
@@ -49,28 +52,28 @@ func workerProjectionConfig(domains []WorkerDomain) *WorkersConfig {
 	if len(domains) > 0 {
 		domains[0].Default = true
 	}
-	return &WorkersConfig{
+	return &appconfig.WorkersConfig{
 		Domains: domains,
-		RuntimePools: []WorkerRuntimePool{{
+		RuntimePools: []appconfig.WorkerRuntimePool{{
 			ID: "default", Access: access, PrivateEgress: privateEgress, PublicEgress: publicEgress,
 			RuntimeService: "runtime-default", ValidatorService: "runtime-validator-default", Default: true,
 		}},
-		NetworkProfiles: []WorkerNetworkProfile{{
+		NetworkProfiles: []appconfig.WorkerNetworkProfile{{
 			ID: "default", Name: "Default", Default: true,
-			Requirements: WorkerNetworkRequirements{Ingress: access, PrivateEgress: privateEgress, PublicEgress: publicEgress},
+			Requirements: appconfig.WorkerNetworkRequirements{Ingress: access, PrivateEgress: privateEgress, PublicEgress: publicEgress},
 		}},
 	}
 }
 
 func TestWorkerConfigProjection(t *testing.T) {
 	st, _ := workerConfigFixture()
-	config := workerProjectionConfig([]WorkerDomain{{ID: "internal", Domain: "workers.test"}})
-	p := workerConfigFromState(st, config)
+	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}})
+	p := workerapp.WorkerConfigFromState(st, config)
 	if len(p.Routes) != 3 {
 		t.Fatalf("routes: %+v", p.Routes)
 	}
-	slug := workerSlug("org-a", "svc-a")
-	wantHosts := []string{hostFor(slug, "empty", (&WorkersConfig{}).poolHostSuffix("default", "workers.test")), hostFor(slug, "preview", (&WorkersConfig{}).poolHostSuffix("default", "workers.test")), hostFor(slug, "production", (&WorkersConfig{}).poolHostSuffix("default", "workers.test"))}
+	slug := appconfig.WorkerSlug("org-a", "svc-a")
+	wantHosts := []string{appconfig.HostFor(slug, "empty", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers.test")), appconfig.HostFor(slug, "preview", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers.test")), appconfig.HostFor(slug, "production", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers.test"))}
 	sort.Strings(wantHosts)
 	for i, want := range wantHosts {
 		if p.Routes[i].Host != want {
@@ -86,19 +89,19 @@ func TestWorkerConfigProjection(t *testing.T) {
 	if _, ok := p.Releases["rel-1"]; !ok || len(p.Releases) != 1 {
 		t.Fatalf("only referenced releases should be projected: %+v", p.Releases)
 	}
-	digest, _, err := workerConfigDigest(p)
+	digest, _, err := workerapp.WorkerConfigDigest(p)
 	if err != nil || digest == "" {
 		t.Fatal(err)
 	}
-	if again, _, _ := workerConfigDigest(workerConfigFromState(st, config)); again != digest {
+	if again, _, _ := workerapp.WorkerConfigDigest(workerapp.WorkerConfigFromState(st, config)); again != digest {
 		t.Fatal("projection digest is not deterministic")
 	}
 }
 
 func TestWorkerConfigDiffOrdering(t *testing.T) {
 	st, _ := workerConfigFixture()
-	first := workerConfigFromState(st, workerProjectionConfig([]WorkerDomain{{ID: "internal", Domain: "workers.test"}}))
-	ops := diffWorkerConfig(nil, first)
+	first := workerapp.WorkerConfigFromState(st, workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}}))
+	ops := workerapp.DiffWorkerConfig(nil, first)
 	seenRoute := false
 	for _, op := range ops {
 		if op.Type == "route_upsert" {
@@ -111,19 +114,19 @@ func TestWorkerConfigDiffOrdering(t *testing.T) {
 	next := first
 	next.Routes = append([]workerConfigRoute(nil), first.Routes...)
 	next.Releases = map[string]WorkerRelease{"rel-1": first.Releases["rel-1"]}
-	prodHost := hostFor(workerSlug("org-a", "svc-a"), "production", (&WorkersConfig{}).poolHostSuffix("default", "workers.test"))
+	prodHost := appconfig.HostFor(appconfig.WorkerSlug("org-a", "svc-a"), "production", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers.test"))
 	for i := range next.Routes {
 		if next.Routes[i].Host == prodHost {
 			next.Routes[i].Release = "rel-2"
 		}
 	}
 	next.Releases["rel-2"] = WorkerRelease{ID: "rel-2", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-2"}
-	ops = diffWorkerConfig(&first, next)
+	ops = workerapp.DiffWorkerConfig(&first, next)
 	if len(ops) != 2 || ops[0].Type != "release_put" || ops[0].Release.ID != "rel-2" || ops[1].Type != "route_upsert" || ops[1].Host != prodHost {
 		t.Fatalf("unexpected migration ops: %+v", ops)
 	}
 	next.Routes = next.Routes[:1]
-	ops = diffWorkerConfig(&first, next)
+	ops = workerapp.DiffWorkerConfig(&first, next)
 	deleted := 0
 	for _, op := range ops {
 		if op.Type == "route_delete" {
@@ -203,7 +206,11 @@ func runtimeConfigRequest(s *Server, token, query string) *httptest.ResponseReco
 func TestWorkerRuntimeConfigChanges(t *testing.T) {
 	s, store := testServer(t)
 	token := strings.Repeat("t", 32)
-	s.Config.Workers = func() *WorkersConfig { c := testWorkersConfig(); c.RuntimePools[0].RuntimeToken = token; return c }()
+	s.Config.Workers = func() *appconfig.WorkersConfig {
+		c := testWorkersConfig()
+		c.RuntimePools[0].RuntimeToken = token
+		return c
+	}()
 	s.routes()
 	ctx := context.Background()
 	payload, _ := json.Marshal(workerConfigProjection{Routes: []workerConfigRoute{{Host: "w.workers.test", Enabled: true, Release: "rel-1", Pool: "default"}}, Releases: map[string]WorkerRelease{}})
@@ -246,7 +253,7 @@ func TestWorkerRuntimeConfigChanges(t *testing.T) {
 func TestMultiPoolRuntimeConfigIsolation(t *testing.T) {
 	s, store := testServer(t)
 	c := testWorkersConfig()
-	c.RuntimePools = []WorkerRuntimePool{
+	c.RuntimePools = []appconfig.WorkerRuntimePool{
 		{ID: "private-a", Access: []string{"private"}, RuntimeService: "runtime-private", ValidatorService: "validator-private", RuntimeToken: strings.Repeat("p", 24), ManagementToken: strings.Repeat("q", 24), Default: true},
 		{ID: "public-b", Access: []string{"public"}, RuntimeService: "runtime-public", ValidatorService: "validator-public", RuntimeToken: strings.Repeat("u", 24), ManagementToken: strings.Repeat("v", 24)},
 	}

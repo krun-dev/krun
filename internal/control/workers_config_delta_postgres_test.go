@@ -6,6 +6,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	workerartifact "github.com/krun-dev/krun/internal/artifact"
+	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
 func TestPostgresConfigDeltaMovesAndDeletesRoutes(t *testing.T) {
@@ -27,7 +30,7 @@ func TestPostgresConfigDeltaMovesAndDeletesRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if revision, won, err := store.AppendConfigDelta(ctx, 0, dirty, diffWorkerConfig(nil, before)); err != nil || !won || revision != 1 {
+	if revision, won, err := store.AppendConfigDelta(ctx, 0, dirty, workerapp.DiffWorkerConfig(nil, before)); err != nil || !won || revision != 1 {
 		t.Fatalf("seed revision=%d won=%v err=%v", revision, won, err)
 	}
 	if _, err := postgresTestPool(store).Exec(ctx, `UPDATE worker_config_checkpoints SET published_revision=revision`); err != nil {
@@ -45,7 +48,7 @@ func TestPostgresConfigDeltaMovesAndDeletesRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ops := diffWorkerConfig(&before, after)
+	ops := workerapp.DiffWorkerConfig(&before, after)
 	if revision, won, err := store.AppendConfigDelta(ctx, 1, dirty, ops); err != nil || !won || revision != 2 {
 		t.Fatalf("move revision=%d won=%v err=%v", revision, won, err)
 	}
@@ -79,7 +82,7 @@ func TestPostgresConfigDeltaMovesAndDeletesRoutes(t *testing.T) {
 		{"old", deleting.Host, 1},
 	} {
 		var revision, published int64
-		shard := bytesDigest([]byte(location.host))[:2]
+		shard := workerartifact.BytesDigest([]byte(location.host))[:2]
 		err := postgresTestPool(store).QueryRow(ctx, `SELECT revision, published_revision FROM worker_config_checkpoints WHERE pool=$1 AND shard=$2`, location.pool, shard).Scan(&revision, &published)
 		if err != nil || revision != 2 || published != location.published {
 			t.Fatalf("checkpoint %s/%s revision=%d published=%d err=%v", location.pool, shard, revision, published, err)
@@ -133,7 +136,7 @@ func TestPostgresConfigDeltaRollsBackCleanupFailureAndRetries(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	host := "delete.workers.test"
-	shard := bytesDigest([]byte(host))[:2]
+	shard := workerartifact.BytesDigest([]byte(host))[:2]
 	queries := []string{
 		`UPDATE krun_meta SET value='512' WHERE key='worker_config_head'`,
 		`INSERT INTO worker_config_revisions(config_revision, digest) VALUES (1, 'expired'), (512, 'current')`,

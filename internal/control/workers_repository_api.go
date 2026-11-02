@@ -2,196 +2,46 @@ package control
 
 import (
 	"net/http"
-	"sort"
+
+	appconfig "github.com/krun-dev/krun/internal/config"
+	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
-type workerServiceSummary struct {
-	Resource
-	Repository     *WorkerRepositorySource    `json:"repository_source,omitempty"`
-	NetworkProfile WorkerNetworkProfileView   `json:"network_profile"`
-	Environments   []WorkerEnvironmentSummary `json:"environments"`
-}
-
-type WorkerEnvironmentSummary struct {
-	Name      string   `json:"name"`
-	Domains   []string `json:"domains,omitempty"`
-	Hosts     []string `json:"hosts,omitempty"`
-	Enabled   bool     `json:"enabled"`
-	Release   string   `json:"release_id,omitempty"`
-	Confirmed string   `json:"confirmed_release_id,omitempty"`
-}
-
-// WorkerDomainView is the client-facing domain catalog entry. It deliberately
-// omits access classes, selectors, Gateway and pool identifiers: organization
-// users only see domains made available by their selected network profile.
-type WorkerDomainView struct {
-	ID      string `json:"id"`
-	Domain  string `json:"domain"`
-	Label   string `json:"label"`
-	Default bool   `json:"default"`
-}
-
-type WorkerNetworkProfileView struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	Description      string `json:"description"`
-	ApprovalRequired bool   `json:"approval_required"`
-	Default          bool   `json:"default"`
-}
-
 func (s *Server) workerNetworkProfiles(st *State, p Principal, r *http.Request) (any, int, error) {
-	target, err := s.orgTarget(st, r)
-	if err != nil {
-		return nil, 0, err
-	}
-	if err := s.require(st, p, r, "service.list", target); err != nil {
-		return nil, 0, err
-	}
-	out := []WorkerNetworkProfileView{}
-	for _, profile := range s.Config.Workers.configuredNetworkProfiles() {
-		if profile.Visibility != "public" {
-			continue
-		}
-		out = append(out, WorkerNetworkProfileView{ID: profile.ID, Name: profile.Name, Description: profile.Description, ApprovalRequired: profile.Approval == "required", Default: profile.Default})
-	}
-	return items(out)
+	out, outcome, err := s.workerApplication(r).WorkerNetworkProfiles(r.Context(), st, p, workerRef(r))
+	return out, workerHTTPStatus(outcome), err
 }
 
-// domainCatalog renders the platform domain catalog for clients.
-func (s *Server) domainCatalog() []WorkerDomainView {
-	out := make([]WorkerDomainView, 0, len(s.Config.Workers.Domains))
-	for _, d := range s.Config.Workers.Domains {
-		out = append(out, WorkerDomainView{ID: d.ID, Domain: d.Domain, Label: d.Label, Default: d.Default})
-	}
-	return out
+func (s *Server) domainCatalog() []workerapp.WorkerDomainView {
+	return s.workerApplication(nil).DomainCatalog()
 }
 
-func (s *Server) domainCatalogForProfile(profile WorkerNetworkProfile) []WorkerDomainView {
-	allowed := map[string]bool{}
-	for _, domain := range s.Config.Workers.domainsForProfile(profile) {
-		allowed[domain.ID] = true
-	}
-	out := []WorkerDomainView{}
-	for _, domain := range s.domainCatalog() {
-		if allowed[domain.ID] {
-			out = append(out, domain)
-		}
-	}
-	return out
+func (s *Server) domainCatalogForProfile(profile appconfig.WorkerNetworkProfile) []workerapp.WorkerDomainView {
+	return s.workerApplication(nil).DomainCatalogForProfile(profile)
 }
 
 // workerDomains lists the domain catalog so the console can offer choices.
 func (s *Server) workerDomains(st *State, p Principal, r *http.Request) (any, int, error) {
-	target, err := s.orgTarget(st, r)
-	if err != nil {
-		return nil, 0, err
-	}
-	if err := s.require(st, p, r, "service.list", target); err != nil {
-		return nil, 0, err
-	}
-	seen := map[string]bool{}
-	out := []WorkerDomainView{}
-	for _, profile := range s.Config.Workers.configuredNetworkProfiles() {
-		if profile.Visibility != "public" {
-			continue
-		}
-		for _, domain := range s.domainCatalogForProfile(profile) {
-			if !seen[domain.ID] {
-				seen[domain.ID] = true
-				out = append(out, domain)
-			}
-		}
-	}
-	return items(out)
+	out, outcome, err := s.workerApplication(r).WorkerDomains(r.Context(), st, p, workerRef(r))
+	return out, workerHTTPStatus(outcome), err
 }
 
 func (s *Server) workerServiceList(st *State, p Principal, r *http.Request) (any, int, error) {
-	target, err := s.orgTarget(st, r)
+	out, _, err := s.workerApplication(r).WorkerServiceList(r.Context(), st, p, workerRef(r))
 	if err != nil {
 		return nil, 0, err
 	}
-	if err := s.require(st, p, r, "service.list", target); err != nil {
-		return nil, 0, err
-	}
-	out := make([]workerServiceSummary, 0)
-	for _, resource := range st.Resources {
-		if resource.Kind != "service" || resource.Organization != target.ID {
-			continue
-		}
-		summary := workerServiceSummary{Resource: resource, Environments: []WorkerEnvironmentSummary{}}
-		service := s.Config.Workers.normalizeServiceNetwork(st.Workers.Services[resource.ID])
-		if profile, ok := s.Config.Workers.networkProfile(service.NetworkProfile); ok {
-			summary.NetworkProfile = WorkerNetworkProfileView{ID: profile.ID, Name: profile.Name, Description: profile.Description, ApprovalRequired: profile.Approval == "required", Default: profile.Default}
-		}
-		names := make([]string, 0, len(service.Environments)+1)
-		if _, exists := service.Environments[workerBaseline]; !exists {
-			names = append(names, workerBaseline)
-		}
-		for name := range service.Environments {
-			names = append(names, name)
-		}
-		sort.Slice(names, func(i, j int) bool {
-			if names[i] == workerBaseline {
-				return true
-			}
-			if names[j] == workerBaseline {
-				return false
-			}
-			return names[i] < names[j]
-		})
-		visible := false
-		for _, env := range names {
-			decision, err := Authorize(st, p, "service.read", Target{Kind: "service", ID: resource.ID, Organization: target.ID, Environment: env})
-			if err != nil {
-				return nil, 0, err
-			}
-			if !decision.Allowed {
-				continue
-			}
-			visible = true
-			if current, exists := service.Environments[env]; exists {
-				// Hosts are derived for display; the persisted row is not rewritten
-				// from a read path.
-				s.syncEnvironmentHosts(&current, resource.Organization, resource.ID, s.syncServiceDomains(service), service.NetworkProfile, s.Config.Workers.servicePool(st.Workers, service))
-				summary.Environments = append(summary.Environments, WorkerEnvironmentSummary{Name: env, Domains: current.Domains, Hosts: current.Hosts, Enabled: current.Enabled, Release: current.Release, Confirmed: current.Confirmed})
-			}
-		}
-		if visible {
-			summary.Repository = service.Repository
-			out = append(out, summary)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Name == out[j].Name {
-			return out[i].ID < out[j].ID
-		}
-		return out[i].Name < out[j].Name
-	})
 	return resourcePageItems(st, r, out)
 }
 
 func (s *Server) workerRepositoryProviders(st *State, p Principal, r *http.Request) (any, int, error) {
-	target, err := s.orgTarget(st, r)
-	if err != nil {
-		return nil, 0, err
-	}
-	if err := s.require(st, p, r, "service.list", target); err != nil {
-		return nil, 0, err
-	}
-	connected, err := s.Store.ConnectedRepositoryProviders(r.Context(), p.User.ID)
-	if err != nil {
-		return nil, 0, err
-	}
-	return items(s.visibleRepositoryProviders(target.ID, connected))
+	out, outcome, err := s.workerApplication(r).WorkerRepositoryProviders(r.Context(), st, p, workerRef(r))
+	return out, workerHTTPStatus(outcome), err
 }
 
 func (s *Server) workerRepositoryGet(st *State, p Principal, r *http.Request) (any, int, error) {
-	target, err := s.workerCollectionTarget(st, r, "service.read", p)
-	if err != nil {
-		return nil, 0, err
-	}
-	service := s.workerServiceView(st, target)
-	return map[string]any{"source": service.Repository, "revision": service.RepositoryRevision}, 200, nil
+	out, outcome, err := s.workerApplication(r).WorkerRepositoryGet(r.Context(), st, p, workerRef(r))
+	return out, workerHTTPStatus(outcome), err
 }
 
 func (s *Server) workerRepositoryUpdate(st *State, p Principal, r *http.Request) (any, int, error) {
@@ -200,26 +50,10 @@ func (s *Server) workerRepositoryUpdate(st *State, p Principal, r *http.Request)
 	if err != nil {
 		return nil, 0, err
 	}
-	var in struct {
-		Source   *WorkerRepositorySource `json:"source"`
-		Revision int                     `json:"expected_revision"`
-	}
+	var in workerapp.WorkerRepositoryUpdateInput
 	if err := body(r, &in); err != nil {
 		return nil, 0, err
 	}
-	service := s.workerService(st, target)
-	if service.RepositoryRevision != in.Revision {
-		return nil, 0, problem(409, "REVISION_CONFLICT", "Repository configuration changed")
-	}
-	if in.Source == nil {
-		service.Repository = nil
-	} else {
-		if _, err := s.validateRepositorySource(in.Source, target.Organization); err != nil {
-			return nil, 0, err
-		}
-		service.Repository = in.Source
-	}
-	service.RepositoryRevision++
-	st.Workers.Services[target.ID] = service
-	return map[string]any{"source": service.Repository, "revision": service.RepositoryRevision}, 200, nil
+	out, outcome, err := s.workerApplication(r).WorkerRepositoryUpdate(r.Context(), st, p, workerRef(r), target, in)
+	return out, workerHTTPStatus(outcome), err
 }

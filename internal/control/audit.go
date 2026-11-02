@@ -1,39 +1,16 @@
 package control
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"net/http"
 	"strconv"
-	"time"
 
-	"github.com/krun-dev/krun/internal/configfile"
+	auditlog "github.com/krun-dev/krun/internal/audit"
 )
 
-type auditCursor struct {
-	Scope  string     `json:"scope"`
-	AsOf   time.Time  `json:"as_of"`
-	Before *time.Time `json:"before,omitempty"`
-	ID     string     `json:"id,omitempty"`
-}
+type auditCursor = auditlog.Cursor
+type auditPage = auditlog.Page
 
-type auditPage struct {
-	Items         []Audit   `json:"items"`
-	Total         int       `json:"total"`
-	Limit         int       `json:"limit"`
-	HasMore       bool      `json:"has_more"`
-	Cursor        string    `json:"cursor"`
-	NextCursor    string    `json:"next_cursor"`
-	AsOf          time.Time `json:"as_of"`
-	RetentionDays int       `json:"retention_days"`
-}
-
-func (s *Server) encodeAuditCursor(cursor auditCursor) string {
-	// A cursor contains pagination parameters only; auditList validates scope,
-	// times and current permissions on every request.
-	raw, _ := json.Marshal(cursor)
-	return base64.RawURLEncoding.EncodeToString(raw)
-}
+func (s *Server) encodeAuditCursor(cursor auditCursor) string { return auditlog.EncodeCursor(cursor) }
 
 func (s *Server) auditList(st *State, p Principal, r *http.Request) (any, int, error) {
 	at := now()
@@ -63,60 +40,6 @@ func (s *Server) auditList(st *State, p Principal, r *http.Request) (any, int, e
 	if len(query["cursor"]) > 1 {
 		return nil, 0, problem(400, "INVALID_REQUEST", "Use one cursor")
 	}
-	cursor := auditCursor{Scope: t.Kind + ":" + t.ID, AsOf: at}
-	current := query.Get("cursor")
-	if current != "" {
-		if len(current) > 2048 {
-			return nil, 0, problem(400, "INVALID_REQUEST", "Invalid audit cursor")
-		}
-		raw, err := base64.RawURLEncoding.DecodeString(current)
-		if err != nil || configfile.DecodeJSON(raw, &cursor) != nil || cursor.Scope != t.Kind+":"+t.ID || cursor.AsOf.IsZero() || cursor.AsOf.After(at) || (cursor.Before == nil) != (cursor.ID == "") || (cursor.Before != nil && cursor.Before.After(cursor.AsOf)) {
-			return nil, 0, problem(400, "INVALID_REQUEST", "Invalid audit cursor")
-		}
-		if cursor.AsOf.Before(at.Add(-auditRetention)) {
-			return nil, 0, problem(409, "AUDIT_CURSOR_EXPIRED", "Audit pagination expired. Refresh the list.")
-		}
-	} else {
-		current = s.encodeAuditCursor(cursor)
-	}
-	scope := ""
-	if t.Kind != "system" {
-		scope = t.ID
-	}
-	cutoff := at.Add(-auditRetention)
-	entries, err := s.Store.ReadAudits(r.Context(), cutoff, scope, 5000)
-	if err != nil {
-		return nil, 0, problem(503, "AUTHORIZATION_UNAVAILABLE", "Control service unavailable")
-	}
-	matching := []Audit{}
-	for _, entry := range entries {
-		if entry.Time.After(cursor.AsOf) {
-			continue
-		}
-		if t.Kind == "system" || entry.Organization == t.ID {
-			matching = append(matching, entry)
-			continue
-		}
-		resource, ok := st.Resources[entry.Resource]
-		if ok && resource.Organization == t.ID {
-			matching = append(matching, entry)
-		}
-	}
-	page := auditPage{Items: []Audit{}, Total: len(matching), Limit: limit, Cursor: current, AsOf: cursor.AsOf, RetentionDays: 7}
-	for _, entry := range matching {
-		if cursor.Before != nil && (entry.Time.After(*cursor.Before) || (entry.Time.Equal(*cursor.Before) && entry.ID >= cursor.ID)) {
-			continue
-		}
-		if len(page.Items) == limit {
-			page.HasMore = true
-			break
-		}
-		page.Items = append(page.Items, entry)
-	}
-	if page.HasMore {
-		last := page.Items[len(page.Items)-1]
-		cursor.Before, cursor.ID = &last.Time, last.ID
-		page.NextCursor = s.encodeAuditCursor(cursor)
-	}
-	return page, 200, nil
+	out, err := auditlog.List(r.Context(), s.Store, st, t, limit, query.Get("cursor"), at)
+	return out, 200, err
 }

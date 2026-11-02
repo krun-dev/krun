@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	workerartifact "github.com/krun-dev/krun/internal/artifact"
 )
 
 func workerAssetArchive(t *testing.T, manifest map[string]any, assets map[string][]byte) []byte {
@@ -45,8 +47,8 @@ func workerAssetManifest(files []map[string]any, options map[string]any) map[str
 			assets[k] = v
 		}
 	}
-	return map[string]any{"schema_version": 2, "profile": workerProfile, "compatibility_date": workerDefaultCompatibilityDate, "main_module": "index.js",
-		"modules": []map[string]any{{"name": "index.js", "path": "modules/index.js", "type": "esm", "sha256": bytesDigest([]byte("export default {fetch(){return new Response('ok')}}")), "size_bytes": len("export default {fetch(){return new Response('ok')}}")}},
+	return map[string]any{"schema_version": 2, "profile": workerartifact.WorkerProfile, "compatibility_date": workerartifact.WorkerDefaultCompatibilityDate, "main_module": "index.js",
+		"modules": []map[string]any{{"name": "index.js", "path": "modules/index.js", "type": "esm", "sha256": workerartifact.BytesDigest([]byte("export default {fetch(){return new Response('ok')}}")), "size_bytes": len("export default {fetch(){return new Response('ok')}}")}},
 		"assets":  assets}
 }
 
@@ -55,11 +57,11 @@ func TestParseWorkerAssets(t *testing.T) {
 	js := []byte("console.log('app')")
 	license := []byte("fixture license")
 	manifest := workerAssetManifest([]map[string]any{
-		{"path": "index.html", "sha256": bytesDigest(html), "size_bytes": len(html), "content_type": "text/html; charset=utf-8"},
-		{"path": "assets/app-0123abcd.js", "sha256": bytesDigest(js), "size_bytes": len(js), "content_type": "application/javascript; charset=utf-8"},
-		{"path": "LICENSE", "sha256": bytesDigest(license), "size_bytes": len(license), "content_type": "application/octet-stream"},
+		{"path": "index.html", "sha256": workerartifact.BytesDigest(html), "size_bytes": len(html), "content_type": "text/html; charset=utf-8"},
+		{"path": "assets/app-0123abcd.js", "sha256": workerartifact.BytesDigest(js), "size_bytes": len(js), "content_type": "application/javascript; charset=utf-8"},
+		{"path": "LICENSE", "sha256": workerartifact.BytesDigest(license), "size_bytes": len(license), "content_type": "application/octet-stream"},
 	}, nil)
-	code, _, err := parseWorkerArchive(workerAssetArchive(t, manifest, map[string][]byte{"index.html": html, "assets/app-0123abcd.js": js, "LICENSE": license}))
+	code, _, err := workerartifact.ParseWorkerArchive(workerAssetArchive(t, manifest, map[string][]byte{"index.html": html, "assets/app-0123abcd.js": js, "LICENSE": license}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,23 +79,23 @@ func TestParseWorkerAssets(t *testing.T) {
 func TestParseWorkerAssetsRejections(t *testing.T) {
 	html := []byte("<!doctype html>")
 	bad := []byte("binary")
-	if _, _, err := parseWorkerArchive(workerAssetArchive(t, workerAssetManifest([]map[string]any{
-		{"path": "index.html", "sha256": bytesDigest(html), "size_bytes": len(html), "content_type": "text/html; charset=utf-8"},
-		{"path": "payload.exe", "sha256": bytesDigest(bad), "size_bytes": len(bad), "content_type": "text/html; charset=utf-8"},
+	if _, _, err := workerartifact.ParseWorkerArchive(workerAssetArchive(t, workerAssetManifest([]map[string]any{
+		{"path": "index.html", "sha256": workerartifact.BytesDigest(html), "size_bytes": len(html), "content_type": "text/html; charset=utf-8"},
+		{"path": "payload.exe", "sha256": workerartifact.BytesDigest(bad), "size_bytes": len(bad), "content_type": "text/html; charset=utf-8"},
 	}, nil), map[string][]byte{"index.html": html, "payload.exe": bad})); err == nil {
 		t.Fatal("unknown extension accepted a spoofed content type")
 	}
-	if _, _, err := parseWorkerArchive(workerAssetArchive(t, workerAssetManifest([]map[string]any{
-		{"path": "index.html", "sha256": bytesDigest([]byte("tampered")), "size_bytes": len(html), "content_type": "text/html; charset=utf-8"},
+	if _, _, err := workerartifact.ParseWorkerArchive(workerAssetArchive(t, workerAssetManifest([]map[string]any{
+		{"path": "index.html", "sha256": workerartifact.BytesDigest([]byte("tampered")), "size_bytes": len(html), "content_type": "text/html; charset=utf-8"},
 	}, nil), map[string][]byte{"index.html": html})); err == nil {
 		t.Fatal("digest mismatch accepted")
 	}
-	if _, _, err := parseWorkerArchive(workerAssetArchive(t, workerAssetManifest([]map[string]any{
-		{"path": "app.js", "sha256": bytesDigest(html), "size_bytes": len(html), "content_type": "application/javascript; charset=utf-8"},
+	if _, _, err := workerartifact.ParseWorkerArchive(workerAssetArchive(t, workerAssetManifest([]map[string]any{
+		{"path": "app.js", "sha256": workerartifact.BytesDigest(html), "size_bytes": len(html), "content_type": "application/javascript; charset=utf-8"},
 	}, nil), map[string][]byte{"app.js": html})); err == nil || !strings.Contains(err.Error(), "single-page-application") {
 		t.Fatalf("SPA without index.html accepted: %v", err)
 	}
-	if _, _, err := parseWorkerArchive(workerAssetArchive(t, workerAssetManifest(nil, map[string]any{"run_worker_first": []string{"/api/*/x"}}), map[string][]byte{"index.html": html})); err == nil {
+	if _, _, err := workerartifact.ParseWorkerArchive(workerAssetArchive(t, workerAssetManifest(nil, map[string]any{"run_worker_first": []string{"/api/*/x"}}), map[string][]byte{"index.html": html})); err == nil {
 		t.Fatal("invalid pattern accepted")
 	}
 }
@@ -106,7 +108,7 @@ func TestParseBuilderProducedArchive(t *testing.T) {
 	if err != nil {
 		t.Skip("builder fixture not present")
 	}
-	code, _, err := parseWorkerArchive(raw)
+	code, _, err := workerartifact.ParseWorkerArchive(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,15 +127,15 @@ func TestArtifactWithoutAssets(t *testing.T) {
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 	code := []byte("export default {fetch(){return new Response('ok')}}")
-	manifest, _ := json.Marshal(map[string]any{"schema_version": 2, "profile": workerProfile, "compatibility_date": workerDefaultCompatibilityDate, "main_module": "index.js",
-		"modules": []map[string]any{{"name": "index.js", "path": "modules/index.js", "type": "esm", "sha256": bytesDigest(code), "size_bytes": len(code)}}})
+	manifest, _ := json.Marshal(map[string]any{"schema_version": 2, "profile": workerartifact.WorkerProfile, "compatibility_date": workerartifact.WorkerDefaultCompatibilityDate, "main_module": "index.js",
+		"modules": []map[string]any{{"name": "index.js", "path": "modules/index.js", "type": "esm", "sha256": workerartifact.BytesDigest(code), "size_bytes": len(code)}}})
 	for name, data := range map[string][]byte{"manifest.json": manifest, "modules/index.js": code} {
 		_ = tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(data)), Typeflag: tar.TypeReg})
 		_, _ = tw.Write(data)
 	}
 	_ = tw.Close()
 	_ = gz.Close()
-	parsed, _, err := parseWorkerArchive(buf.Bytes())
+	parsed, _, err := workerartifact.ParseWorkerArchive(buf.Bytes())
 	if err != nil || parsed.Assets != nil {
 		t.Fatal(parsed, err)
 	}
@@ -141,7 +143,7 @@ func TestArtifactWithoutAssets(t *testing.T) {
 
 func TestArtifactRejectsObsoleteManifestSchema(t *testing.T) {
 	code := []byte("export default {fetch(){return new Response('ok')}}")
-	manifest := map[string]any{"schema_version": 1, "profile": workerProfile, "compatibility_date": workerDefaultCompatibilityDate, "main_module": "index.js", "modules": []map[string]any{{"name": "index.js", "path": "modules/index.js", "type": "esm", "sha256": bytesDigest(code), "size_bytes": len(code)}}}
+	manifest := map[string]any{"schema_version": 1, "profile": workerartifact.WorkerProfile, "compatibility_date": workerartifact.WorkerDefaultCompatibilityDate, "main_module": "index.js", "modules": []map[string]any{{"name": "index.js", "path": "modules/index.js", "type": "esm", "sha256": workerartifact.BytesDigest(code), "size_bytes": len(code)}}}
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
@@ -160,7 +162,7 @@ func TestArtifactRejectsObsoleteManifestSchema(t *testing.T) {
 	if err := gz.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := parseWorkerArchive(buf.Bytes()); err == nil {
+	if _, _, err := workerartifact.ParseWorkerArchive(buf.Bytes()); err == nil {
 		t.Fatal("obsolete manifest schema accepted")
 	}
 }

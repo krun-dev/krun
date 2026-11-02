@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	identityprovider "github.com/krun-dev/krun/internal/adapters/identity"
+	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/storage"
 )
 
@@ -34,126 +36,18 @@ func fixture() (*State, User, User) {
 	st.Resources["svc-b"] = Resource{ID: "svc-b", Kind: "service", Organization: "org-b", Name: "B", Revision: 1}
 	return st, admin, viewer
 }
-func TestAuthorizationBoundaries(t *testing.T) {
-	st, admin, viewer := fixture()
-	tests := []struct {
-		name, user, action, kind, id, environment string
-		allow                                     bool
-	}{{"system admin cross organization", "admin", "service.read", "service", "svc-b", "global", true}, {"viewer reads own organization", "viewer", "service.read", "service", "svc-a", "global", true}, {"cross organization denied", "viewer", "service.read", "service", "svc-b", "global", false}, {"viewer cannot publish", "viewer", "service.publish", "service", "svc-a", "production", false}, {"unknown action denied", "admin", "service.magic", "service", "svc-a", "global", false}, {"action kind mismatch denied", "admin", "model.read", "service", "svc-a", "global", false}, {"unknown environment denied", "admin", "service.read", "service", "svc-a", "bad env!", false}}
-	_ = admin
-	_ = viewer
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			target, e := resolve(st, tc.kind, tc.id, tc.environment)
-			if e != nil {
-				t.Fatal(e)
-			}
-			d, e := Authorize(st, Principal{User: st.Users[tc.user]}, tc.action, target)
-			if e != nil {
-				t.Fatal(e)
-			}
-			if d.Allowed != tc.allow {
-				t.Fatalf("decision %+v want %t", d, tc.allow)
-			}
-		})
-	}
-}
-func TestKeyIntersectionExplicitDenyAndRevocation(t *testing.T) {
-	st, admin, viewer := fixture()
-	policy := Policy{Version: 1, Statements: []Statement{{Effect: "allow", Actions: []string{"service.read", "service.publish"}, Resource: Selector{Organization: "org-a", Kind: "service", IDs: []string{"svc-a"}}, Conditions: Conditions{Environments: []string{"release-candidate"}}}, {Effect: "deny", Actions: []string{"service.publish"}, Resource: Selector{Organization: "org-a", Kind: "service", IDs: []string{"svc-a"}}}}}
-	key := APIKey{ID: "key-a", ScopeKind: "organization", Organization: "org-a", Owner: admin.ID, Policy: policy}
-	target, _ := resolve(st, "service", "svc-a", "release-candidate")
-	p := Principal{User: admin, Key: &key}
-	d, e := Authorize(st, p, "service.read", target)
-	if e != nil || !d.Allowed {
-		t.Fatalf("%+v %v", d, e)
-	}
-	d, e = Authorize(st, p, "service.publish", target)
-	if e != nil || d.Allowed {
-		t.Fatalf("explicit deny ignored %+v %v", d, e)
-	}
-	target.Environment = "production"
-	d, e = Authorize(st, p, "service.read", target)
-	if e != nil || d.Allowed {
-		t.Fatal("environment constraint ignored")
-	}
-	target.Environment = "release-candidate"
-	p.User = viewer
-	delete(st.Assignments, "viewer")
-	d, e = Authorize(st, p, "service.read", target)
-	if e != nil || d.Allowed || !d.KeyAllowed {
-		t.Fatalf("key bypassed current user permissions %+v %v", d, e)
-	}
-	target, _ = resolve(st, "service", "svc-b", "release-candidate")
-	p.User = admin
-	d, e = Authorize(st, p, "service.read", target)
-	if e != nil || d.Allowed {
-		t.Fatal("key escaped organization")
-	}
-}
-func TestGroupsAndIndependentSources(t *testing.T) {
-	st, _, viewer := fixture()
-	delete(st.Assignments, "viewer")
-	st.Groups["publishers"] = Group{ID: "publishers", ScopeKind: "organization", ScopeID: "org-a", Members: []string{viewer.ID}}
-	st.Assignments["publish"] = Assignment{ID: "publish", SubjectKind: "group", SubjectID: "publishers", Role: "publisher", ScopeKind: "service", ScopeID: "svc-a", Conditions: Conditions{Environments: []string{"release-candidate"}}}
-	target, _ := resolve(st, "service", "svc-a", "release-candidate")
-	d, e := Authorize(st, Principal{User: viewer}, "service.publish", target)
-	if e != nil || !d.Allowed {
-		t.Fatalf("group scoped role failed %+v %v", d, e)
-	}
-	g := st.Groups["publishers"]
-	g.Members = nil
-	st.Groups[g.ID] = g
-	d, e = Authorize(st, Principal{User: viewer}, "service.publish", target)
-	if e != nil || d.Allowed {
-		t.Fatal("removed group membership still authorized")
-	}
-	g.Members = []string{viewer.ID}
-	st.Groups[g.ID] = g
-	org := st.Organizations["org-a"]
-	org.Sources = []string{"company"}
-	st.Organizations[org.ID] = org
-	d, e = Authorize(st, Principal{User: viewer}, "service.publish", target)
-	if e != nil || d.Allowed {
-		t.Fatal("organization source gate bypassed")
-	}
-	other := viewer
-	other.ID = "same-email-new-source"
-	other.Source = "company"
-	st.Users[other.ID] = other
-	d, e = Authorize(st, Principal{User: other}, "service.publish", target)
-	if e != nil || d.Allowed {
-		t.Fatal("new source inherited permissions")
-	}
-}
-func TestPolicyDelegation(t *testing.T) {
-	st, admin, viewer := fixture()
-	tests := []struct {
-		name   string
-		p      Principal
-		policy Policy
-		ok     bool
-	}{{"exact read within owner rights", Principal{User: viewer}, Policy{Version: 1, Statements: []Statement{{Effect: "allow", Actions: []string{"service.read"}, Resource: Selector{Kind: "service", Organization: "org-a", IDs: []string{"svc-a"}}}}}, true}, {"viewer can restrict a publish template", Principal{User: viewer}, Policy{Version: 1, Statements: []Statement{{Effect: "allow", Actions: []string{"service.publish"}, Resource: Selector{Kind: "service", Organization: "org-a", IDs: []string{"svc-a"}}}}}, true}, {"ordinary user organization wildcard", Principal{User: viewer}, Policy{Version: 1, Statements: []Statement{{Effect: "allow", Actions: []string{"service.read"}, Resource: Selector{Kind: "service", Organization: "org-a", All: true}}}}, true}, {"admin organization wildcard", Principal{User: admin}, Policy{Version: 1, Statements: []Statement{{Effect: "allow", Actions: []string{"service.read"}, Resource: Selector{Kind: "service", Organization: "org-a", All: true}}}}, true}, {"cross organization selector rejected", Principal{User: admin}, Policy{Version: 1, Statements: []Statement{{Effect: "allow", Actions: []string{"service.read"}, Resource: Selector{Kind: "service", Organization: "org-a", IDs: []string{"svc-b"}}}}}, false}, {"empty policy", Principal{User: admin}, Policy{Version: 1}, false}}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			e := validatePolicy(st, tc.p, "org-a", "organization", tc.policy)
-			if (e == nil) != tc.ok {
-				t.Fatalf("error=%v want valid=%t", e, tc.ok)
-			}
-		})
-	}
-}
+
 func testServer(t *testing.T) (*Server, *Store) {
 	t.Helper()
 	store := memoryStore()
-	c := Config{DB: "postgres://test-only/krun_test", Development: true, PublicURL: "http://127.0.0.1:8080", Providers: []ProviderConfig{{ID: "local", Source: "local", Type: "dev", Registration: "jit"}}}
+	c := appconfig.Config{DB: "postgres://test-only/krun_test", Development: true, PublicURL: "http://127.0.0.1:8080", Providers: []appconfig.ProviderConfig{{ID: "local", Source: "local", Type: "dev", Registration: "jit"}}}
 	s, e := NewServer(context.Background(), c, store)
 	if e != nil {
 		t.Fatal(e)
 	}
 	st, admin, viewer := fixture()
 	st.Bootstrapped = true
-	st.Sources["local"] = fingerprint(c.Providers[0])
+	st.Sources["local"] = appconfig.Fingerprint(c.Providers[0])
 	for _, u := range []User{admin, viewer} {
 		token := "krun_cli_" + u.ID
 		st.Sessions[digest(token)] = Session{User: u.ID, AuthVersion: 1, CLI: true, Created: now(), Seen: now(), Absolute: now().Add(time.Hour)}
@@ -163,6 +57,7 @@ func testServer(t *testing.T) (*Server, *Store) {
 	}
 	return s, store
 }
+
 func request(s *Server, method, path, token, raw string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, path, strings.NewReader(raw))
 	r.Header.Set("Content-Type", "application/json")
@@ -173,6 +68,7 @@ func request(s *Server, method, path, token, raw string) *httptest.ResponseRecor
 	s.ServeHTTP(w, r)
 	return w
 }
+
 func TestAPIValidationAndLastAdmin(t *testing.T) {
 	s, store := testServer(t)
 	tests := []struct {
@@ -194,6 +90,7 @@ func TestAPIValidationAndLastAdmin(t *testing.T) {
 		return nil
 	})
 }
+
 func TestAPIKeyLifecycleAndImmediateUserRevocation(t *testing.T) {
 	s, store := testServer(t)
 	raw := `{"name":"test","expires_in":3600,"policy":{"schema_version":1,"statements":[{"effect":"allow","actions":["service.read"],"resource":{"organization_id":"org-a","kind":"service","ids":["svc-a"]},"conditions":{}}]}}`
@@ -227,6 +124,7 @@ func TestAPIKeyLifecycleAndImmediateUserRevocation(t *testing.T) {
 		t.Fatal("revoked key remained valid")
 	}
 }
+
 func browserRequest(s *Server, method, path string, form url.Values, cookies []*http.Cookie) *httptest.ResponseRecorder {
 	var raw string
 	if form != nil {
@@ -242,6 +140,7 @@ func browserRequest(s *Server, method, path string, form url.Values, cookies []*
 	s.ServeHTTP(w, r)
 	return w
 }
+
 func TestLoginCSRFReplayLogoutAndStableIdentity(t *testing.T) {
 	s, store := testServer(t)
 	csrfResponse := browserRequest(s, "POST", "/api/auth/csrf", nil, nil)
@@ -306,6 +205,7 @@ func TestLoginCSRFReplayLogoutAndStableIdentity(t *testing.T) {
 	}
 	_ = store
 }
+
 func TestLoginReturnPathUsesRootQueryNavigation(t *testing.T) {
 	for _, tc := range []struct {
 		value string
@@ -351,6 +251,7 @@ func TestSessionCSRFAndAmbiguousCredential(t *testing.T) {
 		t.Fatal("ambiguous credentials accepted")
 	}
 }
+
 func TestDeviceApprovalAndSingleConsumption(t *testing.T) {
 	s, store := testServer(t)
 	w := request(s, "POST", "/api/auth/cli/start", "", `{}`)
@@ -442,12 +343,13 @@ func TestDeviceApprovalDoesNotCreateOrphanSession(t *testing.T) {
 		t.Fatal("losing approval created an orphan session")
 	}
 }
+
 func TestMappingPreservesLargeInteger(t *testing.T) {
 	d := json.NewDecoder(strings.NewReader(`{"data":{"id":9007199254740993}}`))
 	d.UseNumber()
 	var value any
 	_ = d.Decode(&value)
-	id, e := mapped(value, "data.id", true)
+	id, e := identityprovider.Mapped(value, "data.id", true)
 	if e != nil || id != "9007199254740993" {
 		t.Fatal(id, e)
 	}
@@ -483,6 +385,7 @@ func TestLoginGenerationAndSessionExpiration(t *testing.T) {
 		t.Fatal("absolute timeout ignored")
 	}
 }
+
 func TestRemovedSourceInvalidatesExistingCredentials(t *testing.T) {
 	s, _ := testServer(t)
 	delete(s.providers, "local")
@@ -490,16 +393,17 @@ func TestRemovedSourceInvalidatesExistingCredentials(t *testing.T) {
 		t.Fatal("disabled source accepted")
 	}
 }
+
 func TestConfigurationGuardsAndSourceTombstones(t *testing.T) {
-	c := Config{DB: "postgres://test-only/krun_test", Development: true, PublicURL: "http://0.0.0.0:8080"}
+	c := appconfig.Config{DB: "postgres://test-only/krun_test", Development: true, PublicURL: "http://0.0.0.0:8080"}
 	if c.Validate() == nil {
 		t.Fatal("development public_url must stay on loopback HTTP")
 	}
-	c = Config{DB: "postgres://test-only/krun_test", Development: true, PublicURL: "http://127.0.0.1:8080", Listen: "0.0.0.0:9000", InternalListen: "0.0.0.0:9000"}
+	c = appconfig.Config{DB: "postgres://test-only/krun_test", Development: true, PublicURL: "http://127.0.0.1:8080", Listen: "0.0.0.0:9000", InternalListen: "0.0.0.0:9000"}
 	if c.Validate() == nil {
 		t.Fatal("internal_listen must differ from listen")
 	}
-	c = Config{DB: "postgres://test-only/krun_test", Development: true, PublicURL: "http://127.0.0.1:8080", Workers: catalogConfig()}
+	c = appconfig.Config{DB: "postgres://test-only/krun_test", Development: true, PublicURL: "http://127.0.0.1:8080", Workers: catalogConfig()}
 	if c.Validate() == nil {
 		t.Fatal("Workers without internal_listen accepted")
 	}
@@ -511,7 +415,7 @@ func TestConfigurationGuardsAndSourceTombstones(t *testing.T) {
 	c.Listen = "127.0.0.1:8080"
 	c.InternalListen = ""
 	c.Workers = nil
-	c.Providers = []ProviderConfig{{ID: "local", Source: "source1", Type: "dev", Registration: "jit"}}
+	c.Providers = []appconfig.ProviderConfig{{ID: "local", Source: "source1", Type: "dev", Registration: "jit"}}
 	if _, e := NewServer(context.Background(), c, store); e != nil {
 		t.Fatal(e)
 	}
@@ -523,7 +427,7 @@ func TestConfigurationGuardsAndSourceTombstones(t *testing.T) {
 
 func TestProtectedRejectsAnonymousBeforeLoadingState(t *testing.T) {
 	s := &Server{
-		Config: Config{Development: true, PublicURL: "http://127.0.0.1:8080"},
+		Config: appconfig.Config{Development: true, PublicURL: "http://127.0.0.1:8080"},
 		Store:  &Store{},
 	}
 	s.routes()
@@ -622,7 +526,7 @@ func TestRequiredListenerFailureStopsServerGroup(t *testing.T) {
 
 func TestInviteOnlyRequiresExactUnexpiredIdentity(t *testing.T) {
 	s, store := testServer(t)
-	s.providers["local"].config.Registration = "invite_only"
+	s.providers["local"].Config.Registration = "invite_only"
 	login := func() string {
 		w := browserRequest(s, "POST", "/api/auth/csrf", nil, nil)
 		var csrf struct {
@@ -652,4 +556,41 @@ func TestInviteOnlyRequiresExactUnexpiredIdentity(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+func TestJSONLoginStartKeepsRedirectContract(t *testing.T) {
+	server, _ := testServer(t)
+	csrf := browserRequest(server, http.MethodPost, "/api/auth/csrf", nil, nil)
+	var challenge struct {
+		Token string `json:"csrf_token"`
+	}
+	if err := json.Unmarshal(csrf.Body.Bytes(), &challenge); err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"return_to": {"/"}, "csrf_token": {challenge.Token}}
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/local/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Origin", server.Config.PublicURL)
+	cookies := csrf.Result().Cookies()
+	for _, cookie := range cookies {
+		req.AddCookie(cookie)
+	}
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, req)
+	var start struct {
+		Redirect string `json:"redirect_url"`
+	}
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &start) != nil || start.Redirect == "" {
+		t.Fatalf("JSON login: %d %s", response.Code, response.Body.String())
+	}
+	callback := browserRequest(server, http.MethodGet, start.Redirect, nil, cookies)
+	if callback.Code != http.StatusSeeOther || callback.Header().Get("Location") != "/" {
+		t.Fatalf("callback: %d %s", callback.Code, callback.Header().Get("Location"))
+	}
+	cookies = append(cookies, callback.Result().Cookies()...)
+	me := browserRequest(server, http.MethodGet, "/api/auth/me", nil, cookies)
+	if me.Code != http.StatusOK {
+		t.Fatalf("login session missing: %d %s", me.Code, me.Body.String())
+	}
 }

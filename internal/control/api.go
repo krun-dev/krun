@@ -1,11 +1,16 @@
 package control
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/krun-dev/krun/internal/authorization"
+)
 
 func (s *Server) apiRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/v1/me", s.protected(false, s.me))
 	m.HandleFunc("GET /api/v1/roles", s.protected(false, func(st *State, p Principal, r *http.Request) (any, int, error) {
-		return map[string]any{"roles": []string{"system_admin", "org_admin", "developer", "publisher", "viewer"}, "actions": actions, "environments": environments}, 200, nil
+		roles, actions, environments := authorization.Catalog()
+		return map[string]any{"roles": roles, "actions": actions, "environments": environments}, 200, nil
 	}))
 	m.HandleFunc("POST /api/v1/authz/check", s.protected(false, s.check))
 	m.HandleFunc("GET /api/v1/orgs", s.protected(false, s.orgList))

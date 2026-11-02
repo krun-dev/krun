@@ -5,10 +5,9 @@ import (
 	"sync"
 	"testing"
 	"time"
-)
 
-// The rest of the suite runs on the in-memory store, which cannot exercise
-// conditional updates or throttled writes. These cases need a real database.
+	appconfig "github.com/krun-dev/krun/internal/config"
+)
 
 // TestPostgresBuildClaimIsExclusive covers the replacing of the advisory-lock
 // leader election: two replicas racing for the same build must not both win.
@@ -114,8 +113,8 @@ func TestPostgresWorkerRepositoryRevisionCASIsExclusive(t *testing.T) {
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Services["svc-repository-cas"] = WorkerService{
 			Service: "svc-repository-cas", Organization: "org-1", Domains: []string{"internal"},
-			Environments: map[string]WorkerEnvironment{workerBaseline: {
-				Name: workerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{},
+			Environments: map[string]WorkerEnvironment{appconfig.WorkerBaseline: {
+				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{},
 			}},
 		}
 		return nil
@@ -161,8 +160,8 @@ func TestPostgresWorkerEnvironmentConfigCASIsExclusive(t *testing.T) {
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Services["svc-environment-cas"] = WorkerService{
 			Service: "svc-environment-cas", Organization: "org-1", Domains: []string{"internal"},
-			Environments: map[string]WorkerEnvironment{workerBaseline: {
-				Name: workerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{},
+			Environments: map[string]WorkerEnvironment{appconfig.WorkerBaseline: {
+				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{},
 			}},
 		}
 		return nil
@@ -176,13 +175,13 @@ func TestPostgresWorkerEnvironmentConfigCASIsExclusive(t *testing.T) {
 		go func(value string) {
 			errs <- store.Update(ctx, PartitionWorkers, func(st *State) error {
 				service := st.Workers.Services["svc-environment-cas"]
-				environment := service.Environments[workerBaseline]
+				environment := service.Environments[appconfig.WorkerBaseline]
 				if environment.ConfigRevision != 1 {
 					return problem(409, "REVISION_CONFLICT", "test did not load the shared pre-image")
 				}
 				environment.Variables = map[string]string{"VALUE": value}
 				environment.ConfigRevision++
-				service.Environments[workerBaseline] = environment
+				service.Environments[appconfig.WorkerBaseline] = environment
 				st.Workers.Services[service.Service] = service
 				ready <- struct{}{}
 				<-start
@@ -198,7 +197,7 @@ func TestPostgresWorkerEnvironmentConfigCASIsExclusive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	environment := st.Workers.Services["svc-environment-cas"].Environments[workerBaseline]
+	environment := st.Workers.Services["svc-environment-cas"].Environments[appconfig.WorkerBaseline]
 	if environment.ConfigRevision != 2 || (environment.Variables["VALUE"] != "alpha" && environment.Variables["VALUE"] != "bravo") {
 		t.Fatalf("environment CAS result = %+v", environment)
 	}
@@ -210,8 +209,8 @@ func TestPostgresWorkerDomainsCASIsExclusive(t *testing.T) {
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Services["svc-domains-cas"] = WorkerService{
 			Service: "svc-domains-cas", Organization: "org-1", Domains: []string{"internal"},
-			Environments: map[string]WorkerEnvironment{workerBaseline: {
-				Name: workerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{},
+			Environments: map[string]WorkerEnvironment{appconfig.WorkerBaseline: {
+				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{},
 			}},
 		}
 		return nil
@@ -261,8 +260,8 @@ func TestPostgresWorkerPreviewSetCASPreventsConcurrentLimitOverflow(t *testing.T
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Services["svc-preview-cas"] = WorkerService{
 			Service: "svc-preview-cas", Organization: "org-1", Domains: []string{"internal"},
-			Environments: map[string]WorkerEnvironment{workerBaseline: {
-				Name: workerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{},
+			Environments: map[string]WorkerEnvironment{appconfig.WorkerBaseline: {
+				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{},
 			}},
 		}
 		return nil

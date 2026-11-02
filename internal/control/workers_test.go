@@ -11,6 +11,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	workerartifact "github.com/krun-dev/krun/internal/artifact"
+	appconfig "github.com/krun-dev/krun/internal/config"
+	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
 func workerTestServer(t *testing.T) (*Server, *Store, string) {
@@ -29,6 +33,7 @@ func workerTestServer(t *testing.T) (*Server, *Store, string) {
 	}
 	return s, store, "/api/v1/orgs/org-a/services/svc-a/workers"
 }
+
 func TestWorkerBuildPermissionScopeAndIdempotency(t *testing.T) {
 	s, store, base := workerTestServer(t)
 	payload := `{"environment":"fix-demo","entrypoint":"index.ts","files":{"index.ts":"export default {fetch(){return new Response('ok')}}"},"idempotency_key":"build-one"}`
@@ -160,10 +165,10 @@ func TestWorkerOverviewAggregatesPollingState(t *testing.T) {
 		t.Fatal(response.Code, response.Body.String())
 	}
 	var overview struct {
-		Builds       []WorkerBuild               `json:"builds"`
-		Environments []workerOverviewEnvironment `json:"environments"`
-		Operations   []WorkerOperation           `json:"operations"`
-		Releases     map[string]WorkerRelease    `json:"releases"`
+		Builds       []WorkerBuild                         `json:"builds"`
+		Environments []workerapp.WorkerOverviewEnvironment `json:"environments"`
+		Operations   []WorkerOperation                     `json:"operations"`
+		Releases     map[string]WorkerRelease              `json:"releases"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &overview); err != nil {
 		t.Fatal(err)
@@ -178,20 +183,22 @@ func TestWorkerOverviewAggregatesPollingState(t *testing.T) {
 		t.Fatalf("production overview incomplete: %+v", overview.Environments[0])
 	}
 }
+
 func TestWorkerSourcesCannotEscapeOrOverridePlatformEntry(t *testing.T) {
 	cases := []struct {
 		entry string
 		files map[string]string
-	}{{"../evil.ts", map[string]string{"../evil.ts": "x"}}, {"/etc/passwd.js", map[string]string{"/etc/passwd.js": "x"}}, {"a/../index.ts", map[string]string{"a/../index.ts": "x"}}, {"__krun_entry__.mjs", map[string]string{"__krun_entry__.mjs": "x"}}, {"index.ts", map[string]string{"index.ts": strings.Repeat("x", workerSourceBytesMax+1)}}}
+	}{{"../evil.ts", map[string]string{"../evil.ts": "x"}}, {"/etc/passwd.js", map[string]string{"/etc/passwd.js": "x"}}, {"a/../index.ts", map[string]string{"a/../index.ts": "x"}}, {"__krun_entry__.mjs", map[string]string{"__krun_entry__.mjs": "x"}}, {"index.ts", map[string]string{"index.ts": strings.Repeat("x", workerartifact.WorkerSourceBytesMax+1)}}}
 	for _, tc := range cases {
-		if sourceValid(tc.entry, tc.files) == nil {
+		if workerartifact.SourceValid(tc.entry, tc.files) == nil {
 			t.Fatal("source accepted", tc.entry)
 		}
 	}
-	if e := sourceValid("src/index.ts", map[string]string{"src/index.ts": "import './util'", "src/util.ts": "export const x=1"}); e != nil {
+	if e := workerartifact.SourceValid("src/index.ts", map[string]string{"src/index.ts": "import './util'", "src/util.ts": "export const x=1"}); e != nil {
 		t.Fatal(e)
 	}
 }
+
 func seedWorkerBuild(t *testing.T, s *Server, store *Store, base string) WorkerBuild {
 	r := request(s, "POST", base+"/builds", "krun_cli_admin", `{"environment":"production","entrypoint":"index.ts","files":{"index.ts":"export default {fetch(){return new Response('ok')}}"},"idempotency_key":"seed"}`)
 	if r.Code != 202 {
@@ -208,6 +215,7 @@ func seedWorkerBuild(t *testing.T, s *Server, store *Store, base string) WorkerB
 	})
 	return b
 }
+
 func TestWorkerReleaseQueuesImmutableConfigurationAndRejectsInvalidTarget(t *testing.T) {
 	s, store, base := workerTestServer(t)
 	b := seedWorkerBuild(t, s, store, base)
@@ -242,6 +250,7 @@ func TestWorkerReleaseQueuesImmutableConfigurationAndRejectsInvalidTarget(t *tes
 		return nil
 	})
 }
+
 func TestWorkerActorKeyRevocationIsRechecked(t *testing.T) {
 	s, store, base := workerTestServer(t)
 	b := seedWorkerBuild(t, s, store, base)
@@ -346,9 +355,10 @@ func TestWorkerEnvironmentScopedKeyCanReadCollections(t *testing.T) {
 		t.Fatal(r.Code, r.Body.String())
 	}
 }
+
 func workerArchive(t *testing.T, names []string, module string, link bool) []byte {
 	t.Helper()
-	manifest, _ := json.Marshal(workerManifest{Schema: 2, Profile: workerProfile, CompatibilityDate: workerDefaultCompatibilityDate, MainModule: "index.js", Modules: []workerManifestModule{{Name: "index.js", Path: "modules/index.js", Type: "esm", Digest: bytesDigest([]byte(module)), Size: len(module)}}})
+	manifest, _ := json.Marshal(workerartifact.WorkerManifest{Schema: 2, Profile: workerartifact.WorkerProfile, CompatibilityDate: workerartifact.WorkerDefaultCompatibilityDate, MainModule: "index.js", Modules: []workerartifact.WorkerManifestModule{{Name: "index.js", Path: "modules/index.js", Type: "esm", Digest: workerartifact.BytesDigest([]byte(module)), Size: len(module)}}})
 	var raw bytes.Buffer
 	gz := gzip.NewWriter(&raw)
 	tr := tar.NewWriter(gz)
@@ -374,18 +384,20 @@ func workerArchive(t *testing.T, names []string, module string, link bool) []byt
 	_ = gz.Close()
 	return raw.Bytes()
 }
+
 func TestWorkerArchiveIntegrityAndTraversal(t *testing.T) {
 	raw := workerArchive(t, []string{"manifest.json", "modules/index.js"}, "export default {}", false)
-	code, _, e := parseWorkerArchive(raw)
-	if e != nil || code.ArchiveDigest != bytesDigest(raw) {
+	code, _, e := workerartifact.ParseWorkerArchive(raw)
+	if e != nil || code.ArchiveDigest != workerartifact.BytesDigest(raw) {
 		t.Fatal(e, code)
 	}
 	for _, bad := range [][]byte{workerArchive(t, []string{"manifest.json", "../../escape"}, "x", false), workerArchive(t, []string{"manifest.json", "modules/index.js", "modules/index.js"}, "x", false), workerArchive(t, []string{"manifest.json", "modules/index.js"}, "x", true), raw[:len(raw)-4]} {
-		if _, _, e := parseWorkerArchive(bad); e == nil {
+		if _, _, e := workerartifact.ParseWorkerArchive(bad); e == nil {
 			t.Fatal("unsafe or truncated archive accepted")
 		}
 	}
 }
+
 func TestWorkerRoutesReportUnconfiguredInsteadOfMissing(t *testing.T) {
 	s, _ := testServer(t)
 	r := request(s, http.MethodGet, "/api/v1/orgs/org-a/workers/services", "krun_cli_admin", "")
@@ -400,7 +412,7 @@ func TestWorkerRoutesReportUnconfiguredInsteadOfMissing(t *testing.T) {
 
 func TestWorkerRuntimeChannelRequiresCredentialAndPool(t *testing.T) {
 	s, _, _ := workerTestServer(t)
-	token := s.Config.Workers.defaultRuntimePool().RuntimeToken
+	token := s.Config.Workers.DefaultRuntimePool().RuntimeToken
 	r := httptest.NewRequest("GET", "/api/internal/workers/config/snapshot", nil)
 	r.Header.Set("Authorization", "Bearer "+token)
 	if s.workerRuntimeAllowed(r) {
@@ -477,24 +489,24 @@ func TestWorkerConsoleInvocationRejectsUnauthorizedAndUnpublishedTargets(t *test
 }
 
 // testWorkersConfig is a minimal catalog: one Gateway, one default domain.
-func testWorkersConfig() *WorkersConfig {
-	return &WorkersConfig{
+func testWorkersConfig() *appconfig.WorkersConfig {
+	return &appconfig.WorkersConfig{
 		Namespace:   "workers-mvp",
 		BuilderMode: "local",
-		RuntimePools: []WorkerRuntimePool{{
+		RuntimePools: []appconfig.WorkerRuntimePool{{
 			ID: "default", Access: []string{"private"}, PrivateEgress: "direct", PublicEgress: "deny",
 			RuntimeService: "runtime-default", ValidatorService: "runtime-validator-default", RuntimeToken: strings.Repeat("r", 24),
 			ManagementToken: strings.Repeat("m", 24), Default: true,
 		}},
-		NetworkProfiles: []WorkerNetworkProfile{{
+		NetworkProfiles: []appconfig.WorkerNetworkProfile{{
 			ID: "default", Name: "Default", Default: true, Approval: "none", Visibility: "public",
-			Requirements: WorkerNetworkRequirements{Ingress: []string{"private"}, PrivateEgress: "direct", PublicEgress: "deny"},
+			Requirements: appconfig.WorkerNetworkRequirements{Ingress: []string{"private"}, PrivateEgress: "direct", PublicEgress: "deny"},
 		}},
 
-		Gateways: []WorkerGateway{
+		Gateways: []appconfig.WorkerGateway{
 			{ID: "internal", Name: "workers-mvp", Namespace: "kgateway-system", Section: "private"},
 		},
-		Domains: []WorkerDomain{
+		Domains: []appconfig.WorkerDomain{
 			{ID: "internal", Domain: "workers.test", Label: "内网", Access: "private", Gateway: "internal", Default: true},
 		},
 	}

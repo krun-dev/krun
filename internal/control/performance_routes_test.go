@@ -8,6 +8,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	kubernetes "github.com/krun-dev/krun/internal/adapters/kubernetes"
+	appconfig "github.com/krun-dev/krun/internal/config"
+	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
 func TestWorkerRouteInventoryPaginationAndReuse(t *testing.T) {
@@ -28,14 +32,14 @@ func TestWorkerRouteInventoryPaginationAndReuse(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]string{"continue": token}, "items": names})
 	}))
 	defer server.Close()
-	kube := &workerKubernetes{base: server.URL, client: server.Client(), namespace: "test"}
-	names, err := kube.listRoutes(context.Background())
+	kube := &kubernetes.Client{Base: server.URL, Client: server.Client(), Namespace: "test"}
+	names, err := kube.ListRoutes(context.Background())
 	if err != nil || len(names) != 103 || calls != 2 {
 		t.Fatalf("names=%d calls=%d err=%v", len(names), calls, err)
 	}
-	ctx := context.WithValue(context.Background(), workerRouteInventoryKey{}, names)
+	ctx := context.WithValue(context.Background(), kubernetes.WorkerRouteInventoryKey{}, names)
 	for i := 0; i < 1000; i++ {
-		if _, err = staleWorkerRoutes(ctx, kube, "workers-", map[string]bool{}); err != nil {
+		if _, err = kubernetes.StaleWorkerRoutes(ctx, kube, "workers-", map[string]bool{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -43,6 +47,7 @@ func TestWorkerRouteInventoryPaginationAndReuse(t *testing.T) {
 		t.Fatalf("per-service stale checks repeated namespace LIST %d times", calls)
 	}
 }
+
 func TestSharedGatewayRouteCountIndependentOfSites(t *testing.T) {
 	posts := []map[string]any{}
 	lists := 0
@@ -61,11 +66,11 @@ func TestSharedGatewayRouteCountIndependentOfSites(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	config := workerProjectionConfig([]WorkerDomain{{ID: "internal", Domain: "workers.test", Gateway: "edge"}})
-	config.Gateways = []WorkerGateway{{ID: "edge", Name: "edge", Namespace: "test", Section: "http"}}
+	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test", Gateway: "edge"}})
+	config.Gateways = []appconfig.WorkerGateway{{ID: "edge", Name: "edge", Namespace: "test", Section: "http"}}
 
-	controller := &workersController{config: config, kube: &workerKubernetes{base: server.URL, client: server.Client(), namespace: "test"}}
-	_, err := controller.reconcileRoutes(context.Background())
+	controller := &workerapp.Controller{Config: config, Kube: &kubernetes.Client{Base: server.URL, Client: server.Client(), Namespace: "test"}}
+	_, err := controller.ReconcileRoutes(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +78,7 @@ func TestSharedGatewayRouteCountIndependentOfSites(t *testing.T) {
 		t.Fatalf("shared routing produced %d routes and %d namespace lists", len(posts), lists)
 	}
 	hosts := posts[0]["spec"].(map[string]any)["hostnames"].([]any)
-	if hosts[0] != "*."+config.poolHostSuffix("default", "workers.test") {
+	if hosts[0] != "*."+config.PoolHostSuffix("default", "workers.test") {
 		t.Fatalf("unpartitioned shared hostname: %v", hosts)
 	}
 }

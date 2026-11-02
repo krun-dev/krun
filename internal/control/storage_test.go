@@ -26,6 +26,7 @@ func openStoreForTest(t *testing.T, ctx context.Context, dsn string) (*Store, er
 	t.Cleanup(func() { testPools.Delete(store); pool.Close() })
 	return store, nil
 }
+
 func postgresTestPool(store *Store) *pgxpool.Pool {
 	value, ok := testPools.Load(store)
 	if !ok {
@@ -33,6 +34,7 @@ func postgresTestPool(store *Store) *pgxpool.Pool {
 	}
 	return value.(*pgxpool.Pool)
 }
+
 func memorySnapshot(t *testing.T, store *Store) *State {
 	t.Helper()
 	var state *State
@@ -41,6 +43,7 @@ func memorySnapshot(t *testing.T, store *Store) *State {
 	}
 	return state
 }
+
 func memoryAudits(t *testing.T, store *Store) []Audit {
 	t.Helper()
 	var audits []Audit

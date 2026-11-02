@@ -7,14 +7,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/coreos/go-oidc/v3/oidc"
-	"github.com/go-jose/go-jose/v4"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/go-jose/go-jose/v4"
+	identityprovider "github.com/krun-dev/krun/internal/adapters/identity"
+	appconfig "github.com/krun-dev/krun/internal/config"
 	"golang.org/x/oauth2"
 )
 
@@ -42,18 +44,18 @@ func TestGenericOAuthPKCEAndMappedUserInfo(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	pc := ProviderConfig{ID: "oauth", Type: "oauth2", UserInfoURL: upstream.URL + "/user", SubjectPath: "data.users.0.id", NamePath: "data.users.0.name", UserInfo: UserInfoConfig{Method: "POST", Body: map[string]any{"profile": true}, Query: map[string]string{"locale": "zh-CN"}, Success: &SuccessCondition{Path: "code", Equals: json.Number("0")}}}
-	p := &provider{config: pc, client: upstream.Client(), oauth: &oauth2.Config{ClientID: "client", ClientSecret: "secret", RedirectURL: "http://127.0.0.1/callback", Endpoint: oauth2.Endpoint{AuthURL: upstream.URL + "/authorize", TokenURL: upstream.URL + "/token", AuthStyle: oauth2.AuthStyleInParams}}}
-	redirect := p.begin("state", "verifier", "nonce")
+	pc := appconfig.ProviderConfig{ID: "oauth", Type: "oauth2", UserInfoURL: upstream.URL + "/user", SubjectPath: "data.users.0.id", NamePath: "data.users.0.name", UserInfo: appconfig.UserInfoConfig{Method: "POST", Body: map[string]any{"profile": true}, Query: map[string]string{"locale": "zh-CN"}, Success: &appconfig.SuccessCondition{Path: "code", Equals: json.Number("0")}}}
+	p := &identityprovider.Provider{Config: pc, Client: upstream.Client(), Oauth: &oauth2.Config{ClientID: "client", ClientSecret: "secret", RedirectURL: "http://127.0.0.1/callback", Endpoint: oauth2.Endpoint{AuthURL: upstream.URL + "/authorize", TokenURL: upstream.URL + "/token", AuthStyle: oauth2.AuthStyleInParams}}}
+	redirect := p.Begin("state", "verifier", "nonce")
 	if !strings.Contains(redirect, "code_challenge_method=S256") || !strings.Contains(redirect, "state=state") {
 		t.Fatal("missing PKCE/state")
 	}
-	identity, e := p.complete(context.Background(), "code", "verifier", "nonce")
+	identity, e := p.Complete(context.Background(), "code", "verifier", "nonce")
 	if e != nil || identity.Subject != "9007199254740993" || identity.Name != "Test" || verifier != "verifier" {
 		t.Fatal(identity, verifier, e)
 	}
-	p.config.UserInfo.Success.Equals = json.Number("1")
-	if _, e = p.complete(context.Background(), "code", "verifier", "nonce"); e == nil {
+	p.Config.UserInfo.Success.Equals = json.Number("1")
+	if _, e = p.Complete(context.Background(), "code", "verifier", "nonce"); e == nil {
 		t.Fatal("failed business response accepted")
 	}
 }
@@ -93,28 +95,28 @@ func TestOIDCVerifiesSignatureIssuerAudienceExpiryAndNonce(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	p := &provider{config: ProviderConfig{ID: "oidc", Type: "oidc", ClientID: "client"}, client: upstream.Client(), oidc: idp, oauth: &oauth2.Config{ClientID: "client", ClientSecret: "secret", Endpoint: oauth2.Endpoint{AuthURL: issuer + "/authorize", TokenURL: issuer + "/token", AuthStyle: oauth2.AuthStyleInParams}}}
-	identity, e := p.complete(context.Background(), "code", "verifier", "nonce")
+	p := &identityprovider.Provider{Config: appconfig.ProviderConfig{ID: "oidc", Type: "oidc", ClientID: "client"}, Client: upstream.Client(), Oidc: idp, Oauth: &oauth2.Config{ClientID: "client", ClientSecret: "secret", Endpoint: oauth2.Endpoint{AuthURL: issuer + "/authorize", TokenURL: issuer + "/token", AuthStyle: oauth2.AuthStyleInParams}}}
+	identity, e := p.Complete(context.Background(), "code", "verifier", "nonce")
 	if e != nil || identity.Subject != "stable-subject" {
 		t.Fatal(identity, e)
 	}
 	nonce = "wrong"
-	if _, e = p.complete(context.Background(), "code", "verifier", "nonce"); e == nil {
+	if _, e = p.Complete(context.Background(), "code", "verifier", "nonce"); e == nil {
 		t.Fatal("bad nonce accepted")
 	}
 	nonce = "nonce"
 	audience = "other-client"
-	if _, e = p.complete(context.Background(), "code", "verifier", "nonce"); e == nil {
+	if _, e = p.Complete(context.Background(), "code", "verifier", "nonce"); e == nil {
 		t.Fatal("bad audience accepted")
 	}
 	audience = "client"
 	expires = time.Now().Add(-time.Hour).Unix()
-	if _, e = p.complete(context.Background(), "code", "verifier", "nonce"); e == nil {
+	if _, e = p.Complete(context.Background(), "code", "verifier", "nonce"); e == nil {
 		t.Fatal("expired ID token accepted")
 	}
 	expires = time.Now().Add(time.Hour).Unix()
 	issuer = "https://wrong-issuer.example"
-	if _, e = p.complete(context.Background(), "code", "verifier", "nonce"); e == nil {
+	if _, e = p.Complete(context.Background(), "code", "verifier", "nonce"); e == nil {
 		t.Fatal("bad issuer accepted")
 	}
 }
@@ -159,10 +161,10 @@ func TestProviderFailureDiagnosticsDoNotExposeCredentials(t *testing.T) {
 			}))
 			defer upstream.Close()
 			client := upstream.Client()
-			client.CheckRedirect = func(*http.Request, []*http.Request) error { return errUpstreamRedirect }
-			p := &provider{config: ProviderConfig{Type: "oauth2", UserInfoURL: upstream.URL + "/user", SubjectPath: "sub"}, client: client, oauth: &oauth2.Config{ClientID: "client", ClientSecret: secret, Endpoint: oauth2.Endpoint{TokenURL: upstream.URL + "/token", AuthStyle: oauth2.AuthStyleInParams}}}
-			_, err := p.complete(context.Background(), secret, "verifier", "")
-			var failure *providerFailure
+			client.CheckRedirect = func(*http.Request, []*http.Request) error { return identityprovider.ErrUpstreamRedirect }
+			p := &identityprovider.Provider{Config: appconfig.ProviderConfig{Type: "oauth2", UserInfoURL: upstream.URL + "/user", SubjectPath: "sub"}, Client: client, Oauth: &oauth2.Config{ClientID: "client", ClientSecret: secret, Endpoint: oauth2.Endpoint{TokenURL: upstream.URL + "/token", AuthStyle: oauth2.AuthStyleInParams}}}
+			_, err := p.Complete(context.Background(), secret, "verifier", "")
+			var failure *identityprovider.ProviderFailure
 			if !errors.As(err, &failure) || failure.Stage != tc.stage || failure.Reason != tc.reason || failure.Status != tc.status {
 				t.Fatalf("unexpected safe diagnostic: %v", err)
 			}

@@ -2,6 +2,8 @@ package control
 
 import (
 	"net/http"
+
+	"github.com/krun-dev/krun/internal/iam"
 )
 
 func resourceKind(r *http.Request) string {
@@ -10,6 +12,7 @@ func resourceKind(r *http.Request) string {
 	}
 	return "service"
 }
+
 func containsPath(path, part string) bool {
 	for i := 0; i+len(part) <= len(path); i++ {
 		if path[i:i+len(part)] == part {
@@ -18,6 +21,7 @@ func containsPath(path, part string) bool {
 	}
 	return false
 }
+
 func (s *Server) resourceTarget(st *State, r *http.Request) (Target, error) {
 	t, e := resolve(st, resourceKind(r), r.PathValue("resource"), "global")
 	if e != nil || t.Organization != r.PathValue("org") {
@@ -25,6 +29,7 @@ func (s *Server) resourceTarget(st *State, r *http.Request) (Target, error) {
 	}
 	return t, nil
 }
+
 func (s *Server) resourceList(st *State, p Principal, r *http.Request) (any, int, error) {
 	t, e := s.orgTarget(st, r)
 	if e != nil {
@@ -34,22 +39,13 @@ func (s *Server) resourceList(st *State, p Principal, r *http.Request) (any, int
 	if e = s.require(st, p, r, kind+".list", t); e != nil {
 		return nil, 0, e
 	}
-	out := []Resource{}
-	for _, res := range st.Resources {
-		if res.Organization != t.ID || res.Kind != kind {
-			continue
-		}
-		target, _ := resolve(st, kind, res.ID, "global")
-		d, e := Authorize(st, p, kind+".read", target)
-		if e != nil {
-			return nil, 0, e
-		}
-		if d.Allowed {
-			out = append(out, res)
-		}
+	out, err := s.iam().Resources(st, p, t, kind)
+	if err != nil {
+		return nil, 0, err
 	}
 	return resourcePageItems(st, r, out)
 }
+
 func (s *Server) resourceCreate(st *State, p Principal, r *http.Request) (any, int, error) {
 	t, e := s.orgTarget(st, r)
 	if e != nil {
@@ -59,20 +55,14 @@ func (s *Server) resourceCreate(st *State, p Principal, r *http.Request) (any, i
 	if e = s.require(st, p, r, kind+".create", t); e != nil {
 		return nil, 0, e
 	}
-	var in struct {
-		Name string `json:"name"`
-	}
+	var in iam.NameInput
 	if e = body(r, &in); e != nil {
 		return nil, 0, e
 	}
-	if !nameValid(in.Name) {
-		return nil, 0, problem(422, "INVALID_REQUEST", "Name required")
-	}
-	res := Resource{ID: randomID(kind), Kind: kind, Name: in.Name, Organization: t.ID, Revision: 1}
-	st.Resources[res.ID] = res
-	st.Revision++
-	return res, 201, nil
+	out, err := s.iam().CreateResource(st, t, kind, in)
+	return out, 201, err
 }
+
 func (s *Server) resourceDetail(st *State, p Principal, r *http.Request) (any, int, error) {
 	t, e := s.resourceTarget(st, r)
 	if e != nil {
@@ -86,6 +76,7 @@ func (s *Server) resourceDetail(st *State, p Principal, r *http.Request) (any, i
 	}
 	return st.Resources[t.ID], 200, nil
 }
+
 func (s *Server) resourceUpdate(st *State, p Principal, r *http.Request) (any, int, error) {
 	t, e := s.resourceTarget(st, r)
 	if e != nil {
@@ -94,26 +85,14 @@ func (s *Server) resourceUpdate(st *State, p Principal, r *http.Request) (any, i
 	if e = s.require(st, p, r, t.Kind+".update", t); e != nil {
 		return nil, 0, e
 	}
-	var in struct {
-		Name     string `json:"name"`
-		Revision int    `json:"expected_revision"`
-	}
+	var in iam.RevisionNameInput
 	if e = body(r, &in); e != nil {
 		return nil, 0, e
 	}
-	res := st.Resources[t.ID]
-	if in.Revision != res.Revision {
-		return nil, 0, problem(409, "REVISION_CONFLICT", "Resource changed")
-	}
-	if !nameValid(in.Name) {
-		return nil, 0, problem(422, "INVALID_REQUEST", "Name required")
-	}
-	res.Name = in.Name
-	res.Revision++
-	st.Resources[t.ID] = res
-	st.Revision++
-	return res, 200, nil
+	out, err := s.iam().UpdateResource(st, t, in)
+	return out, 200, err
 }
+
 func (s *Server) resourceDelete(st *State, p Principal, r *http.Request) (any, int, error) {
 	t, e := s.resourceTarget(st, r)
 	if e != nil {
@@ -122,19 +101,6 @@ func (s *Server) resourceDelete(st *State, p Principal, r *http.Request) (any, i
 	if e = s.require(st, p, r, t.Kind+".delete", t); e != nil {
 		return nil, 0, e
 	}
-	delete(st.Resources, t.ID)
-	deletedGroups := map[string]bool{}
-	for id, group := range st.Groups {
-		if group.ScopeKind == t.Kind && group.ScopeID == t.ID {
-			deletedGroups[id] = true
-			delete(st.Groups, id)
-		}
-	}
-	for id, a := range st.Assignments {
-		if (a.ScopeKind == t.Kind && a.ScopeID == t.ID) || (a.SubjectKind == "group" && deletedGroups[a.SubjectID]) {
-			delete(st.Assignments, id)
-		}
-	}
-	st.Revision++
-	return nil, 204, nil
+	err := s.iam().DeleteResource(st, t)
+	return nil, 204, err
 }

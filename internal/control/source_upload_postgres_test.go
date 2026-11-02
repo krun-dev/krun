@@ -5,6 +5,9 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	appconfig "github.com/krun-dev/krun/internal/config"
+	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
 func TestPostgresSourceUploadReservationDefeatsStaleGCClaim(t *testing.T) {
@@ -13,15 +16,15 @@ func TestPostgresSourceUploadReservationDefeatsStaleGCClaim(t *testing.T) {
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Services["source-service"] = WorkerService{
 			Service: "source-service", Organization: "source-org",
-			Environments: map[string]WorkerEnvironment{workerBaseline: {
-				Name: workerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{},
+			Environments: map[string]WorkerEnvironment{appconfig.WorkerBaseline: {
+				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{},
 			}},
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	key := workerSourceUploadKey("source-org", "src-reservation")
+	key := workerapp.WorkerSourceUploadKey("source-org", "src-reservation")
 	if err := store.IssueWorkerSourceUpload(ctx, key, "source-org"); err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +42,7 @@ func TestPostgresSourceUploadReservationDefeatsStaleGCClaim(t *testing.T) {
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Builds["source-build"] = WorkerBuild{
 			ID: "source-build", Organization: "source-org", Service: "source-service",
-			Environment: workerBaseline, State: "queued", Entrypoint: "index.ts", Created: now(),
+			Environment: appconfig.WorkerBaseline, State: "queued", Entrypoint: "index.ts", Created: now(),
 		}
 		st.Workers.BuildPrivate["source-build"] = WorkerBuildPrivate{SourceKey: key}
 		return nil
@@ -62,7 +65,7 @@ func TestPostgresSourceUploadReservationDefeatsStaleGCClaim(t *testing.T) {
 	err = store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Builds["source-build-reuse"] = WorkerBuild{
 			ID: "source-build-reuse", Organization: "source-org", Service: "source-service",
-			Environment: workerBaseline, State: "queued", Entrypoint: "index.ts", Created: now(),
+			Environment: appconfig.WorkerBaseline, State: "queued", Entrypoint: "index.ts", Created: now(),
 		}
 		st.Workers.BuildPrivate["source-build-reuse"] = WorkerBuildPrivate{SourceKey: key}
 		return nil

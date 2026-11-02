@@ -142,7 +142,6 @@ type Audit struct {
 }
 
 type State struct {
-	Authorization *AuthorizationCache `json:"-"`
 	Workers       *WorkerState
 	Revision      int
 	Bootstrapped  bool

@@ -6,9 +6,8 @@ import (
 	"testing"
 )
 
-func TestStateJSONExcludesPendingCommandsAndAuthorization(t *testing.T) {
+func TestStateJSONExcludesPendingCommands(t *testing.T) {
 	state := NewState()
-	state.Authorization = NewAuthorizationCache()
 	state.PendingLogin = &LoginCommit{Session: Session{CSRF: "private-csrf"}}
 	state.PendingAudits = []Audit{{Actor: "private-pending-actor"}}
 	state.PendingWorkerSecrets = map[string]EncryptedWorkerSecret{
@@ -18,7 +17,7 @@ func TestStateJSONExcludesPendingCommandsAndAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"Authorization", "PendingLogin", "PendingAudits", "PendingWorkerSecrets", "private-"} {
+	for _, field := range []string{"PendingLogin", "PendingAudits", "PendingWorkerSecrets", "private-"} {
 		if strings.Contains(string(raw), field) {
 			t.Fatalf("request-local data leaked into JSON: %s", field)
 		}
@@ -27,7 +26,7 @@ func TestStateJSONExcludesPendingCommandsAndAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if clone.Authorization != nil || clone.PendingLogin != nil || len(clone.PendingAudits) != 0 || len(clone.PendingWorkerSecrets) != 0 {
+	if clone.PendingLogin != nil || len(clone.PendingAudits) != 0 || len(clone.PendingWorkerSecrets) != 0 {
 		t.Fatal("snapshot clone retained request-local commands")
 	}
 }

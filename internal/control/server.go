@@ -18,8 +18,15 @@ import (
 	"sync"
 	"time"
 
+	identityprovider "github.com/krun-dev/krun/internal/adapters/identity"
+	mailer "github.com/krun-dev/krun/internal/adapters/mail"
+	"github.com/krun-dev/krun/internal/audit"
+	authapp "github.com/krun-dev/krun/internal/auth"
+	"github.com/krun-dev/krun/internal/authorization"
+	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/configfile"
 	"github.com/krun-dev/krun/internal/localize"
+	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
 const apiJSONBodyMax = 1 << 20
@@ -43,69 +50,48 @@ func bodyWithLimit(r *http.Request, value any, limit int64) error {
 }
 
 type Server struct {
-	workers                *workersController
-	workerInvokeClient     *http.Client
-	workerRepositoryClient *http.Client
-	Config                 Config
-	Store                  *Store
-	mux                    *http.ServeMux
-	internalMux            *http.ServeMux
-	providers              map[string]*provider
-	trustedProxies         []*net.IPNet
-	sendEmail              func(context.Context, string, string, string) error
+	workers            *workerapp.Controller
+	workerInvokeClient *http.Client
+	Config             appconfig.Config
+	Store              *Store
+	mux                *http.ServeMux
+	internalMux        *http.ServeMux
+	providers          map[string]*identityprovider.Provider
+	trustedProxies     []*net.IPNet
+	sendEmail          func(context.Context, string, string, string) error
 }
 
-func NewServer(ctx context.Context, c Config, store *Store) (*Server, error) {
+func NewServer(ctx context.Context, c appconfig.Config, store *Store) (*Server, error) {
 	if e := c.Validate(); e != nil {
 		return nil, e
 	}
-	s := &Server{Config: c, Store: store, providers: map[string]*provider{}}
+	s := &Server{Config: c, Store: store, providers: map[string]*identityprovider.Provider{}}
 	for _, cidr := range c.TrustedProxyCIDRs {
 		_, network, _ := net.ParseCIDR(cidr) // Config.Validate already checked it.
 		s.trustedProxies = append(s.trustedProxies, network)
 	}
 	s.workerInvokeClient = newWorkerInvokeClient()
-	s.workerRepositoryClient = newWorkerRepositoryClient()
-	s.sendEmail = c.sendVerificationEmail
-	client := upstreamClient(c)
+	s.sendEmail = mailer.New(c).Send
+	client := identityprovider.NewHTTPClient(c)
 	for _, pc := range c.Providers {
-		if !pc.enabled() {
+		if !pc.IsEnabled() {
 			continue
 		}
-		p, e := newProvider(ctx, c, pc, client)
+		p, e := identityprovider.New(ctx, c, pc, client)
 		if e != nil {
 			return nil, e
 		}
 		s.providers[pc.ID] = p
 	}
-	registrationCtx := ctx
-	if store.Persistent() {
-		registrationCtx = withStateScope(ctx, stateReadScope{ActorOnly: true})
+	activeProviders := make([]appconfig.ProviderConfig, 0, len(s.providers))
+	for _, provider := range s.providers {
+		activeProviders = append(activeProviders, provider.Config)
 	}
-	if e := store.Update(registrationCtx, PartitionIAM, func(st *State) error {
-		for _, p := range s.providers {
-			fp := fingerprint(p.config)
-			if old, ok := st.Sources[p.config.Source]; ok && old != fp {
-				return errors.New("existing identity source namespace cannot be replaced")
-			}
-			providerKey := "provider:" + p.config.ID
-			namespaceKey := "namespace:" + namespace(p.config)
-			if old, ok := st.Sources[providerKey]; ok && old != p.config.Source {
-				return errors.New("provider identity source cannot be reassigned")
-			}
-			if old, ok := st.Sources[namespaceKey]; ok && old != p.config.Source {
-				return errors.New("identity namespace already registered")
-			}
-			st.Sources[providerKey] = p.config.Source
-			st.Sources[namespaceKey] = p.config.Source
-			st.Sources[p.config.Source] = fp
-		}
-		return nil
-	}); e != nil {
-		return nil, e
+	if err := s.authApplication().RegisterSources(ctx, activeProviders); err != nil {
+		return nil, err
 	}
 	if c.Workers != nil {
-		if err := ensureWorkerConfigCatalogue(ctx, store, c.Workers); err != nil {
+		if err := workerapp.EnsureWorkerConfigCatalogue(ctx, store, c.Workers); err != nil {
 			return nil, err
 		}
 		var err error
@@ -117,6 +103,7 @@ func NewServer(ctx context.Context, c Config, store *Store) (*Server, error) {
 	s.routes()
 	return s, nil
 }
+
 func (s *Server) routes() {
 	m := http.NewServeMux()
 	s.mux = m
@@ -187,6 +174,7 @@ func (s *Server) routes() {
 		fs.ServeHTTP(w, r)
 	})
 }
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Language", localize.RequestLanguage(r.Header.Get("Accept-Language")))
 	w.Header().Add("Vary", "Accept-Language")
@@ -207,6 +195,7 @@ func (s *Server) serveInternal(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	s.internalMux.ServeHTTP(w, r)
 }
+
 func (s *Server) json(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
@@ -214,6 +203,7 @@ func (s *Server) json(w http.ResponseWriter, status int, v any) {
 		_ = json.NewEncoder(w).Encode(v)
 	}
 }
+
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, e error) {
 	a := &APIError{Status: 503, Code: "AUTHORIZATION_UNAVAILABLE", Message: "Control service unavailable"}
 	var target *APIError
@@ -226,15 +216,18 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, e error) {
 	}
 	s.json(w, a.Status, map[string]any{"error": map[string]string{"code": a.Code, "message": localize.Text(localize.RequestLanguage(r.Header.Get("Accept-Language")), a.Message)}, "request_id": r.Header.Get("X-Krun-Request-ID")})
 }
+
 func (s *Server) cookieName(kind string) string {
 	if s.Config.Development {
 		return "krun_dev_" + kind
 	}
 	return "__Host-krun_" + kind
 }
+
 func (s *Server) setCookie(w http.ResponseWriter, kind, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{Name: s.cookieName(kind), Value: value, Path: "/", HttpOnly: true, Secure: !s.Config.Development, SameSite: http.SameSiteLaxMode, MaxAge: maxAge})
 }
+
 func (s *Server) cookie(r *http.Request, kind string) string {
 	c, e := r.Cookie(s.cookieName(kind))
 	if e != nil {
@@ -242,6 +235,7 @@ func (s *Server) cookie(r *http.Request, kind string) string {
 	}
 	return c.Value
 }
+
 func (s *Server) validCSRF(r *http.Request, expected string) bool {
 	if r.Header.Get("Origin") != s.Config.PublicURL {
 		return false
@@ -252,9 +246,10 @@ func (s *Server) validCSRF(r *http.Request, expected string) bool {
 	}
 	return value != "" && expected != "" && subtle.ConstantTimeCompare([]byte(value), []byte(expected)) == 1
 }
+
 func (s *Server) sourceEnabled(source string) bool {
 	for _, p := range s.providers {
-		if p.config.Source == source {
+		if p.Config.Source == source {
 			return true
 		}
 	}
@@ -314,33 +309,7 @@ func (s *Server) readCredentials(r *http.Request) (authCredentials, error) {
 // no writes: refreshing last-seen is a separate throttled statement issued by
 // protected() only after the request succeeds.
 func (s *Server) authenticate(st *State, c authCredentials, r *http.Request) (Principal, error) {
-	p := Principal{}
-	if c.isKey {
-		if k, ok := st.Keys[c.keyID]; ok && k.Active() {
-			p.User = st.Users[k.Owner]
-			p.Kind = "api_key"
-			p.Key = &k
-		}
-	} else if c.hasSession {
-		session := c.session
-		// A bearer token must never be satisfied by a cookie session, or the
-		// reverse: CLI sessions are only reachable with an Authorization header.
-		if session.CLI == (r.Header.Get("Authorization") != "") && now().Before(session.Absolute) && now().Sub(session.Seen) < 30*time.Minute {
-			u, exists := st.Users[session.User]
-			if exists && u.AuthVersion == session.AuthVersion {
-				p.User = u
-				p.Kind = "session"
-				p.SessionHash = session.Hash
-				if session.CLI {
-					p.Kind = "cli_session"
-				}
-			}
-		}
-	}
-	if p.User.ID == "" || p.User.Status != "active" || !s.sourceEnabled(p.User.Source) {
-		return Principal{}, problem(401, "UNAUTHENTICATED", "Authentication required")
-	}
-	return p, nil
+	return s.authApplication().Authenticate(st, authapp.Credentials{IsKey: c.isKey, HasSession: c.hasSession, Bearer: r.Header.Get("Authorization") != "", KeyID: c.keyID, Session: c.session})
 }
 
 type endpoint func(*State, Principal, *http.Request) (any, int, error)
@@ -420,6 +389,9 @@ func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, b
 				appErr = e
 				return nil
 			}
+			if requestPersist == 0 {
+				p = authorization.ForReadSnapshot(st, p)
+			}
 			out, status, appErr = fn(st, p, r)
 			if appErr != nil {
 				if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -448,23 +420,11 @@ func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, b
 		s.json(w, status, out)
 	}
 }
+
 func (s *Server) audit(st *State, p Principal, r *http.Request, action, target string, allowed bool) {
-	key := ""
-	if p.Key != nil {
-		key = p.Key.ID
-	}
-	org := ""
-	if _, ok := st.Organizations[target]; ok {
-		org = target
-	}
-	if res, ok := st.Resources[target]; ok {
-		org = res.Organization
-	}
-	if key, ok := st.Keys[target]; ok {
-		org = key.Organization
-	}
-	st.RecordAudit(Audit{ID: randomID("audit"), Time: now(), Actor: p.User.ID, Credential: p.Kind, KeyID: key, Action: action, Resource: target, Organization: org, Allowed: allowed, RequestID: r.Header.Get("X-Krun-Request-ID"), Revision: st.Revision})
+	audit.Record(st, p, r.Header.Get("X-Krun-Request-ID"), action, target, allowed)
 }
+
 func (s *Server) require(st *State, p Principal, r *http.Request, action string, t Target) error {
 	d, e := Authorize(st, p, action, t)
 	if e != nil {
@@ -480,6 +440,7 @@ func (s *Server) require(st *State, p Principal, r *http.Request, action string,
 	}
 	return nil
 }
+
 func (s *Server) checkRateLimit(r *http.Request) error {
 	exceeded, err := s.Store.RateLimitExceeded(r.Context(), "auth", s.clientIP(r), time.Minute, 120)
 	if err != nil {
@@ -539,33 +500,13 @@ func (s *Server) me(st *State, p Principal, r *http.Request) (any, int, error) {
 // logout deletes this session row and bumps the browser generation so a
 // concurrent login cannot be replayed onto the just-closed browser.
 func (s *Server) logout(st *State, p Principal, r *http.Request) (any, int, error) {
-	browserHash := digest(s.cookie(r, "browser"))
-	s.audit(st, p, r, "auth.logout", p.User.ID, true)
-	if s.Store.Persistent() {
-		audits := append([]Audit(nil), st.PendingAudits...)
-		st.PendingAudits = nil
-		if e := s.Store.LogoutSessionAudited(r.Context(), p.SessionHash, browserHash, audits); e != nil {
-			return nil, 0, e
-		}
-		return nil, 204, nil
-	}
-	if e := s.Store.DeleteSession(r.Context(), p.SessionHash); e != nil {
-		return nil, 0, e
-	}
-	if browser, ok, e := s.Store.BrowserFor(r.Context(), browserHash); e != nil {
-		return nil, 0, e
-	} else if ok {
-		browser.Generation++
-		if e = s.Store.UpsertBrowser(r.Context(), browserHash, browser); e != nil {
-			return nil, 0, e
-		}
-	}
-	return nil, 204, nil
+	return nil, 204, s.authApplication().Logout(r.Context(), st, p, digest(s.cookie(r, "browser")), r.Header.Get("X-Krun-Request-ID"))
 }
+
 func (s *Server) providersHandler(w http.ResponseWriter, r *http.Request) {
 	out := []map[string]string{}
 	for _, pc := range s.Config.Providers {
-		if !pc.enabled() {
+		if !pc.IsEnabled() {
 			continue
 		}
 		out = append(out, map[string]string{"id": pc.ID, "type": pc.Type, "name": pc.Name})
@@ -580,45 +521,18 @@ func (s *Server) csrfHandler(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, problem(403, "CSRF_INVALID", "CSRF verification failed"))
 		return
 	}
-	sessionHash := digest(s.cookie(r, "session"))
-	if session, ok, e := s.Store.SessionByHash(r.Context(), sessionHash); e != nil {
-		s.writeError(w, r, e)
-		return
-	} else if ok && now().Before(session.Absolute) && now().Sub(session.Seen) < 30*time.Minute {
-		s.json(w, 200, map[string]string{"csrf_token": session.CSRF})
+	out, err := s.authApplication().CSRF(r.Context(), digest(s.cookie(r, "session")), digest(s.cookie(r, "browser")), s.clientIP(r))
+	if err != nil {
+		s.writeError(w, r, err)
 		return
 	}
-	browserToken := ""
-	browserHash := digest(s.cookie(r, "browser"))
-	browser, ok, e := s.Store.BrowserFor(r.Context(), browserHash)
-	if e != nil {
-		s.writeError(w, r, e)
-		return
+	if out.BrowserToken != "" {
+		s.setCookie(w, "browser", out.BrowserToken, 900)
 	}
-	if !ok || !now().Before(browser.Expires) {
-		exceeded, err := s.Store.RateLimitExceeded(r.Context(), "csrf", s.clientIP(r), time.Minute, 30)
-		if err != nil {
-			s.writeError(w, r, err)
-			return
-		}
-		if exceeded {
-			s.writeError(w, r, problem(429, "RATE_LIMITED", "Try again later"))
-			return
-		}
-		browserToken = randomToken()
-		browserHash = digest(browserToken)
-		browser = Browser{CSRF: randomToken(), Expires: now().Add(15 * time.Minute)}
-		if e = s.Store.UpsertBrowser(r.Context(), browserHash, browser); e != nil {
-			s.writeError(w, r, e)
-			return
-		}
-	}
-	if browserToken != "" {
-		s.setCookie(w, "browser", browserToken, 900)
-	}
-	s.json(w, 200, map[string]string{"csrf_token": browser.CSRF})
+	s.json(w, 200, map[string]string{"csrf_token": out.Token})
 }
-func Serve(ctx context.Context, c Config) error {
+
+func Serve(ctx context.Context, c appconfig.Config) error {
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 	store, e := OpenStore(ctx, c.DB)
@@ -634,7 +548,7 @@ func Serve(ctx context.Context, c Config) error {
 	if handler.workers != nil {
 		go func() {
 			defer close(workersDone)
-			handler.workers.run(runCtx)
+			handler.workers.Run(runCtx)
 		}()
 	} else {
 		close(workersDone)

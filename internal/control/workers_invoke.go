@@ -2,42 +2,22 @@ package control
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"net/url"
-	"strings"
-	"time"
+
+	invocation "github.com/krun-dev/krun/internal/adapters/invoke"
 )
 
-const (
-	workerInvokePathLimit      = 2048
-	workerInvokeBodyLimit      = 64 << 10
-	workerInvokeResponseLimit  = 64 << 10
-	workerInvokeTimeout        = 10 * time.Second
-	workerInvokeInvalidMessage = "Use a relative path and a supported HTTP method; body at most 64 KiB"
-)
+type workerInvokeRequest = invocation.Request
+type workerInvokeResponse = invocation.Response
 
-type workerInvokeRequest struct {
-	Path   string `json:"path"`
-	Method string `json:"method"`
-	Body   string `json:"body"`
-}
+const workerInvokePathLimit = invocation.InvokePathLimit
+const workerInvokeBodyLimit = invocation.InvokeBodyLimit
+const workerInvokeResponseLimit = invocation.InvokeResponseLimit
+const workerInvokeTimeout = invocation.InvokeTimeout
+const workerInvokeInvalidMessage = invocation.InvokeInvalidMessage
 
-type workerInvokeResponse struct {
-	Status    int               `json:"status"`
-	Headers   map[string]string `json:"headers"`
-	Body      string            `json:"body"`
-	Truncated bool              `json:"truncated"`
-}
-
-func newWorkerInvokeClient() *http.Client {
-	return &http.Client{
-		Timeout: workerInvokeTimeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-}
+var newWorkerInvokeClient = invocation.NewHTTPClient
 
 // Console invocation returns business responses as JSON data. It never serves
 // business HTML, cookies, or redirects on the console origin.
@@ -50,7 +30,7 @@ func (s *Server) workerInvoke(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	path, err := in.validate()
+	path, err := in.Validate()
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -66,32 +46,6 @@ func (s *Server) workerInvoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.json(w, http.StatusOK, out)
-}
-
-func (in *workerInvokeRequest) validate() (*url.URL, error) {
-	if in.Path == "" {
-		in.Path = "/"
-	}
-	if in.Method == "" {
-		in.Method = http.MethodGet
-	}
-	if len(in.Path) > workerInvokePathLimit || len(in.Body) > workerInvokeBodyLimit {
-		return nil, problem(422, "WORKER_INVOKE_INVALID", workerInvokeInvalidMessage)
-	}
-	switch in.Method {
-	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
-		http.MethodPatch, http.MethodDelete, http.MethodOptions:
-	default:
-		return nil, problem(422, "WORKER_INVOKE_INVALID", workerInvokeInvalidMessage)
-	}
-	path, err := url.ParseRequestURI(in.Path)
-	if err != nil {
-		return nil, problem(422, "WORKER_INVOKE_INVALID", workerInvokeInvalidMessage)
-	}
-	if path.IsAbs() || path.Host != "" || !strings.HasPrefix(in.Path, "/") || strings.HasPrefix(in.Path, "//") {
-		return nil, problem(422, "WORKER_INVOKE_INVALID", workerInvokeInvalidMessage)
-	}
-	return path, nil
 }
 
 // workerInvokeTarget resolves the upstream host for an invoke call. It reads
@@ -115,41 +69,7 @@ func (s *Server) workerInvokeTarget(r *http.Request) (string, string, error) {
 			appErr = e
 			return nil
 		}
-		env := r.PathValue("environment")
-		if !workerEnvValid(env) {
-			appErr = notFound()
-			return nil
-		}
-		target, err := s.workerTarget(st, r, env, "service.invoke", principal)
-		if err != nil {
-			appErr = err
-			return nil
-		}
-		service := st.Workers.Services[target.ID]
-		current := service.Environments[env]
-		if !current.Enabled || current.Release == "" {
-			appErr = problem(409, "WORKER_NOT_PUBLISHED", "Publish this enabled environment first")
-			return nil
-		}
-		// Invoke through the first selected domain of the service. The domain's
-		// Gateway decides which instance to address. Hosts are derived, not
-		// stored, so they come from the catalog and the service selection.
-		slug := workerSlug(service.Organization, service.Service)
-		for _, id := range s.syncServiceDomains(service) {
-			d, ok := s.Config.Workers.domain(id)
-			if !ok {
-				continue
-			}
-			suffix := d.Domain
-			if pool := s.Config.Workers.servicePool(st.Workers, service); pool != "" {
-				suffix = s.Config.Workers.poolHostSuffix(pool, d.Domain)
-			}
-			if candidate := hostFor(slug, env, suffix); candidate != "" {
-				host, gatewayID = candidate, d.Gateway
-				return nil
-			}
-		}
-		appErr = problem(409, "WORKER_NOT_PUBLISHED", "Environment has no routable domain")
+		host, gatewayID, appErr = s.workerApplication(r).ResolveInvocation(st, principal, workerRef(r))
 		return nil
 	})
 	if err != nil {
@@ -172,49 +92,5 @@ func (s *Server) workerInvokeTarget(r *http.Request) (string, string, error) {
 
 // Keep network I/O outside Store.Update: a slow Worker must not hold the IAM lock.
 func (s *Server) invokeWorker(ctx context.Context, host, gatewayID string, in workerInvokeRequest, path *url.URL) (workerInvokeResponse, error) {
-	var out workerInvokeResponse
-	g, ok := s.Config.Workers.gateway(gatewayID)
-	if !ok {
-		return out, problem(503, "WORKER_INVOKE_UNAVAILABLE", "Worker gateway not configured")
-	}
-	target := *path
-	if base := g.gatewayBase(); base != "" {
-		parsed, e := url.Parse(base)
-		if e != nil {
-			return out, problem(503, "WORKER_INVOKE_UNAVAILABLE", "Worker gateway not configured")
-		}
-		target.Scheme = parsed.Scheme
-		target.Host = parsed.Host
-	} else {
-		target.Scheme = "http"
-		target.Host = g.inClusterAddress()
-	}
-	req, err := http.NewRequestWithContext(ctx, in.Method, target.String(), strings.NewReader(in.Body))
-	if err != nil {
-		return out, err
-	}
-	req.Host = host
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := s.workerInvokeClient.Do(req)
-	if err != nil {
-		return out, problem(503, "WORKER_INVOKE_UNAVAILABLE", "Worker invocation unavailable")
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, workerInvokeResponseLimit+1))
-	if err != nil {
-		return out, problem(503, "WORKER_INVOKE_UNAVAILABLE", "Worker response interrupted")
-	}
-	out.Status = resp.StatusCode
-	out.Truncated = len(raw) > workerInvokeResponseLimit
-	if out.Truncated {
-		raw = raw[:workerInvokeResponseLimit]
-	}
-	out.Body = string(raw)
-	out.Headers = make(map[string]string)
-	for _, name := range []string{"Content-Type", "X-Krun-Release", "X-Krun-Pod"} {
-		if value := resp.Header.Get(name); value != "" {
-			out.Headers[name] = value
-		}
-	}
-	return out, nil
+	return (&invocation.Client{Config: s.Config.Workers, HTTP: s.workerInvokeClient}).Call(ctx, host, gatewayID, in, path)
 }

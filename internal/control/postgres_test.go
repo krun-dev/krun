@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	appconfig "github.com/krun-dev/krun/internal/config"
 )
 
 // KRUN_TEST_POSTGRES_URL must point at an isolated disposable test database.
@@ -134,7 +136,7 @@ func TestPostgresBrowserLoginSurvivesRestart(t *testing.T) {
 	if err := store.Update(ctx, PartitionAll, func(st *State) error { *st = *newState(); return nil }); err != nil {
 		t.Fatal(err)
 	}
-	c := Config{Development: true, PublicURL: "http://127.0.0.1:8080", DB: "postgres://test-only/krun_test", Providers: []ProviderConfig{{ID: "local", Source: "pg-local", Type: "dev", Registration: "jit"}}}
+	c := appconfig.Config{Development: true, PublicURL: "http://127.0.0.1:8080", DB: "postgres://test-only/krun_test", Providers: []appconfig.ProviderConfig{{ID: "local", Source: "pg-local", Type: "dev", Registration: "jit"}}}
 	s, err := NewServer(ctx, c, store)
 	if err != nil {
 		t.Fatal(err)

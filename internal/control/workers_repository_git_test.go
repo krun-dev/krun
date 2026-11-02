@@ -10,6 +10,9 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	workerartifact "github.com/krun-dev/krun/internal/artifact"
+	appconfig "github.com/krun-dev/krun/internal/config"
+	repositories "github.com/krun-dev/krun/internal/repository"
 )
 
 // newLocalGitRepo builds a real repository on disk with two commits so the git
@@ -59,8 +62,8 @@ func newLocalGitRepo(t *testing.T, files map[string]string) (dir, head, first st
 }
 
 // A local path is a valid git URL, so the clone path runs unchanged.
-func localProvider(dir string) WorkerRepositoryProvider {
-	return WorkerRepositoryProvider{Type: "gitlab", BaseURL: "file://" + dir, Priority: 10}
+func localProvider(dir string) appconfig.WorkerRepositoryProvider {
+	return appconfig.WorkerRepositoryProvider{Type: "gitlab", BaseURL: "file://" + dir, Priority: 10}
 }
 
 func TestCloneResolvesCommitAndReadsTree(t *testing.T) {
@@ -126,18 +129,18 @@ func TestCloneHonoursRootDirectoryAndWrangler(t *testing.T) {
 	if _, ok := files["wrangler.jsonc"]; !ok {
 		t.Fatalf("config missing under root_directory: %v", keys(files))
 	}
-	cfg, _, err := parseWranglerConfig(files)
+	cfg, _, err := workerartifact.ParseWranglerConfig(files)
 	if err != nil || cfg == nil {
 		t.Fatalf("config parse: %v", err)
 	}
-	assets, entry, err := resolveWranglerBuild(cfg)
+	assets, entry, err := workerartifact.ResolveWranglerBuild(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if entry != "src/index.ts" || assets.Directory != "public" {
 		t.Fatalf("resolved %q %q", entry, assets.Directory)
 	}
-	assetFiles, err := extractRepositoryAssets(raw, "apps/demo", assets.Directory)
+	assetFiles, err := workerartifact.ExtractRepositoryAssets(raw, "apps/demo", assets.Directory)
 	if err != nil || len(assetFiles) != 1 {
 		t.Fatalf("assets: %v %v", keys(assetFiles), err)
 	}
@@ -145,7 +148,7 @@ func TestCloneHonoursRootDirectoryAndWrangler(t *testing.T) {
 
 func TestCloneFailureIsReportedWithoutLeakingURL(t *testing.T) {
 	s := &Server{}
-	provider := WorkerRepositoryProvider{Type: "gitlab", BaseURL: "file:///nonexistent/repository"}
+	provider := appconfig.WorkerRepositoryProvider{Type: "gitlab", BaseURL: "file:///nonexistent/repository"}
 	_, err := s.resolveRepositoryCommit(context.Background(), provider, WorkerRepositorySource{Ref: "main"}, "")
 	if err == nil {
 		t.Fatal("missing repository accepted")
@@ -215,7 +218,7 @@ func TestRepositoryCloneIsHistoryBoundedAndRemoved(t *testing.T) {
 		head = hash.String()
 	}
 	cloneBase := t.TempDir()
-	cloned, cloneDir, err := cloneRepository(context.Background(), localProvider(dir), "", "", head, "master", cloneBase)
+	cloned, cloneDir, err := repositories.CloneRepository(context.Background(), localProvider(dir), "", "", head, "master", cloneBase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +244,7 @@ func TestRepositoryCloneIsHistoryBoundedAndRemoved(t *testing.T) {
 func TestRepositoryFetchRemovesCloneDirectory(t *testing.T) {
 	dir, head, _ := newLocalGitRepo(t, map[string]string{"src/index.ts": "export const revision = 'second'"})
 	cloneBase := t.TempDir()
-	s := &Server{Config: Config{Workers: &WorkersConfig{CloneDirectory: cloneBase}}}
+	s := &Server{Config: appconfig.Config{Workers: &appconfig.WorkersConfig{CloneDirectory: cloneBase}}}
 	_, _, err := s.fetchRepositorySource(context.Background(), localProvider(dir), WorkerBuildRepository{
 		WorkerRepositorySource: WorkerRepositorySource{Ref: "master"},
 		Commit:                 head,
@@ -260,10 +263,10 @@ func TestRepositoryFetchRemovesCloneDirectory(t *testing.T) {
 
 func TestRepositoryFetchRejectsLargeBlobBeforeReadingIt(t *testing.T) {
 	dir, head, _ := newLocalGitRepo(t, map[string]string{
-		"public/oversized.bin": strings.Repeat("x", repositorySingleFileLimit+1),
+		"public/oversized.bin": strings.Repeat("x", workerartifact.RepositorySingleFileLimit+1),
 	})
 	cloneBase := t.TempDir()
-	s := &Server{Config: Config{Workers: &WorkersConfig{CloneDirectory: cloneBase}}}
+	s := &Server{Config: appconfig.Config{Workers: &appconfig.WorkersConfig{CloneDirectory: cloneBase}}}
 	_, _, err := s.fetchRepositorySource(context.Background(), localProvider(dir), WorkerBuildRepository{
 		WorkerRepositorySource: WorkerRepositorySource{Ref: "master"},
 		Commit:                 head,
@@ -287,11 +290,11 @@ func TestRepositoryArchiveRejectsFileCountBeforeReadingExtraBlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = archiveRepositoryCommitWithLimits(repo, head, "bounded", repositoryArchiveLimits{
-		maxCompressedBytes: 2 << 20,
-		maxExpandedBytes:   2 << 20,
-		maxFileBytes:       2 << 20,
-		maxFiles:           2,
+	_, err = repositories.ArchiveRepositoryCommitWithLimits(repo, head, "bounded", repositories.RepositoryArchiveLimits{
+		MaxCompressedBytes: 2 << 20,
+		MaxExpandedBytes:   2 << 20,
+		MaxFileBytes:       2 << 20,
+		MaxFiles:           2,
 	})
 	if err == nil || !strings.Contains(err.Error(), "2 files") {
 		t.Fatalf("file-count limit was not applied before the third blob: %v", err)

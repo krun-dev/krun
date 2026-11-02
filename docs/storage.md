@@ -6,11 +6,11 @@
 
 ## 代码分层
 
-- `internal/control`：HTTP、授权与业务编排，通过 `storage.Store` 调用持久化操作，不包含 SQL 或数据库驱动。配置投影、对象存储上传与数据库事务分别执行。
-- `internal/domain`：共享实体、请求工作副本与存储命令的数据类型。`State` 的待提交登录、审计、密文和授权缓存都排除在 JSON 之外。
-- `internal/storage`：连接池、SQL、行映射、事务、CAS、保留期和清理。数据库驱动类型与连接池保持包内私有。
+HTTP 入口位于 `internal/control`，认证、IAM、Workers、仓库、Runtime 配置及审计均有独立业务模块；网络和 SDK 实现集中在 `internal/adapters/`。完整边界见 [代码架构](architecture.md)。
 
-`control/models.go` 和 `control/storage.go` 只转接共享类型及存储入口，不重复定义模型或实现持久化。存储文件按领域组织，定位表结构与查询的入口见 [storage 包说明](../internal/storage/README.md)。`TestStorageLayerBoundaries` 检查业务层无 SQL/驱动以及下层无反向业务依赖。
+`internal/storage` 集中连接池、SQL、行映射、事务、CAS、租约和清理，对外不暴露驱动类型。共享实体在 `internal/domain`。待提交登录、审计和密文排除在 JSON 之外；授权缓存由授权模块持有，不属于 `State` 或存储层。
+
+`control/models.go` 和 `control/storage.go` 保留命令入口使用的类型转接。表结构与查询的定位入口见 [storage 包说明](../internal/storage/README.md)。边界测试递归检查全部模块的依赖，并禁止 HTTP handler 直接修改实体。
 
 ## 分区
 

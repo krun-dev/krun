@@ -1,24 +1,21 @@
 package control
 
 import (
-	"context"
 	"crypto/subtle"
-	"encoding/json"
-	"errors"
 	"net/http"
-	"sort"
 	"strconv"
-	"strings"
 	"time"
+
+	appconfig "github.com/krun-dev/krun/internal/config"
 )
 
-func (s *Server) workerRuntimePool(r *http.Request) (WorkerRuntimePool, bool) {
+func (s *Server) workerRuntimePool(r *http.Request) (appconfig.WorkerRuntimePool, bool) {
 	if s.Config.Workers == nil {
-		return WorkerRuntimePool{}, false
+		return appconfig.WorkerRuntimePool{}, false
 	}
-	pool, ok := s.Config.Workers.runtimePool(r.Header.Get("X-Runtime-Pool"))
+	pool, ok := s.Config.Workers.RuntimePool(r.Header.Get("X-Runtime-Pool"))
 	if !ok || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+pool.RuntimeToken)) != 1 {
-		return WorkerRuntimePool{}, false
+		return appconfig.WorkerRuntimePool{}, false
 	}
 	return pool, true
 }
@@ -66,34 +63,17 @@ func (s *Server) workerRuntimeConfigChanges(w http.ResponseWriter, r *http.Reque
 	}
 	deadline := time.Now().Add(wait)
 	for {
-		revisions, floor, err := s.Store.ConfigRevisionsSince(context.WithValue(r.Context(), workerRuntimeFeedPoolKey{}, pool.ID), since, 100)
+		changes, err := s.runtimeApplication().ReadChanges(r.Context(), pool.ID, since)
 		if err != nil {
 			s.writeError(w, r, err)
 			return
 		}
-		if since > 0 && since < floor {
+		if changes.Resync {
 			s.workerConfigResync(w, r)
 			return
 		}
-		if len(revisions) > 0 {
-			if since == 0 || revisions[0].Revision != since+1 {
-				s.workerConfigResync(w, r)
-				return
-			}
-			ops := []workerConfigOp{}
-			for _, revision := range revisions {
-				batch := []workerConfigOp{}
-				if err := json.Unmarshal(revision.Ops, &batch); err != nil {
-					s.writeError(w, r, err)
-					return
-				}
-				ops = append(ops, workerConfigOpsForPool(batch, pool.ID)...)
-			}
-			if len(ops) > 2000 {
-				s.workerConfigResync(w, r)
-				return
-			}
-			s.json(w, 200, map[string]any{"from": since, "to": revisions[len(revisions)-1].Revision, "ops": ops})
+		if changes.Batch != nil {
+			s.json(w, 200, changes.Batch)
 			return
 		}
 		if time.Now().After(deadline) {
@@ -133,27 +113,12 @@ func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, forbidden())
 		return
 	}
-	out, e := s.Store.RuntimeArtifact(r.Context(), r.PathValue("artifact"), pool.ID)
-
-	if e != nil {
-		s.writeError(w, r, e)
+	out, err := s.runtimeApplication().Artifact(r.Context(), r.PathValue("artifact"), pool.ID)
+	if err != nil {
+		s.writeError(w, r, err)
 		return
 	}
-	// Runtimes fetch the object directly from storage; the control plane only
-	// hands out a short-lived URL and never proxies artifact bytes.
-	signed, e := s.workers.downloadURL(r.Context(), out)
-	if e != nil {
-		s.writeError(w, r, problem(503, "ARTIFACT_UNAVAILABLE", "Artifact storage unavailable"))
-		return
-	}
-	s.json(w, 200, map[string]any{
-		"artifact_id":    out.ID,
-		"object_key":     out.ObjectKey,
-		"download_url":   signed,
-		"archive_sha256": out.ArchiveDigest,
-		"module_sha256":  out.ModuleDigest,
-		"size":           out.Size,
-	})
+	s.json(w, 200, out)
 }
 
 // workerRuntimeReleaseSecrets is the only plaintext delivery path. It is
@@ -166,29 +131,14 @@ func (s *Server) workerRuntimeReleaseSecrets(w http.ResponseWriter, r *http.Requ
 		s.writeError(w, r, forbidden())
 		return
 	}
-	digest, encrypted, err := s.Store.EncryptedReleaseSecrets(r.Context(), r.PathValue("release"), pool.ID)
+	out, err := s.runtimeApplication().Secrets(r.Context(), r.PathValue("release"), pool.ID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	values := make(map[string]string, len(encrypted))
-	versions := make(map[string]string, len(encrypted))
-	for _, item := range encrypted {
-		value, decryptErr := decryptWorkerSecret(s.Config.Workers, item)
-		if decryptErr != nil {
-			s.writeError(w, r, problem(503, "WORKER_SECRET_UNAVAILABLE", "Worker secret unavailable"))
-			return
-		}
-		values[item.Version.Name] = value
-		versions[item.Version.Name] = item.Version.ID
-	}
-	if workerSecretsDigest(versions) != digest {
-		s.writeError(w, r, problem(503, "WORKER_SECRET_UNAVAILABLE", "Worker secret binding mismatch"))
-		return
-	}
-	w.Header().Set("Cache-Control", "no-store")
-	s.json(w, 200, map[string]any{"release_id": r.PathValue("release"), "secret_digest": digest, "values": values})
+	s.json(w, 200, out)
 }
+
 func (s *Server) workerRuntimeAck(w http.ResponseWriter, r *http.Request) {
 	pool, allowed := s.workerRuntimePool(r)
 	if !allowed {
@@ -200,95 +150,11 @@ func (s *Server) workerRuntimeAck(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, e)
 		return
 	}
-	if in.Pool != pool.ID || in.Pod == "" || in.UID == "" {
-		s.writeError(w, r, problem(422, "ACK_INVALID", "Pod UID and pool required"))
-		return
-	}
-	head, _, e := s.Store.ConfigState(r.Context())
-	if e != nil {
-		s.writeError(w, r, e)
-		return
-	}
-	if in.Revision < 0 || int64(in.Revision) > head {
-		s.writeError(w, r, problem(422, "ACK_INVALID", "Config revision is outside the published range"))
-		return
-	}
-	in.Time = now()
-	if e := s.Store.RecordAck(r.Context(), in); e != nil {
-		s.writeError(w, r, e)
+	if err := s.runtimeApplication().Ack(r.Context(), pool.ID, in); err != nil {
+		s.writeError(w, r, err)
 		return
 	}
 	s.json(w, 200, map[string]bool{"ok": true})
-}
-
-type workerReleaseAssets struct {
-	Release  WorkerRelease
-	Artifact WorkerArtifact
-	Config   *WorkerAssetsConfig
-	Files    []workerManifestFile
-}
-
-func (w *workersController) releaseAssets(ctx context.Context, releaseID, pool string) (workerReleaseAssets, error) {
-	var out workerReleaseAssets
-	rel, art, e := w.server.Store.RuntimeRelease(ctx, releaseID, pool)
-	out.Release, out.Artifact = rel, art
-
-	if e != nil {
-		return out, e
-	}
-	value, e, _ := w.assetFlights.Do(out.Artifact.ID, func() (any, error) {
-		w.assetMu.Lock()
-		cached, ok := w.assetCache[out.Artifact.ID]
-		if ok {
-			cached.Used = now()
-			w.assetCache[out.Artifact.ID] = cached
-		}
-		w.assetMu.Unlock()
-		if ok {
-			return cached, nil
-		}
-		raw, err := w.getObject(ctx, workerArtifactManifestKey(out.Artifact))
-		if err != nil {
-			return nil, err
-		}
-		if bytesDigest(raw) != out.Artifact.ManifestDigest {
-			return nil, errors.New("artifact manifest digest mismatch")
-		}
-		var manifest workerManifest
-		if err = json.Unmarshal(raw, &manifest); err != nil {
-			return nil, err
-		}
-
-		cached = workerCachedAssets{Used: now()}
-		if assets := manifest.Assets; assets != nil {
-			cached.Config = &WorkerAssetsConfig{Directory: assets.Directory, Binding: assets.Binding, RunWorkerFirst: assets.RunWorkerFirst, NotFoundHandling: assets.NotFoundHandling, HTMLHandling: assets.HTMLHandling}
-			cached.Files = assets.Files
-		}
-		sort.Slice(cached.Files, func(i, j int) bool { return cached.Files[i].Path < cached.Files[j].Path })
-		w.assetMu.Lock()
-		if w.assetCache == nil {
-			w.assetCache = map[string]workerCachedAssets{}
-		}
-		if len(w.assetCache) >= 256 {
-			oldest := ""
-			var at time.Time
-			for id, v := range w.assetCache {
-				if oldest == "" || v.Used.Before(at) {
-					oldest, at = id, v.Used
-				}
-			}
-			delete(w.assetCache, oldest)
-		}
-		w.assetCache[out.Artifact.ID] = cached
-		w.assetMu.Unlock()
-		return cached, nil
-	})
-	if e != nil {
-		return out, e
-	}
-	manifest := value.(workerCachedAssets)
-	out.Config, out.Files = manifest.Config, manifest.Files
-	return out, nil
 }
 
 func (s *Server) workerRuntimeReleaseAssets(w http.ResponseWriter, r *http.Request) {
@@ -297,12 +163,12 @@ func (s *Server) workerRuntimeReleaseAssets(w http.ResponseWriter, r *http.Reque
 		s.writeError(w, r, forbidden())
 		return
 	}
-	assets, e := s.workers.releaseAssets(r.Context(), r.PathValue("release"), pool.ID)
-	if e != nil {
-		s.writeError(w, r, e)
+	out, err := s.runtimeApplication().Assets(r.Context(), r.PathValue("release"), pool.ID)
+	if err != nil {
+		s.writeError(w, r, err)
 		return
 	}
-	s.json(w, 200, map[string]any{"release_id": assets.Release.ID, "config": assets.Config, "files": assets.Files})
+	s.json(w, 200, out)
 }
 
 func (s *Server) workerRuntimeReleaseAssetURL(w http.ResponseWriter, r *http.Request) {
@@ -311,58 +177,25 @@ func (s *Server) workerRuntimeReleaseAssetURL(w http.ResponseWriter, r *http.Req
 		s.writeError(w, r, forbidden())
 		return
 	}
-	assets, e := s.workers.releaseAssets(r.Context(), r.PathValue("release"), pool.ID)
-	if e != nil {
-		s.writeError(w, r, e)
-		return
-	}
-	name := r.PathValue("path")
-	var file *workerManifestFile
-	for i := range assets.Files {
-		if assets.Files[i].Path == name {
-			file = &assets.Files[i]
-			break
-		}
-	}
-	if file == nil {
-		s.writeError(w, r, notFound())
-		return
-	}
-	prefix := "int"
-	if runtimePoolHasAccess(pool, "public") {
-		prefix = "pub"
-	}
-	key := workerAssetObjectKey(prefix, assets.Release.Organization, assets.Release.Service, assets.Artifact.ArchiveDigest, name)
-	signed, e := s.workers.s3Runtime.PresignedGetObject(r.Context(), s.workers.config.S3Bucket, key, 15*time.Minute, nil)
-	if e != nil {
-		s.writeError(w, r, problem(503, "ASSET_UNAVAILABLE", "Asset storage unavailable"))
-		return
-	}
-	s.json(w, 200, map[string]any{
-		"path":         file.Path,
-		"sha256":       file.Digest,
-		"size_bytes":   file.Size,
-		"content_type": file.ContentType,
-		"download_url": signed.String(),
-	})
-}
-
-// A cold host resolves exactly one normalized route and immutable release.
-func (s *Server) workerRuntimeConfigRoute(w http.ResponseWriter, r *http.Request) {
-	pool, ok := s.workerRuntimePool(r)
-	if !ok {
-		s.writeError(w, r, forbidden())
-		return
-	}
-	host := strings.ToLower(r.PathValue("host"))
-	if len(host) > 253 || strings.ContainsAny(host, "/\\: ") {
-		s.writeError(w, r, notFound())
-		return
-	}
-	projection, revision, err := s.Store.RuntimeConfigRoute(r.Context(), host, pool.ID)
+	out, err := s.runtimeApplication().AssetURL(r.Context(), r.PathValue("release"), r.PathValue("path"), pool)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	s.json(w, 200, workerConfigSnapshot{Pool: pool.ID, ConfigRevision: revision, Routes: projection.Routes, Releases: projection.Releases})
+	s.json(w, 200, out)
+}
+
+// A cold host resolves exactly one normalized route and immutable release.
+func (s *Server) workerRuntimeConfigRoute(w http.ResponseWriter, r *http.Request) {
+	pool, allowed := s.workerRuntimePool(r)
+	if !allowed {
+		s.writeError(w, r, forbidden())
+		return
+	}
+	out, err := s.runtimeApplication().Route(r.Context(), r.PathValue("host"), pool.ID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	s.json(w, 200, out)
 }

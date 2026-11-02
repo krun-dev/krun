@@ -15,10 +15,13 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	mailer "github.com/krun-dev/krun/internal/adapters/mail"
+	appconfig "github.com/krun-dev/krun/internal/config"
 )
 
-func emailTestConfig() Config {
-	return Config{Development: true, PublicURL: "http://127.0.0.1:8080", DB: "postgres://test-only/krun_test", SMTP: SMTPConfig{Host: "127.0.0.1", Port: 2525, From: "krun@example.com", TLS: "none"}, Providers: []ProviderConfig{{ID: "email", Source: "email-test", Type: "email", Name: "Email"}}}
+func emailTestConfig() appconfig.Config {
+	return appconfig.Config{Development: true, PublicURL: "http://127.0.0.1:8080", DB: "postgres://test-only/krun_test", SMTP: appconfig.SMTPConfig{Host: "127.0.0.1", Port: 2525, From: "krun@example.com", TLS: "none"}, Providers: []appconfig.ProviderConfig{{ID: "email", Source: "email-test", Type: "email", Name: "Email"}}}
 }
 
 func emailTestServer(t *testing.T, store *Store) (*Server, *string) {
@@ -177,7 +180,7 @@ func TestEmailCodeSecurityBoundaries(t *testing.T) {
 				return
 			}
 			if test == "invite-only" {
-				s.providers["email"].config.Registration = "invite_only"
+				s.providers["email"].Config.Registration = "invite_only"
 			}
 			challenge := emailChallenge(t, s, cookies, csrf)
 			input := map[string]string{"challenge_id": challenge, "code": *code}
@@ -212,7 +215,7 @@ func TestEmailCodeSecurityBoundaries(t *testing.T) {
 					return nil
 				})
 			case "config-change":
-				s.providers["email"].config.Name = "changed"
+				s.providers["email"].Config.Name = "changed"
 			case "cooldown":
 				otherCookies, otherCSRF := emailBrowser(t, s)
 				w := emailRequest(s, "/api/auth/email/email/code", map[string]string{"email": "person@example.com"}, otherCookies, otherCSRF)
@@ -275,7 +278,7 @@ func TestDisabledLoginSources(t *testing.T) {
 	}
 	c = emailTestConfig()
 	c.Providers[0].Enabled = &falseValue
-	c.SMTP = SMTPConfig{}
+	c.SMTP = appconfig.SMTPConfig{}
 	emailDisabled, err := NewServer(context.Background(), c, memoryStore())
 	if err != nil {
 		t.Fatal(err)
@@ -380,7 +383,7 @@ func TestVerificationMailSMTP(t *testing.T) {
 			_, port, _ := net.SplitHostPort(listener.Addr().String())
 			c := emailTestConfig()
 			c.SMTP.Port, _ = strconv.Atoi(port)
-			if err := c.sendVerificationEmail(context.Background(), "person@example.com", "123456", language); err != nil {
+			if err := mailer.New(c).Send(context.Background(), "person@example.com", "123456", language); err != nil {
 				t.Fatal(err)
 			}
 			select {

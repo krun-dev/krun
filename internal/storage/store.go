@@ -148,7 +148,6 @@ func (s *Store) Mutate(ctx context.Context, loadPartition, persistPartition Stat
 		// A read persists nothing, so it needs no pre-image to diff against.
 		// Skipping the clone here keeps GET requests to one batched read.
 		if persistPartition == 0 {
-			st.Authorization = domain.NewAuthorizationCache()
 			if err = fn(st); err != nil {
 				if auditErr := s.flushAudits(ctx, deniedAudits(st.PendingAudits)); auditErr != nil {
 					return auditErr

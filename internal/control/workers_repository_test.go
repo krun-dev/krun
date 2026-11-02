@@ -13,10 +13,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	workerartifact "github.com/krun-dev/krun/internal/artifact"
+	appconfig "github.com/krun-dev/krun/internal/config"
+	repositories "github.com/krun-dev/krun/internal/repository"
+	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
-func repositoryTestProviders() []WorkerRepositoryProvider {
-	return []WorkerRepositoryProvider{
+func repositoryTestProviders() []appconfig.WorkerRepositoryProvider {
+	return []appconfig.WorkerRepositoryProvider{
 		{ID: "github", Type: "github", Name: "GitHub", Enabled: true, Priority: 20, BaseURL: "https://github.com"},
 		{ID: "company", Type: "gitlab", Name: "Company GitLab", Enabled: true, Priority: 10, BaseURL: "https://gitlab.example.com", AllowPrivateNetwork: true, Token: "private-test-token", AllowedRepositories: []string{"team/nested/worker"}},
 		{ID: "disabled", Type: "gitlab", Enabled: false, BaseURL: "https://gitlab.com"},
@@ -26,12 +31,12 @@ func repositoryTestProviders() []WorkerRepositoryProvider {
 func TestRepositoryProviderConfigurationAndDisplay(t *testing.T) {
 	s, _, _ := workerTestServer(t)
 	s.Config.Workers.RepositoryProviders = repositoryTestProviders()
-	if err := s.Config.Workers.validateRepositoryProviders(); err != nil {
+	if err := s.Config.Workers.ValidateRepositoryProviders(); err != nil {
 		t.Fatal(err)
 	}
 	r := request(s, "GET", "/api/v1/orgs/org-a/workers/repository-providers", "krun_cli_admin", "")
 	var out struct {
-		Items []repositoryConnectionInfo `json:"items"`
+		Items []repositories.RepositoryConnectionInfo `json:"items"`
 	}
 	if err := json.Unmarshal(r.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
@@ -42,17 +47,19 @@ func TestRepositoryProviderConfigurationAndDisplay(t *testing.T) {
 	if strings.Contains(r.Body.String(), "token") || strings.Contains(r.Body.String(), "allowed_repositories") || strings.Contains(r.Body.String(), "private-test") {
 		t.Fatal("provider credentials or policy leaked")
 	}
-	for _, change := range []func(*WorkersConfig){
-		func(c *WorkersConfig) { c.RepositoryProviders[1].BaseURL = "http://gitlab.example.com" },
-		func(c *WorkersConfig) { c.RepositoryProviders[1].BaseURL = "https://user:password@gitlab.example.com" },
-		func(c *WorkersConfig) { c.RepositoryProviders[1].ID = "github" },
-		func(c *WorkersConfig) { c.RepositoryProviders[1].AllowedRepositories = nil },
-		func(c *WorkersConfig) { c.RepositoryProviders[1].Priority = -1 },
-		func(c *WorkersConfig) { c.RepositoryProviders[0].AllowPrivateNetwork = true },
+	for _, change := range []func(*appconfig.WorkersConfig){
+		func(c *appconfig.WorkersConfig) { c.RepositoryProviders[1].BaseURL = "http://gitlab.example.com" },
+		func(c *appconfig.WorkersConfig) {
+			c.RepositoryProviders[1].BaseURL = "https://user:password@gitlab.example.com"
+		},
+		func(c *appconfig.WorkersConfig) { c.RepositoryProviders[1].ID = "github" },
+		func(c *appconfig.WorkersConfig) { c.RepositoryProviders[1].AllowedRepositories = nil },
+		func(c *appconfig.WorkersConfig) { c.RepositoryProviders[1].Priority = -1 },
+		func(c *appconfig.WorkersConfig) { c.RepositoryProviders[0].AllowPrivateNetwork = true },
 	} {
-		c := &WorkersConfig{RepositoryProviders: repositoryTestProviders()}
+		c := &appconfig.WorkersConfig{RepositoryProviders: repositoryTestProviders()}
 		change(c)
-		if err := c.validateRepositoryProviders(); err == nil {
+		if err := c.ValidateRepositoryProviders(); err == nil {
 			t.Fatal("invalid repository configuration accepted")
 		}
 	}
@@ -150,11 +157,11 @@ func TestRepositoryArchiveBoundaries(t *testing.T) {
 	for _, files := range []map[string]string{
 		{"repo/../worker/index.ts": "unsafe"},
 		{"repo/worker/../index.ts": "unsafe"},
-		{"repo/worker/index.ts": strings.Repeat("x", workerRepositoryProjectFileMax+1)},
+		{"repo/worker/index.ts": strings.Repeat("x", workerartifact.WorkerRepositoryProjectFileMax+1)},
 		{"repo/worker/not-entry.ts": "missing entry"},
 		{"repo/worker/index.ts": string([]byte{0xff})},
 	} {
-		if _, _, err := extractRepositorySource(repositoryTestArchive(t, files), source.RootDirectory, entrypoint); err == nil {
+		if _, _, err := workerartifact.ExtractRepositorySource(repositoryTestArchive(t, files), source.RootDirectory, entrypoint); err == nil {
 			t.Fatal("invalid archive accepted")
 		}
 	}
@@ -164,7 +171,7 @@ func TestRepositoryArchiveBoundaries(t *testing.T) {
 	_ = archive.WriteHeader(&tar.Header{Name: "repo/worker/index.ts", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd"})
 	_ = archive.Close()
 	_ = zip.Close()
-	if _, _, err := extractRepositorySource(buf.Bytes(), source.RootDirectory, entrypoint); err == nil {
+	if _, _, err := workerartifact.ExtractRepositorySource(buf.Bytes(), source.RootDirectory, entrypoint); err == nil {
 		t.Fatal("symlink accepted")
 	}
 }
@@ -182,7 +189,7 @@ func TestRepositoryProjectKeepsWranglerInputsAndRejectsLocalSecrets(t *testing.T
 		"repo/worker/node_modules/pkg/index.js": "must not cross the build boundary",
 		"repo/worker/.wrangler/tmp/output.js":   "stale generated output",
 	})
-	files, _, err := extractRepositorySource(archive, "worker", "src/index.ts")
+	files, _, err := workerartifact.ExtractRepositorySource(archive, "worker", "src/index.ts")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +202,7 @@ func TestRepositoryProjectKeepsWranglerInputsAndRejectsLocalSecrets(t *testing.T
 	if _, ok := files[".wrangler/tmp/output.js"]; ok {
 		t.Fatal("stale .wrangler output crossed the repository build boundary")
 	}
-	bundle, err := workerSourceBundle(files, nil)
+	bundle, err := workerapp.WorkerSourceBundle(files, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +239,7 @@ func TestRepositoryProjectKeepsWranglerInputsAndRejectsLocalSecrets(t *testing.T
 			"repo/worker/index.ts":       "export default {}",
 			"repo/worker/" + secret:      "credential=should-not-enter-builder",
 		}
-		if _, _, err := extractRepositorySource(repositoryTestArchive(t, files), "worker", "index.ts"); err == nil {
+		if _, _, err := workerartifact.ExtractRepositorySource(repositoryTestArchive(t, files), "worker", "index.ts"); err == nil {
 			t.Fatalf("sensitive build input %s was accepted", secret)
 		}
 	}
@@ -241,7 +248,7 @@ func TestRepositoryProjectKeepsWranglerInputsAndRejectsLocalSecrets(t *testing.T
 		"repo/worker/index.ts":       "export default {}",
 		"repo/worker/.yarnrc.yml":    "npmAuthToken: secret-token",
 	}
-	if _, _, err := extractRepositorySource(repositoryTestArchive(t, authYarn), "worker", "index.ts"); err == nil {
+	if _, _, err := workerartifact.ExtractRepositorySource(repositoryTestArchive(t, authYarn), "worker", "index.ts"); err == nil {
 		t.Fatal("package-manager credentials were accepted")
 	}
 }
@@ -261,7 +268,7 @@ func TestWorkerServiceListFiltersEnvironmentPermissions(t *testing.T) {
 	_ = json.Unmarshal(r.Body.Bytes(), &key)
 	r = request(s, "GET", "/api/v1/orgs/org-a/workers/services", key.Key, "")
 	var list struct {
-		Items []workerServiceSummary `json:"items"`
+		Items []workerapp.WorkerServiceSummary `json:"items"`
 	}
 	_ = json.Unmarshal(r.Body.Bytes(), &list)
 	if r.Code != 200 || len(list.Items) != 1 || list.Items[0].ID != "svc-a" || len(list.Items[0].Environments) != 1 || list.Items[0].Environments[0].Name != "fix-demo" {
@@ -287,7 +294,7 @@ func TestRepositoryArchiveGitHubGlobalPAXHeader(t *testing.T) {
 	if err := zip.Close(); err != nil {
 		t.Fatal(err)
 	}
-	files, _, err := extractRepositorySource(buf.Bytes(), "src", "index.ts")
+	files, _, err := workerartifact.ExtractRepositorySource(buf.Bytes(), "src", "index.ts")
 	if err != nil || files["index.ts"] != code {
 		t.Fatal(files, err)
 	}
@@ -295,7 +302,7 @@ func TestRepositoryArchiveGitHubGlobalPAXHeader(t *testing.T) {
 
 func TestRepositoryConnectionLifecycle(t *testing.T) {
 	s, store, _ := workerTestServer(t)
-	s.Config.Workers.RepositoryProviders = []WorkerRepositoryProvider{
+	s.Config.Workers.RepositoryProviders = []appconfig.WorkerRepositoryProvider{
 		{ID: "github", Type: "github", Name: "GitHub", Enabled: true, Priority: 10, ClientID: "cid", ClientSecret: "csecret"},
 	}
 	s.routes()
@@ -314,7 +321,7 @@ func TestRepositoryConnectionLifecycle(t *testing.T) {
 	}
 	r := request(s, "GET", "/api/v1/orgs/org-a/workers/repository-providers", "krun_cli_admin", "")
 	var out struct {
-		Items []repositoryConnectionInfo `json:"items"`
+		Items []repositories.RepositoryConnectionInfo `json:"items"`
 	}
 	if err := json.Unmarshal(r.Body.Bytes(), &out); err != nil || r.Code != 200 || len(out.Items) != 1 {
 		t.Fatal(r.Code, r.Body.String())
@@ -338,7 +345,7 @@ func TestRepositoryOAuthGETCallbackStoresConnectionAndReturnsToWorkspace(t *test
 	defer oauth.Close()
 
 	s, store, _ := workerTestServer(t)
-	s.Config.Workers.RepositoryProviders = []WorkerRepositoryProvider{{
+	s.Config.Workers.RepositoryProviders = []appconfig.WorkerRepositoryProvider{{
 		ID: "gitlab", Type: "gitlab", Name: "GitLab", Enabled: true,
 		BaseURL: oauth.URL, ClientID: "client", ClientSecret: "secret",
 		OrganizationIDs: []string{"org-a"},
@@ -394,7 +401,7 @@ func TestRepositoryOAuthCallbackRejectsTokenEndpointRedirect(t *testing.T) {
 	defer tokenEndpoint.Close()
 
 	s, store, _ := workerTestServer(t)
-	s.Config.Workers.RepositoryProviders = []WorkerRepositoryProvider{{
+	s.Config.Workers.RepositoryProviders = []appconfig.WorkerRepositoryProvider{{
 		ID: "gitlab", Type: "gitlab", Name: "GitLab", Enabled: true,
 		BaseURL: tokenEndpoint.URL, ClientID: "client", ClientSecret: "private-client-secret",
 		OrganizationIDs: []string{"org-a"},
@@ -434,8 +441,8 @@ func TestRepositoryOAuthTransportRejectsPrivateProductionAddressAndOversizeBody(
 			_, _ = io.WriteString(w, `{"access_token":"must-not-be-read"}`)
 		}))
 		defer endpoint.Close()
-		s := &Server{Config: Config{Development: false, PublicURL: "https://console.example.test"}}
-		provider := WorkerRepositoryProvider{ID: "gitlab", Type: "gitlab", BaseURL: strings.Replace(endpoint.URL, "http://", "https://", 1), ClientID: "client", ClientSecret: "secret"}
+		s := &Server{Config: appconfig.Config{Development: false, PublicURL: "https://console.example.test"}}
+		provider := appconfig.WorkerRepositoryProvider{ID: "gitlab", Type: "gitlab", BaseURL: strings.Replace(endpoint.URL, "http://", "https://", 1), ClientID: "client", ClientSecret: "secret"}
 		ctx, cancel, err := s.repositoryOAuthContext(context.Background(), provider)
 		if err != nil {
 			t.Fatal(err)
@@ -454,11 +461,11 @@ func TestRepositoryOAuthTransportRejectsPrivateProductionAddressAndOversizeBody(
 	t.Run("bounded response", func(t *testing.T) {
 		endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"access_token":"token","padding":"`+strings.Repeat("x", repositoryOAuthResponseLimitBytes)+`"}`)
+			_, _ = io.WriteString(w, `{"access_token":"token","padding":"`+strings.Repeat("x", repositories.RepositoryOAuthResponseLimitBytes)+`"}`)
 		}))
 		defer endpoint.Close()
-		s := &Server{Config: Config{Development: true, PublicURL: "http://127.0.0.1:8080"}}
-		provider := WorkerRepositoryProvider{ID: "gitlab", Type: "gitlab", BaseURL: endpoint.URL, ClientID: "client", ClientSecret: "secret"}
+		s := &Server{Config: appconfig.Config{Development: true, PublicURL: "http://127.0.0.1:8080"}}
+		provider := appconfig.WorkerRepositoryProvider{ID: "gitlab", Type: "gitlab", BaseURL: endpoint.URL, ClientID: "client", ClientSecret: "secret"}
 		ctx, cancel, err := s.repositoryOAuthContext(context.Background(), provider)
 		if err != nil {
 			t.Fatal(err)
@@ -490,7 +497,7 @@ func TestRepositoryCredentialRefreshRotatesGrantWithoutSharedPATFallback(t *test
 	defer oauth.Close()
 
 	s, store, _ := workerTestServer(t)
-	provider := WorkerRepositoryProvider{
+	provider := appconfig.WorkerRepositoryProvider{
 		ID: "gitlab", Type: "gitlab", Name: "GitLab", Enabled: true,
 		BaseURL: oauth.URL, ClientID: "client", ClientSecret: "secret",
 		Token: "shared-pat", AllowedRepositories: []string{"team/repository"},
@@ -533,7 +540,7 @@ func TestRepositoryCredentialRejectedRefreshRequiresReconnect(t *testing.T) {
 	}))
 	defer oauth.Close()
 	s, store, _ := workerTestServer(t)
-	provider := WorkerRepositoryProvider{
+	provider := appconfig.WorkerRepositoryProvider{
 		ID: "gitlab", Type: "gitlab", Name: "GitLab", Enabled: true,
 		BaseURL: oauth.URL, ClientID: "client", ClientSecret: "secret",
 		Token: "shared-pat", AllowedRepositories: []string{"team/repository"},

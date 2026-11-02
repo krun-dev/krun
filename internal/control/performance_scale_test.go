@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	appconfig "github.com/krun-dev/krun/internal/config"
 )
 
 // Opt-in capacity regression: an isolated schema avoids long, trigger-heavy
@@ -78,7 +79,7 @@ func TestPostgresMillionSiteReadBound(t *testing.T) {
 		t.Fatalf("organization navigation loaded unrelated state: resources=%d users=%d orgs=%d", len(orgState.Resources), len(orgState.Users), len(orgState.Organizations))
 	}
 	started = time.Now()
-	config := Config{DB: parsed.String(), Development: true, PublicURL: "http://127.0.0.1:4381", Providers: []ProviderConfig{{ID: "local", Type: "dev", Source: "local", Name: "Development", Registration: "jit"}}}
+	config := appconfig.Config{DB: parsed.String(), Development: true, PublicURL: "http://127.0.0.1:4381", Providers: []appconfig.ProviderConfig{{ID: "local", Type: "dev", Source: "local", Name: "Development", Registration: "jit"}}}
 	if _, err = NewServer(ctx, config, store); err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,8 @@ import (
 	"io"
 	"testing"
 
+	appconfig "github.com/krun-dev/krun/internal/config"
+	workerapp "github.com/krun-dev/krun/internal/workers"
 	"github.com/minio/minio-go/v7"
 )
 
@@ -13,15 +15,15 @@ func TestPostgresConfigDeltaStoresNormalizedEntitiesAndShards(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	seedPerformanceSites(t, store, 4)
-	config := workerProjectionConfig([]WorkerDomain{{ID: "internal", Domain: "workers.test"}})
-	controller := &workersController{server: &Server{Store: store}, config: config}
+	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}})
+	controller := &workerapp.Controller{Service: (&Server{Store: store}).workerApplication(nil), Config: config}
 	objects := map[string][]byte{}
-	controller.putObject = func(_ context.Context, _, key string, r io.Reader, _ int64, _ minio.PutObjectOptions) (minio.UploadInfo, error) {
+	controller.PutObject = func(_ context.Context, _, key string, r io.Reader, _ int64, _ minio.PutObjectOptions) (minio.UploadInfo, error) {
 		raw, err := io.ReadAll(r)
 		objects[key] = raw
 		return minio.UploadInfo{}, err
 	}
-	head, err := controller.publishConfig(ctx)
+	head, err := controller.PublishConfig(ctx)
 	if err != nil || head != 1 {
 		t.Fatalf("head=%d err=%v", head, err)
 	}
@@ -29,8 +31,8 @@ func TestPostgresConfigDeltaStoresNormalizedEntitiesAndShards(t *testing.T) {
 	if err = postgresTestPool(store).QueryRow(ctx, `SELECT (SELECT count(*) FROM worker_config_routes),(SELECT count(*) FROM worker_config_ops)`).Scan(&routes, &ops); err != nil || routes != 4 || ops != 4 {
 		t.Fatalf("routes=%d ops=%d err=%v", routes, ops, err)
 	}
-	var latest workerConfigLatest
-	if err = json.Unmarshal(objects[workerPoolConfigLatestKey("default")], &latest); err != nil || !latest.LazyRoutes || latest.Snapshot != "" {
+	var latest workerapp.WorkerConfigLatest
+	if err = json.Unmarshal(objects[workerapp.WorkerPoolConfigLatestKey("default")], &latest); err != nil || !latest.LazyRoutes || latest.Snapshot != "" {
 		t.Fatalf("compact head=%+v err=%v", latest, err)
 	}
 	var checkpoints int
@@ -45,7 +47,7 @@ func TestPostgresConfigDeltaStoresNormalizedEntitiesAndShards(t *testing.T) {
 	if err = json.Unmarshal(revisions[0].Ops, &delta); err != nil || len(delta) != 4 {
 		t.Fatalf("delta=%+v err=%v", delta, err)
 	}
-	if again, err := controller.publishConfig(ctx); err != nil || again != head {
+	if again, err := controller.PublishConfig(ctx); err != nil || again != head {
 		t.Fatalf("idle publisher=%d err=%v", again, err)
 	}
 }
@@ -57,20 +59,20 @@ func TestPostgresWorkerConfigProjectionUsesCompactReadModel(t *testing.T) {
 	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_worker_operations(operation_id,kind,org_id,service_id,env_name,state,steps,created_at) VALUES('broken','publish','tenant','site-000002','production','failed','{}'::jsonb,now())`); err != nil {
 		t.Fatal(err)
 	}
-	config := workerProjectionConfig([]WorkerDomain{{ID: "internal", Domain: "workers.test"}})
-	projection, err := loadWorkerConfigProjection(ctx, store, []string{"site-000002"}, config)
+	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}})
+	projection, err := workerapp.LoadWorkerConfigProjection(ctx, store, []string{"site-000002"}, config)
 	if err != nil || len(projection.Routes) != 1 || projection.Routes[0].Service != "site-000002" {
 		t.Fatalf("projection=%+v err=%v", projection, err)
 	}
 	// Prove the idle publisher does not read unrelated service data.
-	controller := &workersController{server: &Server{Store: store}, config: config}
-	if _, err = controller.publishConfig(ctx); err != nil {
+	controller := &workerapp.Controller{Service: (&Server{Store: store}).workerApplication(nil), Config: config}
+	if _, err = controller.PublishConfig(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = postgresTestPool(store).Exec(ctx, `UPDATE krun_worker_environments SET variables='[]'::jsonb`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = controller.publishConfig(ctx); err != nil {
+	if _, err = controller.PublishConfig(ctx); err != nil {
 		t.Fatalf("idle publisher read unrelated state: %v", err)
 	}
 }

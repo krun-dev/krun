@@ -155,10 +155,16 @@ fingerprint；已有库与基线不一致时拒绝启动，由开发者显式重
 5. **不留无界数据**。新增任何「每请求 / 每次构建 / 每次发布产生一行」的表，必须同时给出保留期与清理语句，并在同一提交里接上后台清理。禁止无上限 `append`。
 6. **热路径不写**。认证、列表、健康检查等读路径不得产生写。需要记录 `last_seen` 之类的字段时用节流写（例如 30 秒一次），不要每请求都写。
 
-## 10. 存储层边界（硬约束）
+## 10. 代码分层边界（硬约束）
 
-- `internal/control` 负责 HTTP、鉴权和业务编排；不得包含 SQL、导入数据库驱动或访问连接池。
+- `internal/control` 负责 HTTP、Cookie/CSRF、路由权限门禁、解码、响应和依赖装配；认证、IAM、Workers、仓库、Runtime 配置及审计调用对应独立模块。不得包含 SQL、导入数据库驱动或访问连接池。
+- `internal/iam` 负责组织、成员、用户组、角色、资源目录、API Key、邀请及初始化的业务校验和状态修改；接收类型化参数，不接收 HTTP 请求，不依赖 `control`、`storage` 或外部服务客户端。调用方先解析和授权目标，业务返回错误后丢弃工作副本。
+- `internal/authorization` 负责 Cedar、权限交集、策略校验及资源解析；只依赖共享模型和 Cedar。授权缓存仅供单次只读请求使用，不进入 `State` 或存储层。
 - `internal/storage` 集中 SQL、行映射、事务、CAS 和数据库清理，按认证、IAM、Workers、配置分发等领域组织。对外只提供有业务含义的类型化存储方法，不暴露 `pgx.Tx`、Rows 或连接池。
-- `internal/domain` 保存两层共享的数据类型；不得反向依赖 `control` 或 `storage`。请求内缓存、待提交命令必须显式 `json:"-"`，不得进入序列化快照。
+- `internal/domain` 保存共享数据类型，只依赖标准库。待提交命令必须显式 `json:"-"`，不得进入序列化快照。通用随机凭据、ID 与摘要实现集中在 `internal/securetoken`。
 - 完整 DDL 唯一来源是 `internal/storage/schema.sql`，由同目录 `schema.go` 嵌入并校验 fingerprint；不增加自动迁移或启动回填。
-- 改表时集中检查 DDL、domain 类型、对应 storage 文件和数据库测试。分层边界由 `TestStorageLayerBoundaries` 自动检查。
+- 改表时集中检查 DDL、domain 类型、对应 storage 文件和数据库测试。分层边界由 `TestStorageLayerBoundaries` 和 `TestIAMHandlersDoNotMutateEntities` 自动检查。当前实现边界见 [docs/architecture.md](docs/architecture.md)。
+
+- 业务模块为 `auth`、`iam`、`authorization`、`workers`、`repository`、`runtimeconfig` 和 `audit`；不得导入 HTTP、数据库驱动或基础设施 SDK，不得接收 `http.Request`。源码与制品校验在 `artifact`，配置在 `config`。
+- 身份提供商、Git/仓库 OAuth、Kubernetes、S3、邮件、本地 builder、Runtime 管理和控制台调用实现统一放在 `internal/adapters/*`；适配器不得反向导入 HTTP 入口或包含数据库语句。
+- HTTP handler 不得直接修改 `State` 实体或 revision。读取所需范围、传递类型化输入、连接权限/审计和映射业务结果属于入口职责。

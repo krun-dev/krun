@@ -5,6 +5,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	workerartifact "github.com/krun-dev/krun/internal/artifact"
+	appconfig "github.com/krun-dev/krun/internal/config"
 )
 
 func TestPostgresWorkerCompatibilityMetadataRoundTrip(t *testing.T) {
@@ -14,21 +17,21 @@ func TestPostgresWorkerCompatibilityMetadataRoundTrip(t *testing.T) {
 	finished := created
 	flags := []string{"enable_nodejs_fs_module", "nodejs_compat"}
 	artifact := WorkerArtifact{
-		ID: "art-compat", Organization: "org-compat", State: "finalized", Profile: workerProfile,
+		ID: "art-compat", Organization: "org-compat", State: "finalized", Profile: workerartifact.WorkerProfile,
 		ArchiveDigest: "archive", ManifestDigest: "manifest", ModuleDigest: "module",
 		CompatibilityDate: "2026-09-28", CompatibilityFlags: append([]string(nil), flags...),
 		Size: 123, ObjectKey: "v1/org-compat/archive", StorageLocation: "primary", Bucket: "artifacts", Created: created,
 	}
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Builds["bld-compat"] = WorkerBuild{
-			ID: "bld-compat", Organization: "org-compat", Service: "svc-compat", Environment: workerBaseline,
-			State: "succeeded", Entrypoint: "index.ts", Profile: workerProfile,
+			ID: "bld-compat", Organization: "org-compat", Service: "svc-compat", Environment: appconfig.WorkerBaseline,
+			State: "succeeded", Entrypoint: "index.ts", Profile: workerartifact.WorkerProfile,
 			CompatibilityDate: "2026-09-28", CompatibilityFlags: append([]string(nil), flags...),
 			Artifact: artifact.ID, Created: created, Finished: &finished,
 		}
 		st.Workers.Artifacts[artifact.ID] = artifact
 		st.Workers.Releases["rel-compat"] = WorkerRelease{
-			ID: "rel-compat", Organization: "org-compat", Service: "svc-compat", Environment: workerBaseline,
+			ID: "rel-compat", Organization: "org-compat", Service: "svc-compat", Environment: appconfig.WorkerBaseline,
 			Artifact: artifact.ID, Profile: artifact.Profile, ArchiveDigest: artifact.ArchiveDigest, ModuleDigest: artifact.ModuleDigest,
 			CompatibilityDate: artifact.CompatibilityDate, CompatibilityFlags: append([]string(nil), flags...),
 			Variables: map[string]string{}, Created: created,
@@ -52,13 +55,13 @@ func TestPostgresWorkerCompatibilityMetadataRoundTrip(t *testing.T) {
 			t.Fatalf("%s compatibility flags = %v, want %v", name, got, flags)
 		}
 	}
-	if build.CompatibilityDate != artifact.CompatibilityDate || storedArtifact.Profile != workerProfile || release.CompatibilityDate != artifact.CompatibilityDate || release.Profile != workerProfile {
+	if build.CompatibilityDate != artifact.CompatibilityDate || storedArtifact.Profile != workerartifact.WorkerProfile || release.CompatibilityDate != artifact.CompatibilityDate || release.Profile != workerartifact.WorkerProfile {
 		t.Fatalf("compatibility metadata did not round-trip: build=%+v artifact=%+v release=%+v", build, storedArtifact, release)
 	}
 
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Releases["rel-mismatch"] = WorkerRelease{
-			ID: "rel-mismatch", Organization: artifact.Organization, Service: "svc-compat", Environment: workerBaseline,
+			ID: "rel-mismatch", Organization: artifact.Organization, Service: "svc-compat", Environment: appconfig.WorkerBaseline,
 			Artifact: artifact.ID, Profile: artifact.Profile, ArchiveDigest: artifact.ArchiveDigest, ModuleDigest: artifact.ModuleDigest,
 			CompatibilityDate: "2026-09-27", CompatibilityFlags: []string{"nodejs_compat"}, Variables: map[string]string{}, Created: created,
 		}

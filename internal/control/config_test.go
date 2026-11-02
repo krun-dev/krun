@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	identityprovider "github.com/krun-dev/krun/internal/adapters/identity"
+	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/configfile"
 )
 
@@ -64,7 +66,7 @@ providers:
 	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
-	c, err := LoadConfig(path)
+	c, err := appconfig.LoadConfig(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +93,7 @@ providers:
 		if err := os.WriteFile(p, []byte(data), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := LoadConfig(p); err == nil {
+		if _, err := appconfig.LoadConfig(p); err == nil {
 			t.Fatalf("invalid config accepted: %s", name)
 		}
 	}
@@ -105,20 +107,20 @@ func TestYAMLServerExamples(t *testing.T) {
 	t.Setenv("KRUN_SMTP_PASSWORD", "test-only")
 	for _, name := range []string{"development.example.yaml", "example.yaml"} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := LoadConfig(filepath.Join("..", "..", "config", name)); err != nil {
+			if _, err := appconfig.LoadConfig(filepath.Join("..", "..", "config", name)); err != nil {
 				t.Fatal(err)
 			}
 		})
 	}
 	// Validate every template while enabled, so disabled examples cannot hide
 	// invalid endpoints, missing credentials or SMTP fields.
-	c, err := LoadConfig(filepath.Join("..", "..", "config", "example.yaml"))
+	c, err := appconfig.LoadConfig(filepath.Join("..", "..", "config", "example.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	enabled := true
 	for i := range c.Providers {
-		if c.Providers[i].enabled() {
+		if c.Providers[i].IsEnabled() {
 			t.Fatalf("example source %s should require explicit opt-in", c.Providers[i].ID)
 		}
 		if c.Providers[i].Type != "dev" {
@@ -141,14 +143,14 @@ func TestYAMLServerExamples(t *testing.T) {
 		for _, name := range []string{"KRUN_GITHUB_SECRET", "KRUN_GITLAB_SECRET", "KRUN_OIDC_SECRET", "KRUN_ALIYUN_SECRET", "KRUN_COMPANY_SECRET", "KRUN_SMTP_PASSWORD"} {
 			t.Setenv(name, "")
 		}
-		if _, err := LoadConfig(filepath.Join("..", "..", "config", "example.yaml")); err != nil {
+		if _, err := appconfig.LoadConfig(filepath.Join("..", "..", "config", "example.yaml")); err != nil {
 			t.Fatal(err)
 		}
 	})
 }
 
 func TestDevelopmentRequiresPostgres(t *testing.T) {
-	c := Config{Development: true, PublicURL: "http://127.0.0.1:8080", DB: "postgres://test-only/krun_test"}
+	c := appconfig.Config{Development: true, PublicURL: "http://127.0.0.1:8080", DB: "postgres://test-only/krun_test"}
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +165,7 @@ func TestDevelopmentRequiresPostgres(t *testing.T) {
 		}
 	}
 	c.DB = "postgres://test-only/krun_test"
-	var decoded Config
+	var decoded appconfig.Config
 	if err := configfile.Decode("server.yaml", []byte("data_file: .data/control.json\n"), &decoded); err == nil {
 		t.Fatal("removed data_file setting accepted")
 	}
@@ -191,7 +193,7 @@ func TestUnifiedEnvironmentConfiguration(t *testing.T) {
 			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
 				t.Fatal(err)
 			}
-			c, err := LoadConfig(path)
+			c, err := appconfig.LoadConfig(path)
 			if !tc.valid {
 				if err == nil {
 					t.Fatal("invalid database configuration accepted")
@@ -210,8 +212,8 @@ func TestUnifiedEnvironmentConfiguration(t *testing.T) {
 			if err = c.Validate(); err != nil {
 				t.Fatal("repeated validation failed", err)
 			}
-			p, err := newProvider(context.Background(), c, c.Providers[0], nil)
-			if err != nil || p.oauth.ClientSecret != "private-client-secret" {
+			p, err := identityprovider.New(context.Background(), c, c.Providers[0], nil)
+			if err != nil || p.Oauth.ClientSecret != "private-client-secret" {
 				t.Fatal("resolved secret did not reach OAuth client")
 			}
 		})

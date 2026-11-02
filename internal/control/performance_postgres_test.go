@@ -7,6 +7,9 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	appconfig "github.com/krun-dev/krun/internal/config"
+	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
 func seedPerformanceSites(t *testing.T, s *Store, n int) {
@@ -32,6 +35,7 @@ func seedPerformanceSites(t *testing.T, s *Store, n int) {
 		}
 	}
 }
+
 func TestPostgresScopedSiteReadsAndPagination(t *testing.T) {
 	s := postgresTestStore(t)
 	seedPerformanceSites(t, s, 1000)
@@ -87,14 +91,15 @@ func TestPostgresScopedSiteReadsAndPagination(t *testing.T) {
 		t.Fatalf("pagination omitted sites: %d", len(seen))
 	}
 }
+
 func TestPostgresDeltaPublisherOnlyWritesChangedSite(t *testing.T) {
 	s := postgresTestStore(t)
 	seedPerformanceSites(t, s, 20)
 	ctx := context.Background()
-	config := workerProjectionConfig([]WorkerDomain{{ID: "internal", Domain: "workers.test"}})
+	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}})
 
-	controller := &workersController{server: &Server{Store: s}, config: config}
-	rev, err := controller.publishConfig(ctx)
+	controller := &workerapp.Controller{Service: (&Server{Store: s}).workerApplication(nil), Config: config}
+	rev, err := controller.PublishConfig(ctx)
 	if err != nil || rev != 1 {
 		t.Fatalf("initial delta: %d %v", rev, err)
 	}
@@ -105,7 +110,7 @@ func TestPostgresDeltaPublisherOnlyWritesChangedSite(t *testing.T) {
 	if _, err = postgresTestPool(s).Exec(ctx, `UPDATE krun_worker_environments SET enabled=false WHERE service_id='site-000002'`); err != nil {
 		t.Fatal(err)
 	}
-	rev, err = controller.publishConfig(ctx)
+	rev, err = controller.PublishConfig(ctx)
 	if err != nil || rev != 2 {
 		t.Fatalf("single delta: %d %v", rev, err)
 	}
@@ -134,17 +139,18 @@ func TestPostgresDeltaPublisherOnlyWritesChangedSite(t *testing.T) {
 	request.Header.Set("X-Runtime-Pool", "default")
 	request.Header.Set("Authorization", "Bearer fixture")
 	config.RuntimePools[0].RuntimeToken = "fixture"
-	server := &Server{Store: s, Config: Config{Workers: config}}
+	server := &Server{Store: s, Config: appconfig.Config{Workers: config}}
 	response := httptest.NewRecorder()
 	server.workerRuntimeConfigRoute(response, request)
 	if response.Code != 200 {
 		t.Fatalf("resolve=%d %s", response.Code, response.Body.String())
 	}
-	var snap workerConfigSnapshot
+	var snap workerapp.WorkerConfigSnapshot
 	if err = json.Unmarshal(response.Body.Bytes(), &snap); err != nil || len(snap.Routes) != 1 || snap.Routes[0].Enabled {
 		t.Fatalf("resolved stale route: %+v %v", snap, err)
 	}
 }
+
 func TestPostgresWorkQueueRotatesPastFirstHundred(t *testing.T) {
 	s := postgresTestStore(t)
 	ctx := context.Background()
@@ -201,8 +207,8 @@ func TestPostgresStaleDirtyGenerationCannotPublishOrDropNewerWork(t *testing.T) 
 	if err != nil || len(remaining) != 2 {
 		t.Fatalf("new mutation was lost: %v %v", remaining, err)
 	}
-	controller := &workersController{server: &Server{Store: s}, config: workerProjectionConfig([]WorkerDomain{{ID: "internal", Domain: "workers.test"}})}
-	revision, err := controller.publishConfig(ctx)
+	controller := &workerapp.Controller{Service: (&Server{Store: s}).workerApplication(nil), Config: workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}})}
+	revision, err := controller.PublishConfig(ctx)
 	if err != nil || revision != 1 {
 		t.Fatal(err)
 	}
@@ -225,7 +231,7 @@ func TestPostgresLoginAndStartupDoNotLoadSiteCatalogue(t *testing.T) {
 	if len(state.Users) != 1 || len(state.Resources) != 0 || len(state.Organizations) != 0 || len(state.Assignments) != 0 {
 		t.Fatal("login loaded unrelated IAM state")
 	}
-	config := Config{DB: os.Getenv("KRUN_TEST_POSTGRES_URL"), Development: true, PublicURL: "http://127.0.0.1:4381", Providers: []ProviderConfig{{ID: "local", Type: "dev", Source: "local", Name: "Development", Registration: "jit"}}}
+	config := appconfig.Config{DB: os.Getenv("KRUN_TEST_POSTGRES_URL"), Development: true, PublicURL: "http://127.0.0.1:4381", Providers: []appconfig.ProviderConfig{{ID: "local", Type: "dev", Source: "local", Name: "Development", Registration: "jit"}}}
 	if _, err = NewServer(ctx, config, store); err != nil {
 		t.Fatal(err)
 	}
