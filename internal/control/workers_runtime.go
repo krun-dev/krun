@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
+	"github.com/jackc/pgx/v5"
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -33,6 +36,15 @@ func (s *Server) workerRuntimeConfigSnapshot(w http.ResponseWriter, r *http.Requ
 	pool, allowed := s.workerRuntimePool(r)
 	if !allowed {
 		s.writeError(w, r, forbidden())
+		return
+	}
+	if s.Store.pool != nil {
+		head, _, err := s.Store.ConfigState(r.Context())
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		s.json(w, 200, map[string]any{"pool": pool.ID, "config_revision": head, "lazy_routes": true, "routes": []workerConfigRoute{}, "releases": map[string]WorkerRelease{}})
 		return
 	}
 	latest, ok, e := s.Store.LatestConfigRevision(r.Context())
@@ -74,7 +86,7 @@ func (s *Server) workerRuntimeConfigChanges(w http.ResponseWriter, r *http.Reque
 	}
 	deadline := time.Now().Add(wait)
 	for {
-		revisions, floor, err := s.Store.ConfigRevisionsSince(r.Context(), since, 100)
+		revisions, floor, err := s.Store.ConfigRevisionsSince(context.WithValue(r.Context(), workerRuntimeFeedPoolKey{}, pool.ID), since, 100)
 		if err != nil {
 			s.writeError(w, r, err)
 			return
@@ -141,28 +153,8 @@ func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, forbidden())
 		return
 	}
-	var out WorkerArtifact
-	// The liveness check below consults krun_resources, which lives in the IAM
-	// partition, so this read needs both halves.
-	e := s.Store.View(r.Context(), PartitionAll, func(st *State) error {
-		a, ok := st.Workers.Artifacts[r.PathValue("artifact")]
-		if !ok || a.State != "finalized" {
-			return notFound()
-		}
-		allowed := false
-		for _, d := range st.Workers.Releases {
-			if d.Artifact == a.ID && workerServiceAvailableInPool(st.Workers, d.Service, pool.ID) {
-				if _, ok := st.Resources[d.Service]; ok {
-					allowed = true
-				}
-			}
-		}
-		if !allowed {
-			return forbidden()
-		}
-		out = a
-		return nil
-	})
+	out, e := s.Store.runtimeArtifact(r.Context(), r.PathValue("artifact"), pool.ID)
+
 	if e != nil {
 		s.writeError(w, r, e)
 		return
@@ -258,44 +250,71 @@ type workerReleaseAssets struct {
 
 func (w *workersController) releaseAssets(ctx context.Context, releaseID, pool string) (workerReleaseAssets, error) {
 	var out workerReleaseAssets
-	// st.Resources is in the IAM partition; without it every release looks dead.
-	e := w.server.Store.View(ctx, PartitionAll, func(st *State) error {
-		rel, ok := st.Workers.Releases[releaseID]
-		if !ok || !workerServiceAvailableInPool(st.Workers, rel.Service, pool) || st.Resources[rel.Service].ID == "" {
-			return notFound()
+	rel, art, e := w.server.Store.runtimeRelease(ctx, releaseID, pool)
+	out.Release, out.Artifact = rel, art
+
+	if e != nil {
+		return out, e
+	}
+	value, e, _ := w.assetFlights.Do(out.Artifact.ID, func() (any, error) {
+		w.assetMu.Lock()
+		cached, ok := w.assetCache[out.Artifact.ID]
+		if ok {
+			cached.Used = now()
+			w.assetCache[out.Artifact.ID] = cached
 		}
-		art, ok := st.Workers.Artifacts[rel.Artifact]
-		if !ok || art.State != "finalized" {
-			return notFound()
+		w.assetMu.Unlock()
+		if ok {
+			return cached, nil
 		}
-		out.Release, out.Artifact = rel, art
-		return nil
+		raw, err := w.getObject(ctx, workerArtifactManifestKey(out.Artifact))
+		var manifest workerManifest
+		if err == nil {
+			if bytesDigest(raw) != out.Artifact.ManifestDigest {
+				return nil, errors.New("artifact manifest digest mismatch")
+			}
+			if err = json.Unmarshal(raw, &manifest); err != nil {
+				return nil, err
+			}
+		} else {
+			// Pre-release artifacts built before the standalone manifest existed can
+			// still be opened; every new finalize writes the compact object.
+			code, loadErr := w.artifactCode(ctx, out.Artifact)
+			if loadErr != nil {
+				return nil, loadErr
+			}
+			if err = json.Unmarshal(code.ManifestRaw, &manifest); err != nil {
+				return nil, err
+			}
+		}
+		cached = workerCachedAssets{Used: now()}
+		if assets := manifest.Assets; assets != nil {
+			cached.Config = &WorkerAssetsConfig{Directory: assets.Directory, Binding: assets.Binding, RunWorkerFirst: assets.RunWorkerFirst, NotFoundHandling: assets.NotFoundHandling, HTMLHandling: assets.HTMLHandling}
+			cached.Files = assets.Files
+		}
+		sort.Slice(cached.Files, func(i, j int) bool { return cached.Files[i].Path < cached.Files[j].Path })
+		w.assetMu.Lock()
+		if w.assetCache == nil {
+			w.assetCache = map[string]workerCachedAssets{}
+		}
+		if len(w.assetCache) >= 256 {
+			oldest := ""
+			var at time.Time
+			for id, v := range w.assetCache {
+				if oldest == "" || v.Used.Before(at) {
+					oldest, at = id, v.Used
+				}
+			}
+			delete(w.assetCache, oldest)
+		}
+		w.assetCache[out.Artifact.ID] = cached
+		w.assetMu.Unlock()
+		return cached, nil
 	})
 	if e != nil {
 		return out, e
 	}
-	w.assetMu.RLock()
-	cached, ok := w.assetCache[out.Artifact.ID]
-	w.assetMu.RUnlock()
-	if ok {
-		out.Config, out.Files = cached.Config, cached.Files
-		return out, nil
-	}
-	code, e := w.artifactCode(ctx, out.Artifact)
-	if e != nil {
-		return out, e
-	}
-	manifest := workerCachedAssets{Config: code.Assets}
-	for name, meta := range code.AssetFiles {
-		manifest.Files = append(manifest.Files, workerManifestFile{Path: name, Digest: meta.Digest, Size: meta.Size, ContentType: meta.ContentType})
-	}
-	sort.Slice(manifest.Files, func(i, j int) bool { return manifest.Files[i].Path < manifest.Files[j].Path })
-	w.assetMu.Lock()
-	if len(w.assetCache) >= 256 {
-		w.assetCache = map[string]workerCachedAssets{}
-	}
-	w.assetCache[out.Artifact.ID] = manifest
-	w.assetMu.Unlock()
+	manifest := value.(workerCachedAssets)
 	out.Config, out.Files = manifest.Config, manifest.Files
 	return out, nil
 }
@@ -354,4 +373,45 @@ func (s *Server) workerRuntimeReleaseAssetURL(w http.ResponseWriter, r *http.Req
 		"content_type": file.ContentType,
 		"download_url": signed.String(),
 	})
+}
+
+// A cold host resolves exactly one normalized route and immutable release.
+func (s *Server) workerRuntimeConfigRoute(w http.ResponseWriter, r *http.Request) {
+	pool, ok := s.workerRuntimePool(r)
+	if !ok {
+		s.writeError(w, r, forbidden())
+		return
+	}
+	var route workerConfigRoute
+	var raw []byte
+	var revision int64
+	host := strings.ToLower(r.PathValue("host"))
+	if len(host) > 253 || strings.ContainsAny(host, "/\\: ") {
+		s.writeError(w, r, notFound())
+		return
+	}
+	if s.Store.pool == nil {
+		s.writeError(w, r, notFound())
+		return
+	}
+	err := s.Store.pool.QueryRow(r.Context(), `SELECT r.service_id,r.host,r.pool,r.path,r.enabled,r.release_id,c.payload,COALESCE((SELECT value::bigint FROM krun_meta WHERE key='worker_config_head'),0)
+ FROM worker_config_routes r LEFT JOIN worker_config_releases c ON c.release_id=r.release_id AND c.pool=r.pool WHERE r.host=$1 AND r.pool=$2`, host, pool.ID).Scan(&route.Service, &route.Host, &route.Pool, &route.Path, &route.Enabled, &route.Release, &raw, &revision)
+	if err == pgx.ErrNoRows {
+		s.writeError(w, r, notFound())
+		return
+	}
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	releases := map[string]WorkerRelease{}
+	if len(raw) > 0 {
+		var rel WorkerRelease
+		if err = json.Unmarshal(raw, &rel); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		releases[rel.ID] = rel
+	}
+	s.json(w, 200, workerConfigSnapshot{Pool: pool.ID, ConfigRevision: revision, Routes: []workerConfigRoute{route}, Releases: releases})
 }

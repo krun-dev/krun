@@ -605,5 +605,6 @@
   "当前环境还没有 Secret。": "This environment has no Secrets yet.",
   "Secret 名称": "Secret name",
   "Secret 值": "Secret value",
-  "保存并发布 Secret": "Save and deploy Secret"
+  "保存并发布 Secret": "Save and deploy Secret",
+  "服务不存在或无权访问": "Service not found or access denied"
 }

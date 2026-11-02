@@ -15,7 +15,7 @@
 - 服务选择一组 domain id；每个环境在每个所选后缀下各有一个 host。
 - Network Profile 先过滤服务可见的域名集合，再隐藏地解析 runtime pool；组织 API 不返回
   access、domain labels、Gateway 或 pool。
-- HTTPRoute 按 `(service, Gateway)` 分组；静态资产也按每条 domain 的 Gateway 下发。
+- `shared_routing: true` 时 HTTPRoute 按 `(pool, domain)` 聚合，并使用 pool hash 入口标签；旧模式按 `(service, Gateway)` 分组。静态资产仍按 domain 下发。启用条件、DNS/TLS 与地址变化见 [百万站点改造](performance-scaling.md)。
 
 尚未实现：按单个域名审批、dataplane/workers-router 模式、自定义域名。本文相关章节是
 目标设计；与现状的差异见文末「现状与迁移」。

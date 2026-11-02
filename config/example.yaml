@@ -137,6 +137,8 @@ providers:
 # 省略 workers: 段时服务仍可启动，但 Workers 接口返回 WORKERS_NOT_CONFIGURED，
 # 控制台显示“Workers 未配置”。删除此段即可关闭 Workers。
 workers:
+  shared_routing: true
+  reconcile_concurrency: 8
   namespace: workers-mvp
   # 集群内可省略以下三项，默认使用 Pod service account；local-first 开发
   # 在 .data/dev.yaml 中显式填写本机可达 API 与 .data/kind-creds 的绝对路径。

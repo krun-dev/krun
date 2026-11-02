@@ -428,6 +428,10 @@ func (s *Server) finishEmailLogin(ctx context.Context, r *http.Request, p *provi
 }
 
 func (s *Server) finishLoginCommit(ctx context.Context, r *http.Request, p *provider, browserHash string, expectedGeneration int, id identity, sessionToken, challengeHash string) error {
+	if s.Store.pool != nil {
+		ctx = context.WithValue(ctx, loginReadScopeKey{}, loginReadScope{Source: p.config.Source, Subject: id.Subject})
+	}
+
 	at := now()
 	session := Session{Hash: digest(sessionToken), CSRF: randomToken(), Created: at, Seen: at, Absolute: at.Add(8 * time.Hour)}
 	for attempt := 0; ; attempt++ {

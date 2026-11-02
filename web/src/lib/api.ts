@@ -24,7 +24,11 @@ export async function api<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   if (!path.startsWith("/api/")) {
-    throw new APIError(0, "INVALID_API_PATH", "Refusing a non-API request path");
+    throw new APIError(
+      0,
+      "INVALID_API_PATH",
+      "Refusing a non-API request path",
+    );
   }
   signal = signal
     ? AbortSignal.any([signal, AbortSignal.timeout(20000)])
@@ -177,4 +181,4 @@ export type AuditPageResponse = {
   as_of: string;
   retention_days: number;
 };
-export type List<T> = { items: T[] };
+export type List<T> = { items: T[]; next_after?: string };

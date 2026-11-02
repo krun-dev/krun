@@ -15,16 +15,16 @@ import (
 func replacePublishedWorkerConfig(ctx context.Context, tx pgx.Tx, payload []byte) error {
 	raw := string(payload)
 	if _, err := tx.Exec(ctx, `WITH incoming AS MATERIALIZED (
-			SELECT route->>'host' AS host,
+			SELECT route->>'host' AS host, COALESCE(route->>'service_id','') AS service_id,
 				COALESCE(NULLIF(route->>'pool',''),'default') AS pool,
 				COALESCE(route->>'path','') AS path,
 				COALESCE((route->>'enabled')::boolean,false) AS enabled,
 				COALESCE(route->>'release','') AS release_id
 			FROM jsonb_array_elements(COALESCE($1::jsonb->'routes','[]'::jsonb)) AS route
 		), upserted AS (
-			INSERT INTO worker_config_routes (host, pool, path, enabled, release_id)
-			SELECT host, pool, path, enabled, release_id FROM incoming
-			ON CONFLICT (host) DO UPDATE SET pool=excluded.pool, path=excluded.path, enabled=excluded.enabled, release_id=excluded.release_id
+			INSERT INTO worker_config_routes (host, pool, path, enabled, release_id,service_id)
+			SELECT host, pool, path, enabled, release_id,service_id FROM incoming
+			ON CONFLICT (host) DO UPDATE SET pool=excluded.pool, path=excluded.path, enabled=excluded.enabled, release_id=excluded.release_id,service_id=excluded.service_id
 			RETURNING host
 		)
 		DELETE FROM worker_config_routes current
@@ -86,7 +86,7 @@ func (s *Store) WorkerConfigProjection(ctx context.Context, config *WorkersConfi
 		return workerConfigProjection{}, 0, err
 	}
 	st := newState()
-	rows, err := tx.Query(ctx, `SELECT s.service_id, s.org_id, s.network_profile
+	rows, err := queryWorkerProjection(ctx, tx, `SELECT s.service_id, s.org_id, s.network_profile
 		FROM krun_worker_services s
 		JOIN krun_resources r ON r.resource_id=s.service_id AND r.kind='service' AND r.org_id=s.org_id
 		JOIN krun_organizations o ON o.org_id=s.org_id
@@ -110,7 +110,7 @@ func (s *Store) WorkerConfigProjection(ctx context.Context, config *WorkersConfi
 	}
 	rows.Close()
 
-	rows, err = tx.Query(ctx, `SELECT p.service_id, p.pool_id, p.org_id, p.network_profile,
+	rows, err = queryWorkerProjection(ctx, tx, `SELECT p.service_id, p.pool_id, p.org_id, p.network_profile,
 		p.role, p.state, p.revision, p.created_at, p.updated_at
 		FROM krun_worker_service_placements p
 		JOIN krun_worker_services s ON s.service_id=p.service_id AND s.org_id=p.org_id
@@ -135,7 +135,7 @@ func (s *Store) WorkerConfigProjection(ctx context.Context, config *WorkersConfi
 	}
 	rows.Close()
 
-	rows, err = tx.Query(ctx, `SELECT d.service_id, d.domain_id
+	rows, err = queryWorkerProjection(ctx, tx, `SELECT d.service_id, d.domain_id
 		FROM krun_worker_service_domains d
 		JOIN krun_worker_services s ON s.service_id=d.service_id
 		JOIN krun_resources r ON r.resource_id=s.service_id AND r.kind='service' AND r.org_id=s.org_id
@@ -162,7 +162,7 @@ func (s *Store) WorkerConfigProjection(ctx context.Context, config *WorkersConfi
 	}
 	rows.Close()
 
-	rows, err = tx.Query(ctx, `SELECT e.service_id, e.env_name, e.enabled, e.release_id
+	rows, err = queryWorkerProjection(ctx, tx, `SELECT e.service_id, e.env_name, e.enabled, e.release_id
 		FROM krun_worker_environments e
 		JOIN krun_worker_services s ON s.service_id=e.service_id
 		JOIN krun_resources r ON r.resource_id=s.service_id AND r.kind='service' AND r.org_id=s.org_id
@@ -190,7 +190,7 @@ func (s *Store) WorkerConfigProjection(ctx context.Context, config *WorkersConfi
 	}
 	rows.Close()
 
-	rows, err = tx.Query(ctx, `SELECT rel.release_id, rel.org_id, rel.service_id, rel.env_name,
+	rows, err = queryWorkerProjection(ctx, tx, `SELECT rel.release_id, rel.org_id, rel.service_id, rel.env_name,
 		rel.artifact_id, rel.profile, rel.archive_digest, rel.module_digest,
 		rel.compatibility_date, rel.compatibility_flags, rel.config_revision,
 		rel.variables, rel.secret_digest, rel.created_at
@@ -250,7 +250,7 @@ func (s *Store) WorkerRoutingTopology(ctx context.Context) (map[string]workerRou
 		return nil, 0, err
 	}
 	services := map[string]workerRoutingService{}
-	rows, err := tx.Query(ctx, `SELECT s.service_id, s.org_id, s.network_profile, p.pool_id
+	rows, err := queryWorkerProjection(ctx, tx, `SELECT s.service_id, s.org_id, s.network_profile, p.pool_id
 		FROM krun_worker_services s
 		JOIN krun_worker_service_placements p ON p.service_id=s.service_id AND p.org_id=s.org_id
 			AND p.role='primary' AND p.state='active'
@@ -273,7 +273,7 @@ func (s *Store) WorkerRoutingTopology(ctx context.Context) (map[string]workerRou
 		return nil, 0, err
 	}
 	rows.Close()
-	rows, err = tx.Query(ctx, `SELECT d.service_id, d.domain_id
+	rows, err = queryWorkerProjection(ctx, tx, `SELECT d.service_id, d.domain_id
 		FROM krun_worker_service_domains d
 		JOIN krun_worker_services s ON s.service_id=d.service_id
 		JOIN krun_resources r ON r.resource_id=s.service_id AND r.kind='service' AND r.org_id=s.org_id
@@ -299,7 +299,7 @@ func (s *Store) WorkerRoutingTopology(ctx context.Context) (map[string]workerRou
 		return nil, 0, err
 	}
 	rows.Close()
-	rows, err = tx.Query(ctx, `SELECT e.service_id, e.env_name, e.enabled, e.release_id
+	rows, err = queryWorkerProjection(ctx, tx, `SELECT e.service_id, e.env_name, e.enabled, e.release_id
 		FROM krun_worker_environments e
 		JOIN krun_worker_services s ON s.service_id=e.service_id
 		JOIN krun_resources r ON r.resource_id=s.service_id AND r.kind='service' AND r.org_id=s.org_id

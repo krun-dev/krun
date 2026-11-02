@@ -492,6 +492,8 @@ CREATE TABLE IF NOT EXISTS worker_config_revisions (
 );
 
 CREATE TABLE IF NOT EXISTS worker_config_routes (
+ service_id text NOT NULL DEFAULT '',
+ shard text NOT NULL DEFAULT '00',
 	host       text PRIMARY KEY,
 	pool       text NOT NULL,
 	path       text NOT NULL DEFAULT '',
@@ -522,6 +524,91 @@ CREATE TABLE IF NOT EXISTS worker_config_ops (
 	)
 );
 
+ALTER TABLE worker_config_routes ADD COLUMN IF NOT EXISTS service_id text NOT NULL DEFAULT '';
+ALTER TABLE worker_config_routes ADD COLUMN IF NOT EXISTS shard text NOT NULL DEFAULT '00';
+CREATE INDEX IF NOT EXISTS worker_config_routes_service ON worker_config_routes(service_id);
+CREATE INDEX IF NOT EXISTS worker_config_routes_release ON worker_config_routes(release_id,pool);
+CREATE INDEX IF NOT EXISTS worker_config_routes_shard ON worker_config_routes(pool,shard,host);
+CREATE INDEX IF NOT EXISTS worker_config_ops_pool ON worker_config_ops(pool,config_revision,ordinal);
+CREATE INDEX IF NOT EXISTS krun_worker_releases_artifact ON krun_worker_releases(artifact_id,service_id);
+CREATE INDEX IF NOT EXISTS krun_resources_page ON krun_resources(org_id,kind,resource_id);
+CREATE INDEX IF NOT EXISTS krun_worker_idempotency_prefix ON krun_worker_idempotency(idem_key text_pattern_ops);
+ALTER TABLE krun_worker_builds ADD COLUMN IF NOT EXISTS started_at timestamptz;
+ALTER TABLE krun_worker_builds ADD COLUMN IF NOT EXISTS reconcile_after timestamptz NOT NULL DEFAULT '-infinity';
+ALTER TABLE krun_worker_operations ADD COLUMN IF NOT EXISTS started_at timestamptz;
+ALTER TABLE krun_worker_operations ADD COLUMN IF NOT EXISTS reconcile_after timestamptz NOT NULL DEFAULT '-infinity';
+CREATE INDEX IF NOT EXISTS krun_worker_builds_schedulable ON krun_worker_builds(reconcile_after,created_at) WHERE state NOT IN ('succeeded','failed');
+CREATE INDEX IF NOT EXISTS krun_worker_operations_schedulable ON krun_worker_operations(reconcile_after,created_at) WHERE state NOT IN ('succeeded','failed','available','superseded');
+CREATE TABLE IF NOT EXISTS worker_asset_objects(
+ object_key text PRIMARY KEY,
+ artifact_id text NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS worker_asset_objects_artifact ON worker_asset_objects(artifact_id,object_key);
+CREATE SEQUENCE IF NOT EXISTS worker_dirty_seq;
+CREATE TABLE IF NOT EXISTS worker_retention_scopes(service_id text PRIMARY KEY,generation bigint NOT NULL DEFAULT nextval('worker_dirty_seq'));
+CREATE OR REPLACE FUNCTION krun_mark_worker_retention() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ INSERT INTO worker_retention_scopes(service_id) VALUES(NEW.service_id) ON CONFLICT(service_id) DO UPDATE SET generation=nextval('worker_dirty_seq');
+ RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS worker_build_retention ON krun_worker_builds;
+CREATE TRIGGER worker_build_retention AFTER INSERT OR UPDATE OF state ON krun_worker_builds FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_retention();
+DROP TRIGGER IF EXISTS worker_history_retention ON krun_worker_history;
+CREATE TRIGGER worker_history_retention AFTER INSERT ON krun_worker_history FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_retention();
+CREATE INDEX IF NOT EXISTS worker_retention_scopes_generation ON worker_retention_scopes(generation,service_id);
+CREATE INDEX IF NOT EXISTS krun_worker_releases_age ON krun_worker_releases(created_at);
+CREATE INDEX IF NOT EXISTS krun_worker_operations_age ON krun_worker_operations(created_at);
+CREATE INDEX IF NOT EXISTS krun_worker_builds_age ON krun_worker_builds(created_at);
+CREATE INDEX IF NOT EXISTS krun_worker_environments_release ON krun_worker_environments(release_id);
+CREATE INDEX IF NOT EXISTS krun_worker_environments_confirmed ON krun_worker_environments(confirmed_release_id);
+CREATE INDEX IF NOT EXISTS krun_worker_history_release ON krun_worker_history(release_id);
+CREATE INDEX IF NOT EXISTS krun_worker_operations_release ON krun_worker_operations(release_id);
+CREATE INDEX IF NOT EXISTS krun_worker_builds_artifact ON krun_worker_builds(artifact_id);
+CREATE INDEX IF NOT EXISTS krun_worker_environment_secrets_version ON krun_worker_environment_secrets(secret_version_id);
+CREATE INDEX IF NOT EXISTS krun_worker_release_secrets_version ON krun_worker_release_secrets(secret_version_id);
+CREATE TABLE IF NOT EXISTS worker_config_dirty (
+ service_id text PRIMARY KEY,
+ generation bigint NOT NULL DEFAULT nextval('worker_dirty_seq')
+);
+CREATE INDEX IF NOT EXISTS worker_config_dirty_generation ON worker_config_dirty(generation,service_id);
+CREATE TABLE IF NOT EXISTS worker_config_checkpoints (
+ pool text NOT NULL,
+ shard text NOT NULL,
+ revision bigint NOT NULL,
+ published_revision bigint NOT NULL DEFAULT 0,
+ PRIMARY KEY(pool,shard)
+);
+CREATE OR REPLACE FUNCTION krun_mark_worker_config_dirty() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP<>'INSERT' THEN
+  INSERT INTO worker_config_dirty(service_id) VALUES(OLD.service_id) ON CONFLICT(service_id) DO UPDATE SET generation=nextval('worker_dirty_seq');
+ END IF;
+ IF TG_OP<>'DELETE' THEN
+  INSERT INTO worker_config_dirty(service_id) VALUES(NEW.service_id) ON CONFLICT(service_id) DO UPDATE SET generation=nextval('worker_dirty_seq');
+ END IF;
+ RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS worker_services_config_dirty ON krun_worker_services;
+CREATE TRIGGER worker_services_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_services FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
+DROP TRIGGER IF EXISTS worker_env_config_dirty ON krun_worker_environments;
+CREATE TRIGGER worker_env_config_dirty AFTER INSERT OR DELETE OR UPDATE OF enabled,release_id ON krun_worker_environments FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
+DROP TRIGGER IF EXISTS worker_domains_config_dirty ON krun_worker_service_domains;
+CREATE TRIGGER worker_domains_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_service_domains FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
+DROP TRIGGER IF EXISTS worker_placements_config_dirty ON krun_worker_service_placements;
+CREATE TRIGGER worker_placements_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_service_placements FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
+CREATE OR REPLACE FUNCTION krun_mark_resource_config_dirty() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP<>'INSERT' AND OLD.kind='service' THEN INSERT INTO worker_retention_scopes(service_id) VALUES(OLD.resource_id) ON CONFLICT(service_id) DO UPDATE SET generation=nextval('worker_dirty_seq');INSERT INTO worker_config_dirty(service_id) VALUES(OLD.resource_id) ON CONFLICT(service_id) DO UPDATE SET generation=nextval('worker_dirty_seq');END IF;
+ IF TG_OP<>'DELETE' AND NEW.kind='service' THEN INSERT INTO worker_config_dirty(service_id) VALUES(NEW.resource_id) ON CONFLICT(service_id) DO UPDATE SET generation=nextval('worker_dirty_seq');END IF;
+ RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS resource_config_dirty ON krun_resources;
+CREATE TRIGGER resource_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_resources FOR EACH ROW EXECUTE FUNCTION krun_mark_resource_config_dirty();
+-- Initialize the bounded queue once for pre-release databases that already
+-- contain sites. Subsequent startups do not scan the site catalogue.
+WITH initialized AS(INSERT INTO krun_meta(key,value) VALUES('worker_incremental_config_initialized','1') ON CONFLICT(key) DO NOTHING RETURNING key)
+INSERT INTO worker_config_dirty(service_id) SELECT s.service_id FROM krun_worker_services s CROSS JOIN initialized ON CONFLICT(service_id) DO UPDATE SET generation=nextval('worker_dirty_seq');
 CREATE TABLE IF NOT EXISTS worker_runtime_acks (
 	pod_uid    text PRIMARY KEY,
 	pool       text NOT NULL,

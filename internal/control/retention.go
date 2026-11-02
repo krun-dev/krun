@@ -23,7 +23,10 @@ func (s *Store) retain(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := s.retainExpired(ctx); err != nil && ctx.Err() == nil {
+			cycle, cancel := context.WithTimeout(ctx, 20*time.Second)
+			err := s.retainExpired(cycle)
+			cancel()
+			if err != nil && ctx.Err() == nil {
 				fmt.Fprintln(os.Stderr, localize.Text(localize.Language(ctx), "krun retention cleanup failed:"), localize.Error(localize.Language(ctx), err))
 			}
 		}
@@ -53,92 +56,27 @@ func (s *Store) retainExpired(ctx context.Context) error {
 		{`DELETE FROM krun_invitations WHERE expires_at <= $1`, []any{at}},
 		{`DELETE FROM krun_worker_idempotency WHERE created_at <= $1`, []any{at.Add(-workerIdempotencyRetain)}},
 		{`DELETE FROM krun_worker_operations WHERE state IN ('succeeded','failed','available','superseded') AND created_at <= $1`, []any{at.Add(-workerOperationRetain)}},
-		{`DELETE FROM krun_worker_history WHERE ctid IN (
-			SELECT ctid FROM (
-				SELECT ctid, row_number() OVER (PARTITION BY service_id, env_name ORDER BY created_at DESC) AS position
-				FROM krun_worker_history
-			) ranked WHERE position > $1
-		)`, []any{workerHistoryRetainPerEnv}},
-		// A deleted IAM service is intentionally not cleaned in the IAM
-		// transaction. Reconcile its Workers half here, dependency rows first.
-		{`DELETE FROM krun_worker_history h WHERE NOT EXISTS (
-			SELECT 1 FROM krun_resources r WHERE r.resource_id=h.service_id AND r.kind='service'
-		)`, nil},
-		{`DELETE FROM krun_worker_operations o WHERE NOT EXISTS (
-			SELECT 1 FROM krun_resources r WHERE r.resource_id=o.service_id AND r.kind='service'
-		)`, nil},
-		{`DELETE FROM krun_worker_build_private p WHERE EXISTS (
-			SELECT 1 FROM krun_worker_builds b WHERE b.build_id=p.build_id AND NOT EXISTS (
-				SELECT 1 FROM krun_resources r WHERE r.resource_id=b.service_id AND r.kind='service'
-			)
-		)`, nil},
-		{`DELETE FROM krun_worker_builds b WHERE NOT EXISTS (
-			SELECT 1 FROM krun_resources r WHERE r.resource_id=b.service_id AND r.kind='service'
-		)`, nil},
-		{`DELETE FROM krun_worker_environment_secrets binding WHERE NOT EXISTS (
-			SELECT 1 FROM krun_resources r WHERE r.resource_id=binding.service_id AND r.kind='service'
-		)`, nil},
-		{`DELETE FROM krun_worker_environments e WHERE NOT EXISTS (
-			SELECT 1 FROM krun_resources r WHERE r.resource_id=e.service_id AND r.kind='service'
-		)`, nil},
-		{`DELETE FROM krun_worker_service_domains d WHERE NOT EXISTS (
-			SELECT 1 FROM krun_resources r WHERE r.resource_id=d.service_id AND r.kind='service'
-		)`, nil},
-		{`DELETE FROM krun_worker_releases rel WHERE NOT EXISTS (
-			SELECT 1 FROM krun_resources r WHERE r.resource_id=rel.service_id AND r.kind='service'
-		)`, nil},
-		{`DELETE FROM krun_worker_release_secrets binding WHERE NOT EXISTS (
-			SELECT 1 FROM krun_worker_releases rel WHERE rel.release_id=binding.release_id
-		)`, nil},
-		{`DELETE FROM krun_worker_services s WHERE NOT EXISTS (
-			SELECT 1 FROM krun_resources r WHERE r.resource_id=s.service_id AND r.kind='service'
-		)`, nil},
-		// Build logs are the largest single column; keep them long enough to
-		// debug a failed build, then drop the text and keep the metadata.
-		{`UPDATE krun_worker_build_private SET log = '' WHERE length(log) > 0 AND build_id IN (SELECT build_id FROM krun_worker_builds WHERE created_at <= $1)`, []any{at.Add(-workerBuildLogRetain)}},
-		// Keep the newest terminal builds per service; the private row (which
-		// carries the log) is dropped first so a prune cannot strand a build
-		// without its inputs.
-		{`DELETE FROM krun_worker_build_private WHERE build_id IN (
-			SELECT build_id FROM (
-				SELECT b.build_id, row_number() OVER (PARTITION BY b.service_id ORDER BY b.created_at DESC, b.build_id DESC) AS position
-				FROM krun_worker_builds b
-				WHERE b.state IN ('succeeded','failed')
-			) ranked WHERE position > $1
-		)`, []any{workerBuildRetainPerService}},
-		{`DELETE FROM krun_worker_builds WHERE build_id IN (
-			SELECT build_id FROM (
-				SELECT b.build_id, row_number() OVER (PARTITION BY b.service_id ORDER BY b.created_at DESC, b.build_id DESC) AS position
-				FROM krun_worker_builds b
-				WHERE b.state IN ('succeeded','failed')
-			) ranked WHERE position > $1
-		)`, []any{workerBuildRetainPerService}},
-		{`DELETE FROM krun_worker_build_private p WHERE NOT EXISTS (
-			SELECT 1 FROM krun_worker_builds b WHERE b.build_id=p.build_id
-		)`, nil},
-		// Releases no longer reachable from the live environment, retained
-		// history, or an operation eventually expire. Artifact metadata is kept
-		// until the object-store GC has removed all associated objects.
-		{`DELETE FROM krun_worker_releases rel WHERE rel.created_at <= $1
-			AND NOT EXISTS (SELECT 1 FROM krun_worker_environments e WHERE e.release_id=rel.release_id OR e.confirmed_release_id=rel.release_id)
-			AND NOT EXISTS (SELECT 1 FROM krun_worker_history h WHERE h.release_id=rel.release_id)
-			AND NOT EXISTS (SELECT 1 FROM krun_worker_operations o WHERE o.release_id=rel.release_id)`, []any{at.Add(-workerArtifactRetain)}},
-		{`DELETE FROM krun_worker_release_secrets binding WHERE NOT EXISTS (
-			SELECT 1 FROM krun_worker_releases rel WHERE rel.release_id=binding.release_id
-		)`, nil},
-		// Secret versions are immutable and may outlive a rotation so retained
-		// Releases can still roll back. Once neither an environment nor a Release
-		// references a version, keep it for the normal artifact retention window.
-		{`DELETE FROM krun_worker_secret_versions secret WHERE secret.created_at <= $1
-			AND NOT EXISTS (SELECT 1 FROM krun_worker_environment_secrets binding WHERE binding.secret_version_id=secret.secret_version_id)
-			AND NOT EXISTS (SELECT 1 FROM krun_worker_release_secrets binding WHERE binding.secret_version_id=secret.secret_version_id)`, []any{at.Add(-workerArtifactRetain)}},
+		{`UPDATE krun_worker_build_private SET log='' WHERE build_id IN (SELECT p.build_id FROM krun_worker_build_private p JOIN krun_worker_builds b ON b.build_id=p.build_id WHERE b.created_at<=$1 AND length(p.log)>0 ORDER BY b.created_at LIMIT 1000)`, []any{at.Add(-workerBuildLogRetain)}},
+		{`WITH victims AS MATERIALIZED (SELECT release_id FROM krun_worker_releases rel WHERE rel.created_at<=$1
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_environments e WHERE e.release_id=rel.release_id)
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_environments e WHERE e.confirmed_release_id=rel.release_id)
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_history h WHERE h.release_id=rel.release_id)
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_operations o WHERE o.release_id=rel.release_id)
+ ORDER BY rel.created_at LIMIT 1000), bindings AS(DELETE FROM krun_worker_release_secrets WHERE release_id IN(SELECT release_id FROM victims))
+ DELETE FROM krun_worker_releases WHERE release_id IN(SELECT release_id FROM victims)`, []any{at.Add(-workerArtifactRetain)}},
+		{`DELETE FROM krun_worker_secret_versions WHERE secret_version_id IN (SELECT secret.secret_version_id FROM krun_worker_secret_versions secret WHERE secret.created_at<=$1
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_environment_secrets b WHERE b.secret_version_id=secret.secret_version_id)
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_release_secrets b WHERE b.secret_version_id=secret.secret_version_id) ORDER BY secret.created_at LIMIT 1000)`, []any{at.Add(-workerArtifactRetain)}},
 	}
 	for _, statement := range statements {
-		if _, err := s.pool.Exec(ctx, statement.sql, statement.args...); err != nil {
+		if _, err := s.pool.Exec(ctx, boundedRetentionDelete(statement.sql), statement.args...); err != nil {
 			return err
 		}
 	}
-	return nil
+	if err := s.retainWorkerScopes(ctx); err != nil {
+		return err
+	}
+	return s.retainOrphanInputs(ctx)
 }
 
 // garbageArtifacts returns metadata whose release references have expired.

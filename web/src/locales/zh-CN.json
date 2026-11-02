@@ -605,5 +605,6 @@
   "当前环境还没有 Secret。": "当前环境还没有 Secret。",
   "Secret 名称": "Secret 名称",
   "Secret 值": "Secret 值",
-  "保存并发布 Secret": "保存并发布 Secret"
+  "保存并发布 Secret": "保存并发布 Secret",
+  "服务不存在或无权访问": "服务不存在或无权访问"
 }

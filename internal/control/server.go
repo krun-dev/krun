@@ -88,7 +88,11 @@ func NewServer(ctx context.Context, c Config, store *Store) (*Server, error) {
 		}
 		s.providers[pc.ID] = p
 	}
-	if e := store.Update(ctx, PartitionIAM, func(st *State) error {
+	registrationCtx := ctx
+	if store.pool != nil {
+		registrationCtx = withStateScope(ctx, stateReadScope{ActorOnly: true})
+	}
+	if e := store.Update(registrationCtx, PartitionIAM, func(st *State) error {
 		for _, p := range s.providers {
 			fp := fingerprint(p.config)
 			if old, ok := st.Sources[p.config.Source]; ok && old != fp {
@@ -111,6 +115,9 @@ func NewServer(ctx context.Context, c Config, store *Store) (*Server, error) {
 		return nil, e
 	}
 	if c.Workers != nil {
+		if err := store.ensureWorkerConfigCatalogue(ctx, c.Workers); err != nil {
+			return nil, err
+		}
 		var err error
 		s.workers, err = newWorkersController(s)
 		if err != nil {
@@ -148,6 +155,7 @@ func (s *Server) routes() {
 	if s.Config.Workers != nil {
 		s.internalMux.HandleFunc("GET /api/internal/workers/config/snapshot", s.workerRuntimeConfigSnapshot)
 		s.internalMux.HandleFunc("GET /api/internal/workers/config/changes", s.workerRuntimeConfigChanges)
+		s.internalMux.HandleFunc("GET /api/internal/workers/config/routes/{host}", s.workerRuntimeConfigRoute)
 		s.internalMux.HandleFunc("GET /api/internal/workers/releases/{release}/assets", s.workerRuntimeReleaseAssets)
 		s.internalMux.HandleFunc("GET /api/internal/workers/releases/{release}/assets/{path...}", s.workerRuntimeReleaseAssetURL)
 		s.internalMux.HandleFunc("GET /api/internal/workers/releases/{release}/secrets", s.workerRuntimeReleaseSecrets)
@@ -394,6 +402,11 @@ func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, b
 			s.writeError(w, r, problem(401, "UNAUTHENTICATED", "Authentication required"))
 			return
 		}
+		r, e = s.scopedRequest(r, c)
+		if e != nil {
+			s.writeError(w, r, e)
+			return
+		}
 		// Read the bounded request outside the state transaction; slow clients
 		// must not hold a database transaction open.
 		if r.Body != nil && r.Method != "GET" && r.Method != "HEAD" {
@@ -417,25 +430,13 @@ func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, b
 				appErr = e
 				return nil
 			}
-			// Snapshot the loaded state so a rejected handler cannot leave a
-			// partial mutation behind while its denial audit still commits.
-			var checkpoint *State
-			if requestPersist != 0 {
-				checkpoint, e = cloneState(st)
-				if e != nil {
-					return e
-				}
-			}
 			out, status, appErr = fn(st, p, r)
 			if appErr != nil {
-				if checkpoint != nil {
-					*st = *checkpoint
-				}
 				if r.Method != http.MethodGet && r.Method != http.MethodHead {
 					s.audit(st, p, r, r.Method+" "+r.Pattern, r.PathValue("org"), false)
 				}
 			}
-			return nil
+			return appErr
 		})
 		if err != nil {
 			appErr = err

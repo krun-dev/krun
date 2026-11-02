@@ -480,23 +480,44 @@ func (k *workerKubernetes) ensureRoutes(ctx context.Context, c *WorkersConfig, n
 }
 
 // listRoutes returns the names of HTTPRoutes in the workers namespace.
+type workerRouteInventoryKey struct{}
+
 func (k *workerKubernetes) listRoutes(ctx context.Context) ([]string, error) {
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-		} `json:"items"`
+	if names, ok := ctx.Value(workerRouteInventoryKey{}).([]string); ok {
+		return names, nil
 	}
 	base := "/apis/gateway.networking.k8s.io/v1/namespaces/" + k.namespace + "/httproutes"
-	if e := k.call(ctx, "GET", base, nil, &list); e != nil {
-		return nil, e
+	out := []string{}
+	continuation := ""
+	for {
+		var list struct {
+			Metadata struct {
+				Continue string `json:"continue"`
+			} `json:"metadata"`
+			Items []struct {
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
+			} `json:"items"`
+		}
+		query := url.Values{"limit": []string{"100"}}
+		if continuation != "" {
+			query.Set("continue", continuation)
+		}
+		if err := k.call(ctx, "GET", base+"?"+query.Encode(), nil, &list); err != nil {
+			return nil, err
+		}
+		for _, item := range list.Items {
+			out = append(out, item.Metadata.Name)
+		}
+		if list.Metadata.Continue == "" {
+			return out, nil
+		}
+		if list.Metadata.Continue == continuation {
+			return nil, errors.New("Kubernetes route pagination did not advance")
+		}
+		continuation = list.Metadata.Continue
 	}
-	out := make([]string, 0, len(list.Items))
-	for _, item := range list.Items {
-		out = append(out, item.Metadata.Name)
-	}
-	return out, nil
 }
 
 func (k *workerKubernetes) deleteRoute(ctx context.Context, name string) error {

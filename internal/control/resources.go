@@ -48,7 +48,7 @@ func (s *Server) resourceList(st *State, p Principal, r *http.Request) (any, int
 			out = append(out, res)
 		}
 	}
-	return items(out)
+	return resourcePageItems(st, r, out)
 }
 func (s *Server) resourceCreate(st *State, p Principal, r *http.Request) (any, int, error) {
 	t, e := s.orgTarget(st, r)

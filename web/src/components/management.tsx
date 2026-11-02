@@ -741,13 +741,17 @@ export function CheckPage({
               </Field>
               <Field label={t("目标环境")}>
                 <SelectField value={environment} onChange={setEnvironment}>
-                  {["global", "development", "test", "staging", "production"].map(
-                    (env) => (
-                      <option key={env} value={env}>
-                        {environmentLabel(env)}
-                      </option>
-                    ),
-                  )}
+                  {[
+                    "global",
+                    "development",
+                    "test",
+                    "staging",
+                    "production",
+                  ].map((env) => (
+                    <option key={env} value={env}>
+                      {environmentLabel(env)}
+                    </option>
+                  ))}
                 </SelectField>
               </Field>
               <Button disabled={busy} type="submit">
@@ -919,8 +923,14 @@ export function ResourcesPage({
     [open, setOpen] = useState(false),
     [name, setName] = useState(""),
     [busy, setBusy] = useState(false);
+  const [pageAfter, setPageAfter] = useState("");
+  const [pageHistory, setPageHistory] = useState<string[]>([]);
+  useEffect(() => {
+    setPageAfter("");
+    setPageHistory([]);
+  }, [base, kind]);
   const { data, error, loading } = useData<List<Resource>>(
-    base + "/" + kind,
+    base + "/" + kind + "?after=" + encodeURIComponent(pageAfter),
     refresh,
   );
   if (system)
@@ -991,6 +1001,30 @@ export function ResourcesPage({
           ]}
         />
       )}
+      {pageHistory.length > 0 || data?.next_after ? (
+        <div className="my-4 flex justify-end gap-2">
+          <Button
+            variant="outline"
+            disabled={!pageHistory.length}
+            onClick={() => {
+              setPageAfter(pageHistory.at(-1) || "");
+              setPageHistory((p) => p.slice(0, -1));
+            }}
+          >
+            {t("上一页")}
+          </Button>
+          <Button
+            variant="outline"
+            disabled={!data?.next_after}
+            onClick={() => {
+              setPageHistory((p) => [...p, pageAfter]);
+              setPageAfter(data?.next_after || "");
+            }}
+          >
+            {t("下一页")}
+          </Button>
+        </div>
+      ) : null}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>

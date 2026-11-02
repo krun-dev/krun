@@ -2,3 +2,6 @@
 !Dockerfile.backend
 !generated/krun-server
 !generated/git-mock-ca.crt
+
+!generated/console/
+!generated/console/**

@@ -50,7 +50,10 @@ import {
   SelectField,
 } from "@/components/common";
 import { cn } from "@/lib/utils";
-import { RepositoryBuild, RepositorySettings } from "@/components/workers-repository";
+import {
+  RepositoryBuild,
+  RepositorySettings,
+} from "@/components/workers-repository";
 
 import {
   Status,
@@ -74,6 +77,13 @@ export function WorkersPage({
 }) {
   useTranslation();
   const [services, setServices] = useState<WorkerServiceSummary[] | null>(null);
+  const [pageAfter, setPageAfter] = useState("");
+  const [pageHistory, setPageHistory] = useState<string[]>([]);
+  const [nextAfter, setNextAfter] = useState("");
+  useEffect(() => {
+    setPageAfter("");
+    setPageHistory([]);
+  }, [base]);
   const [service, setService] = useState(
     () => new URLSearchParams(location.search).get("worker") || "",
   );
@@ -82,7 +92,9 @@ export function WorkersPage({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
-  const [networkProfiles, setNetworkProfiles] = useState<WorkerNetworkProfile[]>([]);
+  const [networkProfiles, setNetworkProfiles] = useState<
+    WorkerNetworkProfile[]
+  >([]);
   const [networkProfile, setNetworkProfile] = useState("");
   useEffect(() => {
     if (system) return;
@@ -97,7 +109,10 @@ export function WorkersPage({
         setNetworkProfiles(result.items);
         setNetworkProfile(
           (current) =>
-            current || result.items.find((profile) => profile.default)?.id || result.items[0]?.id || "",
+            current ||
+            result.items.find((profile) => profile.default)?.id ||
+            result.items[0]?.id ||
+            "",
         );
       })
       .catch(() => {
@@ -109,21 +124,50 @@ export function WorkersPage({
     if (system) return;
     const c = new AbortController();
     void api<List<WorkerServiceSummary>>(
-      base + "/workers/services",
+      base + "/workers/services?after=" + encodeURIComponent(pageAfter),
       "GET",
       undefined,
       c.signal,
     )
       .then((r) => {
         setServices(r.items);
-        setService((v) => (r.items.some((s) => s.id === v) ? v : ""));
+        setNextAfter(r.next_after || "");
         setError("");
       })
       .catch((e) => {
         if (!c.signal.aborted) setError(errorMessage(e));
       });
     return () => c.abort();
-  }, [base, system, revision]);
+  }, [base, system, revision, pageAfter]);
+  useEffect(() => {
+    if (
+      system ||
+      !service ||
+      services === null ||
+      services.some((item) => item.id === service)
+    )
+      return;
+    const c = new AbortController();
+    void api<List<WorkerServiceSummary>>(
+      base + "/workers/services?service_id=" + encodeURIComponent(service),
+      "GET",
+      undefined,
+      c.signal,
+    )
+      .then((result) => {
+        if (c.signal.aborted) return;
+        if (result.items[0])
+          setServices((current) => [...(current || []), result.items[0]]);
+        else {
+          setError(t("服务不存在或无权访问"));
+          setService("");
+        }
+      })
+      .catch((e) => {
+        if (!c.signal.aborted) setError(errorMessage(e));
+      });
+    return () => c.abort();
+  }, [base, system, service, services]);
   useEffect(() => {
     const onPopState = () => {
       const id = new URLSearchParams(location.search).get("worker") || "";
@@ -296,6 +340,30 @@ export function WorkersPage({
           </CardContent>
         </Card>
       )}
+      {!selected && (pageHistory.length > 0 || nextAfter) ? (
+        <div className="my-4 flex justify-end gap-2">
+          <Button
+            variant="outline"
+            disabled={!pageHistory.length}
+            onClick={() => {
+              setPageAfter(pageHistory.at(-1) || "");
+              setPageHistory((p) => p.slice(0, -1));
+            }}
+          >
+            {t("上一页")}
+          </Button>
+          <Button
+            variant="outline"
+            disabled={!nextAfter}
+            onClick={() => {
+              setPageHistory((p) => [...p, pageAfter]);
+              setPageAfter(nextAfter);
+            }}
+          >
+            {t("下一页")}
+          </Button>
+        </div>
+      ) : null}
       <Dialog open={create} onOpenChange={setCreate}>
         <DialogContent>
           <DialogHeader>
@@ -356,10 +424,13 @@ export function WorkersPage({
                         networkProfile === profile.id
                           ? "border-primary bg-primary/5 ring-1 ring-primary/15"
                           : "hover:border-primary/40",
-                        profile.approval_required && "cursor-not-allowed opacity-55",
+                        profile.approval_required &&
+                          "cursor-not-allowed opacity-55",
                       )}
                     >
-                      <span className="text-sm font-medium">{profile.name}</span>
+                      <span className="text-sm font-medium">
+                        {profile.name}
+                      </span>
                       {profile.description ? (
                         <span className="mt-1 block text-xs text-muted-foreground">
                           {profile.description}
@@ -405,13 +476,22 @@ function WorkerDetail({
   useEffect(() => {
     const controller = new AbortController();
     void Promise.allSettled([
-      api<RepositoryBinding>(base + "/repository", "GET", undefined, controller.signal),
-      api<WorkerRouting>(base + "/domains", "GET", undefined, controller.signal),
-    ])
-      .then(([repository, network]) => {
-        if (repository.status === "fulfilled") setBinding(repository.value);
-        if (network.status === "fulfilled") setRouting(network.value);
-      });
+      api<RepositoryBinding>(
+        base + "/repository",
+        "GET",
+        undefined,
+        controller.signal,
+      ),
+      api<WorkerRouting>(
+        base + "/domains",
+        "GET",
+        undefined,
+        controller.signal,
+      ),
+    ]).then(([repository, network]) => {
+      if (repository.status === "fulfilled") setBinding(repository.value);
+      if (network.status === "fulfilled") setRouting(network.value);
+    });
     return () => controller.abort();
   }, [base, revision]);
   const { data, error } = useWorkerData(base, revision);
@@ -573,7 +653,9 @@ function WorkerDetail({
       ) : null}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span>{t("基线环境常驻对外服务；预览环境用于验证，可随时删除。")}</span>
+          <span>
+            {t("基线环境常驻对外服务；预览环境用于验证，可随时删除。")}
+          </span>
         </div>
         <Button
           variant="outline"
@@ -688,9 +770,15 @@ function WorkerDetail({
             {!binding?.source ? (
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-primary/25 bg-primary/5 px-4 py-3 text-sm">
                 <p className="text-muted-foreground">
-                  {t("此服务尚未绑定代码仓库；绑定后可直接从分支或 Tag 构建版本。")}
+                  {t(
+                    "此服务尚未绑定代码仓库；绑定后可直接从分支或 Tag 构建版本。",
+                  )}
                 </p>
-                <Button variant="outline" size="sm" onClick={() => setTab("source")}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setTab("source")}
+                >
                   {t("绑定代码仓库")}
                 </Button>
               </div>
@@ -892,10 +980,15 @@ function WorkerDetail({
           <DialogHeader>
             <DialogTitle>{t("创建预览环境")}</DialogTitle>
             <DialogDescription>
-              {t("预览环境是临时的验证场所，验证通过后可将同一制品晋升到基线。")}
+              {t(
+                "预览环境是临时的验证场所，验证通过后可将同一制品晋升到基线。",
+              )}
             </DialogDescription>
           </DialogHeader>
-          <Field label={t("预览名称")} hint={t("小写字母、数字、连字符，例如 fix-auth。")}>
+          <Field
+            label={t("预览名称")}
+            hint={t("小写字母、数字、连字符，例如 fix-auth。")}
+          >
             <Input
               aria-label={t("预览名称")}
               value={previewName}
@@ -907,7 +1000,11 @@ function WorkerDetail({
             />
           </Field>
           <Button
-            disabled={busy || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(previewName) || previewName === "production"}
+            disabled={
+              busy ||
+              !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(previewName) ||
+              previewName === "production"
+            }
             onClick={() => void createPreview()}
           >
             {busy ? t("创建中…") : t("创建")}

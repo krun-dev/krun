@@ -129,6 +129,7 @@ type Audit struct {
 	Revision     int       `json:"revision"`
 }
 type State struct {
+	authorization *authorizationCache
 	Workers       *WorkerState
 	Revision      int
 	Bootstrapped  bool

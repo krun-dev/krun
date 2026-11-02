@@ -107,7 +107,7 @@ Secret 的行为与 Cloudflare Worker 默认命令一致：`PUT`（新增或轮�
 
 ```text
 kgateway 私网 listener :8080
-  → 服务自己的 HTTPRoute（精确 Host，最多 3 个环境）
+  → pool/domain 共享 HTTPRoute（shared_routing=true；旧模式按服务）
   → runtime-default Service :8081
   → Pod 内可信入口 Worker
   → Host 查找环境 Release
@@ -115,7 +115,10 @@ kgateway 私网 listener :8080
   → Worker Loader 加载业务 Worker
 ```
 
-Host 默认形如 `w-{组织与服务 hash 前16位}-{environment}.workers.test`。URI 路径、query、method、body 保留。网关及入口清除客户端伪造的内部 scope / release 等 header；业务代码不能指定活动版本。未知 Host 不匹配路由；未发布环境返回 503。关闭环境后 runtime 配置投影标记 disabled；服务还有启用环境时，网关也移除关闭环境的 Host。全部关闭时仍可能匹配原 HTTPRoute，但 runtime 拒绝执行。
+共享模式 Host 形如 `w-{service-hash}-{environment}.p-{pool-hash}.workers.test`，入口标签由持久 placement 推导。
+URI 路径、query、method、body 保留；网关和入口清除客户端伪造的内部 scope/release header。
+未知 Host 在 Runtime 返回 404，未发布环境返回 503，关闭环境返回 410。
+旧的逐站点路由模式仍可用于小规模既有开发环境。DNS/TLS 与地址变化见 [规模改造](performance-scaling.md)。
 
 配置了资产的版本在入口 Worker 内多一层路径决策：`run_worker_first` 命中 → 业务 Worker；否则查资产表（含 `html_handling` 规范化）→ 命中直接返回（ETag/304）；未命中且是导航请求 → 按 `not_found_handling` 返回 `index.html`；其余交给业务 Worker。资产按文件从桶的 `pub/` 前缀懒加载并做进程内 LRU，归档（`v1/` 前缀）始终需要凭证。两个静态域（`static.{domain}` / `static.{internal_domain}`）各有一条共享 HTTPRoute，路径改写为桶对象 key 后直接反代对象存储。
 
@@ -125,12 +128,12 @@ Host 默认形如 `w-{组织与服务 hash 前16位}-{environment}.workers.test`
 
 入口 Worker 不再每 500ms 轮询完整快照，而是“不可变快照 + 增量 ops + 内存视图”：
 
-1. **bootstrap**：每个 runtime pool 启动时读取 `{config_base_url}/pools/{pool}/latest.json` → 对应的 `snapshots/{rev}.json.gz`，校验 SHA-256 与 revision；对象存储不可达时回退到控制面 `GET /api/internal/workers/config/snapshot`。
-2. **增量**：`GET /api/internal/workers/config/changes?since={rev}&wait=5s`，返回 `{from,to,ops}`；无变化返回 204；落后超过保留窗口返回 409，重新 bootstrap。
-3. **应用**：ops 只有 `release_put` / `route_upsert` / `route_delete`，在内存 Map 副本上应用后原子替换视图；不落盘、不落本地 DB。
-4. **ack**：每个 Pod 应用新 revision 后上报 `{pod_uid, pool, revision}`，并每 5 秒心跳；ack 写入独立的 `worker_runtime_acks`，不参与 IAM 快照。
+1. **bootstrap**：读取 pool 的紧凑 `latest.json`；对象存储不可用时回退到内部 `config/snapshot` 获取同样的 lazy head，不下载全池路由。
+2. **cold host**：内部 `config/routes/{host}` 按主键解析一条 route/Release；控制面不可用时读取该 host hash 对应的 immutable shard checkpoint。Runtime 缓存最多 4096 个 host。
+3. **follow**：`config/changes` 增量只更新已缓存 host；同步提交期间不 await、不复制全量 Map，用引用计数回收不再引用的 Release。
+4. **ack**：每 Pod 每 5 秒心跳，记录已应用 revision；ACK 仍用于收敛观察。
 
-`config/` 前缀与 `pub/`、`int/` 一样匿名可读，但只能通过集群内 endpoint 访问（`config_base_url` 必须指向私有地址）；生产应使用独立桶或带 VPC 条件的桶策略。对象存储快照只含 host → release 指针和不可变 Release 描述符，不含 Build、Operation、日志或 IAM 数据。PostgreSQL 不保存每个 revision 的全量投影，只保存一份归一化当前头和最近 512 个 revision 的逐实体 ops；超窗的 Pod 通过 409 回全量。
+`config/` 前缀与 `pub/`、`int/` 一样匿名可读，但只能通过集群内 endpoint 访问（`config_base_url` 必须指向私有地址）；生产应使用独立桶或带 VPC 条件的桶策略。对象存储快照只含 host → release 指针和不可变 Release 描述符，不含 Build、Operation、日志或 IAM 数据。PostgreSQL 不保存每个 revision 的全量投影，只保存一份归一化当前头和最近 512 个 revision 的逐实体 ops；超窗的 Pod 通过 409 重置为紧凑 head，再按需读取 host。
 
 控制面不可用时，已运行的 Pod 继续用最后一份内存视图服务；新 Pod 仍可从对象存储 bootstrap。尚未缓存的 Release 冷加载仍需控制面签发短时 presigned URL，因此“新版本冷启动”依赖控制面，“已加载版本继续服务”不依赖。
 
@@ -170,7 +173,8 @@ header 与该 pool 独立 token，不能只信任 header：
 
 | 方法与路径 | 用途 |
 | --- | --- |
-| `GET /api/internal/workers/config/snapshot` | 最新全量配置投影（bootstrap 回退） |
+| `GET /api/internal/workers/config/snapshot` | 紧凑配置 head（bootstrap 回退） |
+| `GET /api/internal/workers/config/routes/{host}` | 当前 pool 的单条路由与 Release |
 | `GET /api/internal/workers/config/changes?since=&wait=5s` | 增量 ops：200 批次、204 超时、409 重新 bootstrap |
 | `GET /api/internal/workers/releases/{id}/assets` | 资产 manifest |
 | `GET /api/internal/workers/releases/{id}/assets/{path...}` | 单文件短时 presigned GET |
@@ -222,6 +226,6 @@ header 与该 pool 独立 token，不能只信任 header：
 
 内联源码最多 512 文件 / 合计 2 MiB；仓库项目最多 4096 文件 / 合计 24 MiB / 单文件 8 MiB。静态资产最多 500 文件 / 合计 20 MiB / 单文件 5 MiB，含资产时归档上限 32 MiB；模块最多 512 个、单个 2 MiB、合计 8 MiB；日志最多 32 KiB；每服务保留至多 100 个 Build。配置最多 32 个普通变量 / 合计 16 KiB；Secret 最多 32 个、单值最多 16 KiB。变量与 Secret 使用大写 binding 名并禁止平台预留 `KRUN_` 前缀；资产 binding 允许标准 JS 标识符式名称，但不得覆盖变量、Secret 或平台保留 binding。
 
-尚无跨构建依赖缓存、构建取消、运行日志 API、独立构建队列和高并发优化。完成 Job 30 分钟后由 TTL 清理，控制器按保留策略清理源码上传、日志、操作和无引用制品。实验部署采用开发登录和单节点 kind，不能直接视作生产部署模板。
+尚无跨构建依赖缓存、构建取消、运行日志 API 或独立消息队列。已有数据库租约队列轮转、有界并行协调、增量配置发布和共享网关路由，见 [百万站点改造](performance-scaling.md)。完成 Job 30 分钟后由 TTL 清理，控制器按保留策略清理源码上传、日志、操作和无引用制品。实验部署采用开发登录和单节点 kind，不能直接视作生产部署模板。
 
 仓库来源构建、服务列表与管理员来源配置见 [仓库构建说明](workers-repositories.md)。内联源码 API 仍可用于小 Worker；新控制台从仓库发起构建。

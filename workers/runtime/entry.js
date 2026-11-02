@@ -2,6 +2,10 @@ import {WorkerEntrypoint} from 'cloudflare:workers';
 // Edge configuration is an immutable in-memory view. There is no local DB:
 // bootstrap reads one snapshot, then a long-poll applies incremental ops.
 let view={revision:0,routes:new Map(),releases:new Map()};
+let releaseRefs=new Map(),lazyRoutes=false;
+const routeReleases=new WeakMap();
+const routeVersions=new Map(),routeFlights=new Map(),routeMisses=new Map();
+const ROUTE_CACHE_MAX=4096;
 let viewLoaded=false,booting=null,started=false,lastSync=0,lastLoop=0;
 const encoder=new TextEncoder();const decoder=new TextDecoder();const strictDecoder=new TextDecoder('utf-8',{fatal:true});const json=(value,status=200)=>Response.json(value,{status});
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -105,7 +109,11 @@ function applySnapshot(snapshot,pool='default'){
  for(const route of snapshot.routes||[])if(route.host)routes.set(String(route.host).toLowerCase(),route);
  const releases=new Map();
  for(const [id,release] of Object.entries(snapshot.releases||{}))releases.set(id,release);
+ releaseRefs=new Map();
+ for(const route of routes.values())if(route.release)releaseRefs.set(route.release,(releaseRefs.get(route.release)||0)+1);
+ for(const route of routes.values())routeReleases.set(route,releases.get(route.release));
  view={revision:Number(snapshot.config_revision||0),routes,releases};
+ lazyRoutes=snapshot.lazy_routes===true;routeVersions.clear();routeMisses.clear();
  viewLoaded=true;lastSync=Date.now();
 }
 // Bootstrap prefers object storage so a new Pod starts even while the control
@@ -113,6 +121,7 @@ function applySnapshot(snapshot,pool='default'){
 async function bootstrap(env){
  if(env.CONFIG_BASE)try{
   const latest=await requestJSON(env.CONFIG_BASE+'/latest.json',5000);
+  if(latest?.lazy_routes){applySnapshot({...latest,pool:env.RUNTIME_POOL||'default',routes:[],releases:{}});return view;}
   if(latest&&latest.snapshot){
    const raw=await requestBytes(env.CONFIG_BASE+'/'+latest.snapshot,15000);
    if(latest.sha256&&await sha256(raw)!==latest.sha256)throw new Error('snapshot digest mismatch');
@@ -136,22 +145,73 @@ function ensureBootstrap(env){
 }
 function applyBatch(batch){
  if(!viewLoaded||Number(batch.from)!==view.revision)return false;
- const routes=new Map(view.routes),releases=new Map(view.releases);
- for(const op of batch.ops||[]){
-  if(op.type==='release_put'&&op.release?.id)releases.set(op.release.id,op.release);
-  else if(op.type==='route_upsert'&&op.host)routes.set(String(op.host).toLowerCase(),op.route);
-  else if(op.type==='route_delete'&&op.host)routes.delete(String(op.host).toLowerCase());
-  else throw new Error('unknown config op '+op.type);
+ // Validate before mutating: a malformed batch must never leave a partial view.
+ const ops=batch.ops||[];
+ for(const op of ops){
+  if(op.type==='release_put'&&op.release?.id)continue;
+  if(op.type==='route_upsert'&&op.host&&op.route?.host===op.host)continue;
+  if(op.type==='route_delete'&&op.host)continue;
+  throw new Error('invalid config op '+op.type);
  }
- // Prune descriptors no route references; a later rollback re-sends
- // release_put with its route_upsert.
- const referenced=new Set();
- for(const route of routes.values())if(route.release)referenced.add(route.release);
- for(const id of releases.keys())if(!referenced.has(id))releases.delete(id);
- // Copy-on-write: in-flight requests keep the previous view.
- view={revision:Number(batch.to),routes,releases};
- lastSync=Date.now();
+ // No await occurs in this commit. Requests capture their immutable descriptor
+ // before yielding; updating the indexes cannot change an in-flight release.
+ const prune=new Set(),needed=new Set();
+ for(const op of ops)if(op.type==='route_upsert'&&view.routes.has(String(op.host).toLowerCase())&&op.route.release)needed.add(op.route.release);
+ for(const op of ops){
+  if(op.type==='release_put'&&lazyRoutes&&!needed.has(op.release.id)&&!releaseRefs.has(op.release.id))continue;
+  if(op.type==='release_put'){view.releases.set(op.release.id,op.release);prune.add(op.release.id);continue;}
+  const host=String(op.host).toLowerCase(),old=view.routes.get(host);
+  routeMisses.delete(host);
+  if(lazyRoutes&&(!old||(routeVersions.get(host)||0)>Number(batch.to)))continue;
+  routeVersions.set(host,Number(batch.to));
+  if(old?.release){const n=(releaseRefs.get(old.release)||0)-1;if(n>0)releaseRefs.set(old.release,n);else releaseRefs.delete(old.release);prune.add(old.release);}
+  if(op.type==='route_delete'){view.routes.delete(host);routeVersions.delete(host);}
+  else{view.routes.set(host,op.route);routeReleases.set(op.route,view.releases.get(op.route.release));if(op.route.release)releaseRefs.set(op.route.release,(releaseRefs.get(op.route.release)||0)+1);}
+ }
+ for(const id of prune)if(!releaseRefs.has(id))view.releases.delete(id);
+ view.revision=Number(batch.to);lastSync=Date.now();
  return true;
+}
+function forgetRoute(host){
+ const route=view.routes.get(host);view.routes.delete(host);routeVersions.delete(host);
+ if(route?.release){const n=(releaseRefs.get(route.release)||0)-1;if(n>0)releaseRefs.set(route.release,n);else{releaseRefs.delete(route.release);view.releases.delete(route.release);}}
+}
+async function resolveRoute(env,host){
+ const cached=view.routes.get(host);
+ if(cached){view.routes.delete(host);view.routes.set(host,cached);return cached;}
+ if(!lazyRoutes)return null;
+ if((routeMisses.get(host)||0)>Date.now())return null;
+ return coalesce(routeFlights,host,async()=>{
+  for(let attempt=0;attempt<3;attempt++){
+   const before=view.revision;let snapshot;
+   try{
+    const response=await platformResponse(env,'/config/routes/'+encodeURIComponent(host),{},2000);
+    if(response.status===404){lruPut(routeMisses,host,Date.now()+2000,1024);return null;}
+    if(!response.ok)throw new Error('route lookup '+response.status);
+    snapshot=await response.json();
+   }catch(e){
+    if(!env.CONFIG_BASE)throw e;
+    const shard=(await sha256(host)).slice(0,2);
+    let latest;
+    try{latest=await requestJSON(env.CONFIG_BASE+'/shards/'+shard+'/latest.json',2000);}catch{throw e;}
+    const raw=await requestBytes(env.CONFIG_BASE+'/'+latest.snapshot,5000);
+    if(await sha256(raw)!==latest.sha256)throw new Error('route shard digest mismatch');
+    snapshot=JSON.parse(decoder.decode(await gunzip(raw)));
+   }
+   if(snapshot.pool!==(env.RUNTIME_POOL||'default'))throw new Error('route lookup pool mismatch');
+   if(before!==view.revision)continue;
+   const route=(snapshot.routes||[]).find(r=>r.host===host);
+   if(!route){lruPut(routeMisses,host,Date.now()+2000,1024);return null;}
+   const release=(snapshot.releases||{})[route.release];
+   if(route.release&&!release)throw new Error('route descriptor missing');
+   forgetRoute(host);view.routes.set(host,route);routeVersions.set(host,Number(snapshot.config_revision||0));
+   if(release){view.releases.set(release.id,release);releaseRefs.set(release.id,(releaseRefs.get(release.id)||0)+1);}
+   routeReleases.set(route,release);
+   while(view.routes.size>ROUTE_CACHE_MAX)forgetRoute(view.routes.keys().next().value);
+   return route;
+  }
+  throw new Error('route changed during cold lookup');
+ });
 }
 async function sendAck(env){
  try{await platform(env,'/ack',{method:'POST',body:JSON.stringify({pod:env.POD_NAME,pod_uid:env.POD_UID,pool:env.RUNTIME_POOL||'default',revision:view.revision})});}catch{}
@@ -173,7 +233,7 @@ async function follow(env){
    let applied=false;
    try{applied=applyBatch(batch);}catch(e){viewLoaded=false;throw e;}
    if(!applied){viewLoaded=false;await bootstrapFromControl(env);}
-   lastAck=0;backoff=1000;
+   backoff=1000;
   }catch(e){
    await sleep(backoff);backoff=Math.min(backoff*2,15000);
   }
@@ -189,13 +249,18 @@ function ensureStarted(env,ctx){
 }
 
 // Asset manifests are immutable per release; skip re-fetching them per request.
-const manifests=new Map();
+const manifests=new Map(),manifestFlights=new Map(),assetFlights=new Map();
+function lruPut(cache,key,value,max){cache.delete(key);cache.set(key,value);while(cache.size>max)cache.delete(cache.keys().next().value);}
+function coalesce(cache,key,load){if(cache.has(key))return cache.get(key);const flight=Promise.resolve().then(load).finally(()=>cache.delete(key));cache.set(key,flight);return flight;}
 async function assetManifest(env,release){
- if(manifests.has(release.id))return manifests.get(release.id);
- const m=await platform(env,'/releases/'+encodeURIComponent(release.id)+'/assets');
- if(manifests.size>512)manifests.clear();
- manifests.set(release.id,m);
- return m;
+ const cached=manifests.get(release.id);
+ if(cached){lruPut(manifests,release.id,cached,512);return cached;}
+ return coalesce(manifestFlights,release.id,async()=>{
+  const m=await platform(env,'/releases/'+encodeURIComponent(release.id)+'/assets');
+  // Build the path index once per immutable manifest, including ASSETS binding.
+  m.index=new Map((m.files||[]).map(file=>['/'+file.path,file.path]));
+  lruPut(manifests,release.id,m,512);return m;
+ });
 }
 
 // Per-file lazy loading from the shared bucket, with a bounded in-memory LRU.
@@ -212,6 +277,7 @@ function cachePut(env,key,value){
 }
 async function assetBytes(env,release,path){
  const key=release.id+'\0'+path;const hit=cacheGet(key);if(hit)return hit;
+ return coalesce(assetFlights,key,async()=>{
  const meta=await platform(env,'/releases/'+encodeURIComponent(release.id)+'/assets/'+path.split('/').map(encodeURIComponent).join('/'));
  const response=await fetch(meta.download_url,{signal:AbortSignal.timeout(15000)});
  if(!response.ok)throw new Error('asset download failed ('+response.status+')');
@@ -220,6 +286,7 @@ async function assetBytes(env,release,path){
  const value={bytes,content_type:meta.content_type,digest:meta.sha256};
  cachePut(env,key,value);
  return value;
+ });
 }
 function normalizePath(input){
  try{input=decodeURIComponent(input);}catch{return null;}
@@ -257,7 +324,7 @@ function serveAsset(request,path,value){
 async function boundAssetResponse(env,release,request){
  const manifest=await assetManifest(env,release);if(!manifest.config)return json({error:'assets unavailable'},404);
  const path=normalizePath(new URL(request.url).pathname);if(path===null)return json({error:'invalid path'},400);
- const files=new Map((manifest.files||[]).map(file=>['/'+file.path,file.path]));
+ const files=manifest.index;
  const hit=lookupAsset(files,path,manifest.config.html_handling||'auto-trailing-slash');
  if(hit.redirect!==undefined)return new Response(null,{status:307,headers:{location:hit.redirect}});
  if(hit.file)return serveAsset(request,hit.file,await assetBytes(env,release,files.get(hit.file)));
@@ -310,9 +377,9 @@ export class Private extends WorkerEntrypoint {
    ensureStarted(this.env,this.ctx);
    await ensureBootstrap(this.env);
    const url=new URL(request.url);
-   const route=view.routes.get(url.hostname.toLowerCase());if(!route)return json({error:'unknown route'},404);
+   const route=await resolveRoute(this.env,url.hostname.toLowerCase());if(!route)return json({error:'unknown route'},404);
    if(!route.enabled)return json({error:'environment disabled'},410);
-   const d=view.releases.get(route.release);if(!d)return json({error:'environment not published'},503);
+   const d=routeReleases.get(route)||view.releases.get(route.release);if(!d)return json({error:'environment not published'},503);
    const headers=new Headers(request.headers);for(const name of ['x-krun-release','x-krun-scope','x-forwarded-host','x-internal'])headers.delete(name);
    const forward=async()=>{const stub=await worker(this.env,this.ctx,d);return await stub.getEntrypoint().fetch(new Request(request,{headers}));};
    let response;
@@ -325,7 +392,7 @@ export class Private extends WorkerEntrypoint {
      const decision=workerFirst(path,manifest.config.run_worker_first);
      // Manifests store asset paths relative to assets.directory; the lookup table
      // and the internal asset API both key off that relative form.
-     const files=new Map((manifest.files||[]).map(f=>['/'+f.path,f.path]));
+     const files=manifest.index;
      const hit=decision==='worker'?{worker:true}:lookupAsset(files,path,manifest.config.html_handling||'auto-trailing-slash');
      if(hit.redirect!==undefined)response=new Response(null,{status:307,headers:{location:hit.redirect}});
      else if(hit.worker)response=await forward();

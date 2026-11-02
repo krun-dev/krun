@@ -18,6 +18,7 @@ import (
 // descriptors they reference. Build logs, operations and IAM state never enter
 // this stream.
 type workerConfigRoute struct {
+	Service string `json:"service_id,omitempty"`
 	Host    string `json:"host"`
 	Path    string `json:"path,omitempty"`
 	Enabled bool   `json:"enabled"`
@@ -84,6 +85,12 @@ func workerConfigFromState(st *State, config *WorkersConfig) workerConfigProject
 	if st == nil || st.Workers == nil {
 		return out
 	}
+	placements := map[string]WorkerPlacement{}
+	for _, p := range st.Workers.Placements {
+		if p.Role == "primary" && p.State == "active" {
+			placements[p.Service] = p
+		}
+	}
 	for id, ws := range st.Workers.Services {
 		resource, ok := st.Resources[id]
 		if !ok || resource.Kind != "service" || resource.Organization != ws.Organization {
@@ -93,12 +100,16 @@ func workerConfigFromState(st *State, config *WorkersConfig) workerConfigProject
 			continue
 		}
 		ws = config.normalizeServiceNetwork(ws)
-		hosts := serviceHostPatterns(ws, config.Domains)
-		placement, placed := activeWorkerPlacement(st.Workers, id)
+		placement, placed := placements[id]
 		if !placed || placement.NetworkProfile != ws.NetworkProfile || !config.poolAllowedForProfile(ws.NetworkProfile, placement.Pool) {
 			continue
 		}
 		pool := placement.Pool
+		domains := append([]WorkerDomain(nil), config.Domains...)
+		for i := range domains {
+			domains[i].Domain = config.poolHostSuffix(pool, domains[i].Domain)
+		}
+		hosts := serviceHostPatterns(ws, domains)
 		for name, env := range ws.Environments {
 			// The map key is authoritative: Environment.Name is a denormalised
 			// copy that older rows may not carry.
@@ -109,7 +120,7 @@ func workerConfigFromState(st *State, config *WorkersConfig) workerConfigProject
 			// the Gateway instance already decided which entry a request used.
 			for _, host := range hosts {
 				if expanded := envHostName(host, name); expanded != "" {
-					out.Routes = append(out.Routes, workerConfigRoute{Host: expanded, Path: "/", Enabled: env.Enabled, Release: env.Release, Pool: pool})
+					out.Routes = append(out.Routes, workerConfigRoute{Service: id, Host: expanded, Path: "/", Enabled: env.Enabled, Release: env.Release, Pool: pool})
 				}
 			}
 			if env.Release == "" {
@@ -299,6 +310,7 @@ func encodeWorkerConfigSnapshot(pool string, revision int64, p workerConfigProje
 }
 
 type workerConfigLatest struct {
+	LazyRoutes     bool   `json:"lazy_routes,omitempty"`
 	ConfigRevision int64  `json:"config_revision"`
 	Snapshot       string `json:"snapshot"`
 	SHA256         string `json:"sha256"`
@@ -313,6 +325,9 @@ type workerConfigLatest struct {
 func (w *workersController) publishConfig(ctx context.Context) (int64, error) {
 	w.configMu.Lock()
 	defer w.configMu.Unlock()
+	if w.server.Store.pool != nil && w.config != nil {
+		return w.publishConfigDelta(ctx)
+	}
 	if err := w.loadConfigLocked(ctx); err != nil {
 		return 0, err
 	}

@@ -12,7 +12,7 @@ Assets 内部接口隔离。组织 API/UI 暴露的是部署方定义的 **Netwo
 `public/private`、pool 或 Gateway。Profile 用不可见的 ingress/egress 要求与 label
 selector 解析到一个或多个兼容 pool，并过滤该服务可见、可绑定的域名。控制面使用
 Rendezvous Hash 为新服务稳定选择一个 pool，并把结果写入独立 placement 行。M1.1 仍使用全局 revision
-CAS，并为每个 pool 写独立过滤快照；runtime ACK 按 Pod UID 有界覆盖写，用于控制面无法
+CAS，按 pool 过滤增量并按 host hash 写分片 checkpoint；共享路由和有界 Runtime 缓存见 [百万站点改造](performance-scaling.md)。runtime ACK 按 Pod UID 有界覆盖写，用于控制面无法
 直连 Pod 时观察收敛。
 
 M2–M4 再实现本文后半部分的 pool policy 数据库资源、独立 per-pool revision head、

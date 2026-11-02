@@ -13,15 +13,15 @@ IAM 与 Workers 是两套独立分区，**不共享事务**：
 | IAM | `krun_users`、`krun_organizations`、`krun_org_sources`、`krun_members`、`krun_groups`、`krun_group_members`、`krun_assignments`、`krun_resources`、`krun_api_keys`、`krun_api_key_hashes`、`krun_invitations`、`krun_identity_sources`、`krun_identity_providers`、`krun_meta` |
 | Workers | `krun_worker_services`、`krun_worker_service_domains`、`krun_worker_environments`、`krun_worker_secret_versions`、`krun_worker_environment_secrets`、`krun_worker_builds`、`krun_worker_build_private`、`krun_worker_artifacts`、`krun_worker_releases`、`krun_worker_release_secrets`、`krun_worker_operations`、`krun_worker_history`、`krun_worker_idempotency`、`krun_repository_connections`、`krun_repository_connect_states` |
 | 会话（不属于任何分区） | `krun_sessions`、`krun_browsers`、`krun_login_states`、`krun_email_logins`、`krun_device_codes` |
-| 旁路 | `krun_audits`、`worker_config_revisions`、`worker_runtime_acks` |
+| 旁路 | `krun_audits`、`worker_config_revisions`、`worker_config_routes`、`worker_config_releases`、`worker_config_ops`、`worker_config_dirty`、`worker_config_checkpoints`、`worker_asset_objects`、`worker_retention_scopes`、`worker_runtime_acks` |
 
 DDL 在 `internal/control/schema.go`，全部 `IF NOT EXISTS`，启动时幂等执行。
 
 ## 读路径
 
-- 认证：一次 `krun_sessions` 主键查 + 一次批量的 IAM 快照（14 条查询走在同一个 `pgx.Batch` 里，一次往返）。
+- 认证：会话/API Key 按键查询；登录只加载当前 identity 和邀请，常用请求按 actor / organization / service 过滤；批量行解码复用 `pgx.Batch`，不读取全平台站点。
 - `seen_at` 用**节流写**：`UPDATE ... WHERE seen_at < now() - interval '30 seconds'`，不是每请求都写。读请求本身不持久化任何状态。
-- 列表与详情按分区加载，`WorkerState.Revision` 这类只写不读的计数器已删除。
+- 站点列表与详情在分区内进一步按资源范围过滤；资源列表默认每页 100 条，以 `next_after` 翻页。Runtime 元数据按 Release/Artifact 定向读取。
 
 ## 写路径
 
@@ -54,7 +54,7 @@ UPDATE krun_worker_environments SET release_id=$4, release_revision=release_revi
 
 ## 边缘收敛
 
-不变：写入 `worker_config_revisions` → 快照进对象存储 → runtime 长轮询 `latest.json` + 增量 feed → 每 Pod 一个 ack。收敛只靠 revision 与 ack 观察，不阻塞提交。
+站点变更进入有界 dirty 队列，发布者只读取变更站点并写入 normalized delta；对象存储保存 compact head 与 host-hash shard checkpoint。Runtime 通过增量 feed 收敛，冷 host 按需读取，ACK 仍用于观察收敛。细节及保留/清理机制见 [百万站点改造](performance-scaling.md)。
 
 **Hosts 不再持久化。** 环境的主机名由域名目录 + 服务的域名选择现算，`normalizeService`、`reconcile` 的 HTTPRoute 生成、`workerConfigFromState` 共用同一套推导，因此三者不会漂移。
 

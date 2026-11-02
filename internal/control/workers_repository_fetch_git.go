@@ -290,6 +290,17 @@ func (s *Server) resolveRepositoryCommit(ctx context.Context, provider WorkerRep
 		ref = "HEAD"
 	}
 	want := []string{"refs/heads/" + ref, "refs/tags/" + ref + "^{}", "refs/tags/" + ref}
+	if ref == "HEAD" {
+		want = []string{"HEAD"}
+		// HEAD is an advertised reference, not a branch named "HEAD". Follow
+		// its symbolic target when present; some transports advertise its hash.
+		for _, r := range refs {
+			if r.Name() == plumbing.HEAD && r.Type() == plumbing.SymbolicReference {
+				want = []string{r.Target().String()}
+				break
+			}
+		}
+	}
 	if repositoryCommit.MatchString(strings.ToLower(ref)) {
 		// A pinned commit needs no ref lookup; the caller already knows it.
 		return strings.ToLower(ref), nil

@@ -5,5 +5,7 @@ COPY generated/git-mock-ca.crt /usr/local/share/ca-certificates/krun-kind-git-mo
 RUN update-ca-certificates
 WORKDIR /app
 COPY generated/krun-server /app/krun-server
+# E2E serves the exported SPA and API through one Go origin.
+COPY generated/console /app/dist/console
 USER 1000:1000
 CMD ["/app/krun-server","serve","--config","/config/control.yaml"]

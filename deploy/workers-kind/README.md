@@ -71,3 +71,21 @@ KUBECONFIG="$KUBECONFIG" KIND_CLUSTER_NAME="$KIND_CLUSTER_NAME" node e2e.mjs
 
 Runtime 内部 API 位于独立端口 9001，只允许 runtime 网络访问；外部 9000 只暴露
 `/api/*`，不额外增加根级路由。
+
+## 同源 UI 与规模回归
+
+测试镜像同时包含 `npm run build` 导出的静态控制台；`deploy.sh` 会在本机依赖可用时构建，
+也可预先提供 gitignored 的 `generated/console/`。Go 在同一 origin 提供 `/` 与 `/api/*`，
+便于真实浏览器验证；生产前端仍为 OSS 静态部署。
+
+默认 `public_url` 为 `http://127.0.0.1:4380`。端口冲突时，在部署和 E2E 两步都设置
+`KRUN_E2E_ORIGIN` 为同一个测试 origin，并在 UI 测试中使用对应的 `KRUN_UI_ORIGIN`：
+
+```bash
+npx playwright install chromium
+KRUN_UI_ORIGIN=http://127.0.0.1:4380 npm run test:ui
+```
+
+扩展 E2E 覆盖同源静态入口、百站点游标分页、共享 HTTPRoute 数量、有界配置 head/shard，
+以及实际过期 Artifact 的 indexed GC，确认回收不会删除仍在服务的资产。
+百万 PostgreSQL 元数据测试及算法微基准见 [性能验证](../../docs/performance-scaling.md)。

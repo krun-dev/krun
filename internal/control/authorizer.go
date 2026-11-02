@@ -38,6 +38,7 @@ var roleActions = map[string][]string{
 	"developer": {"organization.read", "service.list", "service.read", "service.create", "service.update", "service.version.create", "service.version.read", "model.list", "model.read", "model.create", "model.update", "model.version.create", "model.version.read", "build.start", "log.read", "source.read", "service.invoke"},
 	"publisher": {"organization.read", "service.list", "service.read", "service.version.read", "service.publish", "service.rollback", "service.invoke", "model.list", "model.read", "model.version.read", "model.publish", "model.rollback"},
 }
+
 // Environment values: the reserved scopes ("global", "development") plus the
 // baseline and any preview slug a service may define.
 var environments = []string{"global", "development", "production"}
@@ -283,12 +284,28 @@ func evaluate(ps *cedar.PolicySet, kind, id, action string, t Target) (bool, err
 	}
 	return decision == cedar.Allow, nil
 }
+
+type authorizationCache struct {
+	users map[string]*cedar.PolicySet
+	keys  map[string]*cedar.PolicySet
+}
+
 func Authorize(st *State, p Principal, action string, t Target) (Decision, error) {
 	d := Decision{Revision: st.Revision, KeyAllowed: p.Key == nil, Reason: "PERMISSION_DENIED"}
 	if !contains(actions[action], t.Kind) || !environmentValid(t.Environment) || p.User.Status != "active" || !sourceAllowed(st, p.User, t.Organization) {
 		return d, nil
 	}
-	ps, e := compileUser(st, p.User)
+	var ps *cedar.PolicySet
+	var e error
+	if st.authorization != nil {
+		ps = st.authorization.users[p.User.ID]
+	}
+	if ps == nil {
+		ps, e = compileUser(st, p.User)
+		if e == nil && st.authorization != nil {
+			st.authorization.users[p.User.ID] = ps
+		}
+	}
 	if e != nil {
 		return d, e
 	}
@@ -300,7 +317,16 @@ func Authorize(st *State, p Principal, action string, t Target) (Decision, error
 		if p.Key.ScopeKind == "organization" && p.Key.Organization != t.Organization {
 			return d, nil
 		}
-		ps, e = compileKey(*p.Key)
+		ps = nil
+		if st.authorization != nil {
+			ps = st.authorization.keys[p.Key.ID]
+		}
+		if ps == nil {
+			ps, e = compileKey(*p.Key)
+			if e == nil && st.authorization != nil {
+				st.authorization.keys[p.Key.ID] = ps
+			}
+		}
 		if e != nil {
 			return d, e
 		}

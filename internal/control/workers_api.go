@@ -111,7 +111,7 @@ func (s *Server) workerService(st *State, t Target) WorkerService {
 		ws = WorkerService{Service: t.ID, Organization: t.Organization, Domains: []string{}, Environments: map[string]WorkerEnvironment{}}
 	}
 	ws.Organization = t.Organization
-	ws = s.normalizeService(ws)
+	ws = s.normalizeService(ws, st)
 	st.Workers.Services[t.ID] = ws
 	s.ensureWorkerPlacement(st, ws)
 	return ws
@@ -166,14 +166,19 @@ func (s *Server) workerServiceView(st *State, t Target) WorkerService {
 		environments[name] = env
 	}
 	ws.Environments = environments
-	return s.normalizeService(ws)
+	return s.normalizeService(ws, st)
 }
 
 // normalizeService applies catalog defaults and derives hosts. Hosts are never
 // persisted: routing, the edge projection and API responses all compute them
 // here, so they cannot drift apart.
-func (s *Server) normalizeService(ws WorkerService) WorkerService {
+func (s *Server) normalizeService(ws WorkerService, states ...*State) WorkerService {
+	var state *WorkerState
+	if len(states) > 0 {
+		state = states[0].Workers
+	}
 	ws = s.Config.Workers.normalizeServiceNetwork(ws)
+	pool := s.Config.Workers.servicePool(state, ws)
 	if ws.Environments == nil {
 		ws.Environments = map[string]WorkerEnvironment{}
 	}
@@ -200,7 +205,7 @@ func (s *Server) normalizeService(ws WorkerService) WorkerService {
 			env.SecretVersions = map[string]string{}
 		}
 		env.SecretNames = workerSecretNames(env.SecretVersions)
-		s.syncEnvironmentHosts(&env, ws.Organization, ws.Service, ws.Domains)
+		s.syncEnvironmentHosts(&env, ws.Organization, ws.Service, ws.Domains, ws.NetworkProfile, pool)
 		ws.Environments[name] = env
 	}
 	return ws
@@ -476,7 +481,7 @@ func (s *Server) workerEnvironments(st *State, p Principal, r *http.Request) (an
 			env := ws.Environments[name]
 			// Recompute rather than trusting persisted hosts: the configured
 			// domain catalog may have changed since the row was written.
-			s.syncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains)
+			s.syncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains, ws.NetworkProfile, s.Config.Workers.servicePool(st.Workers, ws))
 			out = append(out, env)
 		}
 	}
@@ -530,7 +535,7 @@ func (s *Server) workerOverview(st *State, p Principal, r *http.Request) (any, i
 			continue
 		}
 		env := ws.Environments[name]
-		s.syncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains)
+		s.syncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains, ws.NetworkProfile, s.Config.Workers.servicePool(st.Workers, ws))
 		entry := workerOverviewEnvironment{Environment: env, History: []WorkerHistory{}}
 		versions, authErr := Authorize(st, p, "service.version.read", target)
 		if authErr != nil {
@@ -745,7 +750,7 @@ func (s *Server) workerEnvironmentCreate(st *State, p Principal, r *http.Request
 		return nil, 0, problem(409, "ENVIRONMENT_LIMIT", "Too many preview environments")
 	}
 	env := WorkerEnvironment{Name: in.Name, Enabled: true, ConfigRevision: 1, Variables: map[string]string{}, SecretVersions: map[string]string{}}
-	s.syncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains)
+	s.syncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains, ws.NetworkProfile, s.Config.Workers.servicePool(st.Workers, ws))
 	ws.Environments[in.Name] = env
 	ws.PreviewRevision++
 	st.Workers.Services[t.ID] = ws
@@ -821,7 +826,7 @@ func (s *Server) workerEnvironmentUpdate(st *State, p Principal, r *http.Request
 	if in.Variables != nil {
 		current.Variables = in.Variables
 	}
-	s.syncEnvironmentHosts(&current, t.Organization, t.ID, ws.Domains)
+	s.syncEnvironmentHosts(&current, t.Organization, t.ID, ws.Domains, ws.NetworkProfile, s.Config.Workers.servicePool(st.Workers, ws))
 	current.ConfigRevision++
 	ws.Environments[env] = current
 	st.Workers.Services[t.ID] = ws

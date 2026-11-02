@@ -305,3 +305,14 @@ func keys[V any](m map[string]V) []string {
 	}
 	return out
 }
+
+func TestRepositoryDefaultHEADResolvesAdvertisedReference(t *testing.T) {
+	dir, head, _ := newLocalGitRepo(t, map[string]string{"README.md": "head resolution"})
+	server := &Server{}
+	for _, ref := range []string{"", "HEAD"} {
+		commit, err := server.resolveRepositoryCommit(context.Background(), localProvider(dir), WorkerRepositorySource{Ref: ref}, "")
+		if err != nil || commit != head {
+			t.Fatalf("ref=%q commit=%s expected=%s err=%v", ref, commit, head, err)
+		}
+	}
+}

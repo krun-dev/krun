@@ -102,6 +102,10 @@ func (s *Server) workerInvokeTarget(r *http.Request) (string, string, error) {
 	if e != nil {
 		return "", "", e
 	}
+	r, e = s.scopedRequest(r, c)
+	if e != nil {
+		return "", "", e
+	}
 	var host, gatewayID string
 	var appErr error
 	var principal Principal
@@ -136,7 +140,11 @@ func (s *Server) workerInvokeTarget(r *http.Request) (string, string, error) {
 			if !ok {
 				continue
 			}
-			if candidate := hostFor(slug, env, d.Domain); candidate != "" {
+			suffix := d.Domain
+			if pool := s.Config.Workers.servicePool(st.Workers, service); pool != "" {
+				suffix = s.Config.Workers.poolHostSuffix(pool, d.Domain)
+			}
+			if candidate := hostFor(slug, env, suffix); candidate != "" {
 				host, gatewayID = candidate, d.Gateway
 				return nil
 			}

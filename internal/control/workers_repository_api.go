@@ -152,7 +152,7 @@ func (s *Server) workerServiceList(st *State, p Principal, r *http.Request) (any
 			if current, exists := service.Environments[env]; exists {
 				// Hosts are derived for display; the persisted row is not rewritten
 				// from a read path.
-				s.syncEnvironmentHosts(&current, resource.Organization, resource.ID, s.syncServiceDomains(service))
+				s.syncEnvironmentHosts(&current, resource.Organization, resource.ID, s.syncServiceDomains(service), service.NetworkProfile, s.Config.Workers.servicePool(st.Workers, service))
 				summary.Environments = append(summary.Environments, WorkerEnvironmentSummary{Name: env, Domains: current.Domains, Hosts: current.Hosts, Enabled: current.Enabled, Release: current.Release, Confirmed: current.Confirmed})
 			}
 		}
@@ -167,7 +167,7 @@ func (s *Server) workerServiceList(st *State, p Principal, r *http.Request) (any
 		}
 		return out[i].Name < out[j].Name
 	})
-	return items(out)
+	return resourcePageItems(st, r, out)
 }
 
 func (s *Server) workerRepositoryProviders(st *State, p Principal, r *http.Request) (any, int, error) {

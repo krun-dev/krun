@@ -34,6 +34,7 @@ config='''listen: 0.0.0.0:9000
 internal_listen: 0.0.0.0:9001
 public_url: http://127.0.0.1:4380
 development: true
+static_dir: /app/dist
 db: ${KRUN_DATABASE_URL}
 providers:
   - id: local
@@ -41,6 +42,8 @@ providers:
     type: dev
     name: kind 开发登录
 workers:
+  shared_routing: true
+  reconcile_concurrency: 8
   namespace: workers-mvp
   builder_image: krun-worker-builder:20261013
   builder_pull_policy: Never
@@ -146,6 +149,8 @@ workers:
       priority: 30
       base_url: https://gitlab.com
 '''
+config=config.replace('public_url: http://127.0.0.1:4380','public_url: '+json.dumps(os.environ.get('KRUN_E2E_ORIGIN','http://127.0.0.1:4380')))
+
 items.append(resource('ConfigMap','control-config',data={'control.yaml':config}))
 items.append(resource('ServiceAccount','workers-control'))
 items.append(resource('Role','workers-control',apiVersion='rbac.authorization.k8s.io/v1',rules=[{'apiGroups':[''],'resources':['pods','pods/log'],'verbs':['get','list']},{'apiGroups':[''],'resources':['secrets'],'verbs':['get','create','patch','delete']},{'apiGroups':['batch'],'resources':['jobs'],'verbs':['get','list','create','patch','delete']},{'apiGroups':['discovery.k8s.io'],'resources':['endpointslices'],'verbs':['get','list']},{'apiGroups':['gateway.networking.k8s.io'],'resources':['httproutes'],'verbs':['get','list','create','patch','delete'] }]))

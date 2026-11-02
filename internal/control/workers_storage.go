@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -87,6 +88,7 @@ type workerModule struct {
 	Bytes  []byte
 }
 type workerCode struct {
+	ManifestRaw        []byte                  `json:"-"`
 	Profile            string                  `json:"profile"`
 	Digest             string                  `json:"digest"`
 	ArchiveDigest      string                  `json:"archive_digest"`
@@ -275,6 +277,7 @@ func parseWorkerArchive(raw []byte) (workerCode, string, error) {
 	if len(files) < 2 || files["manifest.json"] == nil {
 		return out, "", errors.New("manifest and module required")
 	}
+
 	var m workerManifest
 	decoder := json.NewDecoder(bytes.NewReader(files["manifest.json"]))
 	decoder.DisallowUnknownFields()
@@ -338,7 +341,7 @@ func parseWorkerArchive(raw []byte) (workerCode, string, error) {
 	if mainDigest == "" {
 		return out, "", errors.New("main module is not declared")
 	}
-	out = workerCode{Profile: m.Profile, Digest: mainDigest, ArchiveDigest: bytesDigest(raw), Size: modulesTotal, CompatibilityDate: m.CompatibilityDate, CompatibilityFlags: append([]string(nil), m.CompatibilityFlags...), MainModule: m.MainModule, Modules: modules}
+	out = workerCode{ManifestRaw: append([]byte(nil), files["manifest.json"]...), Profile: m.Profile, Digest: mainDigest, ArchiveDigest: bytesDigest(raw), Size: modulesTotal, CompatibilityDate: m.CompatibilityDate, CompatibilityFlags: append([]string(nil), m.CompatibilityFlags...), MainModule: m.MainModule, Modules: modules}
 	if m.Schema == 1 {
 		if m.Assets != nil {
 			return out, "", errors.New("schema 1 cannot declare assets")
@@ -632,21 +635,44 @@ func workerAssetCacheControl(name string) string {
 // pub/ is the public static origin, int/ the internal one. Both copies come from
 // the same immutable archive; the private v1/ artifact key is never anonymous.
 func (w *workersController) putAssetObjects(ctx context.Context, b WorkerBuild, a WorkerArtifact, code workerCode) error {
-	if code.AssetBytes == nil {
-		return nil
-	}
-	for name, raw := range code.AssetBytes {
-		meta := code.AssetFiles[name]
+	keys := []string{}
+	for name := range code.AssetBytes {
 		for _, prefix := range []string{"pub", "int"} {
-			key := workerAssetObjectKey(prefix, b.Organization, b.Service, a.ArchiveDigest, name)
-			options := minio.PutObjectOptions{ContentType: meta.ContentType, CacheControl: workerAssetCacheControl(name)}
-			if e := w.putBytes(ctx, key, raw, options); e != nil {
-				return e
-			}
+			keys = append(keys, workerAssetObjectKey(prefix, b.Organization, b.Service, a.ArchiveDigest, name))
 		}
 	}
-	return nil
+	if err := w.server.Store.registerAssetObjects(ctx, a.ID, keys); err != nil {
+		return err
+	}
+	tasks := make(chan string, len(keys))
+	for _, key := range keys {
+		tasks <- key
+	}
+	close(tasks)
+	var wg sync.WaitGroup
+	errs := make(chan error, len(keys))
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for key := range tasks {
+				_, tail, _ := strings.Cut(key, "/"+a.ArchiveDigest+"/")
+				meta := code.AssetFiles[tail]
+				if err := w.putBytes(ctx, key, code.AssetBytes[tail], minio.PutObjectOptions{ContentType: meta.ContentType, CacheControl: workerAssetCacheControl(tail)}); err != nil {
+					errs <- err
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	var failures []error
+	for err := range errs {
+		failures = append(failures, err)
+	}
+	return errors.Join(failures...)
 }
+
 func (w *workersController) finalizeBuild(ctx context.Context, b WorkerBuild) (WorkerArtifact, error) {
 	raw, e := w.getObject(ctx, workerUploadKey(b))
 	if e != nil {
@@ -664,6 +690,9 @@ func (w *workersController) finalizeBuild(ctx context.Context, b WorkerBuild) (W
 		return a, e
 	}
 	if e := w.putImmutable(ctx, a.ObjectKey, raw); e != nil {
+		return a, e
+	}
+	if e := w.putImmutable(ctx, workerArtifactManifestKey(a), code.ManifestRaw); e != nil {
 		return a, e
 	}
 	// Per-file copies exist so kgateway and CDN can serve assets directly; the
@@ -699,7 +728,7 @@ func (w *workersController) artifactCode(ctx context.Context, a WorkerArtifact) 
 // publication. Metadata for artifacts is removed only after S3 cleanup
 // succeeds, retaining enough information to retry after an outage.
 func (w *workersController) collectWorkerObjects(ctx context.Context) error {
-	artifacts, err := w.server.Store.garbageArtifacts(ctx, now().Add(-workerArtifactRetain), 32)
+	artifacts, err := w.server.Store.garbageArtifacts(ctx, now().Add(-workerArtifactRetain), 256)
 	if err != nil {
 		return err
 	}
@@ -726,21 +755,21 @@ func (w *workersController) collectWorkerObjects(ctx context.Context) error {
 			failures = append(failures, err)
 			continue
 		}
-		// Assets are organized by service while artifacts are content-addressed
-		// and may have been used by more than one service. Once no release
-		// references the artifact, remove every matching digest in the org.
-		assetFailed := false
-		for _, prefix := range []string{"pub/" + artifact.Organization + "/", "int/" + artifact.Organization + "/"} {
-			if err := w.removeWorkerObjects(ctx, prefix, func(key string, _ time.Time) bool {
-				return strings.Contains(key, "/"+artifact.ArchiveDigest+"/")
-			}); err != nil {
-				failures = append(failures, err)
-				assetFailed = true
-			}
-		}
-		if assetFailed {
+		// The indexed object inventory makes deletion proportional to this
+		// artifact's files, regardless of other services in the organization.
+		complete, err := w.collectArtifactAssets(ctx, artifact)
+		if err != nil {
+			failures = append(failures, err)
 			continue
 		}
+		if !complete {
+			continue
+		}
+		if err := w.s3.RemoveObject(ctx, artifact.Bucket, workerArtifactManifestKey(artifact), minio.RemoveObjectOptions{}); err != nil {
+			failures = append(failures, err)
+			continue
+		}
+
 		if err := w.server.Store.deleteGarbageArtifact(ctx, artifact.ID, w.replica); err != nil {
 			failures = append(failures, err)
 			continue
@@ -803,10 +832,37 @@ func (w *workersController) collectWorkerObjects(ctx context.Context) error {
 	if err != nil {
 		failures = append(failures, err)
 	} else if floor > 0 {
+		protected := map[string]bool{}
+		if w.server.Store.pool != nil {
+			rows, e := w.server.Store.pool.Query(ctx, `SELECT pool,shard,published_revision FROM worker_config_checkpoints WHERE published_revision>0`)
+			if e != nil {
+				return e
+			}
+			for rows.Next() {
+				var pool, shard string
+				var revision int64
+				if e = rows.Scan(&pool, &shard, &revision); e != nil {
+					rows.Close()
+					return e
+				}
+				protected[workerPoolConfigPrefix(pool)+"shards/"+shard+"/"+strconv.FormatInt(revision, 10)+".json.gz"] = true
+			}
+			e = rows.Err()
+			rows.Close()
+			if e != nil {
+				return e
+			}
+		}
 		if err := w.removeWorkerObjects(ctx, workerConfigPoolsDir, func(key string, _ time.Time) bool {
+			if protected[key] {
+				return false
+			}
 			_, name, found := strings.Cut(key, "/snapshots/")
 			if !found {
-				return false
+				if !strings.Contains(key, "/shards/") {
+					return false
+				}
+				name = path.Base(key)
 			}
 			name = strings.TrimSuffix(name, ".json.gz")
 			revision, parseErr := strconv.ParseInt(name, 10, 64)
@@ -819,19 +875,29 @@ func (w *workersController) collectWorkerObjects(ctx context.Context) error {
 }
 
 func (w *workersController) removeWorkerObjects(ctx context.Context, prefix string, remove func(string, time.Time) bool) error {
-	for object := range w.s3.ListObjects(ctx, w.config.S3Bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+	if w.objectGCAfter == nil {
+		w.objectGCAfter = map[string]string{}
+	}
+	count := 0
+	for object := range w.s3.ListObjects(ctx, w.config.S3Bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true, StartAfter: w.objectGCAfter[prefix], MaxKeys: 500}) {
 		if object.Err != nil {
 			return object.Err
 		}
-		if !remove(object.Key, object.LastModified) {
-			continue
+		if remove(object.Key, object.LastModified) {
+			if err := w.s3.RemoveObject(ctx, w.config.S3Bucket, object.Key, minio.RemoveObjectOptions{}); err != nil {
+				return err
+			}
 		}
-		if err := w.s3.RemoveObject(ctx, w.config.S3Bucket, object.Key, minio.RemoveObjectOptions{}); err != nil {
-			return err
+		w.objectGCAfter[prefix] = object.Key
+		count++
+		if count >= 500 {
+			return nil
 		}
 	}
+	delete(w.objectGCAfter, prefix)
 	return nil
 }
+
 func safeWorkerLog(text string) string {
 	if len(text) > 32768 {
 		text = text[:32768]

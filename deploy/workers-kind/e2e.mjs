@@ -16,7 +16,7 @@ const kubectl=(...args)=>execFileSync('kubectl',['--kubeconfig',kubeconfig,...ar
 const clusterName=process.env.KIND_CLUSTER_NAME;assert(clusterName,'KIND_CLUSTER_NAME must identify the intended kind cluster');
 const expectedContext='kind-'+clusterName;assert.equal(kubectl('config','current-context').trim(),expectedContext,'Verification requires the intended kind context');
 const podTransport=process.env.KRUN_E2E_TRANSPORT!=='port-forward';
-const origin='http://127.0.0.1:4380';const cookies=new Map();let csrf='',key='';const evidence=[];const transportRetries=[];
+const origin=process.env.KRUN_E2E_ORIGIN||'http://127.0.0.1:4380';const cookies=new Map();let csrf='',key='';const evidence=[];const transportRetries=[];
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function request(route,method='GET',input,options={}){return new Promise((resolve,reject)=>{
  const data=input===undefined?undefined:options.form?input:JSON.stringify(input);
@@ -61,7 +61,7 @@ async function startForward(){
  if(podTransport){for(let i=0;i<60;i++){try{await api('/api/healthz');return;}catch{await sleep(500);}}throw new Error('Backend did not become healthy');}
  forward?.kill();
  const log=openSync(evidencePath('port-forward.log'),'a');
- forward=spawn('kubectl',['--kubeconfig',kubeconfig,'-n','workers-mvp','port-forward','deployment/backend','4380:9000','--address=127.0.0.1'],{stdio:['ignore',log,log],env:{...process.env,KUBECTL_PORT_FORWARD_WEBSOCKETS:'false'}});closeSync(log);forward.unref();
+ forward=spawn('kubectl',['--kubeconfig',kubeconfig,'-n','workers-mvp','port-forward','deployment/backend',new URL(origin).port+':9000','--address=127.0.0.1'],{stdio:['ignore',log,log],env:{...process.env,KUBECTL_PORT_FORWARD_WEBSOCKETS:'false'}});closeSync(log);forward.unref();
  for(let i=0;i<60;i++){try{await api('/api/healthz');return;}catch{await sleep(500);}}
  throw new Error('Backend port-forward did not become healthy');
 }
@@ -112,7 +112,7 @@ function testerPut(url,base64){
  return JSON.parse(kubectl('exec','-n','workers-mvp','deploy/tester','--','node','-e',script,url,base64));
 }
 function testerGet(url){
- const script=`const http=require('http');const u=new URL(process.argv[1]);http.get({hostname:u.hostname,port:u.port,path:u.pathname+u.search},res=>{let s='';res.on('data',x=>s+=x);res.on('end',()=>console.log(JSON.stringify({status:res.statusCode,body:s.slice(0,200)})));}).on('error',e=>{console.error(e.message);process.exitCode=1;});`;
+ const script=`const http=require('http');const u=new URL(process.argv[1]);http.get({hostname:u.hostname,port:u.port,path:u.pathname+u.search},res=>{let s='';res.on('data',x=>s+=x);res.on('end',()=>{let body;try{body=JSON.parse(s)}catch{body=s.slice(0,4096)};console.log(JSON.stringify({status:res.statusCode,body}))});}).on('error',e=>{console.error(e.message);process.exitCode=1;});`;
  return JSON.parse(kubectl('exec','-n','workers-mvp','deploy/tester','--','node','-e',script,url));
 }
 function sourceBundle(code,assets){
@@ -329,5 +329,51 @@ await check('gateway instances are isolated per domain binding',async()=>{
  const viaPrivateOwn=await invokeAt(gateway,privateHost);
  assert.equal(viaPrivateOwn.status,200);
  return {publicService:publicService.id,publicBuild:publicBuild.id,publicRelease:publicRelease.release_id,publicHost,privateHost,mixed:mixed.status,forgedPublic:viaPublicPrivateHost.status,forgedPrivate:viaPrivatePublicHost.status,public:viaPublicOwn.status,private:viaPrivateOwn.status};
+});
+await check('exported console and API share the same origin',async()=>{
+ const root=await request('/','GET',undefined,{token:null,headers:{host:new URL(origin).host}});assert.equal(root.status,200);assert(String(root.body).includes('<div id="root">'));
+ const unknown=await request('/api/unknown-scale-route');assert.equal(unknown.status,404);assert.equal(unknown.body.error.code,'RESOURCE_NOT_FOUND');
+ return {static_console:root.status,unknown_api:unknown.status};
+});
+await check('site pagination is complete and shared Gateway routes stay bounded',async()=>{
+ const routeCount=()=>JSON.parse(kubectl('get','httproutes','-n','workers-mvp','-o','json')).items.filter(r=>r.metadata.name.startsWith('workers-')).length;
+ const before=routeCount();const expected=new Set((await api('/api/v1/orgs/'+org.id+'/services')).items.map(r=>r.id));
+ const profiles=await api('/api/v1/orgs/'+org.id+'/workers/network-profiles');const profile=profiles.items.find(p=>p.default)?.id||profiles.items[0].id;
+ for(let i=0;i<105;i++){const r=await api('/api/v1/orgs/'+org.id+'/services','POST',{name:'cursor-'+run+'-'+i},201);await api('/api/v1/orgs/'+org.id+'/services/'+r.id+'/workers/network-profile','PUT',{network_profile:profile,expected_revision:0});expected.add(r.id)}
+ const seen=new Set();let after='',pages=0;
+ do{
+  const page=await api('/api/v1/orgs/'+org.id+'/workers/services?limit=37&after='+encodeURIComponent(after));assert(page.items.length<=37);
+  for(const item of page.items){assert(!seen.has(item.id));seen.add(item.id)}
+  after=page.next_after||'';pages++;assert(pages<10);
+ }while(after);
+ assert.deepEqual([...seen].sort(),[...expected].sort());assert.equal(routeCount(),before);
+ return {sites:seen.size,pages,gateway_routes:before};
+});
+await check('runtime bootstraps from a compact head and immutable host shards',async()=>{
+ const latest=testerGet('http://minio:9000/krun-artifacts/config/pools/default/latest.json');assert.equal(latest.status,200);assert.equal(latest.body.lazy_routes,true);assert.equal(latest.body.snapshot,'');
+ const {createHash}=await import('node:crypto');const shard=createHash('sha256').update(hostProd).digest('hex').slice(0,2);
+ const pointer=testerGet('http://minio:9000/krun-artifacts/config/pools/default/shards/'+shard+'/latest.json');assert.equal(pointer.status,200);assert(pointer.body.snapshot.endsWith('.json.gz'));assert(pointer.body.sha256);
+ const snapshot=testerGet('http://minio:9000/krun-artifacts/config/pools/default/'+pointer.body.snapshot);assert.equal(snapshot.status,200);
+ return {lazy_routes:true,shard,checkpoint_revision:pointer.body.config_revision};
+});
+await check('background GC removes indexed artifact files and preserves live assets',async()=>{
+ const doomed=await api('/api/v1/orgs/'+org.id+'/services','POST',{name:'gc-'+run},201);
+ const target='/api/v1/orgs/'+org.id+'/services/'+doomed.id+'/workers';
+ const input=sourceBundle({'index.ts':'export default {fetch(){return new Response("gc")}}'},{'index.html':'GC fixture'});
+ const upload=await api(target+'/source-uploads','POST',{},201);testerPut(upload.upload_url,input.toString('base64'));
+ const b=await buildAt(target,{source_type:'upload',entrypoint:'index.ts',source_upload:upload.source_upload,assets:{directory:'public',run_worker_first:[],not_found_handling:'none',html_handling:'none'}});
+ const artifact=await api(target+'/artifacts/'+b.artifact_id);
+ const objectURL='http://minio:9000/krun-artifacts/pub/'+org.id+'/'+doomed.id+'/'+artifact.archive_sha256+'/index.html';assert.equal(testerGet(objectURL).status,200);
+ const sql=query=>kubectl('exec','-n','workers-mvp','deploy/postgres','--','psql','-U','postgres','-d','postgres','-tAc',query).trim();
+ assert.equal(Number(sql(`SELECT count(*) FROM worker_asset_objects WHERE artifact_id='${artifact.id}'`)),2);
+ sql(`WITH private AS(DELETE FROM krun_worker_build_private WHERE build_id='${b.id}') DELETE FROM krun_worker_builds WHERE build_id='${b.id}'`);
+ sql(`UPDATE krun_worker_artifacts SET created_at=now()-interval '31 days' WHERE artifact_id='${artifact.id}'`);
+ let removed=false;
+ for(let i=0;i<60;i++){
+  if(Number(sql(`SELECT count(*) FROM krun_worker_artifacts WHERE artifact_id='${artifact.id}'`))===0){removed=true;break}await sleep(1000);
+ }
+ assert(removed,'artifact GC did not converge');assert.equal(Number(sql(`SELECT count(*) FROM worker_asset_objects WHERE artifact_id='${artifact.id}'`)),0);assert.equal(testerGet(objectURL).status,404);
+ const live=testerGet('http://minio:9000/krun-artifacts/pub/'+org.id+'/'+service.id+'/'+assetArtifact.archive_sha256+'/index.html');assert.equal(live.status,200);
+ return {removed_artifact:artifact.id,removed_files:2,live_assets:live.status};
 });
 console.log('PASS '+evidence.length+' kind backend end-to-end checks');

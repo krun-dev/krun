@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	cedar "github.com/cedar-policy/cedar-go"
 	"sort"
 	"sync"
 	"time"
@@ -150,6 +151,7 @@ func (s *Store) Mutate(ctx context.Context, loadPartition, persistPartition Stat
 		// A read persists nothing, so it needs no pre-image to diff against.
 		// Skipping the clone here keeps GET requests to one batched read.
 		if persistPartition == 0 {
+			st.authorization = &authorizationCache{users: map[string]*cedar.PolicySet{}, keys: map[string]*cedar.PolicySet{}}
 			if err = fn(st); err != nil {
 				if auditErr := s.flushAudits(ctx, deniedAudits(st.pendingAudits)); auditErr != nil {
 					return auditErr

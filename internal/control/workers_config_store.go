@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -150,7 +151,7 @@ func (s *Store) LatestConfigRevision(ctx context.Context) (workerConfigRevision,
 			jsonb_build_object(
 				'routes', COALESCE((
 					SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
-						'host', host, 'pool', pool, 'path', NULLIF(path,''), 'enabled', enabled, 'release', release_id
+						'service_id',NULLIF(service_id,''),'host', host, 'pool', pool, 'path', NULLIF(path,''), 'enabled', enabled, 'release', release_id
 					)) ORDER BY host) FROM worker_config_routes
 				), '[]'::jsonb),
 				'releases', COALESCE((
@@ -185,7 +186,7 @@ func (s *Store) LatestConfigRevision(ctx context.Context) (workerConfigRevision,
 		if digestErr != nil {
 			return workerConfigRevision{}, false, digestErr
 		}
-		if reconstructedDigest != out.Digest {
+		if !strings.HasPrefix(out.Digest, "delta:") && reconstructedDigest != out.Digest {
 			return workerConfigRevision{}, false, errors.New("edge config head digest does not match normalized projection")
 		}
 		out.Payload, out.Ops = payload, ops
@@ -207,6 +208,7 @@ func (s *Store) ConfigRevisionsSince(ctx context.Context, since int64, limit int
 		limit = 1
 	}
 	if s.pool != nil {
+		pool, _ := ctx.Value(workerRuntimeFeedPoolKey{}).(string)
 		rows, err := s.pool.Query(ctx, `SELECT revision.config_revision, revision.digest,
 			COALESCE((SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
 				'type', op.op_type,
@@ -215,10 +217,10 @@ func (s *Store) ConfigRevisionsSince(ctx context.Context, since int64, limit int
 				'route', CASE WHEN op.op_type='route_upsert' THEN op.payload END,
 				'release', CASE WHEN op.op_type='release_put' THEN op.payload END
 			)) ORDER BY op.ordinal) FROM worker_config_ops op
-				WHERE op.config_revision=revision.config_revision), '[]'::jsonb),
+				WHERE op.config_revision=revision.config_revision AND ($3='' OR op.pool=$3)), '[]'::jsonb),
 			revision.created_at
 			FROM worker_config_revisions revision
-			WHERE revision.config_revision > $1 ORDER BY revision.config_revision LIMIT $2`, since, limit)
+			WHERE revision.config_revision > $1 ORDER BY revision.config_revision LIMIT $2`, since, limit, pool)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -354,3 +356,5 @@ func (s *Store) ReadAcks(ctx context.Context) (map[string]WorkerAck, error) {
 	}
 	return out, nil
 }
+
+type workerRuntimeFeedPoolKey struct{}

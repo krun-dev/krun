@@ -255,7 +255,7 @@ func (s *Server) emailVerifyHandler(w http.ResponseWriter, r *http.Request) {
 
 // recordAnonymousAudit commits a denial entry without a state mutation.
 func (s *Server) recordAnonymousAudit(r *http.Request, p *provider, action string) {
-	_ = s.Store.Update(r.Context(), PartitionIAM, func(st *State) error {
+	_ = s.Store.Update(withStateScope(r.Context(), stateReadScope{ActorOnly: true}), PartitionIAM, func(st *State) error {
 		s.audit(st, Principal{Kind: "anonymous"}, r, action, p.config.ID, false)
 		return nil
 	})

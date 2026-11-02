@@ -13,10 +13,13 @@ import (
 
 // Workers is opt-in: existing authentication deployments keep their current behavior.
 type WorkersConfig struct {
-	RepositoryProviders []WorkerRepositoryProvider `json:"repository_providers"`
-	Namespace           string                     `json:"namespace"`
-	BuilderImage        string                     `json:"builder_image"`
-	BuilderPullPolicy   string                     `json:"builder_pull_policy"`
+	// SharedRouting bounds Gateway resources by pool and domain, not site count.
+	SharedRouting        bool                       `json:"shared_routing"`
+	ReconcileConcurrency int                        `json:"reconcile_concurrency"`
+	RepositoryProviders  []WorkerRepositoryProvider `json:"repository_providers"`
+	Namespace            string                     `json:"namespace"`
+	BuilderImage         string                     `json:"builder_image"`
+	BuilderPullPolicy    string                     `json:"builder_pull_policy"`
 	// BuilderRuntimeClass selects an optional Kubernetes RuntimeClass for
 	// untrusted project builds (for example gVisor or Kata Containers).
 	BuilderRuntimeClass string `json:"builder_runtime_class"`
@@ -154,6 +157,16 @@ type WorkerAssetsConfig struct {
 }
 
 func (c *WorkersConfig) validate() error {
+	if c == nil {
+		return nil
+	}
+	if c.ReconcileConcurrency == 0 {
+		c.ReconcileConcurrency = 8
+	}
+	if c.ReconcileConcurrency < 1 || c.ReconcileConcurrency > 64 {
+		return fmt.Errorf("reconcile_concurrency must be between 1 and 64")
+	}
+
 	if c == nil {
 		return nil
 	}
@@ -989,20 +1002,18 @@ func activeWorkerPlacement(state *WorkerState, service string) (WorkerPlacement,
 }
 
 func workerServiceAvailableInPool(state *WorkerState, service, pool string) bool {
-	for _, placement := range state.Placements {
-		if placement.Service == service && placement.Pool == pool &&
-			(placement.State == "preparing" || placement.State == "ready" || placement.State == "active") {
-			return true
-		}
+	if state == nil {
+		return false
 	}
-	return false
+	placement, ok := state.Placements[workerPlacementKey(service, pool)]
+	return ok && (placement.State == "preparing" || placement.State == "ready" || placement.State == "active")
 }
 
 // syncEnvironmentHosts recomputes an environment's Hosts from the service's
 // domain selection. Every write path funnels through it so persisted hosts, the
 // edge projection and the HTTPRoutes cannot drift apart. Domains that no longer
 // exist in the catalog are dropped.
-func (s *Server) syncEnvironmentHosts(env *WorkerEnvironment, organization, service string, serviceDomains []string) {
+func (s *Server) syncEnvironmentHosts(env *WorkerEnvironment, organization, service string, serviceDomains []string, profiles ...string) {
 	if s.Config.Workers == nil || env == nil {
 		return
 	}
@@ -1020,7 +1031,21 @@ func (s *Server) syncEnvironmentHosts(env *WorkerEnvironment, organization, serv
 		if !selected[d.ID] {
 			continue
 		}
-		host := hostFor(slug, env.Name, d.Domain)
+		suffix := d.Domain
+		if c.SharedRouting {
+			profile := c.defaultNetworkProfile().ID
+			if len(profiles) > 0 {
+				profile = profiles[0]
+			}
+			if len(profiles) > 1 && profiles[1] != "" {
+				suffix = c.poolHostSuffix(profiles[1], d.Domain)
+			} else if pool, ok := c.selectPoolForService(profile, service); ok {
+				suffix = c.poolHostSuffix(pool.ID, d.Domain)
+			} else {
+				continue
+			}
+		}
+		host := hostFor(slug, env.Name, suffix)
 		if host == "" {
 			continue
 		}
@@ -1038,7 +1063,7 @@ func (s *Server) syncServiceHosts(ws *WorkerService) []string {
 	}
 	ws.Domains = s.syncServiceDomains(*ws)
 	for name, env := range ws.Environments {
-		s.syncEnvironmentHosts(&env, ws.Organization, ws.Service, ws.Domains)
+		s.syncEnvironmentHosts(&env, ws.Organization, ws.Service, ws.Domains, ws.NetworkProfile)
 		ws.Environments[name] = env
 	}
 	return ws.Domains
@@ -1236,4 +1261,21 @@ func workerVariablesValid(vars map[string]string) bool {
 		size += len(v)
 	}
 	return size <= 16<<10
+}
+
+func (c *WorkersConfig) poolHostSuffix(pool, domain string) string {
+	if !c.SharedRouting {
+		return domain
+	}
+	return "p-" + digest(pool)[:10] + "." + domain
+}
+
+func (c *WorkersConfig) servicePool(state *WorkerState, service WorkerService) string {
+	if p, ok := activeWorkerPlacement(state, service.Service); ok && p.NetworkProfile == service.NetworkProfile {
+		return p.Pool
+	}
+	if p, ok := c.selectPoolForService(service.NetworkProfile, service.Service); ok {
+		return p.ID
+	}
+	return ""
 }

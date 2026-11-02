@@ -33,6 +33,16 @@ for task_proxy_name in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no
   fi
 done
 mkdir -p deploy/workers-kind/generated
+# The verification image serves the same exported static console as OSS.
+if [[ -d node_modules ]]; then npm run build; fi
+if [[ -f dist/console/index.html ]]; then
+  mkdir -p deploy/workers-kind/generated/console
+  cp -R dist/console/. deploy/workers-kind/generated/console/
+fi
+if [[ ! -f deploy/workers-kind/generated/console/index.html ]]; then
+  echo "Build the static console with npm ci && npm run build before deployment" >&2
+  exit 1
+fi
 if ! command -v openssl >/dev/null; then
   echo "OpenSSL is required to create the local Git fixture certificate" >&2
   exit 1

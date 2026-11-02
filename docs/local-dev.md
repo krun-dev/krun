@@ -23,6 +23,8 @@
 - 集群里只保留 `runtime-default`、不接业务 Gateway 的 `runtime-validator-default` 和 kgateway；旧的 backend/postgres/minio/tester deployment 已 scale 到 0。
 - 业务 Worker 的 host 仍然是 `w-xxx-<env>.workers.test`；nginx 把外网域名改写成它。
 
+共享网关模式的 host 多一层 `p-<pool-hash>` 标签；启用 `workers.shared_routing` 时需同步配置对应 DNS / nginx / TLS。已有未启用配置可保持旧地址，完整说明见 [百万站点改造](performance-scaling.md)。
+
 ## 唯一配置
 
 `.data/dev.yaml` 是唯一的本地开发配置，已被 `git` 忽略。不要再创建 `config/development.yaml`、`.data/development-*.yaml`、`.data/sso-local.yaml` 之类的变体；需要改端口、数据库、Worker 参数或 SSO 来源时直接改这一份。

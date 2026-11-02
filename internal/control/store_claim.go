@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -42,7 +43,7 @@ func (s *Store) claimBuild(ctx context.Context, id, replica string) (bool, error
 		return true, nil
 	}
 	tag, err := s.pool.Exec(ctx, `UPDATE krun_worker_builds
-		SET state='building', claimed_by=$2, claimed_at=now()
+		SET state='building', claimed_by=$2, claimed_at=now(), started_at=COALESCE(started_at,now())
 		WHERE build_id=$1 AND (
 			state='queued'
 			OR (state IN ('fetching','building') AND (
@@ -218,7 +219,7 @@ func (s *Store) claimOperation(ctx context.Context, id, replica string) (bool, e
 		return true, nil
 	}
 	tag, err := s.pool.Exec(ctx, `UPDATE krun_worker_operations
-		SET state='validating', claimed_by=$2, claimed_at=now()
+		SET state='validating', claimed_by=$2, claimed_at=now(), started_at=COALESCE(started_at,now())
 		WHERE operation_id=$1 AND state='queued'`, id, replica)
 	if err != nil {
 		return false, err
@@ -680,6 +681,8 @@ func (s *Store) setBuildState(ctx context.Context, id, from, to string) error {
 // cycle. Both queries use partial indexes, so an idle control plane scans no
 // rows instead of deserializing a whole document.
 func (s *Store) pendingWork(ctx context.Context, limit int) (WorkerState, error) {
+	replica, _ := ctx.Value(workerQueueReplicaKey{}).(string)
+
 	state := WorkerState{
 		Builds:           map[string]WorkerBuild{},
 		BuildPrivate:     map[string]WorkerBuildPrivate{},
@@ -698,8 +701,8 @@ func (s *Store) pendingWork(ctx context.Context, limit int) (WorkerState, error)
 	}
 	rows, err := s.pool.Query(ctx, `SELECT operation_id, kind, org_id, service_id, env_name, state, build_id, release_id, expected_revision, config_revision, edge_revision, release_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at
 		FROM krun_worker_operations
-		WHERE state NOT IN ('succeeded','failed','available','superseded')
-		ORDER BY created_at LIMIT $1`, limit)
+		WHERE state NOT IN ('succeeded','failed','available','superseded') AND reconcile_after<=now() AND (state IN ('queued','committed') OR claimed_by=$2 OR claimed_at IS NULL OR claimed_at<now()-'60 seconds'::interval)
+		ORDER BY reconcile_after,created_at LIMIT $1`, limit, replica)
 	if err != nil {
 		return state, err
 	}
@@ -714,8 +717,8 @@ func (s *Store) pendingWork(ctx context.Context, limit int) (WorkerState, error)
 	}
 	rows, err = s.pool.Query(ctx, `SELECT build_id, org_id, service_id, env_name, state, entrypoint, source_digest, profile, compatibility_date, compatibility_flags, job, artifact_id, error, repository, assets, created_at, finished_at, claimed_by, claimed_at
 		FROM krun_worker_builds
-		WHERE state NOT IN ('succeeded','failed')
-		ORDER BY created_at LIMIT $1`, limit)
+		WHERE state NOT IN ('succeeded','failed') AND reconcile_after<=now() AND (state='queued' OR claimed_by=$2 OR claimed_at IS NULL OR claimed_at<now()-'60 seconds'::interval)
+		ORDER BY reconcile_after,created_at LIMIT $1`, limit, replica)
 	if err != nil {
 		return state, err
 	}
@@ -922,4 +925,38 @@ func scanBuilds(rows pgx.Rows) ([]WorkerBuild, error) {
 		out = append(out, b)
 	}
 	return out, rows.Err()
+}
+
+type workerQueueReplicaKey struct{}
+
+// Rescheduling rotates unfinished tasks behind new arrivals instead of keeping
+// the oldest 100 as a global admission window shared by every replica.
+func (s *Store) scheduleWorkerRetry(ctx context.Context, kind, id string) error {
+	if s.pool == nil {
+		return nil
+	}
+	table, column := "krun_worker_builds", "build_id"
+	if kind == "operation" {
+		table, column = "krun_worker_operations", "operation_id"
+	}
+	_, err := s.pool.Exec(ctx, `UPDATE `+table+` SET reconcile_after=now()+'2 seconds'::interval WHERE `+column+`=$1`, id)
+	return err
+}
+func (s *Store) workerExecutionStarted(ctx context.Context, kind, id string, fallback time.Time) (time.Time, error) {
+	if s.pool == nil {
+		return fallback, nil
+	}
+	table, column := "krun_worker_builds", "build_id"
+	if kind == "operation" {
+		table, column = "krun_worker_operations", "operation_id"
+	}
+	var started *time.Time
+	err := s.pool.QueryRow(ctx, `SELECT started_at FROM `+table+` WHERE `+column+`=$1`, id).Scan(&started)
+	if err != nil {
+		return fallback, err
+	}
+	if started == nil {
+		return now(), nil
+	}
+	return *started, nil
 }

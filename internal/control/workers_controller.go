@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/minio/minio-go/v7"
+	"golang.org/x/sync/singleflight"
 )
 
 // workerPutObject is the narrow object-write seam used by source bundles and
@@ -39,8 +40,9 @@ type workersController struct {
 	http      *http.Client
 	// Parsed asset manifests are immutable per artifact; cache them so presigning
 	// a single file does not re-download the archive.
-	assetMu    sync.RWMutex
-	assetCache map[string]workerCachedAssets
+	assetFlights singleflight.Group
+	assetMu      sync.RWMutex
+	assetCache   map[string]workerCachedAssets
 	// Edge config publication is coordinated by a durable revision CAS; every
 	// replica may race without electing a process-wide leader.
 	configMu       sync.Mutex
@@ -58,7 +60,10 @@ type workersController struct {
 	routingTopology           map[string]workerRoutingService
 	routingTopologyGeneration int64
 	routingTopologyLoaded     bool
-	lastGC                    time.Time
+	routingReady              map[string]bool
+	routingChecked            time.Time
+	lastRouteGeneration       int64
+	objectGCAfter             map[string]string
 	// Local build executor state for builder_mode: local.
 	localMu     sync.Mutex
 	localBuilds map[string]*workerLocalBuild
@@ -72,6 +77,7 @@ type workersController struct {
 type workerLocalBuild struct{ Running bool }
 
 type workerCachedAssets struct {
+	Used   time.Time
 	Config *WorkerAssetsConfig
 	Files  []workerManifestFile
 }
@@ -113,7 +119,14 @@ func workerReplicaID() string {
 // but resolve() looks the service up in krun_resources, which is Workers.
 func (w *workersController) authorizeActor(ctx context.Context, actor WorkerActor, service, env, action string) (error, error) {
 	var denied error
-	err := w.server.Store.View(ctx, PartitionAll, func(st *State) error {
+	ctx, err := w.server.Store.actorScope(ctx, actor, service)
+	if err != nil {
+		if _, ok := err.(*APIError); ok {
+			return err, nil
+		}
+		return nil, err
+	}
+	err = w.server.Store.View(ctx, PartitionIAM, func(st *State) error {
 		denied = w.server.workerAuthorizeActor(st, actor, service, env, action)
 		return nil
 	})
@@ -130,6 +143,25 @@ func (w *workersController) putBytes(ctx context.Context, key string, data []byt
 }
 
 func (w *workersController) run(ctx context.Context) {
+	gcDone := make(chan struct{})
+	go func() {
+		defer close(gcDone)
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cycle, cancel := context.WithTimeout(ctx, 8*time.Second)
+				if err := w.collectWorkerObjects(cycle); err != nil && ctx.Err() == nil {
+					fmt.Println("workers cleanup:", err)
+				}
+				cancel()
+			}
+		}
+	}()
+	defer func() { <-gcDone }()
 	w.lifecycle = ctx
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -165,14 +197,7 @@ func (w *workersController) reconcile(ctx context.Context) error {
 	if _, e := w.publishConfig(ctx); e != nil {
 		failures = append(failures, e)
 	}
-	if w.lastGC.IsZero() || now().Sub(w.lastGC) >= time.Minute {
-		// Rate-limit even failed attempts; an object-store outage must not turn
-		// the one-second reconcile loop into a tight remote retry loop.
-		w.lastGC = now()
-		if e := w.collectWorkerObjects(ctx); e != nil {
-			failures = append(failures, e)
-		}
-	}
+
 	// The route reconciler repairs Kubernetes every cycle, but its desired
 	// topology changes far less often. Keep the compact read model behind the
 	// same durable generation used by config publication.
@@ -181,7 +206,7 @@ func (w *workersController) reconcile(ctx context.Context) error {
 	if e != nil {
 		return e
 	}
-	if !w.routingTopologyLoaded || generation < 0 || generation != w.routingTopologyGeneration {
+	if !w.config.SharedRouting && (!w.routingTopologyLoaded || generation < 0 || generation != w.routingTopologyGeneration) {
 		topology, generation, e = w.server.Store.WorkerRoutingTopology(ctx)
 		if e != nil {
 			return e
@@ -190,7 +215,7 @@ func (w *workersController) reconcile(ctx context.Context) error {
 		w.routingTopologyGeneration = generation
 		w.routingTopologyLoaded = generation >= 0
 	}
-	pending, e := w.server.Store.pendingWork(ctx, 100)
+	pending, e := w.server.Store.pendingWork(context.WithValue(ctx, workerQueueReplicaKey{}, w.replica), 100)
 	if e != nil {
 		return e
 	}
@@ -199,23 +224,102 @@ func (w *workersController) reconcile(ctx context.Context) error {
 		builds = append(builds, b)
 	}
 	sort.Slice(builds, func(i, j int) bool { return builds[i].Created.Before(builds[j].Created) })
+	limit := w.config.ReconcileConcurrency
+	if limit < 1 {
+		limit = 8
+	}
+	work := make(chan func() error, len(builds)+len(pending.Operations))
 	for _, b := range builds {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		claimed, claimErr := w.server.Store.claimBuild(ctx, b.ID, w.replica)
-		if claimErr != nil {
-			failures = append(failures, claimErr)
-			continue
-		}
-		if !claimed {
-			continue
-		}
-		b.State = "building"
-		if e = w.processClaimedBuild(ctx, b, pending.BuildPrivate[b.ID]); e != nil {
-			failures = append(failures, e)
+		b := b
+		work <- func() error {
+			claimed, err := w.server.Store.claimBuild(ctx, b.ID, w.replica)
+			if err != nil || !claimed {
+				return err
+			}
+			if err = w.server.Store.scheduleWorkerRetry(ctx, "build", b.ID); err != nil {
+				return err
+			}
+			b.State = "building"
+			return w.processClaimedBuild(ctx, b, pending.BuildPrivate[b.ID])
 		}
 	}
+
+	routesReady := w.routingReady
+	routeInterval := 30 * time.Second
+	for _, ready := range routesReady {
+		if !ready {
+			routeInterval = time.Second
+			break
+		}
+	}
+	if routesReady == nil || w.routingChecked.IsZero() || now().Sub(w.routingChecked) >= routeInterval || generation != w.lastRouteGeneration {
+		var routeErr error
+		routesReady, routeErr = w.reconcileRoutes(ctx, topology)
+		if routeErr != nil {
+			failures = append(failures, routeErr)
+		} else {
+			w.routingReady = routesReady
+			w.routingChecked = now()
+			w.lastRouteGeneration = generation
+		}
+	}
+
+	ops := make([]WorkerOperation, 0, len(pending.Operations))
+	for _, op := range pending.Operations {
+		ops = append(ops, op)
+	}
+	sort.Slice(ops, func(i, j int) bool { return ops[i].Created.Before(ops[j].Created) })
+	for _, op := range ops {
+		op := op
+		work <- func() error {
+			if err := w.server.Store.scheduleWorkerRetry(ctx, "operation", op.ID); err != nil {
+				return err
+			}
+			ready := routesReady[op.Service]
+			if w.config.SharedRouting {
+				if p, ok := activeWorkerPlacement(&pending, op.Service); ok {
+					ready = routesReady["pool:"+p.Pool]
+				}
+			}
+			return w.processOperation(ctx, op, pending, ready)
+		}
+	}
+	close(work)
+	var wg sync.WaitGroup
+	errs := make(chan error, len(builds)+len(ops))
+	for i := 0; i < limit; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for task := range work {
+				if ctx.Err() != nil {
+					errs <- ctx.Err()
+					continue
+				}
+				if err := task(); err != nil {
+					errs <- err
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		failures = append(failures, err)
+	}
+
+	return errors.Join(failures...)
+}
+
+// The namespace inventory is read once, with pagination, and reused for every
+// stale-route check. Route repair is independent of the one-second work queue.
+func (w *workersController) reconcileRoutes(ctx context.Context, topology map[string]workerRoutingService) (map[string]bool, error) {
+	var failures []error
+	names, err := w.kube.listRoutes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ctx = context.WithValue(ctx, workerRouteInventoryKey{}, names)
 	// One shared static route per domain; it does not scale with services.
 	// Each route lives on the Gateway instance that domain is bound to. Assets
 	// are written to both the public and internal object prefixes. The explicit
@@ -244,61 +348,85 @@ func (w *workersController) reconcile(ctx context.Context) error {
 			}
 		}
 	}
-	// One HTTPRoute per (service, Gateway instance). Hosts are grouped by the
-	// Gateway their domain is bound to, so routes never carry a hostname the
-	// instance is not meant to serve.
 	routesReady := map[string]bool{}
 	desiredRoutes := map[string]bool{}
 	for name := range desiredStatic {
 		desiredRoutes[name] = true
 	}
-	for _, routing := range topology {
-		service := w.config.normalizeServiceNetwork(routing.Service)
-		if !w.config.poolAllowedForProfile(service.NetworkProfile, routing.Pool) {
-			failures = append(failures, fmt.Errorf("worker service %s placement %q is incompatible with network profile %q", service.Service, routing.Pool, service.NetworkProfile))
-			routesReady[service.Service] = false
-			continue
-		}
-		pool, ok := w.config.runtimePool(routing.Pool)
-		if !ok {
-			failures = append(failures, fmt.Errorf("worker service %s references unknown runtime pool %q", service.Service, routing.Pool))
-			routesReady[service.Service] = false
-			continue
-		}
-		hostsByGateway := map[string][]string{}
-		selectedDomains := service.Domains
-		for _, env := range service.Environments {
-			if !env.Enabled {
-				continue
-			}
-			// Hosts are derived from the domain catalog, never persisted, so a
-			// catalog change cannot leave stale hosts behind.
-			for _, id := range selectedDomains {
-				d, ok := w.config.domain(id)
+	if w.config.SharedRouting {
+		for _, pool := range w.config.configuredRuntimePools() {
+			ready := true
+			for _, domain := range w.config.Domains {
+				if !runtimePoolHasAccess(pool, domain.Access) {
+					continue
+				}
+				gateway, ok := w.config.gateway(domain.Gateway)
 				if !ok {
 					continue
 				}
-				host := hostFor(workerSlug(service.Organization, service.Service), env.Name, d.Domain)
-				if host == "" {
+				name := "workers-shared-" + digest(pool.ID + "/" + domain.ID)[:24]
+				desiredRoutes[name] = true
+				adopted, err := w.kube.ensureRoute(ctx, name, pool.RuntimeService, gateway, []string{"*." + w.config.poolHostSuffix(pool.ID, domain.Domain)})
+				ready = ready && adopted && err == nil
+				if err != nil {
+					failures = append(failures, err)
+				}
+			}
+			routesReady["pool:"+pool.ID] = ready
+		}
+	} else {
+		// One HTTPRoute per (service, Gateway instance). Hosts are grouped by the
+		// Gateway their domain is bound to, so routes never carry a hostname the
+		// instance is not meant to serve.
+		for _, routing := range topology {
+			service := w.config.normalizeServiceNetwork(routing.Service)
+			if !w.config.poolAllowedForProfile(service.NetworkProfile, routing.Pool) {
+				failures = append(failures, fmt.Errorf("worker service %s placement %q is incompatible with network profile %q", service.Service, routing.Pool, service.NetworkProfile))
+				routesReady[service.Service] = false
+				continue
+			}
+			pool, ok := w.config.runtimePool(routing.Pool)
+			if !ok {
+				failures = append(failures, fmt.Errorf("worker service %s references unknown runtime pool %q", service.Service, routing.Pool))
+				routesReady[service.Service] = false
+				continue
+			}
+			hostsByGateway := map[string][]string{}
+			selectedDomains := service.Domains
+			for _, env := range service.Environments {
+				if !env.Enabled {
 					continue
 				}
-				hostsByGateway[d.Gateway] = append(hostsByGateway[d.Gateway], host)
+				// Hosts are derived from the domain catalog, never persisted, so a
+				// catalog change cannot leave stale hosts behind.
+				for _, id := range selectedDomains {
+					d, ok := w.config.domain(id)
+					if !ok {
+						continue
+					}
+					host := hostFor(workerSlug(service.Organization, service.Service), env.Name, d.Domain)
+					if host == "" {
+						continue
+					}
+					hostsByGateway[d.Gateway] = append(hostsByGateway[d.Gateway], host)
+				}
 			}
-		}
-		baseName := "workers-" + digest(service.Organization + "/" + service.Service)[:24]
-		for i, gateway := range w.config.Gateways {
-			name := baseName
-			if i > 0 {
-				name += "-" + gateway.ID
+			baseName := "workers-" + digest(service.Organization + "/" + service.Service)[:24]
+			for i, gateway := range w.config.Gateways {
+				name := baseName
+				if i > 0 {
+					name += "-" + gateway.ID
+				}
+				desiredRoutes[name] = true
 			}
-			desiredRoutes[name] = true
-		}
-		ready, routeError := w.kube.ensureRoutes(ctx, w.config, baseName, pool.RuntimeService, hostsByGateway)
-		routesReady[service.Service] = ready && routeError == nil
-		if routeError != nil {
-			failures = append(failures, routeError)
+			ready, routeError := w.kube.ensureRoutes(ctx, w.config, baseName, pool.RuntimeService, hostsByGateway)
+			routesReady[service.Service] = ready && routeError == nil
+			if routeError != nil {
+				failures = append(failures, routeError)
+			}
 		}
 	}
+
 	// A service that disappeared from IAM is not visited above. Remove its old
 	// HTTPRoutes explicitly rather than waiting for a future service write.
 	staleRoutes, staleErr := staleWorkerRoutes(ctx, w.kube, "workers-", desiredRoutes)
@@ -311,20 +439,7 @@ func (w *workersController) reconcile(ctx context.Context) error {
 			}
 		}
 	}
-	ops := make([]WorkerOperation, 0, len(pending.Operations))
-	for _, op := range pending.Operations {
-		ops = append(ops, op)
-	}
-	sort.Slice(ops, func(i, j int) bool { return ops[i].Created.Before(ops[j].Created) })
-	for _, op := range ops {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if e = w.processOperation(ctx, op, pending, routesReady[op.Service]); e != nil {
-			failures = append(failures, e)
-		}
-	}
-	return errors.Join(failures...)
+	return routesReady, errors.Join(failures...)
 }
 
 func (w *workersController) processClaimedBuild(ctx context.Context, b WorkerBuild, private WorkerBuildPrivate) error {
@@ -381,7 +496,15 @@ func (w *workersController) processBuild(ctx context.Context, b WorkerBuild, pri
 	if denied != nil {
 		return w.failBuild(ctx, b.ID, "Build permission revoked", "")
 	}
-	if now().Sub(b.Created) > 180*time.Second {
+	started, startErr := w.server.Store.workerExecutionStarted(ctx, "build", b.ID, b.Created)
+	if startErr != nil {
+		return startErr
+	}
+	timeout := w.config.BuilderTimeoutSeconds
+	if timeout == 0 {
+		timeout = 600
+	}
+	if now().Sub(started) > time.Duration(timeout)*time.Second {
 		log := ""
 		if w.config.BuilderMode != "local" {
 			log = w.kube.buildLog(ctx, b.Job)
@@ -508,7 +631,11 @@ func workerMemberIDs(pods []workerPod) string {
 	return strings.Join(ids, ",")
 }
 func (w *workersController) processOperation(ctx context.Context, op WorkerOperation, state WorkerState, routesReady bool) error {
-	if op.State != "committed" && now().Sub(op.Created) > 180*time.Second {
+	started, startErr := w.server.Store.workerExecutionStarted(ctx, "operation", op.ID, op.Created)
+	if startErr != nil {
+		return startErr
+	}
+	if op.State != "committed" && now().Sub(started) > 180*time.Second {
 		return w.failOperation(ctx, op.ID, "Candidate preparation deadline exceeded")
 	}
 	release, ok := state.Releases[op.Release]
@@ -525,9 +652,6 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 		return w.failOperation(ctx, op.ID, "Artifact unavailable")
 	}
 	if op.State != "committed" {
-		if _, e := w.artifactCode(ctx, artifact); e != nil {
-			return w.failOperation(ctx, op.ID, "Artifact validation failed: "+e.Error())
-		}
 		// Claim the queued operation; losing the race means another replica owns
 		// it and this cycle simply skips it.
 		claimed, e := w.server.Store.claimOperation(ctx, op.ID, w.replica)
@@ -542,6 +666,9 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 			if !claimed {
 				return nil
 			}
+		}
+		if _, e := w.artifactCode(ctx, artifact); e != nil {
+			return w.failOperation(ctx, op.ID, "Artifact validation failed: "+e.Error())
 		}
 		actor := state.OperationPrivate[op.ID].Actor
 		auth, e := w.authorizeActor(ctx, actor, op.Service, op.Environment, workerOperationAction(op.Kind))
@@ -630,7 +757,7 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 	// operation's acknowledgement target forward.
 	revision := int64(op.EdgeRevision)
 	if revision == 0 {
-		revision, e = w.publishConfig(ctx)
+		revision, e = w.publishConfig(context.WithValue(ctx, workerConfigPriorityKey{}, op.Service))
 		if e != nil {
 			return w.noteOperation(ctx, op.ID, "Committed; waiting for configuration publication")
 		}
