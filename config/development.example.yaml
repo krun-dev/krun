@@ -1,7 +1,7 @@
 # 本地开发配置模板。实际开发配置只有一份：.data/dev.yaml（gitignored）。
 # 从本模板复制后填写真实值：cp config/development.example.yaml .data/dev.yaml
-# 本地开发拓扑：控制面/Postgres/MinIO/builder 跑在开发机；集群只跑 runtime(workerd) + kgateway。
-# 完整的 workers: 配置见 config/example.yaml。
+# 本地开发拓扑：控制面/Postgres/MinIO/builder 跑在开发机；集群只跑 serving runtime、
+# 独立 validator workerd 与 kgateway。完整 workers: 配置见 config/example.yaml。
 listen: 127.0.0.1:8080
 public_url: http://127.0.0.1:8080
 development: true

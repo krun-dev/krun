@@ -74,16 +74,19 @@ type WorkersConfig struct {
 }
 
 type WorkerRuntimePool struct {
-	ID                    string            `json:"id"`
-	Access                []string          `json:"access"`
-	Labels                map[string]string `json:"labels"`
-	PrivateEgress         string            `json:"private_egress"`
-	PublicEgress          string            `json:"public_egress"`
-	RuntimeService        string            `json:"runtime_service"`
-	RuntimeManagementBase string            `json:"runtime_management_base"`
-	RuntimeToken          string            `json:"runtime_token"`
-	ManagementToken       string            `json:"management_token"`
-	Default               bool              `json:"default"`
+	ID             string            `json:"id"`
+	Access         []string          `json:"access"`
+	Labels         map[string]string `json:"labels"`
+	PrivateEgress  string            `json:"private_egress"`
+	PublicEgress   string            `json:"public_egress"`
+	RuntimeService string            `json:"runtime_service"`
+	// ValidatorService selects a dedicated workerd Deployment that loads release
+	// candidates before commit. It must not be the serving RuntimeService.
+	ValidatorService        string `json:"validator_service"`
+	ValidatorManagementBase string `json:"validator_management_base"`
+	RuntimeToken            string `json:"runtime_token"`
+	ManagementToken         string `json:"management_token"`
+	Default                 bool   `json:"default"`
 }
 
 type WorkerNetworkRequirements struct {
@@ -313,13 +316,16 @@ func (c *WorkersConfig) validateRuntimePools(dns *regexp.Regexp) error {
 	defaults := 0
 	for i := range c.RuntimePools {
 		pool := &c.RuntimePools[i]
-		if !slug.MatchString(pool.ID) || !dns.MatchString(pool.RuntimeService) {
+		if !slug.MatchString(pool.ID) || !dns.MatchString(pool.RuntimeService) || !dns.MatchString(pool.ValidatorService) {
 			return fmt.Errorf("invalid Workers runtime pool")
 		}
-		if seenIDs[pool.ID] || seenServices[pool.RuntimeService] {
+		if pool.RuntimeService == pool.ValidatorService {
+			return fmt.Errorf("Workers runtime pool validator service must be distinct from the serving runtime service")
+		}
+		if seenIDs[pool.ID] || seenServices[pool.RuntimeService] || seenServices[pool.ValidatorService] {
 			return fmt.Errorf("duplicate Workers runtime pool id or service")
 		}
-		seenIDs[pool.ID], seenServices[pool.RuntimeService] = true, true
+		seenIDs[pool.ID], seenServices[pool.RuntimeService], seenServices[pool.ValidatorService] = true, true, true
 		access, err := normalizeWorkerAccess(pool.Access)
 		if err != nil {
 			return err
@@ -341,12 +347,12 @@ func (c *WorkersConfig) validateRuntimePools(dns *regexp.Regexp) error {
 		}
 		seenRuntimeTokens[pool.RuntimeToken] = true
 		seenManagementTokens[pool.ManagementToken] = true
-		if pool.RuntimeManagementBase != "" {
-			u, err := url.Parse(pool.RuntimeManagementBase)
+		if pool.ValidatorManagementBase != "" {
+			u, err := url.Parse(pool.ValidatorManagementBase)
 			if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
-				return fmt.Errorf("invalid Workers runtime pool management base")
+				return fmt.Errorf("invalid Workers runtime pool validator management base")
 			}
-			pool.RuntimeManagementBase = strings.TrimSuffix(pool.RuntimeManagementBase, "/")
+			pool.ValidatorManagementBase = strings.TrimSuffix(pool.ValidatorManagementBase, "/")
 		}
 		if pool.Default {
 			defaults++

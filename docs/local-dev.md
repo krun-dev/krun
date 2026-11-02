@@ -1,25 +1,26 @@
 # 本地开发环境（local-first）
 
-只有一套开发环境。目标是把能跑在开发机上的组件都跑在开发机上，集群只保留无法本地替代的 runtime（workerd）和 kgateway。
+只有一套开发环境。目标是把能跑在开发机上的组件都跑在开发机上，集群只保留无法本地替代的 serving runtime、候选 validator（均为 workerd）和 kgateway。
 
 ## 拓扑
 
 ```text
 开发机                                远端主机 <dev-host>
 ├─ krun-server (Go)  :8080             ├─ nginx 80/443
-├─ PostgreSQL        :25432            └─ kind: runtime-default + kgateway
+├─ PostgreSQL        :25432            └─ kind: runtime-default + runtime-validator-default + kgateway
 ├─ MinIO             :9000
 ├─ builder (node)    本地子进程
 └─ Vite              :5173
         │                                     │
         ├─ 38443 → kind API                   │
-        ├─ 38083 → runtime-default:8083  ─────┘
-        └─ 38080 → workers-mvp:8080
+        ├─ 38084 → runtime-validator-default:8083 ─┘
+        ├─ 38080 → workers-mvp:8080
+        └─ 38081 → workers-public:8080
 ```
 
 - 控制面、Postgres、MinIO、builder、前端都在开发机；改后端或 builder 不需要构建镜像。
 - 集群内通过 selectorless `static-assets` Service/EndpointSlice 和开发机 IP 访问 MinIO；没有 MinIO Pod，也没有对象存储端口转发。
-- 集群里只保留 `runtime-default`（workerd）和 kgateway；旧的 backend/postgres/minio/tester deployment 已 scale 到 0。
+- 集群里只保留 `runtime-default`、不接业务 Gateway 的 `runtime-validator-default` 和 kgateway；旧的 backend/postgres/minio/tester deployment 已 scale 到 0。
 - 业务 Worker 的 host 仍然是 `w-xxx-<env>.workers.test`；nginx 把外网域名改写成它。
 
 ## 唯一配置
@@ -33,7 +34,8 @@
 - `builder_mode: local`：builder 在本机以 `node workers/builder/build-worker.mjs` 运行，不创建 Kubernetes Job。Wrangler/custom build 会执行仓库代码，因此此模式只用于开发者自己的可信仓库；面向不可信租户必须使用 Kubernetes builder，并建议配置 `builder_runtime_class` 为 gVisor/Kata 等强隔离运行时。
 - `gateways` / `domains`：网关实例与域名清单。每个域名绑定一个网关，并带一个只用于展示的 `label`；服务从中选择要用哪些域名。
 - 网关的 `base`（如 `http://127.0.0.1:38080`）：控制台 invoke 经 SSH 隧道打到对应的集群网关实例。
-- `runtime_pools[].runtime_management_base: http://127.0.0.1:38083`：候选验证和运行时管理走隧道。
+- `runtime_pools[].validator_service: runtime-validator-default`：候选只在独立 validator 中加载，不进入 serving runtime。
+- `runtime_pools[].validator_management_base: http://127.0.0.1:38084`：local-first 控制面通过隧道访问 validator；生产集群内通常留空，直接访问 Pod IP。
 - `s3_endpoint` 和 `s3_builder_endpoint` 指向开发机上的 MinIO（通常是 `http://127.0.0.1:9000`）；本地 builder 使用同一地址。
 - `s3_runtime_endpoint` 是 runtime 下载制品和静态文件所见的地址。local-first 应设为
   `http://<minio-host>:9000`；该开发机地址由 `dev-runtime-config.sh` 同时加入 workerd
@@ -78,13 +80,13 @@ MinIO 由开发者在本机独立启动，凭据只放 `.data/dev.yaml`；`dev-u
 
 ## Runtime 镜像与集群配置
 
-runtime 是唯一需要镜像的组件。修改 `workers/runtime/` 后执行：
+serving runtime 与 validator 共用同一个 runtime 镜像。修改 `workers/runtime/` 后执行：
 
 ```bash
 ./scripts/dev-runtime-image.sh
 ```
 
-它会构建 `krun-worker-runtime:dev`、加载到 kind、更新 `runtime-default` 并等待 rollout。
+它会构建 `krun-worker-runtime:dev`、加载到 kind、更新 `runtime-default` 与 `runtime-validator-default` 并等待 rollout。
 
 如果集群重建，或开发机/MinIO 地址变化，重新应用 runtime 配置：
 
@@ -98,13 +100,13 @@ runtime 是唯一需要镜像的组件。修改 `workers/runtime/` 后执行：
 KRUN_DEV_CONTROL_HOST=<new-control-host> ./scripts/dev-runtime-config.sh
 ```
 
-该脚本会写入 `runtime-config`（`PLATFORM`、`CONFIG_BASE`、开发机 MinIO 的 `storage`
-allow），创建供 Gateway 静态域使用、指向本地 MinIO 的 `static-assets`
-Service/EndpointSlice，更新 runtime NetworkPolicy，并把 in-cluster 的
+该脚本会写入 `runtime-config` 和不启动配置跟随/Ack 的 `validator-config`，确保独立
+validator Deployment/Service 存在，创建供 Gateway 静态域使用、指向本地 MinIO 的
+`static-assets` Service/EndpointSlice，更新 runtime/validator NetworkPolicy，并把 in-cluster 的
 backend/postgres/minio/tester 缩到 0。业务 runtime 下载制品时使用
 `s3_runtime_endpoint` 的开发机地址，不经过 `static-assets` Service。
 
-runtime rollout 会让本地 38083/38080 的 port-forward 失效；`./scripts/dev-up.sh` 会探测 `/ready` 并自动重建隧道。
+validator 或 Gateway rollout 会让本地 38084/38080/38081 的 port-forward 失效；`./scripts/dev-up.sh` 会探测 `/ready` 并自动重建隧道。
 
 ## 外网域名
 

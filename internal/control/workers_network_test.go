@@ -38,7 +38,7 @@ func catalogConfig() *WorkersConfig {
 		BuilderScript: "workers/builder/build-worker.mjs",
 		RuntimePools: []WorkerRuntimePool{{
 			ID: "default", Access: []string{"public", "private"}, PrivateEgress: "direct", PublicEgress: "direct",
-			RuntimeService: "runtime-default", RuntimeToken: strings.Repeat("r", 24),
+			RuntimeService: "runtime-default", ValidatorService: "runtime-validator-default", RuntimeToken: strings.Repeat("r", 24),
 			ManagementToken: strings.Repeat("m", 24), Default: true,
 		}},
 		NetworkProfiles: []WorkerNetworkProfile{{
@@ -90,11 +90,24 @@ func TestCatalogValidationAndDefaults(t *testing.T) {
 	}
 }
 
+func TestRuntimePoolRequiresIsolatedValidatorService(t *testing.T) {
+	missing := catalogConfig()
+	missing.RuntimePools[0].ValidatorService = ""
+	if err := missing.validate(); err == nil {
+		t.Fatal("runtime pool without validator service was accepted")
+	}
+	same := catalogConfig()
+	same.RuntimePools[0].ValidatorService = same.RuntimePools[0].RuntimeService
+	if err := same.validate(); err == nil || !strings.Contains(err.Error(), "distinct") {
+		t.Fatalf("serving runtime accepted as validator: %v", err)
+	}
+}
+
 func multiPoolCatalogConfig() *WorkersConfig {
 	c := catalogConfig()
 	c.RuntimePools = []WorkerRuntimePool{
-		{ID: "private-a", Access: []string{"private"}, Labels: map[string]string{"zone": "internal"}, RuntimeService: "runtime-private", RuntimeToken: strings.Repeat("p", 24), ManagementToken: strings.Repeat("q", 24), Default: true},
-		{ID: "public-b", Access: []string{"public"}, Labels: map[string]string{"zone": "external"}, RuntimeService: "runtime-public", RuntimeToken: strings.Repeat("u", 24), ManagementToken: strings.Repeat("v", 24)},
+		{ID: "private-a", Access: []string{"private"}, Labels: map[string]string{"zone": "internal"}, RuntimeService: "runtime-private", ValidatorService: "validator-private", RuntimeToken: strings.Repeat("p", 24), ManagementToken: strings.Repeat("q", 24), Default: true},
+		{ID: "public-b", Access: []string{"public"}, Labels: map[string]string{"zone": "external"}, RuntimeService: "runtime-public", ValidatorService: "validator-public", RuntimeToken: strings.Repeat("u", 24), ManagementToken: strings.Repeat("v", 24)},
 	}
 	c.NetworkProfiles = []WorkerNetworkProfile{
 		{ID: "internal-service", Name: "Internal service", Description: "Reachable from the deployment's internal network.", DomainSelector: map[string]string{"exposure": "internal"}, PoolSelector: map[string]string{"zone": "internal"}, Requirements: WorkerNetworkRequirements{Ingress: []string{"private"}, PrivateEgress: "direct", PublicEgress: "deny"}, Default: true},
@@ -150,7 +163,7 @@ func TestRuntimePoolsExposeOnlyProductNetworkProfiles(t *testing.T) {
 
 func TestRuntimePoolsAllowMultiplePlacementsPerProfile(t *testing.T) {
 	c := multiPoolCatalogConfig()
-	c.RuntimePools = append(c.RuntimePools, WorkerRuntimePool{ID: "public-c", Access: []string{"public"}, Labels: map[string]string{"zone": "external"}, RuntimeService: "runtime-public-2", RuntimeToken: strings.Repeat("x", 24), ManagementToken: strings.Repeat("y", 24)})
+	c.RuntimePools = append(c.RuntimePools, WorkerRuntimePool{ID: "public-c", Access: []string{"public"}, Labels: map[string]string{"zone": "external"}, RuntimeService: "runtime-public-2", ValidatorService: "validator-public-2", RuntimeToken: strings.Repeat("x", 24), ManagementToken: strings.Repeat("y", 24)})
 	if err := c.validate(); err != nil {
 		t.Fatalf("multiple compatible runtime pools rejected: %v", err)
 	}
@@ -857,17 +870,26 @@ func TestProcessOperationStopsAfterCommitCASConflict(t *testing.T) {
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/pods"):
+			validator := strings.Contains(r.URL.Query().Get("labelSelector"), "role=krun-validator")
+			name, uid := "runtime-0", "runtime-pod-1"
+			if validator {
+				name, uid = "validator-0", "validator-pod-1"
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
-				"metadata": map[string]any{"name": "runtime-0", "uid": "pod-1"},
+				"metadata": map[string]any{"name": name, "uid": uid},
 				"status":   map[string]any{"podIP": "127.0.0.1", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}},
 			}}})
 		case strings.HasSuffix(r.URL.Path, "/endpointslices"):
+			uid := "runtime-pod-1"
+			if strings.Contains(r.URL.Query().Get("labelSelector"), "runtime-validator-default") {
+				uid = "validator-pod-1"
+			}
 			ready := true
 			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{"endpoints": []any{map[string]any{
-				"addresses": []string{"127.0.0.1"}, "conditions": map[string]any{"ready": ready}, "targetRef": map[string]any{"uid": "pod-1"},
+				"addresses": []string{"127.0.0.1"}, "conditions": map[string]any{"ready": ready}, "targetRef": map[string]any{"uid": uid},
 			}}}}})
 		case r.URL.Path == "/validate":
-			_ = json.NewEncoder(w).Encode(map[string]any{"pod_uid": "pod-1", "release_id": "rel-cas", "archive_sha256": code.ArchiveDigest})
+			_ = json.NewEncoder(w).Encode(map[string]any{"pod_uid": "validator-pod-1", "release_id": "rel-cas", "archive_sha256": code.ArchiveDigest})
 		default:
 			http.NotFound(w, r)
 		}
@@ -877,7 +899,7 @@ func TestProcessOperationStopsAfterCommitCASConflict(t *testing.T) {
 	c := testWorkersConfig()
 	c.S3Endpoint, c.S3BuilderEndpoint = s3Server.URL, s3Server.URL
 	c.S3Bucket, c.S3AccessKey, c.S3SecretKey, c.S3LocationID = "artifacts", "access", "secret", "test"
-	c.RuntimePools[0].RuntimeManagementBase = apiServer.URL
+	c.RuntimePools[0].ValidatorManagementBase = apiServer.URL
 	c.RuntimePools[0].ManagementToken = strings.Repeat("m", 24)
 	s.Config.Workers = c
 	s3, err := newWorkerS3(c)

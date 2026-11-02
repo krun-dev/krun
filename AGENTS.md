@@ -80,7 +80,7 @@
 
 1. `npm run build`（改前端时可 `npx vite build --watch`）产出 `dist/console/`。
 2. 让 `/api/*` 到 Go，三选一：本地 Nginx、Vite `server.proxy`、或让 Go 直接托管（`static_dir: dist`，访问 `http://127.0.0.1:8080/`）。
-3. Workers 日常开发用 **local-first**：控制面、Postgres、MinIO、builder、Vite 都在开发机；集群只保留 runtime（workerd）+ kgateway。见 [docs/local-dev.md](docs/local-dev.md) 和 `scripts/dev-up.sh`。`deploy/workers-kind` 的完整栈只用于独立 e2e，不要和 local-first 同时运行。
+3. Workers 日常开发用 **local-first**：控制面、Postgres、MinIO、builder、Vite 都在开发机；集群只保留 serving runtime、独立 validator（均为 workerd）+ kgateway。见 [docs/local-dev.md](docs/local-dev.md) 和 `scripts/dev-up.sh`。`deploy/workers-kind` 的完整栈只用于独立 e2e，不要和 local-first 同时运行。
 
 本地这些进程只在开发机上存在，不进生产、不进发布产物。
 
@@ -123,7 +123,7 @@
 ## 7. 当前状态（已核实）
 
 - 后端接口统一在 `/api/` 下，前端 `base` 为 `/`（第 1/3 节的迁移已完成）。
-- 日常开发使用 **local-first** 拓扑，见 [docs/local-dev.md](docs/local-dev.md)：控制面、Postgres、MinIO、builder、Vite 在开发机；集群只保留 runtime（workerd）+ kgateway。
+- 日常开发使用 **local-first** 拓扑，见 [docs/local-dev.md](docs/local-dev.md)：控制面、Postgres、MinIO、builder、Vite 在开发机；集群只保留 serving runtime、独立 validator（均为 workerd）+ kgateway。
 - `deploy/workers-kind` 是完整独立 e2e 环境（backend/Postgres/MinIO 都在集群里），已标注不要和 local-first 同时运行。
 - 生产 OSS + CDN 的 `/api/*` 同域转发规则仍需部署侧落地（第 2 节）。
 
@@ -136,7 +136,7 @@
 5. **提交前必须**：`make check-secrets` 通过。它会用 `.data/dev.yaml` / `.data/dev.env` 里的真实值扫描 tracked 文件，并检查私钥 / AWS key 模式；`make test` 也会执行。
 6. **配置加载只有一处**：所有运行期配置从 `LoadConfig` 进入；不要新增运行期读取非公开环境变量的开关。地址、profile、运行模式都必须显式出现在主 YAML。Workers 配置也在同一份 YAML 的 `workers:` 段，不允许独立文件或目录。
 7. **配置示例必须可加载**：`config/development.example.yaml` 和 `config/example.yaml` 由测试覆盖；示例只能使用占位符，不能写真实凭据。
-8. **dev 拓扑保持一致**：local-first；控制面/Postgres/MinIO/builder/Vite 在开发机，集群只保留 runtime + kgateway。变更拓扑时同步修改 `docs/local-dev.md` 和 `scripts/dev-*.sh`。
+8. **dev 拓扑保持一致**：local-first；控制面/Postgres/MinIO/builder/Vite 在开发机，集群只保留 serving runtime、独立 validator + kgateway。变更拓扑时同步修改 `docs/local-dev.md` 和 `scripts/dev-*.sh`。
 
 ## 9. 持久化设计约束（硬约束）
 

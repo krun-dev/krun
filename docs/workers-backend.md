@@ -17,6 +17,7 @@ sequenceDiagram
     participant A as Go 控制服务
     participant J as Kubernetes 构建 Job
     participant S as S3 制品存储
+    participant V as validator workerd
     participant W as workerd × 2
     C->>A: 上传源码，创建 Build
     A-->>C: 202 + queued Build
@@ -28,7 +29,7 @@ sequenceDiagram
     A->>A: Build succeeded，登记 Artifact
     C->>A: build_id + 环境 + expected_revision
     A-->>C: 202 + queued Operation
-    A->>W: 在单个 serving 成员上验证候选 Release（冷加载 + RPC）
+    A->>V: 在独立 validator 加载候选 Release（冷加载 + RPC）
     A->>A: CAS 提交 Release，Operation committed
     A->>A: 生成 config revision（routes + releases 的不可变投影）
     A->>S: 按 pool 写 config/pools/{pool}/snapshots/{rev}.json.gz 与 latest.json
@@ -44,7 +45,7 @@ Kubernetes、S3 和 runtime HTTP 请求均在 IAM 状态事务外进行。执行
 
 ## 构建和制品
 
-内联小 Worker 继续使用固定 `esbuild` profile；仓库构建则要求项目根目录包含 `wrangler.jsonc`、`wrangler.json` 或 `wrangler.toml`，不启用 Wrangler 的框架自动改造。控制面把完整且经过边界检查的项目目录交给 builder，固定版本 Wrangler 以 `deploy --dry-run` 完成 JS / TS、`rules`、`find_additional_modules`、`no_bundle`、Text / Data / Wasm 和已配置 Vite/adapter 项目的构建。Python、Rust、legacy Service Worker 语法以及 Cloudflare 登录、资源管理和真实 deploy 不在当前范围。详细兼容边界见 [Cloudflare Workers 构建兼容](workers-build-compatibility.md)。
+内联小 Worker 继续使用固定 `esbuild` profile；仓库构建则要求项目根目录包含 `wrangler.jsonc`、`wrangler.json` 或 `wrangler.toml`，不启用 Wrangler 的框架自动改造。控制面把完整且经过边界检查的项目目录交给 builder，固定版本 Wrangler 以 `deploy --dry-run` 完成 JS / TS、`rules`、`find_additional_modules`、`no_bundle`、Text / Data / Wasm 和已配置 Vite/adapter 项目的构建。Python、Rust、legacy Service Worker 语法以及 Cloudflare 登录、资源管理和真实 deploy 不在当前范围。详细构建边界见 [Cloudflare Workers 构建兼容](workers-build-compatibility.md)；本地已构建产物通过 Wrangler / multipart 直传的计划见 [Cloudflare Workers API 兼容规范](cloudflare-api-compatibility.md)。该兼容 API 目前尚未实现。
 
 项目必须提交且只提交一种受支持的锁文件；builder 使用镜像内固定版本的 npm、pnpm、Yarn 或 Bun 执行 frozen install，不通过 Corepack 在线下载任意工具版本。仓库模式会安装构建所需的 devDependencies，并可能执行 lifecycle/custom build，所以它本质上是租户代码执行；内联 direct 模式仍走更窄的依赖和 esbuild 路径。
 
@@ -87,14 +88,14 @@ Release（曾用名 Deployment）固定引用 Artifact、目标环境、构建 p
 
 Secret 的行为与 Cloudflare Worker 默认命令一致：`PUT`（新增或轮换）和 `DELETE` 都创建不可变 Release 并立即进入发布流程，但复用当前 Artifact，不重新构建代码。每个环境保存 name → secret version 的期望映射，每个 Release 再固定一份映射，因此轮换后仍能准确回滚。值以 AES-256-GCM 加密后入库，AAD 绑定组织、服务、环境、名称和版本；公开 API 只返回名称与创建时间。`workers.secrets_keys` 是带版本的 key ring，`secrets_active_key` 只用于新写入，仍被保留 Release 引用的旧 key 不得删除。生产 key 应由 KMS/Secret Manager 注入配置，而不是提交到仓库。
 
-发布 API 提交 `expected_revision`，防止覆盖其他发布。幂等 key 相同且请求相同返回原对象；内容不同返回 409。候选验证失败不会修改 Release。验证时核对实际 Ready Pod 与 Service EndpointSlice 的交集；提交前和确认前重新检查成员集合。
+发布 API 提交 `expected_revision`，防止覆盖其他发布。幂等 key 相同且请求相同返回原对象；内容不同返回 409。候选验证失败不会修改 Release。每个 pool 必须配置与 serving Service 不同的 `validator_service`；控制面只从该 Service 的 Ready EndpointSlice 选择带 `role=krun-validator` 的 Pod。validator 使用相同 runtime 镜像和 Release/Secret 快照，但没有业务监听 Service、Gateway 入站、配置跟随或 Ack。生产部署仍应把它放进 gVisor、Kata 或 VM 等适合不可信代码的隔离边界。
 
 | Operation 状态 | 含义 |
 | --- | --- |
 | `queued` | 已持久化，尚未执行 |
-| `validating` | 正在检查制品和单个 serving runtime 成员上的候选（其余成员懒加载） |
+| `validating` | 正在检查制品并在独立 validator 中加载候选、执行顶层作用域和 `KrunValidation` |
 | `committed` | Release 已提交，正在等待 runtime 同步 |
-| `available` | 当前 serving 成员已验证、采用快照并发送新鲜 Ack |
+| `available` | 当前 serving 成员已采用包含该 Release 的配置 revision 并发送新鲜 Ack；不表示每个成员都已加载业务 isolate |
 | `failed` | 提交前失败，或候选准备超过 deadline |
 | `superseded` | 后续已验证发布替换了尚未完成确认的 Release |
 
@@ -133,7 +134,7 @@ Host 默认形如 `w-{组织与服务 hash 前16位}-{environment}.workers.test`
 
 控制面不可用时，已运行的 Pod 继续用最后一份内存视图服务；新 Pod 仍可从对象存储 bootstrap。尚未缓存的 Release 冷加载仍需控制面签发短时 presigned URL，因此“新版本冷启动”依赖控制面，“已加载版本继续服务”不依赖。
 
-controller 不对每个 Pod 做管理 RPC。`/validate` 仍只在单个候选成员上冷加载并运行 `KrunValidation`；commit 后由配置流传播，controller 通过 `worker_runtime_acks` 观察收敛，`available` 表示当前 serving 成员都已上报该 revision。readiness 只要求配置视图已加载；Release 在首次请求时懒加载，避免 Pod 启动成本随服务数量线性增长。
+controller 不对 serving Pod 做候选管理 RPC。`/validate` 只在独立 validator 成员上冷加载并运行 `KrunValidation`；commit 后由配置流传播，controller 通过 `worker_runtime_acks` 观察收敛，`available` 表示当前 serving 成员都已上报该 revision。serving readiness 只要求配置视图已加载；Release 在首次请求时懒加载，避免 Pod 启动成本随服务数量线性增长。validator readiness 不启动配置跟随或 Ack，也没有业务 socket。
 
 实验仍只有单个 `default` pool；公网域名目录与 Gateway 路由已实现，多 pool、Service / DB bindings 和按 pool 的出口策略留待后续，详细方案见 [Workers 资源池与网络策略设计](workers-pools.md)。Secret binding 已支持；现有 runtime token 仍是 pool 内共享的受限凭证，生产应替换为可绑定 workload identity 的认证。隔离测试覆盖 HTTP、TCP 出口和凭证注入边界，没有宣称可阻止 V8 / workerd 原生漏洞逃逸。
 

@@ -11,6 +11,7 @@ if [[ -f .data/dev.env ]]; then
 fi
 
 # Single gitignored local dev config: control plane + Postgres + MinIO + builder
-# run here; only the runtime (workerd) and kgateway stay in the cluster.
+# run here; only serving runtime, isolated validator (both workerd), and
+# kgateway stay in the cluster.
 task_config="${1:-.data/dev.yaml}"
 exec ./bin/krun-server serve --config "$task_config"

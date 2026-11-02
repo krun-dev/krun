@@ -2,7 +2,7 @@
 
 Workers 页面属于主 React/Vite 控制台，不是独立应用。日常开发使用 local-first
 拓扑：控制面、PostgreSQL、MinIO、local builder 和 Vite 在开发机，集群只保留
-runtime（workerd）与 kgateway。
+serving runtime、独立 validator（均为 workerd）与 kgateway。
 
 ```bash
 cp config/development.example.yaml .data/dev.yaml

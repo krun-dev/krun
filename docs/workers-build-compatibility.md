@@ -6,6 +6,11 @@ them in an isolated job, and converts the result into krun's
 `workerd-bundle-v2` artifact. Wrangler is an implementation detail of the
 builder; it is not a public krun CLI or deployment API.
 
+The planned public Wrangler / multipart upload compatibility layer is specified
+separately in [Cloudflare Workers API compatibility](cloudflare-api-compatibility.md).
+That document is a design specification, not a claim that the endpoint is
+already implemented.
+
 ## Scope
 
 The JavaScript build profile supports:

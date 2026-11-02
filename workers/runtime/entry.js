@@ -344,7 +344,8 @@ export class Management extends WorkerEntrypoint {
  async fetch(request){
   // The readiness probe starts the follow loop, so an idle Pod still converges
   // and acks new config revisions even when it receives no business traffic.
-  ensureStarted(this.env,this.ctx);
+  const validatorOnly=this.env.VALIDATOR_ONLY==='true';
+  if(!validatorOnly)ensureStarted(this.env,this.ctx);
   const path=new URL(request.url).pathname;
   if(path!=='/ready'&&request.headers.get('authorization')!==`Bearer ${this.env.MANAGEMENT_TOKEN}`)return json({error:'denied'},403);
   try {
@@ -357,6 +358,7 @@ export class Management extends WorkerEntrypoint {
     return json({pod_uid:this.env.POD_UID,release_id:input.release.id,archive_sha256:input.release.archive_sha256});
    }
    if(path!=='/ready')return json({error:'not found'},404);
+   if(validatorOnly)return json({status:'ready',role:'validator',pod_uid:this.env.POD_UID,pool:this.env.RUNTIME_POOL||'default'});
    // Readiness means the config view is loaded; releases are lazy-loaded on
    // first request so Pod start does not scale with the number of services.
    await ensureBootstrap(this.env);

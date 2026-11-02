@@ -79,6 +79,19 @@ writeFileSync(generatedPath('api-key.json'),JSON.stringify({key,expires_at:crede
 const run=randomUUID().slice(0,8);
 const org=await api('/api/v1/orgs','POST',{name:'Workers '+run},201,{session:true});const service=await api('/api/v1/orgs/'+org.id+'/services','POST',{name:'orders-'+run},201);const base='/api/v1/orgs/'+org.id+'/services/'+service.id+'/workers';
 const initialPods=JSON.parse(kubectl('get','pods','-n','workers-mvp','-l','role=krun-runtime','-o','json')).items.filter(p=>!p.metadata.deletionTimestamp).map(p=>({name:p.metadata.name,uid:p.metadata.uid,restarts:p.status.containerStatuses[0].restartCount}));
+await check('candidate validator is isolated from the serving Service',async()=>{
+ const validators=JSON.parse(kubectl('get','pods','-n','workers-mvp','-l','role=krun-validator,pool=default','-o','json')).items.filter(p=>!p.metadata.deletionTimestamp);
+ assert.equal(validators.length,1);
+ const validatorUID=validators[0].metadata.uid;
+ const servingSlices=JSON.parse(kubectl('get','endpointslices','-n','workers-mvp','-l','kubernetes.io/service-name=runtime-default','-o','json')).items;
+ const validatorSlices=JSON.parse(kubectl('get','endpointslices','-n','workers-mvp','-l','kubernetes.io/service-name=runtime-validator-default','-o','json')).items;
+ const endpointUIDs=slices=>slices.flatMap(slice=>slice.endpoints||[]).map(endpoint=>endpoint.targetRef?.uid).filter(Boolean);
+ assert(!endpointUIDs(servingSlices).includes(validatorUID));
+ assert(endpointUIDs(validatorSlices).includes(validatorUID));
+ const validatorService=JSON.parse(kubectl('get','service','runtime-validator-default','-n','workers-mvp','-o','json'));
+ assert.deepEqual(validatorService.spec.ports.map(port=>port.port),[8083]);
+ return {validator:validators[0].metadata.name,validatorUID,servingUIDs:endpointUIDs(servingSlices)};
+});
 // Private and public scopes are separate Gateway instances. Requests are aimed
 // at a specific instance so cross-scope Host forgery can be asserted.
 const gateway=JSON.parse(kubectl('get','service','workers-mvp','-n','kgateway-system','-o','json')).spec.clusterIP;

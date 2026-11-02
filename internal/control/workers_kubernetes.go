@@ -155,9 +155,9 @@ type workerPodList struct {
 	} `json:"items"`
 }
 
-func (k *workerKubernetes) runtimeMembers(ctx context.Context, pool, service string) ([]workerPod, error) {
+func (k *workerKubernetes) members(ctx context.Context, role, pool, service string) ([]workerPod, error) {
 	var pods workerPodList
-	if e := k.call(ctx, "GET", k.core("pods")+"?labelSelector="+url.QueryEscape("role=krun-runtime,pool="+pool), nil, &pods); e != nil {
+	if e := k.call(ctx, "GET", k.core("pods")+"?labelSelector="+url.QueryEscape("role="+role+",pool="+pool), nil, &pods); e != nil {
 		return nil, e
 	}
 	var slices struct {
@@ -201,6 +201,12 @@ func (k *workerKubernetes) runtimeMembers(ctx context.Context, pool, service str
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UID < out[j].UID })
 	return out, nil
+}
+func (k *workerKubernetes) runtimeMembers(ctx context.Context, pool, service string) ([]workerPod, error) {
+	return k.members(ctx, "krun-runtime", pool, service)
+}
+func (k *workerKubernetes) validatorMembers(ctx context.Context, pool, service string) ([]workerPod, error) {
+	return k.members(ctx, "krun-validator", pool, service)
 }
 func (k *workerKubernetes) ensureBuildJob(ctx context.Context, b WorkerBuild, private WorkerBuildPrivate, sourceURL, uploadURL, image, pullPolicy string) error {
 	buildMode := "direct"

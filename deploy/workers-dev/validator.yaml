@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runtime-validator-default
+  namespace: workers-mvp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: runtime-validator-default
+  template:
+    metadata:
+      labels:
+        app: runtime-validator-default
+        role: krun-validator
+        pool: default
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: workerd
+          image: krun-worker-runtime:dev
+          imagePullPolicy: Never
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8083
+            periodSeconds: 1
+            timeoutSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: 8083
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: pod
+              mountPath: /pod
+              readOnly: true
+            - name: secrets
+              mountPath: /secrets
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: validator-config
+        - name: pod
+          downwardAPI:
+            items:
+              - path: name
+                fieldRef:
+                  fieldPath: metadata.name
+              - path: uid
+                fieldRef:
+                  fieldPath: metadata.uid
+        - name: secrets
+          secret:
+            secretName: workers-credentials
+            items:
+              - key: KRUN_RUNTIME_TOKEN
+                path: KRUN_RUNTIME_TOKEN
+              - key: KRUN_MANAGEMENT_TOKEN
+                path: KRUN_MANAGEMENT_TOKEN
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: runtime-validator-default
+  namespace: workers-mvp
+spec:
+  selector:
+    app: runtime-validator-default
+  ports:
+    - name: management
+      port: 8083
+      targetPort: 8083

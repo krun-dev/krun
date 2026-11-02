@@ -25,6 +25,7 @@ ssh -o ConnectTimeout=8 "$REMOTE" "set -e
   cd /tmp/krun-runtime
   docker build -t '$IMAGE' .
   kind load docker-image --name '$CLUSTER' '$IMAGE'
-  kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp set image deployment/runtime-default workerd='$IMAGE'
-  kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp rollout restart deployment/runtime-default
-  kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp rollout status deployment/runtime-default --timeout=180s"
+  kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp set image deployment/runtime-default deployment/runtime-validator-default workerd='$IMAGE'
+  kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp rollout restart deployment/runtime-default deployment/runtime-validator-default
+  kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp rollout status deployment/runtime-default --timeout=180s
+  kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp rollout status deployment/runtime-validator-default --timeout=180s"

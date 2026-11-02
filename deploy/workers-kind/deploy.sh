@@ -98,8 +98,8 @@ export KRUN_KUBE_API_IPS="${task_api_endpoints}${task_api_service}"
 python3 deploy/workers-kind/manifests.py
 kubectl --kubeconfig "$KUBECONFIG" apply -f deploy/workers-kind/generated/manifests.json
 # Rebuilt tags are local to this lab. Restart to consume updated images/config.
-kubectl --kubeconfig "$KUBECONFIG" -n workers-mvp rollout restart deployment/backend deployment/git-mock deployment/runtime-default deployment/tester
-for task_deployment in postgres minio git-mock backend runtime-default tester; do
+kubectl --kubeconfig "$KUBECONFIG" -n workers-mvp rollout restart deployment/backend deployment/git-mock deployment/runtime-default deployment/runtime-validator-default deployment/tester
+for task_deployment in postgres minio git-mock backend runtime-default runtime-validator-default tester; do
   kubectl --kubeconfig "$KUBECONFIG" -n workers-mvp rollout status "deployment/$task_deployment" --timeout=180s
 done
 for task_gateway in workers-mvp workers-public; do

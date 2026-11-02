@@ -253,6 +253,7 @@ workers:
       private_egress: direct
       public_egress: deny
       runtime_service: runtime-private
+      validator_service: validator-private
       runtime_token: ${KRUN_PRIVATE_RUNTIME_TOKEN}
       management_token: ${KRUN_PRIVATE_MANAGEMENT_TOKEN}
       default: true
@@ -262,6 +263,7 @@ workers:
       private_egress: deny
       public_egress: connect-proxy
       runtime_service: runtime-public
+      validator_service: validator-public
       runtime_token: ${KRUN_PUBLIC_RUNTIME_TOKEN}
       management_token: ${KRUN_PUBLIC_MANAGEMENT_TOKEN}
 

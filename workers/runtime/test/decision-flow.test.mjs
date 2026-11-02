@@ -311,6 +311,20 @@ await check('readiness starts the follow loop for an idle Pod', async () => {
   assert.ok(switched, 'idle Pod never applied the incremental revision');
 });
 
+await check('isolated validator readiness does not follow or ack serving config', async () => {
+  let platformCalls = 0;
+  const validatorEnv = makeEnv(null, [], release.id);
+  validatorEnv.VALIDATOR_ONLY = 'true';
+  validatorEnv.PLATFORM = {async fetch() { platformCalls++; throw new Error('validator must not read serving config'); }};
+  const validatorEntry = await freshEntry();
+  const management = new validatorEntry.Management(validatorEnv, {});
+  const ready = await management.fetch(new Request('http://validator/ready'));
+  assert.equal(ready.status, 200);
+  assert.equal((await ready.json()).role, 'validator');
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(platformCalls, 0);
+});
+
 await check('profile v2 loads typed modules, compatibility config and an isolated assets binding', async () => {
   const nestedName = 'nested/'.repeat(20) + 'message.txt';
   const moduleFiles = {

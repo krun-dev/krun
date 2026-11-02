@@ -521,7 +521,7 @@ func testWorkersConfig() *WorkersConfig {
 		BuilderMode: "local",
 		RuntimePools: []WorkerRuntimePool{{
 			ID: "default", Access: []string{"private"}, PrivateEgress: "direct", PublicEgress: "deny",
-			RuntimeService: "runtime-default", RuntimeToken: strings.Repeat("r", 24),
+			RuntimeService: "runtime-default", ValidatorService: "runtime-validator-default", RuntimeToken: strings.Repeat("r", 24),
 			ManagementToken: strings.Repeat("m", 24), Default: true,
 		}},
 		NetworkProfiles: []WorkerNetworkProfile{{

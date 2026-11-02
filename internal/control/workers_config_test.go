@@ -58,7 +58,7 @@ func workerProjectionConfig(domains []WorkerDomain) *WorkersConfig {
 		Domains: domains,
 		RuntimePools: []WorkerRuntimePool{{
 			ID: "default", Access: access, PrivateEgress: privateEgress, PublicEgress: publicEgress,
-			RuntimeService: "runtime-default", Default: true,
+			RuntimeService: "runtime-default", ValidatorService: "runtime-validator-default", Default: true,
 		}},
 		NetworkProfiles: []WorkerNetworkProfile{{
 			ID: "default", Name: "Default", Default: true,
@@ -400,8 +400,8 @@ func TestMultiPoolRuntimeConfigIsolation(t *testing.T) {
 	s, store := testServer(t)
 	c := testWorkersConfig()
 	c.RuntimePools = []WorkerRuntimePool{
-		{ID: "private-a", Access: []string{"private"}, RuntimeService: "runtime-private", RuntimeToken: strings.Repeat("p", 24), ManagementToken: strings.Repeat("q", 24), Default: true},
-		{ID: "public-b", Access: []string{"public"}, RuntimeService: "runtime-public", RuntimeToken: strings.Repeat("u", 24), ManagementToken: strings.Repeat("v", 24)},
+		{ID: "private-a", Access: []string{"private"}, RuntimeService: "runtime-private", ValidatorService: "validator-private", RuntimeToken: strings.Repeat("p", 24), ManagementToken: strings.Repeat("q", 24), Default: true},
+		{ID: "public-b", Access: []string{"public"}, RuntimeService: "runtime-public", ValidatorService: "validator-public", RuntimeToken: strings.Repeat("u", 24), ManagementToken: strings.Repeat("v", 24)},
 	}
 	s.Config.Workers = c
 	s.routes()

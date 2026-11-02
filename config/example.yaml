@@ -183,6 +183,8 @@ workers:
       private_egress: deny
       public_egress: direct
       runtime_service: runtime-default
+      # 专用候选验证 workerd；不得与 runtime_service 相同，也不接业务 Gateway。
+      validator_service: runtime-validator-default
       runtime_token: ${KRUN_RUNTIME_TOKEN:-replace-with-a-24-plus-character-token}
       management_token: ${KRUN_MANAGEMENT_TOKEN:-replace-with-a-24-plus-character-token}
       default: true

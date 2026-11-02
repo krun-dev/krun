@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Single local-first development environment.
 # Development machine: control plane + Postgres + MinIO + builder + Vite.
-# Remote host: nginx and kind with runtime + kgateway only.
+# Remote host: nginx and kind with serving runtime + validator + kgateway only.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -26,22 +26,22 @@ if ! curl -fsS -o /dev/null --max-time 2 "$MINIO_LOCAL_URL/minio/health/ready"; 
   exit 1
 fi
 
-# 2. Tunnels: Kubernetes API, runtime management, and gateways.
+# 2. Tunnels: Kubernetes API, isolated validator management, and gateways.
 if ! lsof -nP -iTCP:38443 -sTCP:LISTEN >/dev/null 2>&1; then
   nohup ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
     -L 127.0.0.1:38443:127.0.0.1:38443 "$REMOTE" >.data/tunnel-k8s.log 2>&1 &
   echo $! >.data/tunnel-k8s.pid
 fi
-runtime_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:38083/ready 2>/dev/null || true)
+validator_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:38084/ready 2>/dev/null || true)
 private_gateway_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:38080/ 2>/dev/null || true)
 public_gateway_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:38081/ 2>/dev/null || true)
-if [[ "$runtime_code" != "200" && "$runtime_code" != "503" ]] || [[ "$private_gateway_code" == "000" || "$public_gateway_code" == "000" ]]; then
-  # A runtime rollout replaces the pod behind the port-forward; the listening
+if [[ "$validator_code" != "200" && "$validator_code" != "503" ]] || [[ "$private_gateway_code" == "000" || "$public_gateway_code" == "000" ]]; then
+  # A validator rollout replaces the pod behind the port-forward; the listening
   # SSH socket can survive while the remote channel is dead. Probe /ready and
   # restart the tunnel on connection failure (000), not on a 503 readiness.
   # Probe both Gateway channels too: the SSH listener can outlive either
   # remote kubectl port-forward process.
-  for port in 38083 38080 38081; do
+  for port in 38084 38080 38081; do
     for pid in $(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true); do
       kill "$pid" 2>/dev/null || true
     done
@@ -50,26 +50,26 @@ if [[ "$runtime_code" != "200" && "$runtime_code" != "503" ]] || [[ "$private_ga
   # Clear only these three development port-forwards before binding the same
   # remote ports again.
   ssh -o ConnectTimeout=8 "$REMOTE" \
-    "pkill -f '[p]ort-forward.*38083:8083' 2>/dev/null || true; \
+    "pkill -f '[p]ort-forward.*38084:8083' 2>/dev/null || true; \
      pkill -f '[p]ort-forward.*38080:8080' 2>/dev/null || true; \
      pkill -f '[p]ort-forward.*38081:8080' 2>/dev/null || true"
   # 38080 fronts the private Gateway instance, 38081 the public one. Console
   # invoke picks the target by the environment's network scope.
   nohup ssh -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
-    -L 127.0.0.1:38083:127.0.0.1:38083 \
+    -L 127.0.0.1:38084:127.0.0.1:38084 \
     -L 127.0.0.1:38080:127.0.0.1:38080 \
     -L 127.0.0.1:38081:127.0.0.1:38081 "$REMOTE" \
-    "kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp port-forward deployment/runtime-default 38083:8083 --address 127.0.0.1 & kubectl --kubeconfig $KUBECONFIG_REMOTE -n kgateway-system port-forward svc/workers-mvp 38080:8080 --address 127.0.0.1 & kubectl --kubeconfig $KUBECONFIG_REMOTE -n kgateway-system port-forward deploy/workers-public 38081:8080 --address 127.0.0.1 & wait" \
+    "kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp port-forward deployment/runtime-validator-default 38084:8083 --address 127.0.0.1 & kubectl --kubeconfig $KUBECONFIG_REMOTE -n kgateway-system port-forward svc/workers-mvp 38080:8080 --address 127.0.0.1 & kubectl --kubeconfig $KUBECONFIG_REMOTE -n kgateway-system port-forward deploy/workers-public 38081:8080 --address 127.0.0.1 & wait" \
     >.data/tunnel-runtime.log 2>&1 &
   tunnel_pid=$!
   echo "$tunnel_pid" >.data/tunnel-runtime.pid
 
   tunnel_ready=false
   for _ in $(seq 1 20); do
-    runtime_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:38083/ready 2>/dev/null || true)
+    validator_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:38084/ready 2>/dev/null || true)
     private_gateway_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:38080/ 2>/dev/null || true)
     public_gateway_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:38081/ 2>/dev/null || true)
-    if [[ ("$runtime_code" == "200" || "$runtime_code" == "503") && "$private_gateway_code" != "000" && "$public_gateway_code" != "000" ]]; then
+    if [[ ("$validator_code" == "200" || "$validator_code" == "503") && "$private_gateway_code" != "000" && "$public_gateway_code" != "000" ]]; then
       tunnel_ready=true
       break
     fi
@@ -79,7 +79,7 @@ if [[ "$runtime_code" != "200" && "$runtime_code" != "503" ]] || [[ "$private_ga
     sleep 0.5
   done
   if [[ "$tunnel_ready" != true ]]; then
-    echo "runtime/Gateway tunnels failed; check .data/tunnel-runtime.log" >&2
+    echo "validator/Gateway tunnels failed; check .data/tunnel-runtime.log" >&2
     exit 1
   fi
 fi

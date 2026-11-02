@@ -54,6 +54,7 @@ workers:
       private_egress: direct
       public_egress: direct
       runtime_service: runtime-default
+      validator_service: runtime-validator-default
       runtime_token: ${KRUN_RUNTIME_TOKEN}
       management_token: ${KRUN_MANAGEMENT_TOKEN}
       default: true
@@ -180,15 +181,37 @@ const config :W.Config = (
   (name="management",address="*:8083",http=(),service=(name="entry",entrypoint="Management"))
  ]
 );'''
+validator_capnp='''using W = import "/workerd/workerd.capnp";
+const config :W.Config = (
+ services = [
+  (name="entry",worker=(modules=[(name="entry.js",esModule=embed "/app/entry.js")],compatibilityDate="2026-09-28",compatibilityFlags=["experimental", "enable_ctx_exports"],bindings=[
+   (name="LOADER",workerLoader=(id="workers-mvp-validator-default")),
+   (name="PLATFORM",service="platform"),
+   (name="POD_NAME",text=embed "/pod/name"),
+   (name="POD_UID",text=embed "/pod/uid"),
+   (name="RUNTIME_TOKEN",text=embed "/secrets/KRUN_RUNTIME_TOKEN"),
+   (name="MANAGEMENT_TOKEN",text=embed "/secrets/KRUN_MANAGEMENT_TOKEN"),
+   (name="RUNTIME_POOL",text="default"),
+   (name="VALIDATOR_ONLY",text="true"),
+   (name="ASSETS_CACHE_MAX",text="16777216")
+  ],globalOutbound="storage")),
+  (name="platform",external=(address="backend:9001",http=())),
+  (name="storage",network=(allow=["10.96.0.0/12","192.168.0.0/16"]))
+ ], sockets=[
+  (name="management",address="*:8083",http=(),service=(name="entry",entrypoint="Management"))
+ ]
+);'''
 items.append(resource('ConfigMap','runtime-config',data={'runtime.capnp':capnp}))
+items.append(resource('ConfigMap','validator-config',data={'runtime.capnp':validator_capnp}))
 deployment('runtime-default',[{'name':'workerd','image':f'krun-worker-runtime:{tag}','imagePullPolicy':'Never','securityContext':secure(),'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},{'name':'pod','mountPath':'/pod','readOnly':True},{'name':'secrets','mountPath':'/secrets','readOnly':True}],'readinessProbe':{'httpGet':{'path':'/ready','port':8083},'periodSeconds':1,'timeoutSeconds':5,'failureThreshold':2},'resources':limits('1Gi')}],replicas=2,labels={'role':'krun-runtime','pool':'default'},volumes=[{'name':'config','configMap':{'name':'runtime-config'}},{'name':'pod','downwardAPI':{'items':[{'path':'name','fieldRef':{'fieldPath':'metadata.name'}},{'path':'uid','fieldRef':{'fieldPath':'metadata.uid'}}]}},{'name':'secrets','secret':{'secretName':'workers-credentials','items':[{'key':n,'path':n} for n in ['KRUN_RUNTIME_TOKEN','KRUN_MANAGEMENT_TOKEN']]}}],terminationGracePeriodSeconds=10);service('runtime-default',[8081,8083])
+deployment('runtime-validator-default',[{'name':'workerd','image':f'krun-worker-runtime:{tag}','imagePullPolicy':'Never','securityContext':secure(),'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},{'name':'pod','mountPath':'/pod','readOnly':True},{'name':'secrets','mountPath':'/secrets','readOnly':True}],'readinessProbe':{'httpGet':{'path':'/ready','port':8083},'periodSeconds':1,'timeoutSeconds':5,'failureThreshold':2},'livenessProbe':{'httpGet':{'path':'/ready','port':8083},'periodSeconds':2,'timeoutSeconds':1,'failureThreshold':3},'resources':limits('512Mi')}],labels={'role':'krun-validator','pool':'default'},volumes=[{'name':'config','configMap':{'name':'validator-config'}},{'name':'pod','downwardAPI':{'items':[{'path':'name','fieldRef':{'fieldPath':'metadata.name'}},{'path':'uid','fieldRef':{'fieldPath':'metadata.uid'}}]}},{'name':'secrets','secret':{'secretName':'workers-credentials','items':[{'key':n,'path':n} for n in ['KRUN_RUNTIME_TOKEN','KRUN_MANAGEMENT_TOKEN']]}}],terminationGracePeriodSeconds=5);service('runtime-validator-default',[8083])
 deployment('tester',[{'name':'tester','image':f'krun-worker-builder:{tag}','imagePullPolicy':'Never','command':['node','-e','setInterval(()=>{},100000)'],'resources':limits('128Mi')}])
 def selector(app):return {'podSelector':{'matchLabels':{'app':app}}}
 def tcp(port):return {'protocol':'TCP','port':port}
 def policy(name,labels,ingress=None,egress=None):items.append(resource('NetworkPolicy',name,apiVersion='networking.k8s.io/v1',spec={'podSelector':{'matchLabels':labels},'policyTypes':['Ingress','Egress'],'ingress':ingress or [],'egress':egress or []}))
 policy('deny',{})
 policy('dns',{},egress=[{'to':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kube-system'}},'podSelector':{'matchLabels':{'k8s-app':'kube-dns'}}}],'ports':[{'protocol':'UDP','port':53},tcp(53)]}])
-policy('backend',{'app':'backend'},ingress=[{'from':[selector('tester')],'ports':[tcp(9000)]},{'from':[{'podSelector':{'matchLabels':{'role':'krun-runtime'}}}],'ports':[tcp(9001)]}],egress=[{'to':[selector('postgres')],'ports':[tcp(5432)]},{'to':[selector('minio')],'ports':[tcp(9000)]},{'to':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}},'podSelector':{'matchLabels':{'gateway.networking.k8s.io/gateway-name':'workers-mvp'}}}],'ports':[tcp(8080)]},{'to':[{'podSelector':{'matchLabels':{'role':'krun-runtime'}}}],'ports':[tcp(8083)]},{'to':[{'ipBlock':{'cidr':ip+('/32' if ':' not in ip else '/128')}} for ip in api_ips],'ports':[tcp(443),tcp(6443)]}])
+policy('backend',{'app':'backend'},ingress=[{'from':[selector('tester')],'ports':[tcp(9000)]},{'from':[{'podSelector':{'matchExpressions':[{'key':'role','operator':'In','values':['krun-runtime','krun-validator']}]}}],'ports':[tcp(9001)]}],egress=[{'to':[selector('postgres')],'ports':[tcp(5432)]},{'to':[selector('minio')],'ports':[tcp(9000)]},{'to':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}},'podSelector':{'matchLabels':{'gateway.networking.k8s.io/gateway-name':'workers-mvp'}}}],'ports':[tcp(8080)]},{'to':[{'podSelector':{'matchExpressions':[{'key':'role','operator':'In','values':['krun-runtime','krun-validator']}]}}],'ports':[tcp(8083)]},{'to':[{'ipBlock':{'cidr':ip+('/32' if ':' not in ip else '/128')}} for ip in api_ips],'ports':[tcp(443),tcp(6443)]}])
 # Only the control plane fetches repositories. A builder with package-lock
 # dependencies may additionally reach the single configured npm registry.
 repository_ips=set()
@@ -213,9 +236,10 @@ policy('git-mock',{'app':'git-mock'},ingress=[{'from':[selector('backend'),selec
 # Both network scopes are separate Gateway instances. The gateway-name label
 # selector keeps each instance's traffic distinct at the NetworkPolicy layer.
 gw_selector=[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}},'podSelector':{'matchLabels':{'gateway.networking.k8s.io/gateway-name':g}}} for g in ['workers-mvp','workers-public']]
-policy('minio',{'app':'minio'},ingress=[{'from':[selector('backend'),selector('krun-builder'),selector('runtime-default'),selector('tester')],'ports':[tcp(9000)]},{'from':gw_selector,'ports':[tcp(9000)]}])
+policy('minio',{'app':'minio'},ingress=[{'from':[selector('backend'),selector('krun-builder'),selector('runtime-default'),selector('runtime-validator-default'),selector('tester')],'ports':[tcp(9000)]},{'from':gw_selector,'ports':[tcp(9000)]}])
 policy('builder',{'app':'krun-builder'},egress=[{'to':[selector('minio')],'ports':[tcp(9000)]}])
 policy('runtime',{'role':'krun-runtime'},ingress=[{'from':gw_selector,'ports':[tcp(8081)]},{'from':[selector('backend')],'ports':[tcp(8083)]}],egress=[{'to':[selector('backend')],'ports':[tcp(9001)]},{'to':[selector('minio')],'ports':[tcp(9000)]}])
+policy('validator',{'role':'krun-validator'},ingress=[{'from':[selector('backend')],'ports':[tcp(8083)]}],egress=[{'to':[selector('backend')],'ports':[tcp(9001)]},{'to':[selector('minio')],'ports':[tcp(9000)]}])
 policy('tester',{'app':'tester'},egress=[{'to':[selector('backend')],'ports':[tcp(9000)]},{'to':[selector('minio')],'ports':[tcp(9000)]},{'to':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}}}],'ports':[tcp(8080)]}])
 # Private instance: the only Gateway any private host may attach to.
 items.append({'apiVersion':'gateway.networking.k8s.io/v1','kind':'Gateway','metadata':{'name':'workers-mvp','namespace':'kgateway-system'},'spec':{'gatewayClassName':'kgateway','listeners':[{'name':'private','port':8080,'protocol':'HTTP','allowedRoutes':{'namespaces':{'from':'Selector','selector':{'matchLabels':{'lab':'krun-workers-mvp'}}}}}]}})

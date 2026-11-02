@@ -47,15 +47,20 @@ trap 'rm -rf "$tmp"' EXIT
 sed "s/__CONTROL_HOST__/$CONTROL_HOST/g; s/__MINIO_HOST__/$MINIO_HOST/g; s/__MINIO_PORT__/$MINIO_PORT/g; s/__S3_BUCKET__/$S3_BUCKET/g" \
   deploy/workers-dev/runtime.capnp.tmpl >"$tmp/runtime.capnp"
 sed "s/__CONTROL_HOST__/$CONTROL_HOST/g; s/__MINIO_HOST__/$MINIO_HOST/g; s/__MINIO_PORT__/$MINIO_PORT/g" \
+  deploy/workers-dev/validator.capnp.tmpl >"$tmp/validator.capnp"
+sed "s/__CONTROL_HOST__/$CONTROL_HOST/g; s/__MINIO_HOST__/$MINIO_HOST/g; s/__MINIO_PORT__/$MINIO_PORT/g" \
   deploy/workers-dev/networkpolicy.yaml.tmpl >"$tmp/networkpolicy.yaml"
 sed "s/__MINIO_HOST__/$MINIO_HOST/g; s/__MINIO_PORT__/$MINIO_PORT/g" \
   deploy/workers-dev/static-assets.yaml.tmpl >"$tmp/static-assets.yaml"
 
-scp "$tmp/runtime.capnp" "$tmp/networkpolicy.yaml" "$tmp/static-assets.yaml" "$REMOTE:/tmp/"
+scp "$tmp/runtime.capnp" "$tmp/validator.capnp" "$tmp/networkpolicy.yaml" "$tmp/static-assets.yaml" deploy/workers-dev/validator.yaml "$REMOTE:/tmp/"
 ssh -o ConnectTimeout=8 "$REMOTE" "set -e
   kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp create configmap runtime-config --from-file=runtime.capnp=/tmp/runtime.capnp --dry-run=client -o yaml | kubectl --kubeconfig $KUBECONFIG_REMOTE apply -f -
+  kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp create configmap validator-config --from-file=runtime.capnp=/tmp/validator.capnp --dry-run=client -o yaml | kubectl --kubeconfig $KUBECONFIG_REMOTE apply -f -
+  kubectl --kubeconfig $KUBECONFIG_REMOTE apply -f /tmp/validator.yaml
   kubectl --kubeconfig $KUBECONFIG_REMOTE apply -f /tmp/networkpolicy.yaml
   kubectl --kubeconfig $KUBECONFIG_REMOTE apply -f /tmp/static-assets.yaml
   kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp scale deployment backend postgres minio git-mock tester --replicas=0
-  kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp rollout restart deployment/runtime-default
-  kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp rollout status deployment/runtime-default --timeout=180s"
+  kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp rollout restart deployment/runtime-default deployment/runtime-validator-default
+  kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp rollout status deployment/runtime-default --timeout=180s
+  kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp rollout status deployment/runtime-validator-default --timeout=180s"

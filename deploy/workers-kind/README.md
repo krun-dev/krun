@@ -1,6 +1,6 @@
 # Workers kind 独立 E2E
 
-本目录创建完整、独立的集群验收栈：backend、PostgreSQL、MinIO、builder、runtime
+本目录创建完整、独立的集群验收栈：backend、PostgreSQL、MinIO、builder、serving runtime、独立 validator
 和 kgateway 都在 kind 内。它不是日常开发环境；不要与
 [local-first](../../docs/local-dev.md) 同时运行。
 
@@ -58,7 +58,7 @@ KUBECONFIG="$KUBECONFIG" KIND_CLUSTER_NAME="$KIND_CLUSTER_NAME" node e2e.mjs
 - 验证 `node:crypto`、release-scoped `env.ASSETS`、幂等、权限隔离、配置 revision/ack、回滚和静态资产；
 - 发布 [`examples/workers-fullstack`](../../examples/workers-fullstack/README.md) 的真实前后端项目，
   验证同源 API、SPA fallback、HTML 规范化、ETag/304、immutable 缓存与静态域；
-- 重启 backend、替换 runtime Pod，并验证认领租约与持久化恢复；
+- 重启 backend、替换 serving runtime Pod，并验证认领租约与持久化恢复；候选只由不接 Gateway 的 validator 加载；
 - 在目标 kind 节点做临时网络故障注入，随后撤销同一规则。
 
 因此运行者需要 Docker 权限以及 kind 节点中的 `crictl`、`nsenter`、`iptables`。

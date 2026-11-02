@@ -477,12 +477,12 @@ func (w *workersController) failOperation(ctx context.Context, id, message strin
 func (w *workersController) noteOperation(ctx context.Context, id, message string) error {
 	return w.server.Store.noteOperationMessage(ctx, id, message)
 }
-func (w *workersController) management(ctx context.Context, pool WorkerRuntimePool, pod workerPod, path string, payload any) (map[string]any, int, error) {
+func (w *workersController) management(ctx context.Context, pool WorkerRuntimePool, pod workerPod, baseOverride, path string, payload any) (map[string]any, int, error) {
 	raw, _ := json.Marshal(payload)
 	// Control planes outside the cluster reach runtimes through a fixed proxy base instead of Pod IPs.
 	base := "http://" + net.JoinHostPort(pod.IP, "8083")
-	if pool.RuntimeManagementBase != "" {
-		base = pool.RuntimeManagementBase
+	if baseOverride != "" {
+		base = baseOverride
 	}
 	req, e := http.NewRequestWithContext(ctx, "POST", base+path, bytes.NewReader(raw))
 	if e != nil {
@@ -563,10 +563,16 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 		return w.noteOperation(ctx, op.ID, "Waiting for Gateway and HTTPRoute confirmation")
 	}
 	if op.State != "committed" {
-		// Candidate validation loads the code once on a single serving member;
-		// the other members lazy-load on first request. The edge config revision
-		// and acks below report convergence.
-		candidate := pods[0]
+		validators, validationErr := w.kube.validatorMembers(ctx, pool.ID, pool.ValidatorService)
+		if validationErr != nil {
+			return validationErr
+		}
+		if len(validators) == 0 {
+			return w.noteOperation(ctx, op.ID, "Waiting for isolated validator members")
+		}
+		// Candidate validation runs in a dedicated workerd that never receives
+		// Gateway traffic. Serving members only consume the committed revision.
+		candidate := validators[0]
 		// Pass the immutable descriptor and a short-lived artifact URL with the
 		// validation request. A cold candidate therefore does not need another
 		// control-plane round trip just to validate code.
@@ -574,7 +580,7 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 		if e != nil {
 			return w.noteOperation(ctx, op.ID, "Artifact URL unavailable")
 		}
-		result, status, e := w.management(ctx, pool, candidate, "/validate", map[string]any{"release": release, "artifact": map[string]any{"download_url": signed, "size": artifact.Size, "archive_sha256": artifact.ArchiveDigest}})
+		result, status, e := w.management(ctx, pool, candidate, pool.ValidatorManagementBase, "/validate", map[string]any{"release": release, "artifact": map[string]any{"download_url": signed, "size": artifact.Size, "archive_sha256": artifact.ArchiveDigest}})
 		if e != nil {
 			return w.noteOperation(ctx, op.ID, "Runtime validation temporarily unavailable")
 		}
@@ -582,24 +588,24 @@ func (w *workersController) processOperation(ctx context.Context, op WorkerOpera
 			if result["code"] == "DEPENDENCY_UNAVAILABLE" {
 				return w.noteOperation(ctx, op.ID, "Candidate dependency unavailable")
 			}
-			return w.failOperation(ctx, op.ID, "Candidate validation failed on "+candidate.Name)
+			return w.failOperation(ctx, op.ID, "Candidate validation failed on isolated validator "+candidate.Name)
 		}
 		// The pod-UID identity check assumes requests reach the exact pod
-		// listed. Behind a proxied runtime_management_base the response may
+		// listed. Behind a proxied validator_management_base the response may
 		// come from any healthy member, so only release identity applies.
 		uidMatches := result["pod_uid"] == candidate.UID
-		if pool.RuntimeManagementBase != "" {
+		if pool.ValidatorManagementBase != "" {
 			uidMatches = true
 		}
 		if !uidMatches || result["release_id"] != release.ID || result["archive_sha256"] != release.ArchiveDigest {
 			return w.failOperation(ctx, op.ID, fmt.Sprintf("Candidate identity mismatch (pod %s uid %s vs %s, release %s vs %s, archive %s vs %s)", candidate.Name, candidate.UID, result["pod_uid"], release.ID, result["release_id"], release.ArchiveDigest, result["archive_sha256"]))
 		}
-		after, e := w.kube.runtimeMembers(ctx, pool.ID, pool.RuntimeService)
+		after, e := w.kube.validatorMembers(ctx, pool.ID, pool.ValidatorService)
 		if e != nil {
 			return e
 		}
-		if workerMemberIDs(after) != workerMemberIDs(pods) {
-			return w.noteOperation(ctx, op.ID, "Runtime membership changed; validating again")
+		if workerMemberIDs(after) != workerMemberIDs(validators) {
+			return w.noteOperation(ctx, op.ID, "Validator membership changed; validating again")
 		}
 		// Re-authorize immediately before commit: a permission revoked during
 		// validation must stop the release.
