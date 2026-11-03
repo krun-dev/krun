@@ -13,11 +13,12 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 	// IAM administration may edit other users and grants; it has a separate
 	// loading contract. Resource and Workers endpoints only need their target.
 	isResource := strings.Contains(r.Pattern, "/services") || strings.Contains(r.Pattern, "/models")
+	cloudflare := strings.HasPrefix(r.URL.Path, cfPrefix)
 	simpleIAM := r.URL.Path == "/api/auth/me" || r.URL.Path == "/api/auth/logout" || r.URL.Path == "/api/v1/me" || r.URL.Path == "/api/v1/roles" || r.URL.Path == "/api/v1/orgs" || r.Pattern == "GET /api/v1/orgs/{org}" || r.Pattern == "PATCH /api/v1/orgs/{org}" || strings.HasSuffix(r.Pattern, "/audit")
-	if !isResource && !strings.Contains(r.Pattern, "/workers/") && !simpleIAM {
+	if !isResource && !strings.Contains(r.Pattern, "/workers/") && !simpleIAM && !cloudflare {
 		return r, nil
 	}
-	scope := stateReadScope{ActorOnly: simpleIAM, AllOrganizations: r.URL.Path == "/api/v1/orgs" && r.Method == "GET", User: c.session.User, Key: c.keyID, Organization: r.PathValue("org"), Service: r.PathValue("resource"), Kind: resourceKind(r), Limit: 100, After: r.URL.Query().Get("after")}
+	scope := stateReadScope{ActorOnly: simpleIAM || cloudflare && r.PathValue("org") == "", AllOrganizations: cloudflare && r.PathValue("org") == "" || r.URL.Path == "/api/v1/orgs" && r.Method == "GET", User: c.session.User, Key: c.keyID, Organization: r.PathValue("org"), Service: r.PathValue("resource"), Kind: resourceKind(r), Limit: 100, After: r.URL.Query().Get("after")}
 	if c.isKey {
 		owner, found, err := s.Store.APIKeyOwner(r.Context(), c.keyID)
 		if err != nil {

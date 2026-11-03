@@ -10,7 +10,8 @@ import (
 )
 
 type WorkerEnvironmentCreateInput struct {
-	Name string `json:"name"`
+	Name       string `json:"name"`
+	IgnoreBase bool   `json:"ignore_base_config,omitempty"`
 }
 
 type WorkerEnvironmentUpdateInput struct {
@@ -82,7 +83,7 @@ func (s *Service) WorkerEnvironmentCreate(ctx context.Context, st *domain.State,
 		return nil, Read, domain.Problem(409, "ENVIRONMENT_LIMIT", "Too many preview environments")
 	}
 	env := domain.WorkerEnvironment{Name: in.Name, Enabled: true, ConfigRevision: 1, Variables: map[string]string{}, SecretVersions: map[string]string{}}
-	if ws.PreviewBase != nil {
+	if ws.PreviewBase != nil && !in.IgnoreBase {
 		env.Variables = domain.CloneStringsMap(ws.PreviewBase.Variables)
 		env.SecretVersions = domain.CloneStringsMap(ws.PreviewBase.SecretVersions)
 		env.SecretNames = domain.WorkerSecretNames(env.SecretVersions)

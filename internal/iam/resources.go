@@ -66,3 +66,24 @@ func (s Service) DeleteResource(st *domain.State, t authorization.Target) error 
 	st.Revision++
 	return nil
 }
+
+// EnsureWorkerResource gives protocol retries a stable IAM identity. IAM and
+// Workers remain separate commits; retrying can finish a partially created Worker.
+func (s Service) EnsureWorkerResource(st *domain.State, t authorization.Target, name, id string) (domain.Resource, error) {
+	if !nameValid(name) {
+		return domain.Resource{}, domain.Problem(422, "INVALID_REQUEST", "Name required")
+	}
+	if id == "" {
+		return domain.Resource{}, domain.Problem(422, "INVALID_REQUEST", "Worker service identity required")
+	}
+	if old, ok := st.Resources[id]; ok {
+		if old.Organization != t.ID || old.Kind != "service" {
+			return domain.Resource{}, domain.NotFound()
+		}
+		return old, nil
+	}
+	resource := domain.Resource{ID: id, Organization: t.ID, Kind: "service", Name: name, Revision: 1}
+	st.Resources[id] = resource
+	st.Revision++
+	return resource, nil
+}

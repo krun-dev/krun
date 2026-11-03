@@ -17,6 +17,7 @@ HTTP 与业务入口调用本包，所有层共享 `domain`。本包不依赖 HT
 | CLI 设备授权 | `auth_device.go` |
 | 仓库 OAuth 凭据与刷新租约 | `repository_connections.go` |
 | Workers 行读取 / 差异写入 | `workers_read.go` / `workers.go` |
+| Cloudflare Script 名称映射 / 已打包模块入库 | `scripts.go` / `uploaded_build.go` |
 | 构建认领、制品提交 | `worker_builds.go` |
 | 发布操作的状态迁移 | `worker_operations.go` |
 | 有界工作队列与专用行解码 | `worker_queue.go` |

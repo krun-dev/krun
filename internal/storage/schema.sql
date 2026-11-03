@@ -592,3 +592,14 @@ CREATE TABLE IF NOT EXISTS worker_runtime_acks (
 );
 
 CREATE OR REPLACE TRIGGER deployment_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_deployments FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
+
+-- Cloudflare protocol identities are stable and independent of display names.
+CREATE TABLE IF NOT EXISTS krun_worker_scripts (
+ org_id text NOT NULL,
+ script_name text NOT NULL,
+ service_id text NOT NULL UNIQUE,
+ workers_dev boolean NOT NULL DEFAULT true,
+ previews_enabled boolean NOT NULL DEFAULT true,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(org_id,script_name)
+);

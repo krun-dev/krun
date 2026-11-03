@@ -241,3 +241,12 @@ type WorkerState struct {
 	Idempotency      map[string]WorkerIdempotency
 	SecretVersions   map[string]WorkerSecretVersion
 }
+
+// WorkerScript is a protocol identity, not a mutable resource display name.
+type WorkerScript struct {
+	Organization    string
+	Name            string
+	Service         string
+	WorkersDev      bool
+	PreviewsEnabled bool
+}

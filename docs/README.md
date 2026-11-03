@@ -18,6 +18,7 @@
 | 资源池与 Network Profile | [资源池](workers-pools.md) |
 | 域名、DNS/TLS 与共享路由 | [域名](workers-domains.md) |
 | 仓库连接与构建 | [仓库](workers-repositories.md) |
+| Cloudflare Workers API 与 Wrangler | [协议适配](cloudflare-api.md) |
 | Wrangler 构建支持范围 | [构建兼容](workers-build-compatibility.md) |
 | 静态资产与缓存 | [资产](workers-assets.md) |
 | 自动化验证 | [验证](verification.md) |

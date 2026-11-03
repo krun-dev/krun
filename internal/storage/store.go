@@ -20,10 +20,11 @@ import (
 //
 // No upstream HTTP calls may run inside Update.
 type Store struct {
-	pool   *pgxpool.Pool
-	orm    *bun.DB
-	mu     sync.Mutex
-	memory *domain.State
+	scripts map[string]domain.WorkerScript
+	pool    *pgxpool.Pool
+	orm     *bun.DB
+	mu      sync.Mutex
+	memory  *domain.State
 	// memoryAudits backs the in-memory store used by tests.
 	memoryAudits []domain.Audit
 	// memoryRateLimits backs distributed rate-limit buckets in memory tests.

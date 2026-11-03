@@ -127,6 +127,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/auth/cli/approve", s.protected(true, s.deviceApprove))
 	s.apiRoutes(m)
 	s.workersRoutes(m)
+	s.cloudflareRoutes(m)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { s.writeError(w, r, notFound()) })
 	s.internalMux = http.NewServeMux()
 	if s.Config.Workers != nil {

@@ -39,6 +39,10 @@ func (s *Service) WorkerArtifactGet(ctx context.Context, st *domain.State, p aut
 }
 
 func (w *Controller) FinalizeBuild(ctx context.Context, b domain.WorkerBuild) (domain.WorkerArtifact, error) {
+	return w.FinalizeUploadedBuild(ctx, b, w.Replica)
+}
+
+func (w *Controller) FinalizeUploadedBuild(ctx context.Context, b domain.WorkerBuild, owner string) (domain.WorkerArtifact, error) {
 	raw, e := w.GetObject(ctx, WorkerUploadKey(b))
 	if e != nil {
 		return domain.WorkerArtifact{}, e
@@ -51,7 +55,7 @@ func (w *Controller) FinalizeBuild(ctx context.Context, b domain.WorkerBuild) (d
 		return domain.WorkerArtifact{}, errors.New("artifact build profile does not match requested compatibility")
 	}
 	a := domain.WorkerArtifact{ID: "art_" + securetoken.Digest(b.Organization+"/"+code.ArchiveDigest), Organization: b.Organization, State: "finalized", Profile: code.Profile, StorageLocation: w.Config.S3LocationID, Bucket: w.Config.S3Bucket, ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: append([]string(nil), code.CompatibilityFlags...), Size: len(raw), ObjectKey: "v1/" + b.Organization + "/sha256/" + code.ArchiveDigest + "/bundle.tar.gz", Created: time.Now().UTC()}
-	if e := w.Service.Store.ReserveBuildArtifact(ctx, b.ID, w.Replica, a); e != nil {
+	if e := w.Service.Store.ReserveBuildArtifact(ctx, b.ID, owner, a); e != nil {
 		return a, e
 	}
 	if e := w.PutImmutable(ctx, a.ObjectKey, raw); e != nil {

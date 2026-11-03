@@ -136,7 +136,7 @@ func (s *Service) WorkerSecretList(ctx context.Context, st *domain.State, p auth
 	summaries := make([]WorkerSecretSummary, 0, len(current.SecretVersions))
 	for name, versionID := range current.SecretVersions {
 		version, ok := st.Workers.SecretVersions[versionID]
-		if !ok || version.Service != target.ID || version.Environment != environment || version.Name != name {
+		if !ok || version.Service != target.ID || (version.Environment != environment && !(environment != appconfig.WorkerBaseline && version.Environment == domain.PreviewBaseName)) || version.Name != name {
 			return nil, Read, errors.New("Worker secret metadata is inconsistent")
 		}
 		summaries = append(summaries, WorkerSecretSummary{Name: name, CreatedAt: version.Created})
