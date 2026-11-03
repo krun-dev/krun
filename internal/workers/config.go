@@ -8,6 +8,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"time"
 
 	objectstore "github.com/krun-dev/krun/internal/adapters/objectstore"
 	workerartifact "github.com/krun-dev/krun/internal/artifact"
@@ -20,7 +21,7 @@ type WorkerConfigSnapshot struct {
 	ConfigRevision int64                           `json:"config_revision"`
 	Pool           string                          `json:"pool"`
 	Routes         []domain.WorkerConfigRoute      `json:"routes"`
-	Releases       map[string]domain.WorkerRelease `json:"releases"`
+	Versions       map[string]domain.WorkerVersion `json:"versions"`
 }
 
 const (
@@ -35,13 +36,13 @@ func WorkerPoolConfigLatestKey(pool string) string {
 
 // workerConfigFromState includes the baseline and preview environments of every
 // live service. Disabled environments stay in the projection so the runtime can
-// answer 410 instead of 404; unpublished environments carry an empty release.
+// answer 410 instead of 404; unpublished environments carry an empty version.
 //
 // Hosts are not stored, so they are derived here from the configured domain
 // catalog and the service's selection. This is the same derivation the
 // HTTPRoute reconciler and the API use, which keeps the three from drifting.
 func WorkerConfigFromState(st *domain.State, config *appconfig.WorkersConfig) domain.WorkerConfigProjection {
-	out := domain.WorkerConfigProjection{Routes: []domain.WorkerConfigRoute{}, Releases: map[string]domain.WorkerRelease{}}
+	out := domain.WorkerConfigProjection{Routes: []domain.WorkerConfigRoute{}, Versions: map[string]domain.WorkerVersion{}}
 	if st == nil || st.Workers == nil {
 		return out
 	}
@@ -80,16 +81,42 @@ func WorkerConfigFromState(st *domain.State, config *appconfig.WorkersConfig) do
 			// the Gateway instance already decided which entry a request used.
 			for _, host := range hosts {
 				if expanded := EnvHostName(host, name); expanded != "" {
-					out.Routes = append(out.Routes, domain.WorkerConfigRoute{Service: id, Host: expanded, Path: "/", Enabled: env.Enabled, Release: env.Release, Pool: pool})
+					out.Routes = append(out.Routes, domain.WorkerConfigRoute{Service: id, Host: expanded, Path: "/", Enabled: env.Enabled, Version: env.Version, Pool: pool})
 				}
 			}
-			if env.Release == "" {
+			if env.Version == "" {
 				continue
 			}
-			if release, ok := st.Workers.Releases[env.Release]; ok && release.Service == id && release.Organization == ws.Organization {
-				out.Releases[release.ID] = release
+			if version, ok := st.Workers.Versions[env.Version]; ok && version.Service == id && version.Organization == ws.Organization {
+				out.Versions[version.ID] = version
 			}
 		}
+	}
+
+	for _, deployment := range st.Workers.Deployments {
+		if deployment.Committed == nil || !deployment.Expires.After(time.Now()) {
+			continue
+		}
+		service, ok := st.Workers.Services[deployment.Service]
+		if !ok {
+			continue
+		}
+		env, ok := service.Environments[deployment.Environment]
+		if !ok {
+			continue
+		}
+		placement, ok := placements[service.Service]
+		if !ok || !config.PoolAllowedForProfile(service.NetworkProfile, placement.Pool) {
+			continue
+		}
+		version, ok := st.Workers.Versions[deployment.Version]
+		if !ok || version.Service != service.Service || version.Organization != service.Organization {
+			continue
+		}
+		for _, host := range DeploymentHosts(config, service, placement.Pool, deployment.ID) {
+			out.Routes = append(out.Routes, domain.WorkerConfigRoute{Service: service.Service, Host: host, Path: "/", Expires: &deployment.Expires, Enabled: env.Enabled, Version: version.ID, Pool: placement.Pool})
+		}
+		out.Versions[version.ID] = version
 	}
 	sort.Slice(out.Routes, func(i, j int) bool { return out.Routes[i].Host < out.Routes[j].Host })
 	return out
@@ -157,17 +184,17 @@ func WorkerConfigDigest(p domain.WorkerConfigProjection) (string, []byte, error)
 func SameWorkerConfigRoute(a, b domain.WorkerConfigRoute) bool { return a == b }
 
 // diffWorkerConfig emits the ops needed to move a runtime from prev to next.
-// Release descriptors referenced by changed routes are always included, so a
-// runtime that pruned an unreferenced release can still apply a rollback.
+// Version descriptors referenced by changed routes are always included, so a
+// runtime that pruned an unreferenced version can still apply a rollback.
 func DiffWorkerConfig(prev *domain.WorkerConfigProjection, next domain.WorkerConfigProjection) []domain.WorkerConfigOp {
 	prevRoutes := map[string]domain.WorkerConfigRoute{}
-	prevReleases := map[string]domain.WorkerRelease{}
+	prevVersions := map[string]domain.WorkerVersion{}
 	if prev != nil {
 		for _, route := range prev.Routes {
 			prevRoutes[route.Host] = route
 		}
-		for id, release := range prev.Releases {
-			prevReleases[id] = release
+		for id, version := range prev.Versions {
+			prevVersions[id] = version
 		}
 	}
 	nextRoutes := map[string]domain.WorkerConfigRoute{}
@@ -175,14 +202,14 @@ func DiffWorkerConfig(prev *domain.WorkerConfigProjection, next domain.WorkerCon
 		nextRoutes[route.Host] = route
 	}
 	changedRoutes := []domain.WorkerConfigRoute{}
-	type PooledRelease struct {
+	type PooledVersion struct {
 		pool    string
-		release domain.WorkerRelease
+		version domain.WorkerVersion
 	}
-	neededReleases := map[string]PooledRelease{}
-	addRelease := func(pool, id string) {
-		if release, ok := next.Releases[id]; ok {
-			neededReleases[pool+"\x00"+id] = PooledRelease{pool: pool, release: release}
+	neededVersions := map[string]PooledVersion{}
+	addVersion := func(pool, id string) {
+		if version, ok := next.Versions[id]; ok {
+			neededVersions[pool+"\x00"+id] = PooledVersion{pool: pool, version: version}
 		}
 	}
 	for _, route := range next.Routes {
@@ -191,15 +218,15 @@ func DiffWorkerConfig(prev *domain.WorkerConfigProjection, next domain.WorkerCon
 			continue
 		}
 		changedRoutes = append(changedRoutes, route)
-		if route.Release != "" {
-			addRelease(route.Pool, route.Release)
+		if route.Version != "" {
+			addVersion(route.Pool, route.Version)
 		}
 	}
-	for id, release := range next.Releases {
-		if old, ok := prevReleases[id]; !ok || !reflect.DeepEqual(old, release) {
+	for id, version := range next.Versions {
+		if old, ok := prevVersions[id]; !ok || !reflect.DeepEqual(old, version) {
 			for _, route := range next.Routes {
-				if route.Release == id {
-					addRelease(route.Pool, id)
+				if route.Version == id {
+					addVersion(route.Pool, id)
 				}
 			}
 		}
@@ -211,17 +238,17 @@ func DiffWorkerConfig(prev *domain.WorkerConfigProjection, next domain.WorkerCon
 		}
 	}
 	sort.Strings(deleted)
-	releaseKeys := make([]string, 0, len(neededReleases))
-	for key := range neededReleases {
-		releaseKeys = append(releaseKeys, key)
+	versionKeys := make([]string, 0, len(neededVersions))
+	for key := range neededVersions {
+		versionKeys = append(versionKeys, key)
 	}
-	sort.Strings(releaseKeys)
+	sort.Strings(versionKeys)
 	sort.Slice(changedRoutes, func(i, j int) bool { return changedRoutes[i].Host < changedRoutes[j].Host })
-	ops := make([]domain.WorkerConfigOp, 0, len(releaseKeys)+len(changedRoutes)+len(deleted))
-	for _, key := range releaseKeys {
-		item := neededReleases[key]
-		release := item.release
-		ops = append(ops, domain.WorkerConfigOp{Type: "release_put", Pool: item.pool, Release: &release})
+	ops := make([]domain.WorkerConfigOp, 0, len(versionKeys)+len(changedRoutes)+len(deleted))
+	for _, key := range versionKeys {
+		item := neededVersions[key]
+		version := item.version
+		ops = append(ops, domain.WorkerConfigOp{Type: "version_put", Pool: item.pool, Version: &version})
 	}
 	for i := range changedRoutes {
 		route := changedRoutes[i]
@@ -234,7 +261,7 @@ func DiffWorkerConfig(prev *domain.WorkerConfigProjection, next domain.WorkerCon
 }
 
 func EncodeWorkerConfigSnapshot(pool string, revision int64, p domain.WorkerConfigProjection) ([]byte, error) {
-	snapshot := WorkerConfigSnapshot{ConfigRevision: revision, Pool: pool, Routes: p.Routes, Releases: p.Releases}
+	snapshot := WorkerConfigSnapshot{ConfigRevision: revision, Pool: pool, Routes: p.Routes, Versions: p.Versions}
 	raw, err := json.Marshal(snapshot)
 	if err != nil {
 		return nil, err

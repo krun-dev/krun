@@ -65,9 +65,9 @@ func TestAuthorizationBoundaries(t *testing.T) {
 }
 func TestKeyIntersectionExplicitDenyAndRevocation(t *testing.T) {
 	st, admin, viewer := fixture()
-	policy := Policy{Version: 1, Statements: []Statement{{Effect: "allow", Actions: []string{"service.read", "service.publish"}, Resource: Selector{Organization: "org-a", Kind: "service", IDs: []string{"svc-a"}}, Conditions: Conditions{Environments: []string{"release-candidate"}}}, {Effect: "deny", Actions: []string{"service.publish"}, Resource: Selector{Organization: "org-a", Kind: "service", IDs: []string{"svc-a"}}}}}
+	policy := Policy{Version: 1, Statements: []Statement{{Effect: "allow", Actions: []string{"service.read", "service.publish"}, Resource: Selector{Organization: "org-a", Kind: "service", IDs: []string{"svc-a"}}, Conditions: Conditions{Environments: []string{"version-candidate"}}}, {Effect: "deny", Actions: []string{"service.publish"}, Resource: Selector{Organization: "org-a", Kind: "service", IDs: []string{"svc-a"}}}}}
 	key := APIKey{ID: "key-a", ScopeKind: "organization", Organization: "org-a", Owner: admin.ID, Policy: policy}
-	target, _ := Resolve(st, "service", "svc-a", "release-candidate")
+	target, _ := Resolve(st, "service", "svc-a", "version-candidate")
 	p := Principal{User: admin, Key: &key}
 	d, e := Authorize(st, p, "service.read", target)
 	if e != nil || !d.Allowed {
@@ -82,14 +82,14 @@ func TestKeyIntersectionExplicitDenyAndRevocation(t *testing.T) {
 	if e != nil || d.Allowed {
 		t.Fatal("environment constraint ignored")
 	}
-	target.Environment = "release-candidate"
+	target.Environment = "version-candidate"
 	p.User = viewer
 	delete(st.Assignments, "viewer")
 	d, e = Authorize(st, p, "service.read", target)
 	if e != nil || d.Allowed || !d.KeyAllowed {
 		t.Fatalf("key bypassed current user permissions %+v %v", d, e)
 	}
-	target, _ = Resolve(st, "service", "svc-b", "release-candidate")
+	target, _ = Resolve(st, "service", "svc-b", "version-candidate")
 	p.User = admin
 	d, e = Authorize(st, p, "service.read", target)
 	if e != nil || d.Allowed {
@@ -100,8 +100,8 @@ func TestGroupsAndIndependentSources(t *testing.T) {
 	st, _, viewer := fixture()
 	delete(st.Assignments, "viewer")
 	st.Groups["publishers"] = Group{ID: "publishers", ScopeKind: "organization", ScopeID: "org-a", Members: []string{viewer.ID}}
-	st.Assignments["publish"] = Assignment{ID: "publish", SubjectKind: "group", SubjectID: "publishers", Role: "publisher", ScopeKind: "service", ScopeID: "svc-a", Conditions: Conditions{Environments: []string{"release-candidate"}}}
-	target, _ := Resolve(st, "service", "svc-a", "release-candidate")
+	st.Assignments["publish"] = Assignment{ID: "publish", SubjectKind: "group", SubjectID: "publishers", Role: "publisher", ScopeKind: "service", ScopeID: "svc-a", Conditions: Conditions{Environments: []string{"version-candidate"}}}
+	target, _ := Resolve(st, "service", "svc-a", "version-candidate")
 	d, e := Authorize(st, Principal{User: viewer}, "service.publish", target)
 	if e != nil || !d.Allowed {
 		t.Fatalf("group scoped role failed %+v %v", d, e)

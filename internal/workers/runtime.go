@@ -11,17 +11,17 @@ import (
 	domain "github.com/krun-dev/krun/internal/domain"
 )
 
-type WorkerReleaseAssets struct {
-	Release  domain.WorkerRelease
+type WorkerVersionAssets struct {
+	Version  domain.WorkerVersion
 	Artifact domain.WorkerArtifact
 	Config   *domain.WorkerAssetsConfig
 	Files    []workerartifact.WorkerManifestFile
 }
 
-func (w *Controller) ReleaseAssets(ctx context.Context, releaseID, pool string) (WorkerReleaseAssets, error) {
-	var out WorkerReleaseAssets
-	rel, art, e := w.Service.Store.RuntimeRelease(ctx, releaseID, pool)
-	out.Release, out.Artifact = rel, art
+func (w *Controller) VersionAssets(ctx context.Context, versionID, pool string) (WorkerVersionAssets, error) {
+	var out WorkerVersionAssets
+	rel, art, e := w.Service.Store.RuntimeVersion(ctx, versionID, pool)
+	out.Version, out.Artifact = rel, art
 
 	if e != nil {
 		return out, e

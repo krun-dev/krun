@@ -137,8 +137,8 @@ func (s *Service) NormalizeService(ws domain.WorkerService, states ...*domain.St
 type WorkerOverviewEnvironment struct {
 	Environment      domain.WorkerEnvironment `json:"environment"`
 	History          []domain.WorkerHistory   `json:"history"`
-	CurrentRelease   *domain.WorkerRelease    `json:"current_release,omitempty"`
-	ConfirmedRelease *domain.WorkerRelease    `json:"confirmed_release,omitempty"`
+	CurrentVersion   *domain.WorkerVersion    `json:"current_version,omitempty"`
+	ConfirmedVersion *domain.WorkerVersion    `json:"confirmed_version,omitempty"`
 }
 
 func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
@@ -163,7 +163,7 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 
 	environments := []WorkerOverviewEnvironment{}
 	versionVisible := map[string]bool{}
-	releaseIDs := map[string]bool{}
+	versionIDs := map[string]bool{}
 	for _, name := range names {
 		target := authorization.Target{Kind: "service", ID: t.ID, Organization: t.Organization, Environment: name}
 		read, authErr := authorization.Authorize(st, p, "service.read", target)
@@ -184,17 +184,17 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 			versionVisible[name] = true
 			entry.History = append(entry.History, st.Workers.Histories[t.ID+"/"+name]...)
 			for _, history := range entry.History {
-				releaseIDs[history.Release] = true
+				versionIDs[history.Version] = true
 			}
-			if release, ok := st.Workers.Releases[env.Release]; ok {
-				value := PublicWorkerRelease(release)
-				entry.CurrentRelease = &value
-				releaseIDs[release.ID] = true
+			if version, ok := st.Workers.Versions[env.Version]; ok {
+				value := PublicWorkerVersion(version)
+				entry.CurrentVersion = &value
+				versionIDs[version.ID] = true
 			}
-			if release, ok := st.Workers.Releases[env.Confirmed]; ok {
-				value := PublicWorkerRelease(release)
-				entry.ConfirmedRelease = &value
-				releaseIDs[release.ID] = true
+			if version, ok := st.Workers.Versions[env.Confirmed]; ok {
+				value := PublicWorkerVersion(version)
+				entry.ConfirmedVersion = &value
+				versionIDs[version.ID] = true
 			}
 		}
 		environments = append(environments, entry)
@@ -218,14 +218,15 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 	if len(operations) > 100 {
 		operations = operations[:100]
 	}
-	releases := map[string]domain.WorkerRelease{}
-	for id := range releaseIDs {
-		if release, ok := st.Workers.Releases[id]; ok && release.Service == t.ID && release.Organization == t.Organization && versionVisible[release.Environment] {
-			releases[id] = PublicWorkerRelease(release)
+	versions := map[string]domain.WorkerVersion{}
+	for id,version := range st.Workers.Versions {if version.Service==t.ID && version.Organization==t.Organization && versionVisible[version.Environment] {versionIDs[id]=true}}
+	for id := range versionIDs {
+		if version, ok := st.Workers.Versions[id]; ok && version.Service == t.ID && version.Organization == t.Organization && versionVisible[version.Environment] {
+			versions[id] = PublicWorkerVersion(version)
 		}
 	}
 	return map[string]any{
-		"builds": builds, "environments": environments, "operations": operations, "releases": releases,
+		"builds": builds, "environments": environments, "operations": operations, "versions": versions,
 		"domains_revision": ws.DomainsRevision,
 	}, Read, nil
 
@@ -306,7 +307,7 @@ func (s *Service) WorkerServiceNetworkProfileUpdate(ctx context.Context, st *dom
 		return s.WorkerServiceDomains(ctx, st, p, ref)
 	}
 	for _, env := range ws.Environments {
-		if env.Release != "" {
+		if env.Version != "" {
 			return nil, Read, domain.Problem(409, "WORKER_NETWORK_REASSIGNMENT_REQUIRED", "Published Workers require a platform-managed runtime reassignment before changing network profile")
 		}
 	}
@@ -547,7 +548,7 @@ func (s *Service) WorkerServiceList(ctx context.Context, st *domain.State, p aut
 				// Hosts are derived for display; the persisted row is not rewritten
 				// from a read path.
 				s.SyncEnvironmentHosts(&current, resource.Organization, resource.ID, s.SyncServiceDomains(service), service.NetworkProfile, s.Config.Workers.ServicePool(st.Workers, service))
-				summary.Environments = append(summary.Environments, WorkerEnvironmentSummary{Name: env, Domains: current.Domains, Hosts: current.Hosts, Enabled: current.Enabled, Release: current.Release, Confirmed: current.Confirmed})
+				summary.Environments = append(summary.Environments, WorkerEnvironmentSummary{Name: env, Domains: current.Domains, Hosts: current.Hosts, Enabled: current.Enabled, Version: current.Version, Confirmed: current.Confirmed})
 			}
 		}
 		if visible {

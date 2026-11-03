@@ -98,26 +98,26 @@ func (s *Store) WorkerConfigState(ctx context.Context, ids []string) (*domain.St
 	}
 	rows.Close()
 
-	rows, err = tx.Query(ctx, `SELECT e.service_id, e.env_name, e.enabled, e.release_id
+	rows, err = tx.Query(ctx, `SELECT e.service_id, e.env_name, e.enabled, e.version_id
 		FROM krun_worker_environments e
 		JOIN krun_worker_services s ON s.service_id=e.service_id
 		JOIN krun_resources r ON r.resource_id=s.service_id AND r.kind='service' AND r.org_id=s.org_id
 		JOIN krun_organizations o ON o.org_id=s.org_id
-		WHERE ($1::text[] IS NULL OR s.service_id=ANY($1))
+		WHERE e.env_name<>'@previews-base' AND ($1::text[] IS NULL OR s.service_id=ANY($1))
 		ORDER BY e.service_id, e.env_name`, ids)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
-		var service, name, release string
+		var service, name, version string
 		var enabled bool
-		if err = rows.Scan(&service, &name, &enabled, &release); err != nil {
+		if err = rows.Scan(&service, &name, &enabled, &version); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		item, ok := st.Workers.Services[service]
 		if ok {
-			item.Environments[name] = domain.WorkerEnvironment{Name: name, Enabled: enabled, Release: release}
+			item.Environments[name] = domain.WorkerEnvironment{Name: name, Enabled: enabled, Version: version}
 			st.Workers.Services[service] = item
 		}
 	}
@@ -127,22 +127,31 @@ func (s *Store) WorkerConfigState(ctx context.Context, ids []string) (*domain.St
 	}
 	rows.Close()
 
-	rows, err = tx.Query(ctx, `SELECT rel.release_id, rel.org_id, rel.service_id, rel.env_name,
+	rows, err = tx.Query(ctx, `SELECT rel.version_id, rel.org_id, rel.service_id, rel.env_name,
 		rel.artifact_id, rel.profile, rel.archive_digest, rel.module_digest,
 		rel.compatibility_date, rel.compatibility_flags, rel.config_revision,
 		rel.variables, rel.secret_digest, rel.created_at
-		FROM krun_worker_releases rel
-		JOIN krun_worker_environments e ON e.release_id=rel.release_id
+		FROM krun_worker_versions rel
+		JOIN krun_worker_environments e ON (e.version_id=rel.version_id OR EXISTS(SELECT 1 FROM krun_worker_deployments d WHERE d.version_id=rel.version_id AND d.committed_at IS NOT NULL AND d.expires_at>now()))
 			AND e.service_id=rel.service_id AND e.env_name=rel.env_name
 		JOIN krun_worker_services s ON s.service_id=e.service_id AND s.org_id=rel.org_id
 		JOIN krun_resources r ON r.resource_id=s.service_id AND r.kind='service' AND r.org_id=s.org_id
 		JOIN krun_organizations o ON o.org_id=s.org_id
 		WHERE ($1::text[] IS NULL OR s.service_id=ANY($1))
-		ORDER BY rel.release_id`, ids)
+		ORDER BY rel.version_id`, ids)
 	if err != nil {
 		return nil, err
 	}
-	if err = readReleaseRows(rows, st.Workers); err != nil {
+	if err = readVersionRows(rows, st.Workers); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	rows, err = tx.Query(ctx, `SELECT deployment_id,org_id,service_id,env_name,version_id,operation_id,created_at,expires_at,committed_at FROM krun_worker_deployments WHERE committed_at IS NOT NULL AND expires_at>now() AND ($1::text[] IS NULL OR service_id=ANY($1))`, ids)
+	if err != nil {
+		return nil, err
+	}
+	if err = readDeploymentRows(rows, st.Workers); err != nil {
 		rows.Close()
 		return nil, err
 	}

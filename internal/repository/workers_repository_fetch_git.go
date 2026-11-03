@@ -92,7 +92,7 @@ func (s *Service) FailRepositoryCredentialRefresh(ctx context.Context, connectio
 }
 
 // A provider may rotate the refresh token before the build request context is
-// cancelled. Finalize or release the durable lease with a short independent
+// cancelled. Finalize or version the durable lease with a short independent
 // context so cancellation cannot strand or lose the newly issued grant.
 func (s *Service) SettleRepositoryCredentialRefresh(connection domain.WorkerRepositoryConnection, claimRevision int64, reconnect bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -156,8 +156,8 @@ func (s *Service) RefreshClaimedRepositoryCredential(ctx context.Context, provid
 	refreshed, err := (&repooauth.Client{Config: s.Config}).Refresh(ctx, provider, repooauth.Grant{AccessToken: claimed.AccessToken, TokenType: claimed.TokenType, RefreshToken: claimed.RefreshToken})
 	if err != nil {
 		permanent := RepositoryRefreshGrantRejected(err)
-		if releaseErr := s.SettleRepositoryCredentialRefresh(claimed, claimRevision, permanent); releaseErr != nil {
-			return "", releaseErr
+		if versionErr := s.SettleRepositoryCredentialRefresh(claimed, claimRevision, permanent); versionErr != nil {
+			return "", versionErr
 		}
 		if permanent {
 			return "", fmt.Errorf("Repository connection expired; reconnect %s", provider.Name)

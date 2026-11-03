@@ -147,15 +147,15 @@ func TestWorkerOverviewAggregatesPollingState(t *testing.T) {
 	s, store, base := workerTestServer(t)
 	build := seedWorkerBuild(t, s, store, base)
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
-		release := WorkerRelease{ID: "rel-overview", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: build.Artifact, Created: now()}
-		st.Workers.Releases[release.ID] = release
+		version := WorkerVersion{ID: "rel-overview", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: build.Artifact, Created: now()}
+		st.Workers.Versions[version.ID] = version
 		service := st.Workers.Services["svc-a"]
 		env := service.Environments["production"]
-		env.Release, env.Confirmed = release.ID, release.ID
+		env.Version, env.Confirmed = version.ID, version.ID
 		service.Environments["production"] = env
 		st.Workers.Services[service.Service] = service
-		st.Workers.Histories["svc-a/production"] = []WorkerHistory{{Revision: 1, Release: release.ID, Operation: "op-overview", Kind: "publish", Time: now()}}
-		st.Workers.Operations["op-overview"] = WorkerOperation{ID: "op-overview", Service: "svc-a", Organization: "org-a", Environment: "production", State: "available", Release: release.ID, Created: now()}
+		st.Workers.Histories["svc-a/production"] = []WorkerHistory{{Revision: 1, Version: version.ID, Operation: "op-overview", Kind: "publish", Time: now()}}
+		st.Workers.Operations["op-overview"] = WorkerOperation{ID: "op-overview", Service: "svc-a", Organization: "org-a", Environment: "production", State: "available", Version: version.ID, Created: now()}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -168,7 +168,7 @@ func TestWorkerOverviewAggregatesPollingState(t *testing.T) {
 		Builds       []WorkerBuild                         `json:"builds"`
 		Environments []workerapp.WorkerOverviewEnvironment `json:"environments"`
 		Operations   []WorkerOperation                     `json:"operations"`
-		Releases     map[string]WorkerRelease              `json:"releases"`
+		Versions     map[string]WorkerVersion              `json:"versions"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &overview); err != nil {
 		t.Fatal(err)
@@ -176,10 +176,10 @@ func TestWorkerOverviewAggregatesPollingState(t *testing.T) {
 	if len(overview.Builds) != 1 || len(overview.Environments) != 2 || len(overview.Operations) != 1 {
 		t.Fatalf("unexpected overview: %+v", overview)
 	}
-	if overview.Releases["rel-overview"].Artifact != build.Artifact {
-		t.Fatalf("history release missing from overview: %+v", overview.Releases)
+	if overview.Versions["rel-overview"].Artifact != build.Artifact {
+		t.Fatalf("history version missing from overview: %+v", overview.Versions)
 	}
-	if overview.Environments[0].Environment.Name != "production" || len(overview.Environments[0].History) != 1 || overview.Environments[0].CurrentRelease == nil {
+	if overview.Environments[0].Environment.Name != "production" || len(overview.Environments[0].History) != 1 || overview.Environments[0].CurrentVersion == nil {
 		t.Fatalf("production overview incomplete: %+v", overview.Environments[0])
 	}
 }
@@ -216,34 +216,34 @@ func seedWorkerBuild(t *testing.T, s *Server, store *Store, base string) WorkerB
 	return b
 }
 
-func TestWorkerReleaseQueuesImmutableConfigurationAndRejectsInvalidTarget(t *testing.T) {
+func TestWorkerVersionQueuesImmutableConfigurationAndRejectsInvalidTarget(t *testing.T) {
 	s, store, base := workerTestServer(t)
 	b := seedWorkerBuild(t, s, store, base)
 	publish := `{"build_id":"` + b.ID + `","expected_revision":0,"idempotency_key":"publish-one"}`
-	if r := request(s, "POST", base+"/environments/missing-preview/releases", "krun_cli_admin", publish); r.Code != 404 {
+	if r := request(s, "POST", base+"/environments/missing-preview/deployments", "krun_cli_admin", publish); r.Code != 404 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	first := request(s, "POST", base+"/environments/production/releases", "krun_cli_admin", publish)
+	first := request(s, "POST", base+"/environments/production/deployments", "krun_cli_admin", publish)
 	if first.Code != 202 {
 		t.Fatal(first.Code, first.Body.String())
 	}
 	var op WorkerOperation
 	_ = json.Unmarshal(first.Body.Bytes(), &op)
-	if r := request(s, "POST", base+"/environments/production/releases", "krun_cli_admin", publish); r.Code != 200 {
+	if r := request(s, "POST", base+"/environments/production/deployments", "krun_cli_admin", publish); r.Code != 200 {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	if r := request(s, "PATCH", base+"/environments/production", "krun_cli_admin", `{"expected_revision":1,"variables":{"VALUE":"new"}}`); r.Code != 409 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	if r := request(s, "POST", base+"/environments/missing-preview/rollbacks", "krun_cli_admin", `{"release_id":"`+op.Release+`","expected_revision":0,"idempotency_key":"rollback-wrong-environment"}`); r.Code != 404 {
+	if r := request(s, "POST", base+"/environments/missing-preview/rollbacks", "krun_cli_admin", `{"version_id":"`+op.Version+`","expected_revision":0,"idempotency_key":"rollback-wrong-environment"}`); r.Code != 404 {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		env := st.Workers.Services["svc-a"].Environments["production"]
-		if env.Revision != 0 || env.Release != "" {
-			t.Fatal("enqueue committed a release")
+		if env.Revision != 0 || env.Version != "" {
+			t.Fatal("enqueue committed a version")
 		}
-		d := st.Workers.Releases[op.Release]
+		d := st.Workers.Versions[op.Version]
 		if d.Environment != "production" || d.ConfigRevision != 1 {
 			t.Fatal(d)
 		}
@@ -272,32 +272,32 @@ func TestWorkerActorKeyRevocationIsRechecked(t *testing.T) {
 	})
 }
 
-func TestWorkerRollbackCanRecoverACommittedRelease(t *testing.T) {
+func TestWorkerRollbackCanRecoverACommittedVersion(t *testing.T) {
 	s, store, base := workerTestServer(t)
 	b := seedWorkerBuild(t, s, store, base)
-	first := request(s, "POST", base+"/environments/production/releases", "krun_cli_admin", `{"build_id":"`+b.ID+`","expected_revision":0,"idempotency_key":"first"}`)
+	first := request(s, "POST", base+"/environments/production/deployments", "krun_cli_admin", `{"build_id":"`+b.ID+`","expected_revision":0,"idempotency_key":"first"}`)
 	var op WorkerOperation
 	_ = json.Unmarshal(first.Body.Bytes(), &op)
 	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		ws := st.Workers.Services["svc-a"]
 		env := ws.Environments["production"]
-		env.Revision, env.Release, env.Confirmed = 2, op.Release, op.Release
+		env.Revision, env.Version, env.Confirmed = 2, op.Version, op.Version
 		ws.Environments["production"] = env
 		st.Workers.Services["svc-a"] = ws
-		st.Workers.Histories["svc-a/production"] = []WorkerHistory{{Revision: 1, Release: op.Release}}
+		st.Workers.Histories["svc-a/production"] = []WorkerHistory{{Revision: 1, Version: op.Version}}
 		op.State = "committed"
 		st.Workers.Operations[op.ID] = op
 		return nil
 	})
-	if r := request(s, "POST", base+"/environments/production/rollbacks", "krun_cli_admin", `{"release_id":"missing","expected_revision":2,"idempotency_key":"bad"}`); r.Code != 404 {
+	if r := request(s, "POST", base+"/environments/production/rollbacks", "krun_cli_admin", `{"version_id":"missing","expected_revision":2,"idempotency_key":"bad"}`); r.Code != 404 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	if r := request(s, "POST", base+"/environments/production/rollbacks", "krun_cli_admin", `{"release_id":"`+op.Release+`","expected_revision":2,"idempotency_key":"recover"}`); r.Code != 202 {
+	if r := request(s, "POST", base+"/environments/production/rollbacks", "krun_cli_admin", `{"version_id":"`+op.Version+`","expected_revision":2,"idempotency_key":"recover"}`); r.Code != 202 {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		if st.Workers.Operations[op.ID].State != "committed" || st.Workers.Services["svc-a"].Environments["production"].Revision != 2 {
-			t.Fatal("rollback enqueue changed the active release before validation")
+			t.Fatal("rollback enqueue changed the active version before validation")
 		}
 		return nil
 	})
@@ -305,10 +305,10 @@ func TestWorkerRollbackCanRecoverACommittedRelease(t *testing.T) {
 
 // A committed operation is durable even before every runtime Pod has acked.
 // It must not block the next publish; the newer commit supersedes convergence.
-func TestCommittedReleaseDoesNotBlockNewPublish(t *testing.T) {
+func TestCommittedVersionDoesNotBlockNewPublish(t *testing.T) {
 	s, store, base := workerTestServer(t)
 	b := seedWorkerBuild(t, s, store, base)
-	first := request(s, "POST", base+"/environments/production/releases", "krun_cli_admin", `{"build_id":"`+b.ID+`","expected_revision":0,"idempotency_key":"first-committed"}`)
+	first := request(s, "POST", base+"/environments/production/deployments", "krun_cli_admin", `{"build_id":"`+b.ID+`","expected_revision":0,"idempotency_key":"first-committed"}`)
 	if first.Code != 202 {
 		t.Fatal(first.Code, first.Body.String())
 	}
@@ -317,14 +317,14 @@ func TestCommittedReleaseDoesNotBlockNewPublish(t *testing.T) {
 	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		ws := st.Workers.Services["svc-a"]
 		env := ws.Environments["production"]
-		env.Revision, env.Release = 2, op.Release
+		env.Revision, env.Version = 2, op.Version
 		ws.Environments["production"] = env
 		st.Workers.Services["svc-a"] = ws
 		op.State = "committed"
 		st.Workers.Operations[op.ID] = op
 		return nil
 	})
-	next := request(s, "POST", base+"/environments/production/releases", "krun_cli_admin", `{"build_id":"`+b.ID+`","expected_revision":2,"idempotency_key":"after-committed"}`)
+	next := request(s, "POST", base+"/environments/production/deployments", "krun_cli_admin", `{"build_id":"`+b.ID+`","expected_revision":2,"idempotency_key":"after-committed"}`)
 	if next.Code != 202 {
 		t.Fatal(next.Code, next.Body.String())
 	}
@@ -434,12 +434,12 @@ func TestWorkerRuntimeChannelRequiresCredentialAndPool(t *testing.T) {
 	}
 }
 
-func TestWorkerReleaseAPIHidesRuntimePool(t *testing.T) {
+func TestWorkerVersionAPIHidesRuntimePool(t *testing.T) {
 	s, store, base := workerTestServer(t)
-	release := seedPublishedWorker(t, store)
-	response := request(s, http.MethodGet, base+"/releases/"+release.ID, "krun_cli_admin", "")
+	version := seedPublishedWorker(t, store)
+	response := request(s, http.MethodGet, base+"/versions/"+version.ID, "krun_cli_admin", "")
 	if response.Code != http.StatusOK {
-		t.Fatalf("release: %d %s", response.Code, response.Body.String())
+		t.Fatalf("version: %d %s", response.Code, response.Body.String())
 	}
 	if strings.Contains(response.Body.String(), `"pool"`) || strings.Contains(response.Body.String(), "runtime-default") {
 		t.Fatalf("runtime placement leaked: %s", response.Body.String())
@@ -449,22 +449,22 @@ func TestWorkerReleaseAPIHidesRuntimePool(t *testing.T) {
 func TestWorkerConsoleReadsRespectServiceAndEnvironment(t *testing.T) {
 	s, store, base := workerTestServer(t)
 	b := seedWorkerBuild(t, s, store, base)
-	r := request(s, "POST", base+"/environments/production/releases", "krun_cli_admin", `{"build_id":"`+b.ID+`","expected_revision":0,"idempotency_key":"console"}`)
+	r := request(s, "POST", base+"/environments/production/deployments", "krun_cli_admin", `{"build_id":"`+b.ID+`","expected_revision":0,"idempotency_key":"console"}`)
 	var op WorkerOperation
 	_ = json.Unmarshal(r.Body.Bytes(), &op)
 	if r.Code != 202 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	if r := request(s, "GET", base+"/releases/"+op.Release, "krun_cli_admin", ""); r.Code != 200 {
+	if r := request(s, "GET", base+"/versions/"+op.Version, "krun_cli_admin", ""); r.Code != 200 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	if r := request(s, "GET", "/api/v1/orgs/org-b/services/svc-b/workers/releases/"+op.Release, "krun_cli_admin", ""); r.Code != 404 {
+	if r := request(s, "GET", "/api/v1/orgs/org-b/services/svc-b/workers/versions/"+op.Version, "krun_cli_admin", ""); r.Code != 404 {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	r = request(s, "POST", "/api/v1/orgs/org-a/api-keys", "krun_cli_admin", `{"name":"test read","expires_in":3600,"policy":{"schema_version":1,"statements":[{"effect":"allow","actions":["service.read","service.version.read"],"resource":{"kind":"service","organization_id":"org-a","ids":["svc-a"]},"conditions":{"environments":["fix-demo"]}}]}}`)
 	var key struct{ Key string }
 	_ = json.Unmarshal(r.Body.Bytes(), &key)
-	if r := request(s, "GET", base+"/releases/"+op.Release, key.Key, ""); r.Code != 403 {
+	if r := request(s, "GET", base+"/versions/"+op.Version, key.Key, ""); r.Code != 403 {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	if r := request(s, "GET", base+"/operations", key.Key, ""); r.Code != 200 || strings.Contains(r.Body.String(), op.ID) {

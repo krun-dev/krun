@@ -7,7 +7,7 @@ import (
 type WorkerPlacement = domain.WorkerPlacement
 type WorkerBuild = domain.WorkerBuild
 type WorkerArtifact = domain.WorkerArtifact
-type WorkerRelease = domain.WorkerRelease
+type WorkerVersion = domain.WorkerVersion
 
 var newState = domain.NewState
 var newWorkerState = domain.NewWorkerState

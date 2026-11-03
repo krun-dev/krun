@@ -1,9 +1,9 @@
 import {WorkerEntrypoint} from 'cloudflare:workers';
 // Edge configuration is an immutable in-memory view. There is no local DB:
 // bootstrap reads one snapshot, then a long-poll applies incremental ops.
-let view={revision:0,routes:new Map(),releases:new Map()};
-let releaseRefs=new Map(),lazyRoutes=false;
-const routeReleases=new WeakMap();
+let view={revision:0,routes:new Map(),versions:new Map()};
+let versionRefs=new Map(),lazyRoutes=false;
+const routeDescriptors=new WeakMap();
 const routeVersions=new Map(),routeFlights=new Map(),routeMisses=new Map();
 const ROUTE_CACHE_MAX=4096;
 let viewLoaded=false,booting=null,started=false,lastSync=0,lastLoop=0;
@@ -106,12 +106,12 @@ function applySnapshot(snapshot,pool='default'){
  if(snapshot.pool&&snapshot.pool!==pool)throw new Error('snapshot pool mismatch');
  const routes=new Map();
  for(const route of snapshot.routes||[])if(route.host)routes.set(String(route.host).toLowerCase(),route);
- const releases=new Map();
- for(const [id,release] of Object.entries(snapshot.releases||{}))releases.set(id,release);
- releaseRefs=new Map();
- for(const route of routes.values())if(route.release)releaseRefs.set(route.release,(releaseRefs.get(route.release)||0)+1);
- for(const route of routes.values())routeReleases.set(route,releases.get(route.release));
- view={revision:Number(snapshot.config_revision||0),routes,releases};
+ const versions=new Map();
+ for(const [id,version] of Object.entries(snapshot.versions||{}))versions.set(id,version);
+ versionRefs=new Map();
+ for(const route of routes.values())if(route.version)versionRefs.set(route.version,(versionRefs.get(route.version)||0)+1);
+ for(const route of routes.values())routeDescriptors.set(route,versions.get(route.version));
+ view={revision:Number(snapshot.config_revision||0),routes,versions};
  lazyRoutes=snapshot.lazy_routes===true;routeVersions.clear();routeMisses.clear();
  viewLoaded=true;lastSync=Date.now();
 }
@@ -121,7 +121,7 @@ async function bootstrap(env){
  if(env.CONFIG_BASE)try{
   const latest=await requestJSON(env.CONFIG_BASE+'/latest.json',5000);
   if(latest?.lazy_routes!==true)throw new Error('unsupported config head');
-  applySnapshot({...latest,pool:env.RUNTIME_POOL||'default',routes:[],releases:{}});return view;
+  applySnapshot({...latest,pool:env.RUNTIME_POOL||'default',routes:[],versions:{}});return view;
  }catch(e){console.error('config bootstrap from storage failed',e.message);}
  return bootstrapFromControl(env);
 }
@@ -141,33 +141,33 @@ function applyBatch(batch){
  // Validate before mutating: a malformed batch must never leave a partial view.
  const ops=batch.ops||[];
  for(const op of ops){
-  if(op.type==='release_put'&&op.release?.id)continue;
+  if(op.type==='version_put'&&op.version?.id)continue;
   if(op.type==='route_upsert'&&op.host&&op.route?.host===op.host)continue;
   if(op.type==='route_delete'&&op.host)continue;
   throw new Error('invalid config op '+op.type);
  }
  // No await occurs in this commit. Requests capture their immutable descriptor
- // before yielding; updating the indexes cannot change an in-flight release.
+ // before yielding; updating the indexes cannot change an in-flight version.
  const prune=new Set(),needed=new Set();
- for(const op of ops)if(op.type==='route_upsert'&&view.routes.has(String(op.host).toLowerCase())&&op.route.release)needed.add(op.route.release);
+ for(const op of ops)if(op.type==='route_upsert'&&view.routes.has(String(op.host).toLowerCase())&&op.route.version)needed.add(op.route.version);
  for(const op of ops){
-  if(op.type==='release_put'&&lazyRoutes&&!needed.has(op.release.id)&&!releaseRefs.has(op.release.id))continue;
-  if(op.type==='release_put'){view.releases.set(op.release.id,op.release);prune.add(op.release.id);continue;}
+  if(op.type==='version_put'&&lazyRoutes&&!needed.has(op.version.id)&&!versionRefs.has(op.version.id))continue;
+  if(op.type==='version_put'){view.versions.set(op.version.id,op.version);prune.add(op.version.id);continue;}
   const host=String(op.host).toLowerCase(),old=view.routes.get(host);
   routeMisses.delete(host);
   if(lazyRoutes&&(!old||(routeVersions.get(host)||0)>Number(batch.to)))continue;
   routeVersions.set(host,Number(batch.to));
-  if(old?.release){const n=(releaseRefs.get(old.release)||0)-1;if(n>0)releaseRefs.set(old.release,n);else releaseRefs.delete(old.release);prune.add(old.release);}
+  if(old?.version){const n=(versionRefs.get(old.version)||0)-1;if(n>0)versionRefs.set(old.version,n);else versionRefs.delete(old.version);prune.add(old.version);}
   if(op.type==='route_delete'){view.routes.delete(host);routeVersions.delete(host);}
-  else{view.routes.set(host,op.route);routeReleases.set(op.route,view.releases.get(op.route.release));if(op.route.release)releaseRefs.set(op.route.release,(releaseRefs.get(op.route.release)||0)+1);}
+  else{view.routes.set(host,op.route);routeDescriptors.set(op.route,view.versions.get(op.route.version));if(op.route.version)versionRefs.set(op.route.version,(versionRefs.get(op.route.version)||0)+1);}
  }
- for(const id of prune)if(!releaseRefs.has(id))view.releases.delete(id);
+ for(const id of prune)if(!versionRefs.has(id))view.versions.delete(id);
  view.revision=Number(batch.to);lastSync=Date.now();
  return true;
 }
 function forgetRoute(host){
  const route=view.routes.get(host);view.routes.delete(host);routeVersions.delete(host);
- if(route?.release){const n=(releaseRefs.get(route.release)||0)-1;if(n>0)releaseRefs.set(route.release,n);else{releaseRefs.delete(route.release);view.releases.delete(route.release);}}
+ if(route?.version){const n=(versionRefs.get(route.version)||0)-1;if(n>0)versionRefs.set(route.version,n);else{versionRefs.delete(route.version);view.versions.delete(route.version);}}
 }
 async function resolveRoute(env,host){
  const cached=view.routes.get(host);
@@ -195,11 +195,11 @@ async function resolveRoute(env,host){
    if(before!==view.revision)continue;
    const route=(snapshot.routes||[]).find(r=>r.host===host);
    if(!route){lruPut(routeMisses,host,Date.now()+2000,1024);return null;}
-   const release=(snapshot.releases||{})[route.release];
-   if(route.release&&!release)throw new Error('route descriptor missing');
+   const version=(snapshot.versions||{})[route.version];
+   if(route.version&&!version)throw new Error('route descriptor missing');
    forgetRoute(host);view.routes.set(host,route);routeVersions.set(host,Number(snapshot.config_revision||0));
-   if(release){view.releases.set(release.id,release);releaseRefs.set(release.id,(releaseRefs.get(release.id)||0)+1);}
-   routeReleases.set(route,release);
+   if(version){view.versions.set(version.id,version);versionRefs.set(version.id,(versionRefs.get(version.id)||0)+1);}
+   routeDescriptors.set(route,version);
    while(view.routes.size>ROUTE_CACHE_MAX)forgetRoute(view.routes.keys().next().value);
    return route;
   }
@@ -241,18 +241,18 @@ function ensureStarted(env,ctx){
  if(ctx&&typeof ctx.waitUntil==='function')ctx.waitUntil(loop);
 }
 
-// Asset manifests are immutable per release; skip re-fetching them per request.
+// Asset manifests are immutable per version; skip re-fetching them per request.
 const manifests=new Map(),manifestFlights=new Map(),assetFlights=new Map();
 function lruPut(cache,key,value,max){cache.delete(key);cache.set(key,value);while(cache.size>max)cache.delete(cache.keys().next().value);}
 function coalesce(cache,key,load){if(cache.has(key))return cache.get(key);const flight=Promise.resolve().then(load).finally(()=>cache.delete(key));cache.set(key,flight);return flight;}
-async function assetManifest(env,release){
- const cached=manifests.get(release.id);
- if(cached){lruPut(manifests,release.id,cached,512);return cached;}
- return coalesce(manifestFlights,release.id,async()=>{
-  const m=await platform(env,'/releases/'+encodeURIComponent(release.id)+'/assets');
+async function assetManifest(env,version){
+ const cached=manifests.get(version.id);
+ if(cached){lruPut(manifests,version.id,cached,512);return cached;}
+ return coalesce(manifestFlights,version.id,async()=>{
+  const m=await platform(env,'/versions/'+encodeURIComponent(version.id)+'/assets');
   // Build the path index once per immutable manifest, including ASSETS binding.
   m.index=new Map((m.files||[]).map(file=>['/'+file.path,file.path]));
-  lruPut(manifests,release.id,m,512);return m;
+  lruPut(manifests,version.id,m,512);return m;
  });
 }
 
@@ -268,10 +268,10 @@ function cachePut(env,key,value){
   const first=assetCache.keys().next().value;const old=assetCache.get(first);assetCacheBytes-=old.bytes.length;assetCache.delete(first);
  }
 }
-async function assetBytes(env,release,path){
- const key=release.id+'\0'+path;const hit=cacheGet(key);if(hit)return hit;
+async function assetBytes(env,version,path){
+ const key=version.id+'\0'+path;const hit=cacheGet(key);if(hit)return hit;
  return coalesce(assetFlights,key,async()=>{
- const meta=await platform(env,'/releases/'+encodeURIComponent(release.id)+'/assets/'+path.split('/').map(encodeURIComponent).join('/'));
+ const meta=await platform(env,'/versions/'+encodeURIComponent(version.id)+'/assets/'+path.split('/').map(encodeURIComponent).join('/'));
  const response=await fetch(meta.download_url,{signal:AbortSignal.timeout(15000)});
  if(!response.ok)throw new Error('asset download failed ('+response.status+')');
  const bytes=new Uint8Array(await response.arrayBuffer());
@@ -314,20 +314,20 @@ function serveAsset(request,path,value){
  if(request.headers.get('if-none-match')===etag)return new Response(null,{status:304,headers:baseHeaders});
  return new Response(value.bytes,{status:200,headers:{...baseHeaders,'content-type':value.content_type,'cache-control':hashedAsset.test(path)?'public, max-age=31536000, immutable':'public, max-age=300'}});
 }
-async function boundAssetResponse(env,release,request){
- const manifest=await assetManifest(env,release);if(!manifest.config)return json({error:'assets unavailable'},404);
+async function boundAssetResponse(env,version,request){
+ const manifest=await assetManifest(env,version);if(!manifest.config)return json({error:'assets unavailable'},404);
  const path=normalizePath(new URL(request.url).pathname);if(path===null)return json({error:'invalid path'},400);
  const files=manifest.index;
  const hit=lookupAsset(files,path,manifest.config.html_handling||'auto-trailing-slash');
  if(hit.redirect!==undefined)return new Response(null,{status:307,headers:{location:hit.redirect}});
- if(hit.file)return serveAsset(request,hit.file,await assetBytes(env,release,files.get(hit.file)));
- if(manifest.config.not_found_handling==='single-page-application'&&files.has('/index.html'))return serveAsset(request,'/index.html',await assetBytes(env,release,files.get('/index.html')));
+ if(hit.file)return serveAsset(request,hit.file,await assetBytes(env,version,files.get(hit.file)));
+ if(manifest.config.not_found_handling==='single-page-application'&&files.has('/index.html'))return serveAsset(request,'/index.html',await assetBytes(env,version,files.get('/index.html')));
  return json({error:'asset not found'},404);
 }
-export class ReleaseAssets extends WorkerEntrypoint {
+export class VersionAssets extends WorkerEntrypoint {
  async fetch(request){
-  const releaseId=this.ctx?.props?.release_id;if(typeof releaseId!=='string'||releaseId==='')return json({error:'asset binding unavailable'},404);
-  return boundAssetResponse(this.env,{id:releaseId},request);
+  const versionId=this.ctx?.props?.version_id;if(typeof versionId!=='string'||versionId==='')return json({error:'asset binding unavailable'},404);
+  return boundAssetResponse(this.env,{id:versionId},request);
  }
 }
 const bindingName=/^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
@@ -346,19 +346,19 @@ async function worker(env,ctx,d,artifact) {
   const loaded=await loadArtifact(archive,d),manifest=loaded.manifest;
   let secrets={};
   if(d.secret_digest){
-   const payload=await platform(env,'/releases/'+encodeURIComponent(d.id)+'/secrets');
-   if(payload.release_id!==d.id||payload.secret_digest!==d.secret_digest||!payload.values||typeof payload.values!=='object')throw new Error('secret binding mismatch');
+   const payload=await platform(env,'/versions/'+encodeURIComponent(d.id)+'/secrets');
+   if(payload.version_id!==d.id||payload.secret_digest!==d.secret_digest||!payload.values||typeof payload.values!=='object')throw new Error('secret binding mismatch');
    secrets=payload.values;
   }
   // Object spread defines own data properties even for magic names such as
   // `__proto__`; the assets binding below uses defineProperty for the same reason.
   // A normal prototype is required because WorkerLoader structured-clones env.
-  const childEnv={...(d.variables||{}),...secrets,KRUN_ENVIRONMENT:d.environment,KRUN_SERVICE_ID:d.service_id,KRUN_RELEASE_ID:d.id};
+  const childEnv={...(d.variables||{}),...secrets,KRUN_ENVIRONMENT:d.environment,KRUN_SERVICE_ID:d.service_id,KRUN_VERSION_ID:d.id};
   const assetBinding=manifest.assets?.binding;
   if(assetBinding){
    if(!bindingName.test(assetBinding)||assetBinding.startsWith('KRUN_')||reservedBindings.has(assetBinding)||magicBindings.has(assetBinding)||Object.hasOwn(childEnv,assetBinding))throw new Error('asset binding name conflicts with environment');
-   if(!ctx?.exports?.ReleaseAssets)throw new Error('asset binding factory unavailable');
-   Object.defineProperty(childEnv,assetBinding,{value:ctx.exports.ReleaseAssets({props:{release_id:d.id}}),enumerable:true,writable:false,configurable:false});
+   if(!ctx?.exports?.VersionAssets)throw new Error('asset binding factory unavailable');
+   Object.defineProperty(childEnv,assetBinding,{value:ctx.exports.VersionAssets({props:{version_id:d.id}}),enumerable:true,writable:false,configurable:false});
   }
   return {compatibilityDate:manifest.compatibility_date,compatibilityFlags:manifest.compatibility_flags,mainModule:manifest.main_module,modules:loaded.modules,env:childEnv,globalOutbound:null};
  });
@@ -371,9 +371,10 @@ export class Private extends WorkerEntrypoint {
    await ensureBootstrap(this.env);
    const url=new URL(request.url);
    const route=await resolveRoute(this.env,url.hostname.toLowerCase());if(!route)return json({error:'unknown route'},404);
+   if(route.expires_at&&Date.parse(route.expires_at)<=Date.now())return json({error:'deployment expired'},410);
    if(!route.enabled)return json({error:'environment disabled'},410);
-   const d=routeReleases.get(route)||view.releases.get(route.release);if(!d)return json({error:'environment not published'},503);
-   const headers=new Headers(request.headers);for(const name of ['x-krun-release','x-krun-scope','x-forwarded-host','x-internal'])headers.delete(name);
+   const d=routeDescriptors.get(route)||view.versions.get(route.version);if(!d)return json({error:'environment not published'},503);
+   const headers=new Headers(request.headers);for(const name of ['x-krun-version','x-krun-scope','x-forwarded-host','x-internal'])headers.delete(name);
    const forward=async()=>{const stub=await worker(this.env,this.ctx,d);return await stub.getEntrypoint().fetch(new Request(request,{headers}));};
    let response;
    const manifest=await assetManifest(this.env,d);
@@ -395,7 +396,7 @@ export class Private extends WorkerEntrypoint {
     }
    }
    const out=new Response(response.body,response);
-   out.headers.set('x-krun-release',d.id);out.headers.set('x-krun-pod',this.env.POD_UID);
+   out.headers.set('x-krun-version',d.id);out.headers.set('x-krun-pod',this.env.POD_UID);
    return out;
   }catch(e){console.error('runtime request failed',e.message);return json({error:'runtime unavailable'},503);}
  }
@@ -411,15 +412,15 @@ export class Management extends WorkerEntrypoint {
   try {
    if(path==='/validate'){
     const input=await request.json();
-    if(!input.release||!input.artifact)return json({error:'release and artifact required'},400);
+    if(!input.version||!input.artifact)return json({error:'version and artifact required'},400);
     // The controller supplies the immutable descriptor and a short-lived
     // artifact URL; cold-load and run the KrunValidation RPC on this member.
-    await validate(this.env,this.ctx,input.release,input.artifact);
-    return json({pod_uid:this.env.POD_UID,release_id:input.release.id,archive_sha256:input.release.archive_sha256});
+    await validate(this.env,this.ctx,input.version,input.artifact);
+    return json({pod_uid:this.env.POD_UID,version_id:input.version.id,archive_sha256:input.version.archive_sha256});
    }
    if(path!=='/ready')return json({error:'not found'},404);
    if(validatorOnly)return json({status:'ready',role:'validator',pod_uid:this.env.POD_UID,pool:this.env.RUNTIME_POOL||'default'});
-   // Readiness means the config view is loaded; releases are lazy-loaded on
+   // Readiness means the config view is loaded; versions are lazy-loaded on
    // first request so Pod start does not scale with the number of services.
    await ensureBootstrap(this.env);
    return json({status:'ready',pod_uid:this.env.POD_UID,pool:this.env.RUNTIME_POOL||'default',revision:view.revision,stale_ms:Date.now()-lastSync});

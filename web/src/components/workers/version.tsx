@@ -1,12 +1,18 @@
 import { Check, Circle, LoaderCircle } from "lucide-react";
 import { t } from "@/lib/i18n";
-import { shortID, type Build, type Environment, type Operation, type WorkerData } from "@/lib/workers";
+import {
+  shortID,
+  type Build,
+  type Environment,
+  type Operation,
+  type WorkerData,
+} from "@/lib/workers";
 import { Card, CardContent } from "@/components/ui/card";
 import { SelectField } from "@/components/common";
 import { cn } from "@/lib/utils";
 import { Status, stepNames, stepStates, states } from "./shared";
 
-export function ReleaseSummary({
+export function VersionSummary({
   build,
   data,
   onSelect,
@@ -17,14 +23,12 @@ export function ReleaseSummary({
 }) {
   const stateOf = (env: Environment): string => {
     if (build.state !== "succeeded") return "不可用";
-    const current = env.release_id
-      ? data.releases[env.release_id]
-      : undefined;
+    const current = env.version_id ? data.versions[env.version_id] : undefined;
     const historical = (data.histories[env.name] || []).some(
-      (h) => data.releases[h.release_id]?.artifact_id === build.artifact_id,
+      (h) => data.versions[h.version_id]?.artifact_id === build.artifact_id,
     );
     if (current?.artifact_id === build.artifact_id)
-      return env.release_id !== env.confirmed_release_id ? "生效中" : "当前";
+      return env.version_id !== env.confirmed_version_id ? "生效中" : "当前";
     return historical ? "历史" : "未发布";
   };
   const deployed = data.environments
@@ -61,7 +65,6 @@ export function ReleaseSummary({
     </div>
   );
 }
-
 
 export function OperationPanel({
   operation: op,

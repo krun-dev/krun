@@ -35,7 +35,7 @@ bash deploy/workers-kind/deploy.sh
 
 脚本按目标 kind 节点的 `amd64` / `arm64` 架构构建控制面与镜像、导入目标节点、
 生成 manifest、部署并等待 Gateway 和各 Deployment 就绪。MinIO 镜像从固定的官方
-GitHub release 二进制构建，并校验仓库内固定的 SHA-256；不依赖已撤下的公共容器
+GitHub version 二进制构建，并校验仓库内固定的 SHA-256；不依赖已撤下的公共容器
 镜像。脚本还会生成一个短期本地 CA 和服务端证书，用于集群内的 Git smart-HTTP
 fixture；CA 只烘焙进本次 backend 与 kind 专用 builder 测试镜像，私钥只进入
 gitignored 的生成目录和测试 namespace Secret。生成的凭据、manifest 与二进制位于 gitignored 的
@@ -55,7 +55,7 @@ KUBECONFIG="$KUBECONFIG" KIND_CLUSTER_NAME="$KIND_CLUSTER_NAME" node e2e.mjs
 - 通过集群内 TLS Git smart-HTTP fixture 绑定仓库，验证固定 commit、Wrangler
   build init container、独立 pack container、制品 finalize、发布和 kgateway 请求；
 - 提交 Kubernetes build Job，按锁文件安装真实 Hono 依赖，读写 MinIO、发布并经 kgateway 调用 workerd；
-- 验证 `node:crypto`、release-scoped `env.ASSETS`、幂等、权限隔离、配置 revision/ack、回滚和静态资产；
+- 验证 `node:crypto`、version-scoped `env.ASSETS`、幂等、权限隔离、配置 revision/ack、回滚和静态资产；
 - 发布 [`examples/workers-fullstack`](../../examples/workers-fullstack/README.md) 的真实前后端项目，
   验证同源 API、SPA fallback、HTML 规范化、ETag/304、immutable 缓存与静态域；
 - 重启 backend、替换 serving runtime Pod，并验证认领租约与持久化恢复；候选只由不接 Gateway 的 validator 加载；

@@ -14,7 +14,7 @@ const source = readFileSync(
 writeFileSync(
   join(directory, "entry.mjs"),
   source +
-    "\nexport {applySnapshot,applyBatch,resolveRoute,assetManifest};export const inspect=()=>({view,releaseRefs,routeVersions,manifests});",
+    "\nexport {applySnapshot,applyBatch,resolveRoute,assetManifest};export const inspect=()=>({view,versionRefs,routeVersions,manifests});",
 );
 let serial = 0;
 const fresh = () =>
@@ -31,19 +31,19 @@ try {
     config_revision: 1,
     routes: Array.from({ length: count }, (_, i) => ({
       host: `site-${i}.test`,
-      release: `release-${i}`,
+      version: `version-${i}`,
     })),
-    releases: Object.fromEntries(
+    versions: Object.fromEntries(
       Array.from({ length: count }, (_, i) => [
-        `release-${i}`,
-        { id: `release-${i}` },
+        `version-${i}`,
+        { id: `version-${i}` },
       ]),
     ),
   });
   const before = runtime.inspect();
   // Iterating either entire index on an incremental update is a regression,
   // independently of machine speed and wall-clock benchmark variance.
-  for (const index of [before.view.routes, before.view.releases])
+  for (const index of [before.view.routes, before.view.versions])
     for (const method of [Symbol.iterator, "entries", "values", "keys"])
       index[method] = () => {
         throw new Error("incremental update scanned full index");
@@ -53,19 +53,19 @@ try {
       from: 1,
       to: 2,
       ops: [
-        { type: "release_put", release: { id: "new-release" } },
+        { type: "version_put", version: { id: "new-version" } },
         {
           type: "route_upsert",
           host: "site-0.test",
-          route: { host: "site-0.test", release: "new-release" },
+          route: { host: "site-0.test", version: "new-version" },
         },
       ],
     }),
   );
   assert.equal(runtime.inspect().view.routes, before.view.routes);
-  assert.equal(runtime.inspect().view.releases, before.view.releases);
-  assert(!runtime.inspect().view.releases.has("release-0"));
-  assert(runtime.inspect().view.releases.has("new-release"));
+  assert.equal(runtime.inspect().view.versions, before.view.versions);
+  assert(!runtime.inspect().view.versions.has("version-0"));
+  assert(runtime.inspect().view.versions.has("new-version"));
   assert.throws(() =>
     runtime.applyBatch({
       from: 2,
@@ -93,8 +93,8 @@ try {
     return Response.json({
       pool: "default",
       config_revision: 2,
-      routes: [{ host, release: host, enabled: true }],
-      releases: { [host]: { id: host } },
+      routes: [{ host, version: host, enabled: true }],
+      versions: { [host]: { id: host } },
     });
   });
   await Promise.all(
@@ -109,30 +109,30 @@ try {
       {
         type: "route_upsert",
         host: "cold.test",
-        route: { host: "cold.test", release: "cold.test", enabled: true },
+        route: { host: "cold.test", version: "cold.test", enabled: true },
       },
     ],
   });
   for (let i = 0; i < 4100; i++) await lazy.resolveRoute(env, `cold-${i}.test`);
   const view = lazy.inspect();
   assert.equal(view.view.routes.size, 4096);
-  assert.equal(view.view.releases.size, 4096);
+  assert.equal(view.view.versions.size, 4096);
   assert.equal(view.routeVersions.size, 4096);
-  assert.equal(view.releaseRefs.size, 4096);
+  assert.equal(view.versionRefs.size, 4096);
   lazy.applyBatch({
     from: 2,
     to: 3,
     ops: [
-      { type: "release_put", release: { id: "uncached" } },
+      { type: "version_put", version: { id: "uncached" } },
       {
         type: "route_upsert",
         host: "never-visited.test",
-        route: { host: "never-visited.test", release: "uncached" },
+        route: { host: "never-visited.test", version: "uncached" },
       },
     ],
   });
   assert(!view.view.routes.has("never-visited.test"));
-  assert(!view.view.releases.has("uncached"));
+  assert(!view.view.versions.has("uncached"));
   console.log(
     "PASS coalesced cold lookup, bounded route/descriptor caches and unloaded delta filtering",
   );
@@ -150,7 +150,7 @@ try {
   );
   assert.equal(assetCalls, 1);
   for (let i = 0; i < 600; i++) {
-    await assets.assetManifest(assetEnv, { id: `release-${i}` });
+    await assets.assetManifest(assetEnv, { id: `version-${i}` });
     await assets.assetManifest(assetEnv, { id: "hot" });
   }
   assert.equal(assets.inspect().manifests.size, 512);
@@ -169,8 +169,8 @@ try {
   const snapshot = {
     pool: "default",
     config_revision: 7,
-    routes: [{ host: "fallback.test", release: "fallback", enabled: true }],
-    releases: { fallback: { id: "fallback" } },
+    routes: [{ host: "fallback.test", version: "fallback", enabled: true }],
+    versions: { fallback: { id: "fallback" } },
   };
   const compressed = gzipSync(JSON.stringify(snapshot));
   const digest = Buffer.from(
@@ -191,7 +191,7 @@ try {
     });
     env.CONFIG_BASE = "http://config.test";
     assert.equal(
-      (await fallback.resolveRoute(env, "fallback.test")).release,
+      (await fallback.resolveRoute(env, "fallback.test")).version,
       "fallback",
     );
   } finally {

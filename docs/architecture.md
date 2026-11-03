@@ -33,7 +33,7 @@
 
 ## 文件定位
 
-- Workers 按服务、构建、环境、发布、授权、制品、配置分发及清理分文件；后台构建和发布分别位于 `build_controller.go`、`release_controller.go`。
+- Workers 按服务、构建、环境、发布、授权、制品、配置分发及清理分文件；后台构建和发布分别位于 `build_controller.go`、`deployment_controller.go`。
 - 基础设施实现按系统放在 `internal/adapters/`；Kubernetes 的连接、构建 Job、Pod 发现和 HTTPRoute 各有文件。S3 端口允许注入客户端，SDK 连接构造只在适配器内。
 - 身份提供商、制品和本地 builder 的纯模块测试与模块放在一起；HTTP 集成测试保留在 `internal/control`。
 - 表结构及查询定位见 [存储说明](storage.md) 和 [storage 包目录](../internal/storage/README.md)。

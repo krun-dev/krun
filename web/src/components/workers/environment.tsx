@@ -1,7 +1,12 @@
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { errorMessage, t } from "@/lib/i18n";
-import { shortID, type Environment, type WorkerData, type WorkerDomain } from "@/lib/workers";
+import {
+  shortID,
+  type Environment,
+  type WorkerData,
+  type WorkerDomain,
+} from "@/lib/workers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,9 +43,7 @@ export function EnvironmentSettings({
     domains.find((d) => d.id === id)?.label ||
     domains.find((d) => d.id === id)?.domain ||
     id;
-  const current = env.release_id
-    ? data.releases[env.release_id]
-    : undefined;
+  const current = env.version_id ? data.versions[env.version_id] : undefined;
   const stale = revision !== env.configuration_revision;
   async function save(input: unknown) {
     setBusy(true);
@@ -76,7 +79,7 @@ export function EnvironmentSettings({
         method,
         {
           ...(method === "PUT" ? { value } : {}),
-          expected_revision: env.release_revision,
+          expected_revision: env.deployment_revision,
           idempotency_key: crypto.randomUUID(),
         },
       );
@@ -84,9 +87,11 @@ export function EnvironmentSettings({
       setSecretValue("");
       reload();
       notify(
-        method === "PUT"
-          ? t("Secret 已保存，正在自动发布新版本。")
-          : t("Secret 已删除，正在自动发布新版本。"),
+        !env.version_id
+          ? t("Secret 配置已保存，首次部署时生效。")
+          : method === "PUT"
+            ? t("Secret 已保存，正在自动发布新版本。")
+            : t("Secret 已删除，正在自动发布新版本。"),
       );
     } catch (e) {
       notify(errorMessage(e));
@@ -122,7 +127,9 @@ export function EnvironmentSettings({
             </a>
           ))}
           <p className="text-xs text-muted-foreground">
-            {t("域名由服务的“路由与域名”页统一选择，此处只展示当前环境的地址。")}
+            {t(
+              "域名由服务的“路由与域名”页统一选择，此处只展示当前环境的地址。",
+            )}
           </p>
         </div>
         <Field
@@ -196,7 +203,9 @@ export function EnvironmentSettings({
                     variant="outline"
                     disabled={busy || active}
                     onClick={() => {
-                      if (window.confirm(t("确定删除这个 Secret 并立即发布吗？")))
+                      if (
+                        window.confirm(t("确定删除这个 Secret 并立即发布吗？"))
+                      )
                         void changeSecret("DELETE", name);
                     }}
                   >
@@ -216,7 +225,7 @@ export function EnvironmentSettings({
                 autoComplete="off"
                 placeholder="API_TOKEN"
                 value={secretName}
-                onChange={(e) => setSecretName(e.target.value.toUpperCase())}
+                onChange={(e) => setSecretName(e.target.value)}
               />
             </Field>
             <Field label={t("Secret 值")}>
@@ -233,14 +242,10 @@ export function EnvironmentSettings({
               disabled={
                 busy ||
                 active ||
-                !env.release_id ||
-                !/^[A-Z][A-Z0-9_]{0,63}$/.test(secretName) ||
-                secretName.startsWith("KRUN_") ||
-                secretValue.length === 0
+                !/^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/.test(secretName) ||
+                secretName.startsWith("KRUN_")
               }
-              onClick={() =>
-                void changeSecret("PUT", secretName, secretValue)
-              }
+              onClick={() => void changeSecret("PUT", secretName, secretValue)}
             >
               {t("保存并发布 Secret")}
             </Button>
@@ -248,7 +253,7 @@ export function EnvironmentSettings({
         </div>
         <div className="border-t pt-4">
           <p className="mb-2 text-sm text-muted-foreground">
-            {t("当前 Release 使用的变量")} · {shortID(current?.id)}
+            {t("当前 Version 使用的变量")} · {shortID(current?.id)}
           </p>
           <pre className="rounded-md bg-secondary p-3 text-xs">
             {JSON.stringify(current?.variables || {}, null, 2)}
@@ -362,13 +367,13 @@ export function Invocation({ base, env }: { base: string; env: Environment }) {
           ) : null}
           <Button
             className="w-fit"
-            disabled={busy || !env.enabled || !env.release_id}
+            disabled={busy || !env.enabled || !env.version_id}
             type="submit"
           >
             {busy ? t("调用中…") : t("发送请求")}
           </Button>
         </form>
-        {!env.release_id ? (
+        {!env.version_id ? (
           <p className="text-sm text-muted-foreground">
             {t("先发布到此环境，再发送请求。")}
           </p>

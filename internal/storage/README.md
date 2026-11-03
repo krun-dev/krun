@@ -20,7 +20,7 @@ HTTP 与业务入口调用本包，所有层共享 `domain`。本包不依赖 HT
 | 构建认领、制品提交 | `worker_builds.go` |
 | 发布操作的状态迁移 | `worker_operations.go` |
 | 有界工作队列与专用行解码 | `worker_queue.go` |
-| 密文与环境 / Release 绑定 | `secrets.go` |
+| 密文与环境 / Version 绑定 | `secrets.go` |
 | 来源上传与资产对象清单 | `source_upload.go` / `asset_inventory.go` |
 | 配置投影的数据库读取 | `config_projection.go` |
 | 配置 revision 事务与变更写入 | `config_delta.go` / `config_write.go` |

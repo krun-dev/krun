@@ -160,5 +160,5 @@ curl -o /dev/null -w '%{http_code}\n' -H 'Host: w-x-production.p-<pool-hash>.pub
 1. 在控制台创建服务，或调用 `POST /api/v1/orgs/{org}/services`。
 2. 上传源码包（`POST .../workers/source-uploads` → PUT `source.tar.gz`）。
 3. `POST .../workers/builds`：控制面在**本机**启动 builder，约 1 秒完成；不创建 Job、不拉镜像。
-4. `POST .../environments/production/releases`：控制面在单个 runtime Pod 上 `/validate`，commit，写入本地控制面的 config revision；runtime 通过 `PLATFORM` 拉取并 ack。
+4. `POST .../environments/production/deployments`：控制面在单个 runtime Pod 上 `/validate`，commit，写入本地控制面的 config revision；runtime 通过 `PLATFORM` 拉取并 ack。
 5. 打开 `https://<external_host>/`，或用控制台的 invoke 调 `/headers` 等路径。

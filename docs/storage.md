@@ -31,9 +31,9 @@ IAM 与 Workers 是两套独立分区，**不共享事务**：
 | 分区 | 表 |
 | --- | --- |
 | IAM | `krun_users`、`krun_organizations`、`krun_org_sources`、`krun_members`、`krun_groups`、`krun_group_members`、`krun_assignments`、`krun_resources`、`krun_api_keys`、`krun_api_key_hashes`、`krun_invitations`、`krun_identity_sources`、`krun_identity_providers`、`krun_meta` |
-| Workers | `krun_worker_services`、`krun_worker_service_domains`、`krun_worker_environments`、`krun_worker_secret_versions`、`krun_worker_environment_secrets`、`krun_worker_builds`、`krun_worker_build_private`、`krun_worker_artifacts`、`krun_worker_releases`、`krun_worker_release_secrets`、`krun_worker_operations`、`krun_worker_history`、`krun_worker_idempotency`、`krun_repository_connections`、`krun_repository_connect_states` |
+| Workers | `krun_worker_services`、`krun_worker_service_domains`、`krun_worker_environments`、`krun_worker_secret_versions`、`krun_worker_environment_secrets`、`krun_worker_builds`、`krun_worker_build_private`、`krun_worker_artifacts`、`krun_worker_versions`、`krun_worker_deployments`、`krun_worker_version_secrets`、`krun_worker_operations`、`krun_worker_history`、`krun_worker_idempotency`、`krun_repository_connections`、`krun_repository_connect_states` |
 | 会话（不属于任何分区） | `krun_sessions`、`krun_browsers`、`krun_login_states`、`krun_email_logins`、`krun_device_codes` |
-| 旁路 | `krun_audits`、`worker_config_revisions`、`worker_config_routes`、`worker_config_releases`、`worker_config_ops`、`worker_config_dirty`、`worker_config_checkpoints`、`worker_asset_objects`、`worker_retention_scopes`、`worker_runtime_acks` |
+| 旁路 | `krun_audits`、`worker_config_revisions`、`worker_config_routes`、`worker_config_versions`、`worker_config_ops`、`worker_config_dirty`、`worker_config_checkpoints`、`worker_asset_objects`、`worker_retention_scopes`、`worker_runtime_acks` |
 
 完整 DDL 在 `internal/storage/schema.sql`，由同目录 `schema.go` 通过 `go:embed` 原样嵌入。新库直接初始化；已有库校验 `schema_baseline` fingerprint，匹配时不重复执行 DDL。
 
@@ -41,7 +41,7 @@ IAM 与 Workers 是两套独立分区，**不共享事务**：
 
 - 认证：会话/API Key 按键查询；登录只加载当前 identity 和邀请，常用请求按 actor / organization / service 过滤；批量行解码复用 `pgx.Batch`，不读取全平台站点。边缘配置投影显式接收 service ID 列表，不通过修改 SQL 文本插入过滤条件。
 - `seen_at` 用**节流写**：`UPDATE ... WHERE seen_at < now() - interval '30 seconds'`，不是每请求都写。读请求本身不持久化任何状态。
-- 站点列表与详情在分区内进一步按资源范围过滤；资源列表默认每页 100 条，以 `next_after` 翻页。Runtime 元数据按 Release/Artifact 定向读取。
+- 站点列表与详情在分区内进一步按资源范围过滤；资源列表默认每页 100 条，以 `next_after` 翻页。Runtime 元数据按 Version/Artifact 定向读取。
 
 ## 写路径
 
@@ -65,11 +65,11 @@ UPDATE krun_worker_builds SET state='building', claimed_by=$2, claimed_at=now()
 
 副本崩溃后，`claimed_at` 超过 60 秒的 `validating` 操作可被其他副本接管。所有下游副作用必须幂等，因为同一操作可能执行两次。
 
-发布提交要求环境行的 `release_revision` 仍等于操作校验时的值，否则操作失败而不是覆盖：
+发布提交要求环境行的 `deployment_revision` 仍等于操作校验时的值，否则操作失败而不是覆盖：
 
 ```sql
-UPDATE krun_worker_environments SET release_id=$4, release_revision=release_revision+1
- WHERE service_id=$1 AND env_name=$2 AND release_revision=$3 AND enabled;
+UPDATE krun_worker_environments SET version_id=$4, deployment_revision=deployment_revision+1
+ WHERE service_id=$1 AND env_name=$2 AND deployment_revision=$3 AND enabled;
 ```
 
 ## 边缘收敛
@@ -93,10 +93,10 @@ UPDATE krun_worker_environments SET release_id=$4, release_revision=release_revi
 | `krun_audits` | 7 天 |
 | `krun_worker_builds` | 每服务最近 100 条终态；日志 7 天后清空 |
 | `krun_worker_operations` | 终态保留 30 天 |
-| `krun_worker_artifacts` | 无 release 引用且超过 30 天 |
+| `krun_worker_artifacts` | 无 version 引用且超过 30 天 |
 | `krun_worker_idempotency` | 7 天 |
 | `krun_worker_history` | 每 (service, env) 最近 50 条 |
-| `krun_worker_secret_versions` | 无环境或 Release 引用后保留 30 天 |
+| `krun_worker_secret_versions` | 无环境或 Version 引用后保留 30 天 |
 | `worker_config_revisions` | 512 条 |
 
 ## Schema 基线
@@ -111,3 +111,5 @@ UPDATE krun_worker_environments SET release_id=$4, release_revision=release_revi
 - `ensureAdmin`（至少保留一个系统管理员）是「先写、再查、不满足就写回」的补偿，并发降级可能短暂出现零管理员，需要人工 `krun-server bootstrap` 恢复。
 - 常用身份与站点路径按主体裁剪授权上下文，权限缓存仅限单次只读请求。
 - 数据库集成测试需要 `KRUN_TEST_POSTGRES_URL`，未提供时跳过。存储包的数据库测试使用独立 schema，控制层集成测试通过独立测试连接布置数据，不开放生产连接池。
+
+部署专属地址保留 30 天；部署记录到期或目标环境删除后由后台有界清理，删除同时入队路由撤销。保留中的 Deployment 会保护其 Version，Version 继续保护 Artifact 与 Secret。地址携带到期时间，Runtime 即使暂未收到清理增量也会拒绝过期部署请求。

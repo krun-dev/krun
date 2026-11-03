@@ -19,7 +19,7 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 		Builds:           map[string]domain.WorkerBuild{},
 		BuildPrivate:     map[string]domain.WorkerBuildPrivate{},
 		Artifacts:        map[string]domain.WorkerArtifact{},
-		Releases:         map[string]domain.WorkerRelease{},
+		Versions:         map[string]domain.WorkerVersion{},
 		Operations:       map[string]domain.WorkerOperation{},
 		OperationPrivate: map[string]domain.WorkerOperationPrivate{},
 		Histories:        map[string][]domain.WorkerHistory{},
@@ -31,7 +31,7 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 	if s.pool == nil {
 		return state, nil
 	}
-	rows, err := s.pool.Query(ctx, `SELECT operation_id, kind, org_id, service_id, env_name, state, build_id, release_id, expected_revision, config_revision, edge_revision, release_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at
+	rows, err := s.pool.Query(ctx, `SELECT operation_id, kind, org_id, service_id, env_name, state, build_id, version_id, expected_revision, config_revision, edge_revision, deployment_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at
 		FROM krun_worker_operations
 		WHERE state NOT IN ('succeeded','failed','available','superseded') AND reconcile_after<=now() AND (state IN ('queued','committed') OR claimed_by=$2 OR claimed_at IS NULL OR claimed_at<now()-'60 seconds'::interval)
 		ORDER BY reconcile_after,created_at LIMIT $1`, limit, replica)
@@ -81,27 +81,27 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 		rows.Close()
 	}
 	if len(state.Operations) > 0 {
-		// processOperation needs the release and artifact it is validating.
-		releaseIDs := []string{}
+		// processOperation needs the version and artifact it is validating.
+		versionIDs := []string{}
 		for _, op := range state.Operations {
-			if op.Release != "" {
-				releaseIDs = append(releaseIDs, op.Release)
+			if op.Version != "" {
+				versionIDs = append(versionIDs, op.Version)
 			}
 		}
-		if len(releaseIDs) > 0 {
-			rows, err = s.pool.Query(ctx, `SELECT release_id, org_id, service_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at
-				FROM krun_worker_releases WHERE release_id = ANY($1)`, releaseIDs)
+		if len(versionIDs) > 0 {
+			rows, err = s.pool.Query(ctx, `SELECT version_id, org_id, service_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at
+				FROM krun_worker_versions WHERE version_id = ANY($1)`, versionIDs)
 			if err != nil {
 				return state, err
 			}
-			if err = readReleaseRows(rows, &state); err != nil {
+			if err = readVersionRows(rows, &state); err != nil {
 				rows.Close()
 				return state, err
 			}
 			rows.Close()
 			serviceIDs := []string{}
-			for _, release := range state.Releases {
-				serviceIDs = append(serviceIDs, release.Service)
+			for _, version := range state.Versions {
+				serviceIDs = append(serviceIDs, version.Service)
 			}
 			if len(serviceIDs) > 0 {
 				rows, err = s.pool.Query(ctx, `SELECT service_id, pool_id, org_id, network_profile, role, state, revision, created_at, updated_at
@@ -126,9 +126,9 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 			}
 		}
 		artifactIDs := []string{}
-		for _, release := range state.Releases {
-			if release.Artifact != "" {
-				artifactIDs = append(artifactIDs, release.Artifact)
+		for _, version := range state.Versions {
+			if version.Artifact != "" {
+				artifactIDs = append(artifactIDs, version.Artifact)
 			}
 		}
 		if len(artifactIDs) > 0 {
@@ -165,9 +165,9 @@ func readWorkerBuildPrivateRows(rows pgx.Rows, state *domain.WorkerState) error 
 	return rows.Err()
 }
 
-func readReleaseRows(rows pgx.Rows, state *domain.WorkerState) error {
+func readVersionRows(rows pgx.Rows, state *domain.WorkerState) error {
 	for rows.Next() {
-		var r domain.WorkerRelease
+		var r domain.WorkerVersion
 		var variables, flags []byte
 		if err := rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.Profile, &r.ArchiveDigest, &r.ModuleDigest, &r.CompatibilityDate, &flags, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created); err != nil {
 			return err
@@ -181,7 +181,7 @@ func readReleaseRows(rows pgx.Rows, state *domain.WorkerState) error {
 				return err
 			}
 		}
-		state.Releases[r.ID] = r
+		state.Versions[r.ID] = r
 	}
 	return rows.Err()
 }
@@ -216,7 +216,7 @@ func scanOperations(rows pgx.Rows) ([]struct {
 		}
 		op := &item.Operation
 		var steps []byte
-		if err := rows.Scan(&op.ID, &op.Kind, &op.Organization, &op.Service, &op.Environment, &op.State, &op.Build, &op.Release, &op.ExpectedRevision, &op.ConfigRevision, &op.EdgeRevision, &op.ReleaseRevision, &op.Error, &steps, &item.Actor.User, &item.Actor.Key, &item.Actor.AuthVersion, &op.Created, &op.Finished); err != nil {
+		if err := rows.Scan(&op.ID, &op.Kind, &op.Organization, &op.Service, &op.Environment, &op.State, &op.Build, &op.Version, &op.ExpectedRevision, &op.ConfigRevision, &op.EdgeRevision, &op.DeploymentRevision, &op.Error, &steps, &item.Actor.User, &item.Actor.Key, &item.Actor.AuthVersion, &op.Created, &op.Finished); err != nil {
 			return nil, err
 		}
 		if len(steps) > 0 {

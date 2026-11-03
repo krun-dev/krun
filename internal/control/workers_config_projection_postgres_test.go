@@ -86,7 +86,7 @@ func TestPostgresDirtyQueueCoversProjectionChanges(t *testing.T) {
 	}
 	changes := []string{
 		`UPDATE krun_worker_environments SET enabled=false WHERE service_id='site-000002'`,
-		`UPDATE krun_worker_environments SET release_id='release-new' WHERE service_id='site-000002'`,
+		`UPDATE krun_worker_environments SET version_id='version-new' WHERE service_id='site-000002'`,
 		`INSERT INTO krun_worker_service_domains(service_id,domain_id) VALUES('site-000002','internal')`,
 		`UPDATE krun_worker_service_placements SET state='draining' WHERE service_id='site-000002'`,
 		`DELETE FROM krun_resources WHERE resource_id='site-000002'`,

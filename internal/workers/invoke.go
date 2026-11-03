@@ -17,7 +17,7 @@ func (s *Service) ResolveInvocation(st *domain.State, principal authorization.Pr
 	}
 	service := st.Workers.Services[target.ID]
 	current := service.Environments[env]
-	if !current.Enabled || current.Release == "" {
+	if !current.Enabled || current.Version == "" {
 		return "", "", domain.Problem(409, "WORKER_NOT_PUBLISHED", "Publish this enabled environment first")
 	}
 	// Invoke through the first selected domain of the service. The domain's

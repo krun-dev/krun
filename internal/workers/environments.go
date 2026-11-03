@@ -82,6 +82,11 @@ func (s *Service) WorkerEnvironmentCreate(ctx context.Context, st *domain.State,
 		return nil, Read, domain.Problem(409, "ENVIRONMENT_LIMIT", "Too many preview environments")
 	}
 	env := domain.WorkerEnvironment{Name: in.Name, Enabled: true, ConfigRevision: 1, Variables: map[string]string{}, SecretVersions: map[string]string{}}
+	if ws.PreviewBase != nil {
+		env.Variables = domain.CloneStringsMap(ws.PreviewBase.Variables)
+		env.SecretVersions = domain.CloneStringsMap(ws.PreviewBase.SecretVersions)
+		env.SecretNames = domain.WorkerSecretNames(env.SecretVersions)
+	}
 	s.SyncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains, ws.NetworkProfile, s.Config.Workers.ServicePool(st.Workers, ws))
 	ws.Environments[in.Name] = env
 	ws.PreviewRevision++
@@ -105,7 +110,7 @@ func (s *Service) WorkerEnvironmentDelete(ctx context.Context, st *domain.State,
 		return nil, Read, domain.NotFound()
 	}
 	if WorkerBusy(st, t.ID, env) {
-		return nil, Read, domain.Problem(409, "RELEASE_BUSY", "Wait for the active release operation")
+		return nil, Read, domain.Problem(409, "DEPLOYMENT_BUSY", "Wait for the active version operation")
 	}
 	delete(ws.Environments, env)
 	ws.PreviewRevision++
@@ -125,7 +130,7 @@ func (s *Service) WorkerEnvironmentUpdate(ctx context.Context, st *domain.State,
 		return nil, Read, domain.Problem(409, "REVISION_CONFLICT", "Environment configuration changed")
 	}
 	if WorkerBusy(st, t.ID, env) {
-		return nil, Read, domain.Problem(409, "RELEASE_BUSY", "Wait for the active release operation")
+		return nil, Read, domain.Problem(409, "DEPLOYMENT_BUSY", "Wait for the active version operation")
 	}
 	if in.Variables != nil && !appconfig.WorkerVariablesValid(in.Variables) {
 		return nil, Read, domain.Problem(422, "WORKER_VARIABLES_INVALID", "Use up to 32 non-reserved uppercase variables, at most 16 KiB")
@@ -159,6 +164,6 @@ type WorkerEnvironmentSummary struct {
 	Domains   []string `json:"domains,omitempty"`
 	Hosts     []string `json:"hosts,omitempty"`
 	Enabled   bool     `json:"enabled"`
-	Release   string   `json:"release_id,omitempty"`
-	Confirmed string   `json:"confirmed_release_id,omitempty"`
+	Version   string   `json:"version_id,omitempty"`
+	Confirmed string   `json:"confirmed_version_id,omitempty"`
 }

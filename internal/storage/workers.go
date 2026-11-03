@@ -13,7 +13,7 @@ import (
 // persistWorkers writes only changed Workers rows. Operation and build state
 // transitions use conditional updates so a concurrent claimer wins cleanly and
 // this writer simply skips; that is the extent of the concurrency guarantee
-// (AGENTS.md section 9: builds and releases converge eventually).
+// (AGENTS.md section 9: builds and versions converge eventually).
 func (s *Store) persistWorkers(ctx context.Context, before, after *domain.State, audits []domain.Audit) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -58,7 +58,10 @@ func writeWorkersDiff(ctx context.Context, tx pgx.Tx, before, after *domain.Stat
 	if err := writeArtifacts(ctx, tx, bw, aw); err != nil {
 		return err
 	}
-	if err := writeReleases(ctx, tx, bw, aw); err != nil {
+	if err := writeVersions(ctx, tx, bw, aw); err != nil {
+		return err
+	}
+	if err := writeDeployments(ctx, tx, bw, aw); err != nil {
 		return err
 	}
 	if err := writeOperations(ctx, tx, bw, aw); err != nil {
@@ -162,8 +165,8 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 				return domain.Problem(409, "REVISION_CONFLICT", "Preview environments changed")
 			}
 		}
-		for name, env := range svc.Environments {
-			oldEnv, ok := old.Environments[name]
+		for name, env := range domain.StorageWorkerEnvironments(svc) {
+			oldEnv, ok := domain.StorageWorkerEnvironments(old)[name]
 			if ok && sameEnvironment(oldEnv, env) {
 				continue
 			}
@@ -173,9 +176,9 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 			}
 			if !ok {
 				tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_environments
-					(service_id, env_name, enabled, config_revision, variables, release_revision, release_id, confirmed_release_id)
+					(service_id, env_name, enabled, config_revision, variables, deployment_revision, version_id, confirmed_version_id)
 					VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (service_id, env_name) DO NOTHING`,
-					id, name, env.Enabled, env.ConfigRevision, variables, env.Revision, env.Release, env.Confirmed)
+					id, name, env.Enabled, env.ConfigRevision, variables, env.Revision, env.Version, env.Confirmed)
 				if err != nil {
 					return err
 				}
@@ -184,12 +187,12 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 				}
 			} else {
 				tag, err := tx.Exec(ctx, `UPDATE krun_worker_environments
-					SET enabled=$3, config_revision=$4, variables=$5, release_revision=$6,
-					    release_id=$7, confirmed_release_id=$8, updated_at=now()
+					SET enabled=$3, config_revision=$4, variables=$5, deployment_revision=$6,
+					    version_id=$7, confirmed_version_id=$8, updated_at=now()
 					WHERE service_id=$1 AND env_name=$2 AND config_revision=$9
-					  AND release_revision=$10 AND release_id=$11 AND confirmed_release_id=$12`,
-					id, name, env.Enabled, env.ConfigRevision, variables, env.Revision, env.Release, env.Confirmed,
-					oldEnv.ConfigRevision, oldEnv.Revision, oldEnv.Release, oldEnv.Confirmed)
+					  AND deployment_revision=$10 AND version_id=$11 AND confirmed_version_id=$12`,
+					id, name, env.Enabled, env.ConfigRevision, variables, env.Revision, env.Version, env.Confirmed,
+					oldEnv.ConfigRevision, oldEnv.Revision, oldEnv.Version, oldEnv.Confirmed)
 				if err != nil {
 					return err
 				}
@@ -201,15 +204,15 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 				return err
 			}
 		}
-		for name, oldEnv := range old.Environments {
-			if _, ok := svc.Environments[name]; !ok {
+		for name, oldEnv := range domain.StorageWorkerEnvironments(old) {
+			if _, ok := domain.StorageWorkerEnvironments(svc)[name]; !ok {
 				if _, err := tx.Exec(ctx, `DELETE FROM krun_worker_environment_secrets WHERE service_id=$1 AND env_name=$2`, id, name); err != nil {
 					return err
 				}
 				tag, err := tx.Exec(ctx, `DELETE FROM krun_worker_environments
 					WHERE service_id=$1 AND env_name=$2 AND config_revision=$3
-					  AND release_revision=$4 AND release_id=$5 AND confirmed_release_id=$6`,
-					id, name, oldEnv.ConfigRevision, oldEnv.Revision, oldEnv.Release, oldEnv.Confirmed)
+					  AND deployment_revision=$4 AND version_id=$5 AND confirmed_version_id=$6`,
+					id, name, oldEnv.ConfigRevision, oldEnv.Revision, oldEnv.Version, oldEnv.Confirmed)
 				if err != nil {
 					return err
 				}
@@ -310,7 +313,7 @@ func sameWorkerPlacement(a, b domain.WorkerPlacement) bool {
 // not intend to change environment configuration.
 func defaultWorkerBaseline(name string, env domain.WorkerEnvironment) bool {
 	return name == workerBaseline && env.Name == workerBaseline && env.Enabled &&
-		env.ConfigRevision == 1 && env.Revision == 0 && env.Release == "" && env.Confirmed == "" &&
+		env.ConfigRevision == 1 && env.Revision == 0 && env.Version == "" && env.Confirmed == "" &&
 		len(env.Variables) == 0 && len(env.SecretVersions) == 0
 }
 
@@ -353,7 +356,7 @@ func replaceServiceDomains(ctx context.Context, tx pgx.Tx, service string, domai
 
 func sameEnvironment(a, b domain.WorkerEnvironment) bool {
 	return a.Name == b.Name && a.Enabled == b.Enabled && a.ConfigRevision == b.ConfigRevision &&
-		a.Revision == b.Revision && a.Release == b.Release && a.Confirmed == b.Confirmed &&
+		a.Revision == b.Revision && a.Version == b.Version && a.Confirmed == b.Confirmed &&
 		reflect.DeepEqual(a.Variables, b.Variables) && reflect.DeepEqual(a.SecretVersions, b.SecretVersions)
 }
 
@@ -576,7 +579,7 @@ func sameArtifactContent(a, b domain.WorkerArtifact) bool {
 		a.ObjectKey == b.ObjectKey && a.StorageLocation == b.StorageLocation && a.Bucket == b.Bucket
 }
 
-func sameRelease(a, b domain.WorkerRelease) bool {
+func sameVersion(a, b domain.WorkerVersion) bool {
 	return a.ID == b.ID && a.Service == b.Service && a.Organization == b.Organization &&
 		a.Environment == b.Environment && a.Artifact == b.Artifact && a.Profile == b.Profile && a.ArchiveDigest == b.ArchiveDigest &&
 		a.ModuleDigest == b.ModuleDigest && a.CompatibilityDate == b.CompatibilityDate &&
@@ -585,14 +588,14 @@ func sameRelease(a, b domain.WorkerRelease) bool {
 		reflect.DeepEqual(a.SecretVersions, b.SecretVersions) && a.Created.Equal(b.Created)
 }
 
-func writeReleases(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) error {
-	for id, r := range aw.Releases {
-		old, existed := bw.Releases[id]
+func writeVersions(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) error {
+	for id, r := range aw.Versions {
+		old, existed := bw.Versions[id]
 		if existed {
-			if sameRelease(old, r) {
+			if sameVersion(old, r) {
 				continue
 			}
-			return errors.New("worker release descriptors are immutable")
+			return errors.New("worker version descriptors are immutable")
 		}
 		variables, err := json.Marshal(r.Variables)
 		if err != nil {
@@ -602,29 +605,29 @@ func writeReleases(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 		if err != nil {
 			return err
 		}
-		tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_releases (release_id, org_id, service_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at)
+		tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_versions (version_id, org_id, service_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at)
 				SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14
 				WHERE EXISTS (SELECT 1 FROM krun_worker_artifacts
 					WHERE artifact_id=$5 AND state='finalized' AND org_id=$2
 					  AND profile=$6 AND archive_digest=$7 AND module_digest=$8
 					  AND compatibility_date=$9 AND compatibility_flags=$10)
-				ON CONFLICT (release_id) DO UPDATE SET release_id=excluded.release_id`, id, r.Organization, r.Service, r.Environment, r.Artifact, r.Profile, r.ArchiveDigest, r.ModuleDigest, r.CompatibilityDate, flags, r.ConfigRevision, variables, r.SecretDigest, r.Created)
+				ON CONFLICT (version_id) DO UPDATE SET version_id=excluded.version_id`, id, r.Organization, r.Service, r.Environment, r.Artifact, r.Profile, r.ArchiveDigest, r.ModuleDigest, r.CompatibilityDate, flags, r.ConfigRevision, variables, r.SecretDigest, r.Created)
 		if err != nil {
 			return err
 		}
 		if tag.RowsAffected() == 0 {
 			return domain.Problem(409, "ARTIFACT_UNAVAILABLE", "Artifact is no longer available")
 		}
-		if err := replaceWorkerReleaseSecrets(ctx, tx, id, r.Service, r.Environment, r.SecretVersions); err != nil {
+		if err := replaceWorkerVersionSecrets(ctx, tx, id, r.Service, r.Environment, r.SecretVersions); err != nil {
 			return err
 		}
 	}
-	for id := range bw.Releases {
-		if _, ok := aw.Releases[id]; !ok {
-			if _, err := tx.Exec(ctx, `DELETE FROM krun_worker_release_secrets WHERE release_id=$1`, id); err != nil {
+	for id := range bw.Versions {
+		if _, ok := aw.Versions[id]; !ok {
+			if _, err := tx.Exec(ctx, `DELETE FROM krun_worker_version_secrets WHERE version_id=$1`, id); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `DELETE FROM krun_worker_releases WHERE release_id=$1`, id); err != nil {
+			if _, err := tx.Exec(ctx, `DELETE FROM krun_worker_versions WHERE version_id=$1`, id); err != nil {
 				return err
 			}
 		}
@@ -641,9 +644,9 @@ func sameOperation(a, b domain.WorkerOperation) bool {
 	}
 	return a.ID == b.ID && a.Kind == b.Kind && a.Service == b.Service && a.Organization == b.Organization &&
 		a.Environment == b.Environment && a.State == b.State && a.Build == b.Build &&
-		a.Release == b.Release && a.ExpectedRevision == b.ExpectedRevision &&
+		a.Version == b.Version && a.ExpectedRevision == b.ExpectedRevision &&
 		a.ConfigRevision == b.ConfigRevision && a.EdgeRevision == b.EdgeRevision &&
-		a.ReleaseRevision == b.ReleaseRevision && a.Error == b.Error &&
+		a.DeploymentRevision == b.DeploymentRevision && a.Error == b.Error &&
 		reflect.DeepEqual(a.Steps, b.Steps) && a.Created.Equal(b.Created)
 }
 
@@ -659,7 +662,7 @@ func writeOperations(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState)
 		}
 		actor := aw.OperationPrivate[id].Actor
 		if !existed {
-			if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_operations (operation_id, kind, org_id, service_id, env_name, state, build_id, release_id, expected_revision, config_revision, edge_revision, release_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, id, op.Kind, op.Organization, op.Service, op.Environment, op.State, op.Build, op.Release, op.ExpectedRevision, op.ConfigRevision, op.EdgeRevision, op.ReleaseRevision, op.Error, steps, actor.User, actor.Key, actor.AuthVersion, op.Created, op.Finished); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_operations (operation_id, kind, org_id, service_id, env_name, state, build_id, version_id, expected_revision, config_revision, edge_revision, deployment_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, id, op.Kind, op.Organization, op.Service, op.Environment, op.State, op.Build, op.Version, op.ExpectedRevision, op.ConfigRevision, op.EdgeRevision, op.DeploymentRevision, op.Error, steps, actor.User, actor.Key, actor.AuthVersion, op.Created, op.Finished); err != nil {
 				return err
 			}
 			continue
@@ -667,12 +670,12 @@ func writeOperations(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState)
 		// A state transition is a compare-and-set: if another replica already
 		// moved this row, this writer drops its change instead of fighting.
 		if old.State != op.State {
-			if _, err := tx.Exec(ctx, `UPDATE krun_worker_operations SET state=$3, build_id=$4, release_id=$5, expected_revision=$6, config_revision=$7, edge_revision=$8, release_revision=$9, error=$10, steps=$11, finished_at=$12 WHERE operation_id=$1 AND state=$2`, id, old.State, op.State, op.Build, op.Release, op.ExpectedRevision, op.ConfigRevision, op.EdgeRevision, op.ReleaseRevision, op.Error, steps, op.Finished); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE krun_worker_operations SET state=$3, build_id=$4, version_id=$5, expected_revision=$6, config_revision=$7, edge_revision=$8, deployment_revision=$9, error=$10, steps=$11, finished_at=$12 WHERE operation_id=$1 AND state=$2`, id, old.State, op.State, op.Build, op.Version, op.ExpectedRevision, op.ConfigRevision, op.EdgeRevision, op.DeploymentRevision, op.Error, steps, op.Finished); err != nil {
 				return err
 			}
 			continue
 		}
-		if _, err := tx.Exec(ctx, `UPDATE krun_worker_operations SET build_id=$2, release_id=$3, expected_revision=$4, config_revision=$5, edge_revision=$6, release_revision=$7, error=$8, steps=$9, finished_at=$10 WHERE operation_id=$1`, id, op.Build, op.Release, op.ExpectedRevision, op.ConfigRevision, op.EdgeRevision, op.ReleaseRevision, op.Error, steps, op.Finished); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE krun_worker_operations SET build_id=$2, version_id=$3, expected_revision=$4, config_revision=$5, edge_revision=$6, deployment_revision=$7, error=$8, steps=$9, finished_at=$10 WHERE operation_id=$1`, id, op.Build, op.Version, op.ExpectedRevision, op.ConfigRevision, op.EdgeRevision, op.DeploymentRevision, op.Error, steps, op.Finished); err != nil {
 			return err
 		}
 	}
@@ -690,7 +693,7 @@ func writeHistories(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) 
 	for key, entries := range aw.Histories {
 		service, env := splitHistoryKey(key)
 		for _, h := range entries {
-			if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_history (service_id, env_name, revision, release_id, operation_id, kind, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (service_id, env_name, revision) DO NOTHING`, service, env, h.Revision, h.Release, h.Operation, h.Kind, h.Time); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_history (service_id, env_name, revision, version_id, operation_id, kind, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (service_id, env_name, revision) DO NOTHING`, service, env, h.Revision, h.Version, h.Operation, h.Kind, h.Time); err != nil {
 				return err
 			}
 		}

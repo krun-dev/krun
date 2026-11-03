@@ -295,10 +295,10 @@ async function mainOutputName(projectRoot,outputRoot,metafile,config){
 }
 
 function wrapperFor(userName){
- const specifier='./'+path.posix.basename(userName);return Buffer.from(`import worker from ${JSON.stringify(specifier)};\nexport * from ${JSON.stringify(specifier)};\nimport {WorkerEntrypoint} from 'cloudflare:workers';\nexport default worker;\nexport class KrunValidation extends WorkerEntrypoint {ping(){if(!worker || (typeof worker.fetch!=='function'&&typeof worker?.prototype?.fetch!=='function'))throw new Error('Default export must provide fetch');return {environment:this.env.KRUN_ENVIRONMENT,release_id:this.env.KRUN_RELEASE_ID};}}\n`);
+ const specifier='./'+path.posix.basename(userName);return Buffer.from(`import worker from ${JSON.stringify(specifier)};\nexport * from ${JSON.stringify(specifier)};\nimport {WorkerEntrypoint} from 'cloudflare:workers';\nexport default worker;\nexport class KrunValidation extends WorkerEntrypoint {ping(){if(!worker || (typeof worker.fetch!=='function'&&typeof worker?.prototype?.fetch!=='function'))throw new Error('Default export must provide fetch');return {environment:this.env.KRUN_ENVIRONMENT,version_id:this.env.KRUN_VERSION_ID};}}\n`);
 }
 
-const assetsOnlyWorker=()=>Buffer.from(`import {WorkerEntrypoint} from 'cloudflare:workers';\nconst worker={fetch(){return new Response('Not Found',{status:404});}};\nexport default worker;\nexport class KrunValidation extends WorkerEntrypoint {ping(){return {environment:this.env.KRUN_ENVIRONMENT,release_id:this.env.KRUN_RELEASE_ID};}}\n`);
+const assetsOnlyWorker=()=>Buffer.from(`import {WorkerEntrypoint} from 'cloudflare:workers';\nconst worker={fetch(){return new Response('Not Found',{status:404});}};\nexport default worker;\nexport class KrunValidation extends WorkerEntrypoint {ping(){return {environment:this.env.KRUN_ENVIRONMENT,version_id:this.env.KRUN_VERSION_ID};}}\n`);
 
 function normalizeAssets(config,input,projectRoot,configPath){
  const value=input.assets??config.assets;if(value==null)return null;

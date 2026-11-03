@@ -70,7 +70,8 @@ func NewWorkerState() *WorkerState {
 		Builds:           map[string]WorkerBuild{},
 		BuildPrivate:     map[string]WorkerBuildPrivate{},
 		Artifacts:        map[string]WorkerArtifact{},
-		Releases:         map[string]WorkerRelease{},
+		Deployments:      map[string]WorkerDeployment{},
+		Versions:         map[string]WorkerVersion{},
 		Operations:       map[string]WorkerOperation{},
 		OperationPrivate: map[string]WorkerOperationPrivate{},
 		Histories:        map[string][]WorkerHistory{},
@@ -144,15 +145,18 @@ func CloneState(src *State) (*State, error) {
 			targetEnv.SecretVersions = CloneStringsMap(sourceEnv.SecretVersions)
 			target.Environments[name] = targetEnv
 		}
+		if source.PreviewBase != nil && target.PreviewBase != nil {
+			target.PreviewBase.SecretVersions = CloneStringsMap(source.PreviewBase.SecretVersions)
+		}
 		dst.Workers.Services[service] = target
 	}
-	for id, source := range src.Workers.Releases {
-		target, ok := dst.Workers.Releases[id]
+	for id, source := range src.Workers.Versions {
+		target, ok := dst.Workers.Versions[id]
 		if !ok {
 			continue
 		}
 		target.SecretVersions = CloneStringsMap(source.SecretVersions)
-		dst.Workers.Releases[id] = target
+		dst.Workers.Versions[id] = target
 	}
 	// Refresh tokens and their CAS/lease metadata are intentionally omitted
 	// from JSON. Preserve them only for the in-memory test store; PostgreSQL
@@ -184,4 +188,18 @@ func CloneState(src *State) (*State, error) {
 		dst.Workers.Builds[id] = build
 	}
 	return dst, nil
+}
+
+// PreviewBaseName is an internal configuration scope, never a routable environment.
+const PreviewBaseName = "@previews-base"
+
+func StorageWorkerEnvironments(service WorkerService) map[string]WorkerEnvironment {
+	out := make(map[string]WorkerEnvironment, len(service.Environments)+1)
+	for name, env := range service.Environments {
+		out[name] = env
+	}
+	if service.PreviewBase != nil {
+		out[PreviewBaseName] = *service.PreviewBase
+	}
+	return out
 }

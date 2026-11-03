@@ -1,6 +1,6 @@
 # Workers 静态资产
 
-Worker 代码与资产属于同一个 Artifact。Release 固定 Artifact、变量和 Secret 版本；
+Worker 代码与资产属于同一个 Artifact。Version 固定 Artifact、变量和 Secret 版本；
 发布与回滚通过同一条环境路由切换代码和资产。
 
 ## 构建与格式
@@ -19,18 +19,18 @@ finalize 生成独立的不可变 manifest 对象，按 Artifact 的 manifest di
 
 ## 请求处理
 
-入口 Runtime 根据 Release 的资产配置决定先访问资产还是业务 Worker：
+入口 Runtime 根据 Version 的资产配置决定先访问资产还是业务 Worker：
 
 1. 命中 `run_worker_first` 的路径先交给 Worker；否定模式按规则排除。
 2. 其他路径先按 HTML handling 和路径索引匹配资产。
 3. HTML 规范化可以返回重定向；导航请求可按配置回退到 SPA 入口。
 4. 未命中且没有回退时交给业务 Worker。
 
-设置 `assets.binding` 后，业务通过例如 `env.ASSETS.fetch(request)` 访问本 Release
+设置 `assets.binding` 后，业务通过例如 `env.ASSETS.fetch(request)` 访问本 Version
 资产。binding 不持平台 token；变量重名或平台保留名称会被拒绝。
 
 manifest 使用 single-flight 和有界 LRU，路径索引只构建一次；资产字节按文件按需下载，
-校验 digest 后放入有界 LRU。发布只切换 Release，不清空其他站点的资产缓存。
+校验 digest 后放入有界 LRU。发布只切换 Version，不清空其他站点的资产缓存。
 
 ## 存储与缓存
 

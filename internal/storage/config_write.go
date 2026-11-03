@@ -18,21 +18,21 @@ type workerConfigShardKey struct {
 func affectedWorkerConfig(ctx context.Context, tx pgx.Tx, ops []domain.WorkerConfigOp) ([]workerConfigShardKey, []string, error) {
 	hosts := []string{}
 	shards := map[workerConfigShardKey]bool{}
-	releases := map[string]bool{}
+	versions := map[string]bool{}
 	for _, op := range ops {
 		if op.Type == "route_upsert" || op.Type == "route_delete" {
 			hosts = append(hosts, op.Host)
 			shards[workerConfigShardKey{op.Pool, bytesDigest([]byte(op.Host))[:2]}] = true
 		}
-		if op.Release != nil && op.Release.ID != "" {
-			releases[op.Release.ID] = true
+		if op.Version != nil && op.Version.ID != "" {
+			versions[op.Version.ID] = true
 		}
-		if op.Route != nil && op.Route.Release != "" {
-			releases[op.Route.Release] = true
+		if op.Route != nil && op.Route.Version != "" {
+			versions[op.Route.Version] = true
 		}
 	}
 	rows, err := tx.Query(ctx, `
-		SELECT pool, shard, release_id FROM worker_config_routes
+		SELECT pool, shard, version_id FROM worker_config_routes
 		WHERE host=ANY($1)`, hosts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read affected config routes: %w", err)
@@ -40,13 +40,13 @@ func affectedWorkerConfig(ctx context.Context, tx pgx.Tx, ops []domain.WorkerCon
 	defer rows.Close()
 	for rows.Next() {
 		var key workerConfigShardKey
-		var release string
-		if err = rows.Scan(&key.pool, &key.shard, &release); err != nil {
+		var version string
+		if err = rows.Scan(&key.pool, &key.shard, &version); err != nil {
 			return nil, nil, fmt.Errorf("read affected config route: %w", err)
 		}
 		shards[key] = true
-		if release != "" {
-			releases[release] = true
+		if version != "" {
+			versions[version] = true
 		}
 	}
 	if err = rows.Err(); err != nil {
@@ -62,8 +62,8 @@ func affectedWorkerConfig(ctx context.Context, tx pgx.Tx, ops []domain.WorkerCon
 		}
 		return keys[i].shard < keys[j].shard
 	})
-	prune := make([]string, 0, len(releases))
-	for id := range releases {
+	prune := make([]string, 0, len(versions))
+	for id := range versions {
 		prune = append(prune, id)
 	}
 	sort.Strings(prune)
@@ -75,36 +75,36 @@ func affectedWorkerConfig(ctx context.Context, tx pgx.Tx, ops []domain.WorkerCon
 func applyWorkerConfigOps(ctx context.Context, tx pgx.Tx, revision int64, ops []domain.WorkerConfigOp) error {
 	batch := &pgx.Batch{}
 	for ordinal, op := range ops {
-		var releaseID string
+		var versionID string
 		var payload []byte
 		var err error
 		switch op.Type {
-		case "release_put":
-			if op.Release == nil {
-				return fmt.Errorf("config op %d: release_put requires a release", ordinal)
+		case "version_put":
+			if op.Version == nil {
+				return fmt.Errorf("config op %d: version_put requires a version", ordinal)
 			}
-			releaseID = op.Release.ID
-			payload, err = json.Marshal(op.Release)
+			versionID = op.Version.ID
+			payload, err = json.Marshal(op.Version)
 			batch.Queue(`
-				INSERT INTO worker_config_releases(release_id, pool, payload)
+				INSERT INTO worker_config_versions(version_id, pool, payload)
 				VALUES ($1, $2, $3)
-				ON CONFLICT (release_id, pool) DO UPDATE SET payload=excluded.payload
-				WHERE worker_config_releases.payload IS DISTINCT FROM excluded.payload`,
-				releaseID, op.Pool, payload)
+				ON CONFLICT (version_id, pool) DO UPDATE SET payload=excluded.payload
+				WHERE worker_config_versions.payload IS DISTINCT FROM excluded.payload`,
+				versionID, op.Pool, payload)
 		case "route_upsert":
 			if op.Route == nil {
 				return fmt.Errorf("config op %d: route_upsert requires a route", ordinal)
 			}
 			route := op.Route
-			releaseID = route.Release
+			versionID = route.Version
 			payload, err = json.Marshal(route)
 			batch.Queue(`
-				INSERT INTO worker_config_routes(host, pool, path, enabled, release_id, service_id, shard)
-				VALUES ($1, $2, $3, $4, $5, $6, $7)
+				INSERT INTO worker_config_routes(host, pool, path, enabled, version_id, service_id, shard, expires_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 				ON CONFLICT (host) DO UPDATE SET
 					pool=excluded.pool, path=excluded.path, enabled=excluded.enabled,
-					release_id=excluded.release_id, service_id=excluded.service_id, shard=excluded.shard`,
-				op.Host, op.Pool, route.Path, route.Enabled, releaseID, route.Service, bytesDigest([]byte(op.Host))[:2])
+					version_id=excluded.version_id, service_id=excluded.service_id, shard=excluded.shard, expires_at=excluded.expires_at`,
+				op.Host, op.Pool, route.Path, route.Enabled, versionID, route.Service, bytesDigest([]byte(op.Host))[:2], route.Expires)
 		case "route_delete":
 			batch.Queue(`DELETE FROM worker_config_routes WHERE host=$1`, op.Host)
 		default:
@@ -114,9 +114,9 @@ func applyWorkerConfigOps(ctx context.Context, tx pgx.Tx, revision int64, ops []
 			return fmt.Errorf("encode config op %d: %w", ordinal, err)
 		}
 		batch.Queue(`
-			INSERT INTO worker_config_ops(config_revision, ordinal, pool, op_type, host, release_id, payload)
+			INSERT INTO worker_config_ops(config_revision, ordinal, pool, op_type, host, version_id, payload)
 			VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-			revision, ordinal, op.Pool, op.Type, op.Host, releaseID, payload)
+			revision, ordinal, op.Pool, op.Type, op.Host, versionID, payload)
 	}
 	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
 		return fmt.Errorf("apply config operations: %w", err)
@@ -148,13 +148,13 @@ func acknowledgeWorkerConfig(ctx context.Context, tx pgx.Tx, ids []string, gener
 	return nil
 }
 
-func pruneWorkerConfig(ctx context.Context, tx pgx.Tx, revision int64, releases []string) error {
+func pruneWorkerConfig(ctx context.Context, tx pgx.Tx, revision int64, versions []string) error {
 	if _, err := tx.Exec(ctx, `
-		DELETE FROM worker_config_releases c
-		WHERE release_id=ANY($1) AND NOT EXISTS (
-			SELECT 1 FROM worker_config_routes r WHERE r.release_id=c.release_id AND r.pool=c.pool
-		)`, releases); err != nil {
-		return fmt.Errorf("prune unreferenced config releases: %w", err)
+		DELETE FROM worker_config_versions c
+		WHERE version_id=ANY($1) AND NOT EXISTS (
+			SELECT 1 FROM worker_config_routes r WHERE r.version_id=c.version_id AND r.pool=c.pool
+		)`, versions); err != nil {
+		return fmt.Errorf("prune unreferenced config versions: %w", err)
 	}
 	floor := revision - WorkerConfigOpsRetain + 1
 	if _, err := tx.Exec(ctx, `DELETE FROM worker_config_ops WHERE config_revision<$1`, floor); err != nil {

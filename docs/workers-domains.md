@@ -32,8 +32,8 @@ domain 显式绑定一个 Gateway 实例与 listener。不同访问边界使用�
 每个实例只接收自己的域名；跨实例伪造 Host 返回 404。静态域默认 `static.<domain>`，
 可通过 `static_domain` 显式配置。
 
-Runtime 以完整 Host 定向解析 route，再加载不可变 Release；HTTPRoute 不携带站点
-代码或 Release 版本。创建、发布和回滚不会创建站点专属 HTTPRoute，也不会重启 Runtime。
+Runtime 以完整 Host 定向解析 route，再加载不可变 Version；HTTPRoute 不携带站点
+代码或 Version 版本。创建、发布和回滚不会创建站点专属 HTTPRoute，也不会重启 Runtime。
 删除或调整配置目录后，协调器会修复期望路由并删除不再需要的受管路由。
 
 ## 控制台调用

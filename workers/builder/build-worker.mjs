@@ -209,7 +209,7 @@ if(dispatchInput.build_mode==='wrangler'){
    assetTotal+=data.length;if(assetTotal>20*1024*1024)throw new Error('Assets exceed 20 MiB');
   }
  }
- const wrapper=`import worker from ${JSON.stringify('./'+input.entrypoint)};\nimport {WorkerEntrypoint} from 'cloudflare:workers';\nexport default worker;\nexport class KrunValidation extends WorkerEntrypoint {ping(){if(!worker || (typeof worker.fetch!=='function'&&typeof worker?.prototype?.fetch!=='function'))throw new Error('Default export must provide fetch');return {environment:this.env.KRUN_ENVIRONMENT,release_id:this.env.KRUN_RELEASE_ID};}}\n`;
+ const wrapper=`import worker from ${JSON.stringify('./'+input.entrypoint)};\nimport {WorkerEntrypoint} from 'cloudflare:workers';\nexport default worker;\nexport class KrunValidation extends WorkerEntrypoint {ping(){if(!worker || (typeof worker.fetch!=='function'&&typeof worker?.prototype?.fetch!=='function'))throw new Error('Default export must provide fetch');return {environment:this.env.KRUN_ENVIRONMENT,version_id:this.env.KRUN_VERSION_ID};}}\n`;
  await writeFile(entryStub,wrapper);
  console.log('Profile: workerd-bundle-v2');console.log('Compiling',input.entrypoint);
  const nodeCompat=input.compatibility_flags?.includes('nodejs_compat')===true;

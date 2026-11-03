@@ -17,18 +17,19 @@ type ConfigRevision struct {
 
 type ConfigRoute struct {
 	bun.BaseModel `bun:"table:worker_config_routes,alias:worker_config_routes"`
-	ServiceID     string `bun:"service_id"`
-	Shard         string `bun:"shard"`
-	Host          string `bun:"host,pk"`
-	Pool          string `bun:"pool"`
-	Path          string `bun:"path"`
-	Enabled       bool   `bun:"enabled"`
-	ReleaseID     string `bun:"release_id"`
+	ExpiresAt     *time.Time `bun:"expires_at"`
+	ServiceID     string     `bun:"service_id"`
+	Shard         string     `bun:"shard"`
+	Host          string     `bun:"host,pk"`
+	Pool          string     `bun:"pool"`
+	Path          string     `bun:"path"`
+	Enabled       bool       `bun:"enabled"`
+	VersionID     string     `bun:"version_id"`
 }
 
-type ConfigRelease struct {
-	bun.BaseModel `bun:"table:worker_config_releases,alias:worker_config_releases"`
-	ReleaseID     string          `bun:"release_id,pk"`
+type ConfigVersion struct {
+	bun.BaseModel `bun:"table:worker_config_versions,alias:worker_config_versions"`
+	VersionID     string          `bun:"version_id,pk"`
 	Pool          string          `bun:"pool,pk"`
 	Payload       json.RawMessage `bun:"payload,type:jsonb"`
 }
@@ -40,7 +41,7 @@ type ConfigOp struct {
 	Pool           string          `bun:"pool"`
 	OpType         string          `bun:"op_type"`
 	Host           string          `bun:"host"`
-	ReleaseID      string          `bun:"release_id"`
+	VersionID      string          `bun:"version_id"`
 	Payload        json.RawMessage `bun:"payload,type:jsonb"`
 }
 

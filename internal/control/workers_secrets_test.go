@@ -40,35 +40,35 @@ func enableWorkerSecrets(config *appconfig.WorkersConfig) {
 	config.SecretsKeys = map[string]string{"test-v1": testWorkerSecretsKey()}
 }
 
-func seedPublishedWorker(t *testing.T, store *Store) WorkerRelease {
+func seedPublishedWorker(t *testing.T, store *Store) WorkerVersion {
 	t.Helper()
-	release := WorkerRelease{
+	version := WorkerVersion{
 		ID: "rel_secret_base", Organization: "org-a", Service: "svc-a", Environment: "production",
 		Artifact: "art_secret", ArchiveDigest: strings.Repeat("a", 64), ModuleDigest: strings.Repeat("b", 64),
 		ConfigRevision: 1, Variables: map[string]string{"PLAIN": "visible"}, Created: now(),
 		SecretVersions: map[string]string{},
 	}
 	err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
-		st.Workers.Artifacts[release.Artifact] = WorkerArtifact{
-			ID: release.Artifact, Organization: "org-a", State: "finalized",
-			ArchiveDigest: release.ArchiveDigest, ModuleDigest: release.ModuleDigest, Created: now(),
+		st.Workers.Artifacts[version.Artifact] = WorkerArtifact{
+			ID: version.Artifact, Organization: "org-a", State: "finalized",
+			ArchiveDigest: version.ArchiveDigest, ModuleDigest: version.ModuleDigest, Created: now(),
 		}
-		st.Workers.Releases[release.ID] = release
-		service := st.Workers.Services[release.Service]
-		environment := service.Environments[release.Environment]
-		environment.Release, environment.Confirmed = release.ID, release.ID
+		st.Workers.Versions[version.ID] = version
+		service := st.Workers.Services[version.Service]
+		environment := service.Environments[version.Environment]
+		environment.Version, environment.Confirmed = version.ID, version.ID
 		environment.Revision = 3
 		environment.ConfigRevision = 1
-		environment.Variables = cloneStringsMap(release.Variables)
+		environment.Variables = cloneStringsMap(version.Variables)
 		environment.SecretVersions = map[string]string{}
-		service.Environments[release.Environment] = environment
-		st.Workers.Services[release.Service] = service
+		service.Environments[version.Environment] = environment
+		st.Workers.Services[version.Service] = service
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return release
+	return version
 }
 
 func TestWorkerSecretEncryptionAuthenticatesScope(t *testing.T) {
@@ -124,10 +124,10 @@ func TestWorkerSecretKeyRingValidation(t *testing.T) {
 	}
 }
 
-func TestWorkerSecretPutCreatesAndDeploysImmutableRelease(t *testing.T) {
+func TestWorkerSecretPutCreatesAndDeploysImmutableVersion(t *testing.T) {
 	server, store, base := workerTestServer(t)
 	enableWorkerSecrets(server.Config.Workers)
-	baseRelease := seedPublishedWorker(t, store)
+	baseVersion := seedPublishedWorker(t, store)
 	payload := `{"value":"secret-value-never-return","expected_revision":3,"idempotency_key":"put-api-token"}`
 	response := request(server, http.MethodPut, base+"/environments/production/secrets/API_TOKEN", "krun_cli_admin", payload)
 	if response.Code != http.StatusAccepted {
@@ -140,8 +140,8 @@ func TestWorkerSecretPutCreatesAndDeploysImmutableRelease(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &operation); err != nil {
 		t.Fatal(err)
 	}
-	if operation.Kind != "secret" || operation.Build != "" || operation.Release == baseRelease.ID {
-		t.Fatalf("operation did not create a configuration-only release: %+v", operation)
+	if operation.Kind != "secret" || operation.Build != "" || operation.Version == baseVersion.ID {
+		t.Fatalf("operation did not create a configuration-only version: %+v", operation)
 	}
 
 	retry := request(server, http.MethodPut, base+"/environments/production/secrets/API_TOKEN", "krun_cli_admin", payload)
@@ -153,38 +153,38 @@ func TestWorkerSecretPutCreatesAndDeploysImmutableRelease(t *testing.T) {
 		t.Fatalf("secret metadata list: %d %s", list.Code, list.Body.String())
 	}
 
-	var release WorkerRelease
+	var version WorkerVersion
 	if err := store.View(context.Background(), PartitionWorkers, func(st *State) error {
 		service := st.Workers.Services["svc-a"]
 		environment := service.Environments["production"]
 		if len(environment.SecretVersions) != 1 || len(environment.SecretNames) != 1 || environment.SecretNames[0] != "API_TOKEN" {
 			t.Fatalf("environment secret metadata: %+v", environment)
 		}
-		release = st.Workers.Releases[operation.Release]
-		if release.Artifact != baseRelease.Artifact || release.SecretDigest == "" || len(release.SecretVersions) != 1 {
-			t.Fatalf("release did not reuse artifact and pin secret: %+v", release)
+		version = st.Workers.Versions[operation.Version]
+		if version.Artifact != baseVersion.Artifact || version.SecretDigest == "" || len(version.SecretVersions) != 1 {
+			t.Fatalf("version did not reuse artifact and pin secret: %+v", version)
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	releaseJSON, _ := json.Marshal(release)
-	if strings.Contains(string(releaseJSON), "secv_") || strings.Contains(string(releaseJSON), "secret-value-never-return") {
-		t.Fatalf("secret reference or value leaked in release JSON: %s", releaseJSON)
+	versionJSON, _ := json.Marshal(version)
+	if strings.Contains(string(versionJSON), "secv_") || strings.Contains(string(versionJSON), "secret-value-never-return") {
+		t.Fatalf("secret reference or value leaked in version JSON: %s", versionJSON)
 	}
 
 	unauthorized := httptest.NewRecorder()
-	unauthorizedRequest := httptest.NewRequest(http.MethodGet, "/api/internal/workers/releases/"+release.ID+"/secrets", nil)
+	unauthorizedRequest := httptest.NewRequest(http.MethodGet, "/api/internal/workers/versions/"+version.ID+"/secrets", nil)
 	server.serveInternal(unauthorized, unauthorizedRequest)
 	if unauthorized.Code != http.StatusForbidden {
 		t.Fatalf("internal endpoint allowed anonymous request: %d", unauthorized.Code)
 	}
 	authorized := httptest.NewRecorder()
-	authorizedRequest := httptest.NewRequest(http.MethodGet, "/api/internal/workers/releases/"+release.ID+"/secrets", nil)
+	authorizedRequest := httptest.NewRequest(http.MethodGet, "/api/internal/workers/versions/"+version.ID+"/secrets", nil)
 	authorizedRequest.Header.Set("Authorization", "Bearer "+server.Config.Workers.DefaultRuntimePool().RuntimeToken)
 	authorizedRequest.Header.Set("X-Runtime-Pool", "default")
 	server.serveInternal(authorized, authorizedRequest)
-	if authorized.Code != http.StatusOK || !strings.Contains(authorized.Body.String(), "secret-value-never-return") || !strings.Contains(authorized.Body.String(), release.SecretDigest) {
+	if authorized.Code != http.StatusOK || !strings.Contains(authorized.Body.String(), "secret-value-never-return") || !strings.Contains(authorized.Body.String(), version.SecretDigest) {
 		t.Fatalf("runtime secret delivery: %d %s", authorized.Code, authorized.Body.String())
 	}
 	if authorized.Header().Get("Cache-Control") != "no-store" {
@@ -195,7 +195,7 @@ func TestWorkerSecretPutCreatesAndDeploysImmutableRelease(t *testing.T) {
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
 		service := st.Workers.Services["svc-a"]
 		environment := service.Environments["production"]
-		environment.Release, environment.Confirmed = release.ID, release.ID
+		environment.Version, environment.Confirmed = version.ID, version.ID
 		environment.Revision = 4
 		service.Environments["production"] = environment
 		st.Workers.Services["svc-a"] = service
@@ -217,8 +217,8 @@ func TestWorkerSecretPutCreatesAndDeploysImmutableRelease(t *testing.T) {
 		if len(service.Environments["production"].SecretVersions) != 0 {
 			t.Fatal("deleted secret remained in desired environment")
 		}
-		if next := st.Workers.Releases[deleteOperation.Release]; next.SecretDigest != "" || len(next.SecretVersions) != 0 || next.Artifact != baseRelease.Artifact {
-			t.Fatalf("delete release: %+v", next)
+		if next := st.Workers.Versions[deleteOperation.Version]; next.SecretDigest != "" || len(next.SecretVersions) != 0 || next.Artifact != baseVersion.Artifact {
+			t.Fatalf("delete version: %+v", next)
 		}
 		return nil
 	}); err != nil {
@@ -226,11 +226,11 @@ func TestWorkerSecretPutCreatesAndDeploysImmutableRelease(t *testing.T) {
 	}
 }
 
-func TestWorkerSecretRejectsBindingCollisionAndMissingRelease(t *testing.T) {
+func TestWorkerSecretAllowsDraftAndRejectsBindingCollision(t *testing.T) {
 	server, store, base := workerTestServer(t)
 	enableWorkerSecrets(server.Config.Workers)
-	if response := request(server, http.MethodPut, base+"/environments/fix-demo/secrets/API_TOKEN", "krun_cli_admin", `{"value":"x","expected_revision":0,"idempotency_key":"missing-release"}`); response.Code != http.StatusConflict {
-		t.Fatalf("unpublished environment accepted a secret: %d %s", response.Code, response.Body.String())
+	if response := request(server, http.MethodPut, base+"/environments/fix-demo/secrets/API_TOKEN", "krun_cli_admin", `{"value":"x","expected_revision":0,"idempotency_key":"missing-version"}`); response.Code != http.StatusCreated {
+		t.Fatalf("unpublished environment rejected a secret: %d %s", response.Code, response.Body.String())
 	}
 	seedPublishedWorker(t, store)
 	if response := request(server, http.MethodPut, base+"/environments/production/secrets/PLAIN", "krun_cli_admin", `{"value":"x","expected_revision":3,"idempotency_key":"collision"}`); response.Code != http.StatusConflict {

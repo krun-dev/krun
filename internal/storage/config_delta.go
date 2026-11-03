@@ -36,14 +36,14 @@ func (s *Store) DirtyWorkerServices(ctx context.Context) ([]DirtyService, error)
 }
 
 func (s *Store) PublishedWorkerServices(ctx context.Context, ids []string) (domain.WorkerConfigProjection, error) {
-	out := domain.WorkerConfigProjection{Routes: []domain.WorkerConfigRoute{}, Releases: map[string]domain.WorkerRelease{}}
-	rows, err := s.pool.Query(ctx, `SELECT service_id,host,pool,path,enabled,release_id FROM worker_config_routes WHERE service_id=ANY($1) ORDER BY host`, ids)
+	out := domain.WorkerConfigProjection{Routes: []domain.WorkerConfigRoute{}, Versions: map[string]domain.WorkerVersion{}}
+	rows, err := s.pool.Query(ctx, `SELECT service_id,host,pool,path,enabled,version_id,expires_at FROM worker_config_routes WHERE service_id=ANY($1) ORDER BY host`, ids)
 	if err != nil {
 		return out, err
 	}
 	for rows.Next() {
 		var r domain.WorkerConfigRoute
-		if err = rows.Scan(&r.Service, &r.Host, &r.Pool, &r.Path, &r.Enabled, &r.Release); err != nil {
+		if err = rows.Scan(&r.Service, &r.Host, &r.Pool, &r.Path, &r.Enabled, &r.Version, &r.Expires); err != nil {
 			rows.Close()
 			return out, err
 		}
@@ -54,7 +54,7 @@ func (s *Store) PublishedWorkerServices(ctx context.Context, ids []string) (doma
 	if err != nil {
 		return out, err
 	}
-	rows, err = s.pool.Query(ctx, `SELECT DISTINCT c.release_id,c.payload FROM worker_config_releases c JOIN worker_config_routes r ON r.release_id=c.release_id AND r.pool=c.pool WHERE r.service_id=ANY($1)`, ids)
+	rows, err = s.pool.Query(ctx, `SELECT DISTINCT c.version_id,c.payload FROM worker_config_versions c JOIN worker_config_routes r ON r.version_id=c.version_id AND r.pool=c.pool WHERE r.service_id=ANY($1)`, ids)
 	if err != nil {
 		return out, err
 	}
@@ -62,14 +62,14 @@ func (s *Store) PublishedWorkerServices(ctx context.Context, ids []string) (doma
 	for rows.Next() {
 		var id string
 		var raw []byte
-		var rel domain.WorkerRelease
+		var rel domain.WorkerVersion
 		if err = rows.Scan(&id, &raw); err != nil {
 			return out, err
 		}
 		if err = json.Unmarshal(raw, &rel); err != nil {
 			return out, err
 		}
-		out.Releases[id] = rel
+		out.Versions[id] = rel
 	}
 	return out, rows.Err()
 }
@@ -125,7 +125,7 @@ func (s *Store) AppendConfigDelta(ctx context.Context, expected int64, dirty []D
 		return expected, false, nil
 	}
 	// Read the old locations before changing routes. Moving a host to another
-	// pool must invalidate both pools and prune the release left behind.
+	// pool must invalidate both pools and prune the version left behind.
 	shards, prune, err := affectedWorkerConfig(ctx, tx, ops)
 	if err != nil {
 		return expected, false, err
@@ -152,7 +152,7 @@ func (s *Store) AppendConfigDelta(ctx context.Context, expected int64, dirty []D
 }
 
 func (s *Store) WorkerConfigShard(ctx context.Context, pool, shard string) (domain.WorkerConfigProjection, int64, error) {
-	out := domain.WorkerConfigProjection{Routes: []domain.WorkerConfigRoute{}, Releases: map[string]domain.WorkerRelease{}}
+	out := domain.WorkerConfigProjection{Routes: []domain.WorkerConfigRoute{}, Versions: map[string]domain.WorkerVersion{}}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return out, 0, err
@@ -162,7 +162,7 @@ func (s *Store) WorkerConfigShard(ctx context.Context, pool, shard string) (doma
 	if err = tx.QueryRow(ctx, `SELECT value::bigint FROM krun_meta WHERE key='worker_config_head'`).Scan(&revision); err != nil {
 		return out, 0, err
 	}
-	rows, err := tx.Query(ctx, `SELECT r.service_id,r.host,r.pool,r.path,r.enabled,r.release_id,c.payload FROM worker_config_routes r LEFT JOIN worker_config_releases c ON c.release_id=r.release_id AND c.pool=r.pool WHERE r.pool=$1 AND r.shard=$2 ORDER BY r.host`, pool, shard)
+	rows, err := tx.Query(ctx, `SELECT r.service_id,r.host,r.pool,r.path,r.enabled,r.version_id,r.expires_at,c.payload FROM worker_config_routes r LEFT JOIN worker_config_versions c ON c.version_id=r.version_id AND c.pool=r.pool WHERE r.pool=$1 AND r.shard=$2 ORDER BY r.host`, pool, shard)
 	if err != nil {
 		return out, 0, err
 	}
@@ -170,16 +170,16 @@ func (s *Store) WorkerConfigShard(ctx context.Context, pool, shard string) (doma
 	for rows.Next() {
 		var r domain.WorkerConfigRoute
 		var raw []byte
-		if err = rows.Scan(&r.Service, &r.Host, &r.Pool, &r.Path, &r.Enabled, &r.Release, &raw); err != nil {
+		if err = rows.Scan(&r.Service, &r.Host, &r.Pool, &r.Path, &r.Enabled, &r.Version, &r.Expires, &raw); err != nil {
 			return out, 0, err
 		}
 		out.Routes = append(out.Routes, r)
 		if len(raw) > 0 {
-			var rel domain.WorkerRelease
+			var rel domain.WorkerVersion
 			if err = json.Unmarshal(raw, &rel); err != nil {
 				return out, 0, err
 			}
-			out.Releases[rel.ID] = rel
+			out.Versions[rel.ID] = rel
 		}
 	}
 	if err = rows.Err(); err != nil {

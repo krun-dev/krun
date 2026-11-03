@@ -145,37 +145,37 @@ const fullstackAssets={
 };
 const source=version=>({entrypoint:'src/index.ts',files:{'src/lib.ts':`export const version = ${JSON.stringify(version)};`,'src/index.ts':`import {version} from './lib'; import {connect} from 'cloudflare:sockets'; export default {async fetch(request: Request, env: Record<string,string>) {if(new URL(request.url).pathname==='/probe'){let blocked=false;try{await fetch('http://backend:9001/api/internal/workers/config/snapshot')}catch{blocked=true};let tcpBlocked=false;try{const socket=connect({hostname:'postgres',port:5432});await socket.opened;await socket.close()}catch{tcpBlocked=true};return Response.json({blocked,tcpBlocked,bindings:Object.keys(env)})};return Response.json({version,environment:env.KRUN_ENVIRONMENT,greeting:env.GREETING||'default',url:request.url})}}`}});
 async function buildAt(workerBase,input,expected='succeeded',options={}){const b=await api(workerBase+'/builds','POST',{environment:'production',...input,idempotency_key:randomUUID()},202,options);return poll(workerBase+'/builds/'+b.id,[expected],150000);}
-async function publishAt(workerBase,buildId,environment,revision){const op=await api(workerBase+'/environments/'+environment+'/releases','POST',{build_id:buildId,expected_revision:revision,idempotency_key:randomUUID()},202);return poll(workerBase+'/operations/'+op.id,['available'],150000);}
+async function publishAt(workerBase,buildId,environment,revision){const op=await api(workerBase+'/environments/'+environment+'/deployments','POST',{build_id:buildId,expected_revision:revision,idempotency_key:randomUUID()},202);return poll(workerBase+'/operations/'+op.id,['available'],150000);}
 async function build(input,expected='succeeded',options={}){return buildAt(base,input,expected,options);}
 async function publish(buildId,environment,revision){return publishAt(base,buildId,environment,revision);}
-let b1,b2,prodFirst,hostTest,hostProd,repositoryBuild,repositoryRelease,repositoryHost;
+let b1,b2,prodFirst,hostTest,hostProd,repositoryBuild,repositoryVersion,repositoryHost;
 await check('authenticated real Kubernetes build finalizes S3 archive',async()=>{b1=await build(source('v1-'+run));const a=await api(base+'/artifacts/'+b1.artifact_id);assert.equal(a.state,'finalized');assert.equal(a.storage_location_id,'primary');assert.equal(a.bucket,bucket);assert(a.object_key.endsWith('/bundle.tar.gz'));assert(a.archive_size_bytes>0);const logs=await api(base+'/builds/'+b1.id+'/logs');assert(logs.log.includes('Archive SHA-256'));assert(!logs.log.includes('X-Amz-'));return {build_id:b1.id,artifact:a,job:b1.job};});
-await check('preview release waits for actual runtime and Gateway adoption',async()=>{await api(base+'/environments','POST',{name:'fix-auth'},201);const op=await publish(b1.id,'fix-auth',0);assert(op.steps.every(s=>s.state==='done'));const envs=(await api(base+'/environments')).items;hostTest=environmentHost(envs.find(e=>e.name==='fix-auth'));hostProd=environmentHost(envs.find(e=>e.name==='production'));assert(hostTest&&hostProd);const r=await invoke(hostTest,'/orders?id=1');assert.equal(r.status,200);assert.equal(r.body.version,'v1-'+run);assert.equal(r.body.environment,'fix-auth');assert(r.body.url.includes('/orders?id=1'));assert.equal(envs.find(e=>e.name==='production').release_revision,0);return {operation:op.id,response:r.body};});
+await check('preview version waits for actual runtime and Gateway adoption',async()=>{await api(base+'/environments','POST',{name:'fix-auth'},201);const op=await publish(b1.id,'fix-auth',0);assert(op.steps.every(s=>s.state==='done'));const envs=(await api(base+'/environments')).items;hostTest=environmentHost(envs.find(e=>e.name==='fix-auth'));hostProd=environmentHost(envs.find(e=>e.name==='production'));assert(hostTest&&hostProd);const r=await invoke(hostTest,'/orders?id=1');assert.equal(r.status,200);assert.equal(r.body.version,'v1-'+run);assert.equal(r.body.environment,'fix-auth');assert(r.body.url.includes('/orders?id=1'));assert.equal(envs.find(e=>e.name==='production').deployment_revision,0);return {operation:op.id,response:r.body};});
 await check('repository build uses TLS Git and the Wrangler build-pack Job',async()=>{
  const providers=await api('/api/v1/orgs/'+org.id+'/workers/repository-providers');assert(providers.items.some(provider=>provider.id==='kind-git'));
  const binding=await api(base+'/repository','PUT',{source:{provider_id:'kind-git',repository:'fixture/worker',ref:'main',root_directory:'.'},expected_revision:0});assert.equal(binding.revision,1);
  repositoryBuild=await build({source_type:'repository',repository_revision:binding.revision,ref:'main'});assert(repositoryBuild.artifact_id);assert.match(repositoryBuild.repository_source.commit,/^[0-9a-f]{40}$/);
  const job=JSON.parse(kubectl('get','job',repositoryBuild.job,'-n','workers-mvp','-o','json'));assert.deepEqual(job.spec.template.spec.initContainers.map(container=>container.name),['builder-build']);assert.deepEqual(job.spec.template.spec.containers.map(container=>container.name),['builder-pack']);
  const logs=await api(base+'/builds/'+repositoryBuild.id+'/logs');assert(logs.log.includes('Wrangler build complete'));assert(logs.log.includes('Uploaded; awaiting platform finalize'));
- await api(base+'/environments','POST',{name:'repository-e2e'},201);repositoryRelease=await publish(repositoryBuild.id,'repository-e2e',0);
+ await api(base+'/environments','POST',{name:'repository-e2e'},201);repositoryVersion=await publish(repositoryBuild.id,'repository-e2e',0);
  const environment=(await api(base+'/environments')).items.find(item=>item.name==='repository-e2e');repositoryHost=environmentHost(environment);assert(repositoryHost);
  const response=await invoke(repositoryHost,'/from-repository?run='+run);assert.equal(response.status,200);assert.equal(response.body.source,'repository-wrangler');assert.equal(response.body.environment,'repository-e2e');assert(response.body.url.includes('/from-repository?run='+run));
- return {provider:'kind-git',build:repositoryBuild.id,commit:repositoryBuild.repository_source.commit,artifact:repositoryBuild.artifact_id,release:repositoryRelease.release_id,response:response.body};
+ return {provider:'kind-git',build:repositoryBuild.id,commit:repositoryBuild.repository_source.commit,artifact:repositoryBuild.artifact_id,version:repositoryVersion.version_id,response:response.body};
 });
-await check('same Artifact publishes with production configuration',async()=>{await api(base+'/environments/production','PATCH',{expected_revision:1,variables:{GREETING:'production-value'}});prodFirst=await publish(b1.id,'production',0);const r=await invoke(hostProd);assert.equal(r.body.greeting,'production-value');assert.equal(r.body.environment,'production');return {release:prodFirst.release_id,response:r.body};});
+await check('same Artifact publishes with production configuration',async()=>{await api(base+'/environments/production','PATCH',{expected_revision:1,variables:{GREETING:'production-value'}});prodFirst=await publish(b1.id,'production',0);const r=await invoke(hostProd);assert.equal(r.body.greeting,'production-value');assert.equal(r.body.environment,'production');return {version:prodFirst.version_id,response:r.body};});
 await check('v2 build and publish changes production without changing test',async()=>{b2=await build(source('v2-'+run));await publish(b2.id,'production',1);assert.equal((await invoke(hostProd)).body.version,'v2-'+run);assert.equal((await invoke(hostTest)).body.version,'v1-'+run);return {build_id:b2.id};});
-await check('stale Release revision rejected',async()=>{const r=await request(base+'/environments/production/releases','POST',{build_id:b1.id,expected_revision:1,idempotency_key:randomUUID()});assert.equal(r.status,409);return r.body.error.code;});
-await check('historical release rollback restores code and immutable configuration',async()=>{await api(base+'/environments/production','PATCH',{expected_revision:2,variables:{GREETING:'future-config'}});const op=await api(base+'/environments/production/rollbacks','POST',{release_id:prodFirst.release_id,expected_revision:2,idempotency_key:randomUUID()},202);await poll(base+'/operations/'+op.id,['available']);const r=await invoke(hostProd);assert.equal(r.body.version,'v1-'+run);assert.equal(r.body.greeting,'production-value');assert.equal((await api(base+'/environments/production/history')).items.length,3);return r.body;});
+await check('stale Version revision rejected',async()=>{const r=await request(base+'/environments/production/deployments','POST',{build_id:b1.id,expected_revision:1,idempotency_key:randomUUID()});assert.equal(r.status,409);return r.body.error.code;});
+await check('historical version rollback restores code and immutable configuration',async()=>{await api(base+'/environments/production','PATCH',{expected_revision:2,variables:{GREETING:'future-config'}});const op=await api(base+'/environments/production/rollbacks','POST',{version_id:prodFirst.version_id,expected_revision:2,idempotency_key:randomUUID()},202);await poll(base+'/operations/'+op.id,['available']);const r=await invoke(hostProd);assert.equal(r.body.version,'v1-'+run);assert.equal(r.body.greeting,'production-value');assert.equal((await api(base+'/environments/production/history')).items.length,3);return r.body;});
 await check('syntax error fails build and retains production',async()=>{const b=await build({entrypoint:'index.ts',files:{'index.ts':'export default {fetch('}},'failed');assert(!b.artifact_id);assert((await api(base+'/builds/'+b.id+'/logs')).log.includes('Build failed'));assert.equal((await invoke(hostProd)).body.version,'v1-'+run);return {build_id:b.id,error:b.error};});
 await check('compiler cannot read files outside project',async()=>{const b=await build({entrypoint:'index.ts',files:{'index.ts':`import input from '/input/input.json';export default {fetch(){return Response.json(input)}}`}},'failed');const log=(await api(base+'/builds/'+b.id+'/logs')).log;assert.match(log,/source-boundary.*outside project is forbidden/is);return {build_id:b.id};});
-await check('candidate module initialization failure leaves current Release',async()=>{const bad=await build({entrypoint:'index.ts',files:{'index.ts':`throw new Error('candidate-init-failed'); export default {fetch(){return new Response('bad')}}`}});const op=await api(base+'/environments/production/releases','POST',{build_id:bad.id,expected_revision:3,idempotency_key:randomUUID()},202);const result=await poll(base+'/operations/'+op.id,['failed']);assert(result.error.includes('Candidate'));assert.equal((await invoke(hostProd)).body.version,'v1-'+run);assert.equal((await api(base+'/environments')).items.find(e=>e.name==='production').release_revision,3);return {operation:op.id,error:result.error};});
-await check('API Key is scoped to environment and cannot publish production',async()=>{const limited=await api('/api/v1/orgs/'+org.id+'/api-keys','POST',{name:'test only',expires_in:3600,policy:{schema_version:1,statements:[{effect:'allow',actions:['service.publish','service.read','service.version.read'],resource:{kind:'service',organization_id:org.id,ids:[service.id]},conditions:{environments:['fix-auth']}}]}},201,{session:true});const r=await request(base+'/environments/production/releases','POST',{build_id:b1.id,expected_revision:3,idempotency_key:randomUUID()},{token:limited.key});assert.equal(r.status,403);const visible=await api(base+'/environments','GET',undefined,200,{token:limited.key});assert.deepEqual(visible.items.map(e=>e.name),['fix-auth']);assert.equal((await api(base+'/builds','GET',undefined,200,{token:limited.key})).items.length,0);return {denied:r.status,visible:['fix-auth']};});
+await check('candidate module initialization failure leaves current Version',async()=>{const bad=await build({entrypoint:'index.ts',files:{'index.ts':`throw new Error('candidate-init-failed'); export default {fetch(){return new Response('bad')}}`}});const op=await api(base+'/environments/production/deployments','POST',{build_id:bad.id,expected_revision:3,idempotency_key:randomUUID()},202);const result=await poll(base+'/operations/'+op.id,['failed']);assert(result.error.includes('Candidate'));assert.equal((await invoke(hostProd)).body.version,'v1-'+run);assert.equal((await api(base+'/environments')).items.find(e=>e.name==='production').deployment_revision,3);return {operation:op.id,error:result.error};});
+await check('API Key is scoped to environment and cannot publish production',async()=>{const limited=await api('/api/v1/orgs/'+org.id+'/api-keys','POST',{name:'test only',expires_in:3600,policy:{schema_version:1,statements:[{effect:'allow',actions:['service.publish','service.read','service.version.read'],resource:{kind:'service',organization_id:org.id,ids:[service.id]},conditions:{environments:['fix-auth']}}]}},201,{session:true});const r=await request(base+'/environments/production/deployments','POST',{build_id:b1.id,expected_revision:3,idempotency_key:randomUUID()},{token:limited.key});assert.equal(r.status,403);const visible=await api(base+'/environments','GET',undefined,200,{token:limited.key});assert.deepEqual(visible.items.map(e=>e.name),['fix-auth']);assert.equal((await api(base+'/builds','GET',undefined,200,{token:limited.key})).items.length,0);return {denied:r.status,visible:['fix-auth']};});
 await check('preview lifecycle: create, publish with own variables, then delete',async()=>{await api(base+'/environments','POST',{name:'demo-preview'},201);await api(base+'/environments/demo-preview','PATCH',{expected_revision:1,variables:{GREETING:'preview-value'}});await publish(b1.id,'demo-preview',0);const envs=(await api(base+'/environments')).items;const stage=envs.find(e=>e.name==='demo-preview');assert.equal((await invoke(environmentHost(stage))).body.greeting,'preview-value');await api(base+'/environments/demo-preview','DELETE',undefined,204);assert.equal((await api(base+'/environments')).items.some(e=>e.name==='demo-preview'),false);const recreated=await api(base+'/environments','POST',{name:'demo-preview'},201);await api(base+'/environments/demo-preview','DELETE',undefined,204);return {deleted:'demo-preview',recreated:recreated.name,baseline:envs.find(e=>e.name==='production').name};});
 await check('business network and platform credentials are absent',async()=>{const r=await invoke(hostTest,'/probe');assert.equal(r.status,200);assert.equal(r.body.blocked,true);assert.equal(r.body.tcpBlocked,true);assert(!r.body.bindings.some(n=>['PLATFORM','LOADER','RUNTIME_TOKEN','MANAGEMENT_TOKEN'].includes(n)));return r.body;});
 await check('build idempotency and content addressed Artifact deduplication',async()=>{const data={environment:'fix-auth',...source('v1-'+run),idempotency_key:randomUUID()};const a=await api(base+'/builds','POST',data,202);const b=await api(base+'/builds','POST',data);assert.equal(a.id,b.id);const done=await poll(base+'/builds/'+a.id,['succeeded']);assert.equal(done.artifact_id,b1.artifact_id);const conflict=await request(base+'/builds','POST',{...data,...source('different')});assert.equal(conflict.status,409);return {same_build:a.id,artifact:done.artifact_id};});
 await check('invalid paths and cross-service Artifact access rejected',async()=>{const r=await request(base+'/builds','POST',{environment:'fix-auth',entrypoint:'../bad.ts',files:{'../bad.ts':'x'},idempotency_key:randomUUID()});assert.equal(r.status,422);const other=await api('/api/v1/orgs/'+org.id+'/services','POST',{name:'unrelated'},201);const x=await request('/api/v1/orgs/'+org.id+'/services/'+other.id+'/workers/artifacts/'+b1.artifact_id);assert.equal(x.status,404);return {path:r.status,other_service:x.status};});
 await check('publishing never restarted the runtime Pods',async()=>{const now=JSON.parse(kubectl('get','pods','-n','workers-mvp','-l','role=krun-runtime','-o','json')).items.filter(p=>!p.metadata.deletionTimestamp);assert.deepEqual(now.map(p=>p.metadata.uid).sort(),initialPods.map(p=>p.uid).sort());assert(now.every(p=>p.status.containerStatuses[0].restartCount===initialPods.find(x=>x.uid===p.metadata.uid).restarts));return initialPods;});
-writeFileSync(generatedPath('test-service.json'),JSON.stringify({org:org.id,service:service.id,base,hostTest,hostProd,b1:b1.id,prodFirst:prodFirst.release_id},null,2));
+writeFileSync(generatedPath('test-service.json'),JSON.stringify({org:org.id,service:service.id,base,hostTest,hostProd,b1:b1.id,prodFirst:prodFirst.version_id},null,2));
 await check('control restart recovers durable state and object-backed code',async()=>{kubectl('rollout','restart','deployment/backend','-n','workers-mvp');kubectl('rollout','status','deployment/backend','-n','workers-mvp','--timeout=120s');await startForward();const history=await api(base+'/environments/production/history');assert.equal(history.items.length,3);assert.equal((await invoke(hostProd)).body.version,'v1-'+run);return {history:history.items.length};});
 let recoveryBuild;
 await check('control interruption during build resumes the durable Job',async()=>{
@@ -186,14 +186,14 @@ await check('control interruption during build resumes the durable Job',async()=
  return {build:recoveryBuild.id,job:recoveryBuild.job};
 });
 await check('control interruption during publish resumes the Operation',async()=>{
- const queued=await api(base+'/environments/production/releases','POST',{build_id:recoveryBuild.id,expected_revision:3,idempotency_key:randomUUID()},202);
+ const queued=await api(base+'/environments/production/deployments','POST',{build_id:recoveryBuild.id,expected_revision:3,idempotency_key:randomUUID()},202);
  kubectl('rollout','restart','deployment/backend','-n','workers-mvp');kubectl('rollout','status','deployment/backend','-n','workers-mvp','--timeout=120s');await startForward();
  const done=await poll(base+'/operations/'+queued.id,['available']);assert.equal((await invoke(hostProd)).body.version,'v3-'+run);
- const rollback=await api(base+'/environments/production/rollbacks','POST',{release_id:prodFirst.release_id,expected_revision:4,idempotency_key:randomUUID()},202);await poll(base+'/operations/'+rollback.id,['available']);
+ const rollback=await api(base+'/environments/production/rollbacks','POST',{version_id:prodFirst.version_id,expected_revision:4,idempotency_key:randomUUID()},202);await poll(base+'/operations/'+rollback.id,['available']);
  assert.equal((await invoke(hostProd)).body.version,'v1-'+run);assert.equal((await api(base+'/environments/production/history')).items.length,5);
  return {operation:done.id,state:done.state,rollback:rollback.id};
 });
-await check('rollback recovers a committed release with stalled runtime adoption',async()=>{
+await check('rollback recovers a committed version with stalled runtime adoption',async()=>{
  const node=clusterName+'-control-plane';
  const docker=(...args)=>execFileSync('docker',args,{encoding:'utf8',timeout:20000});
  const pod=JSON.parse(kubectl('get','pods','-n','workers-mvp','-l','app=backend','-o','json')).items.find(p=>!p.metadata.deletionTimestamp);
@@ -202,17 +202,17 @@ await check('rollback recovers a committed release with stalled runtime adoption
  assert(Number.isInteger(pid)&&pid>1);
  const rule=verb=>docker('exec',node,'nsenter','-t',String(pid),'-n','iptables',verb,'INPUT','-p','tcp','--dport','9001','-j','REJECT');
  const prodEnv=()=>api(base+'/environments').then(e=>e.items.find(x=>x.name==='production'));
- const beforeRelease=await prodEnv();
+ const beforeVersion=await prodEnv();
  let queued,rollback;
  // Block the runtime's config feed and ack path before publishing, so the
  // Operation commits but cannot converge while the rule is active.
  rule('-I');
  try {
-  queued=await api(base+'/environments/production/releases','POST',{build_id:b2.id,expected_revision:beforeRelease.release_revision,idempotency_key:randomUUID()},202);
+  queued=await api(base+'/environments/production/deployments','POST',{build_id:b2.id,expected_revision:beforeVersion.deployment_revision,idempotency_key:randomUUID()},202);
   let committed;for(let i=0;i<1500;i++){committed=await api(base+'/operations/'+queued.id);if(['committed','available','failed'].includes(committed.state))break;await sleep(100);}
   assert.equal(committed.state,'committed');
   await sleep(1500);assert.equal((await api(base+'/operations/'+queued.id)).state,'committed');
-  rollback=await api(base+'/environments/production/rollbacks','POST',{release_id:prodFirst.release_id,expected_revision:beforeRelease.release_revision+1,idempotency_key:randomUUID()},202);
+  rollback=await api(base+'/environments/production/rollbacks','POST',{version_id:prodFirst.version_id,expected_revision:beforeVersion.deployment_revision+1,idempotency_key:randomUUID()},202);
 	  // Enqueue itself does not supersede the stalled commit, but the controller
 	  // may validate and commit the rollback before this next HTTP round trip.
 	  // Both observations are valid; failure/availability here would not be.
@@ -222,8 +222,8 @@ await check('rollback recovers a committed release with stalled runtime adoption
  const previous=await api(base+'/operations/'+queued.id);assert(['superseded','available'].includes(previous.state));assert.equal((await invoke(hostProd)).body.version,'v1-'+run);
  return {previous:queued.id,previous_state:previous.state,recovery:rollback.id};
 });
-await check('replacement runtime Pod cold-loads the current object-backed Release',async()=>{const old=initialPods[0];kubectl('delete','pod',old.name,'-n','workers-mvp');kubectl('rollout','status','deployment/runtime-default','-n','workers-mvp','--timeout=120s');const pods=JSON.parse(kubectl('get','pods','-n','workers-mvp','-l','role=krun-runtime','-o','json')).items.filter(p=>!p.metadata.deletionTimestamp);const replacement=pods.find(p=>!initialPods.some(x=>x.uid===p.metadata.uid));assert(replacement);let r;for(let i=0;i<16;i++){r=await invoke(hostProd);if(r.headers['x-krun-pod']===replacement.metadata.uid)break;}assert.equal(r.headers['x-krun-pod'],replacement.metadata.uid);assert.equal(r.body.version,'v1-'+run);return {replaced:old.uid,replacement:replacement.metadata.uid,response:r.body};});
-let assetBuild,assetRelease,assetArtifact;
+await check('replacement runtime Pod cold-loads the current object-backed Version',async()=>{const old=initialPods[0];kubectl('delete','pod',old.name,'-n','workers-mvp');kubectl('rollout','status','deployment/runtime-default','-n','workers-mvp','--timeout=120s');const pods=JSON.parse(kubectl('get','pods','-n','workers-mvp','-l','role=krun-runtime','-o','json')).items.filter(p=>!p.metadata.deletionTimestamp);const replacement=pods.find(p=>!initialPods.some(x=>x.uid===p.metadata.uid));assert(replacement);let r;for(let i=0;i<16;i++){r=await invoke(hostProd);if(r.headers['x-krun-pod']===replacement.metadata.uid)break;}assert.equal(r.headers['x-krun-pod'],replacement.metadata.uid);assert.equal(r.body.version,'v1-'+run);return {replaced:old.uid,replacement:replacement.metadata.uid,response:r.body};});
+let assetBuild,assetVersion,assetArtifact;
 await check('full-stack example source and static assets build as one Artifact',async()=>{
  const upload=await api(base+'/source-uploads','POST',{},201);
  assert(upload.upload_url.includes('/uploads/'));
@@ -238,7 +238,7 @@ await check('full-stack example source and static assets build as one Artifact',
 });
 await check('full-stack page, API, SPA, HTML, and cache behavior work through runtime',async()=>{
  const envs=(await api(base+'/environments')).items;const prod=envs.find(e=>e.name==='production');
- assetRelease=await publish(assetBuild.id,'production',prod.release_revision);
+ assetVersion=await publish(assetBuild.id,'production',prod.deployment_revision);
  assetArtifact=await api(base+'/artifacts/'+assetBuild.artifact_id);
  const root=await invoke(hostProd,'/');
  assert.equal(root.status,200);assert(String(root.body).includes('data-app="krun-workers-fullstack"'));assert((root.headers['content-type']||'').startsWith('text/html'));
@@ -251,7 +251,7 @@ await check('full-stack page, API, SPA, HTML, and cache behavior work through ru
  const styles=await invoke(hostProd,'/assets/styles-a1b2c3d4.css');
  assert.equal(styles.status,200);assert((styles.headers['content-type']||'').startsWith('text/css'));assert((styles.headers['cache-control']||'').includes('immutable'));
  const health=await invoke(hostProd,'/api/health');
- assert.equal(health.status,200);assert.equal(health.body.ok,true);assert.equal(health.body.service,'krun-workers-fullstack');assert.equal(health.body.environment,'production');assert.equal(health.body.release_id,assetRelease.release_id);
+ assert.equal(health.status,200);assert.equal(health.body.ok,true);assert.equal(health.body.service,'krun-workers-fullstack');assert.equal(health.body.environment,'production');assert.equal(health.body.version_id,assetVersion.version_id);
  const assetBinding=await invoke(hostProd,'/api/asset-check');
  assert.equal(assetBinding.status,200);assert.deepEqual(assetBinding.body,{status:200,about_page:true});
  const echoResult=await api(base+'/environments/production/invoke','POST',{path:'/api/echo',method:'POST',body:JSON.stringify({message:'browser to Worker round trip'})});
@@ -264,27 +264,27 @@ await check('full-stack page, API, SPA, HTML, and cache behavior work through ru
  const etag=root.headers.etag;assert(etag);
  const cached=await invoke(hostProd,'/',{'if-none-match':etag});
  assert.equal(cached.status,304);
- return {release:assetRelease.release_id,etag,root:root.status,api:health.status,assets_binding:assetBinding.status,echo:echoResult.status,spa:navigate.status,redirect:redirect.status,missing:missing.status};
+ return {version:assetVersion.version_id,etag,root:root.status,api:health.status,assets_binding:assetBinding.status,echo:echoResult.status,spa:navigate.status,redirect:redirect.status,missing:missing.status};
 });
-await check('Secret put and delete create configuration-only Releases and deploy immediately',async()=>{
+await check('Secret put and delete create configuration-only Versions and deploy immediately',async()=>{
  const before=(await api(base+'/environments')).items.find(e=>e.name==='production');
  const secretValue='kind-secret-'+randomUUID();
- const queued=await api(base+'/environments/production/secrets/VERIFICATION_SECRET','PUT',{value:secretValue,expected_revision:before.release_revision,idempotency_key:randomUUID()},202);
+ const queued=await api(base+'/environments/production/secrets/VERIFICATION_SECRET','PUT',{value:secretValue,expected_revision:before.deployment_revision,idempotency_key:randomUUID()},202);
  const deployed=await poll(base+'/operations/'+queued.id,['available']);
- const secretRelease=await api(base+'/releases/'+deployed.release_id);
- assert.equal(secretRelease.artifact_id,assetBuild.artifact_id);
+ const secretVersion=await api(base+'/versions/'+deployed.version_id);
+ assert.equal(secretVersion.artifact_id,assetBuild.artifact_id);
  const withSecret=await invoke(hostProd,'/api/health');
- assert.equal(withSecret.status,200);assert.equal(withSecret.body.secret_configured,true);assert.equal(withSecret.body.release_id,deployed.release_id);
+ assert.equal(withSecret.status,200);assert.equal(withSecret.body.secret_configured,true);assert.equal(withSecret.body.version_id,deployed.version_id);
  const listed=await api(base+'/environments/production/secrets');
  assert.deepEqual(listed.items.map(item=>item.name),['VERIFICATION_SECRET']);
  assert(!JSON.stringify(listed).includes(secretValue));
  const current=(await api(base+'/environments')).items.find(e=>e.name==='production');
- const removing=await api(base+'/environments/production/secrets/VERIFICATION_SECRET','DELETE',{expected_revision:current.release_revision,idempotency_key:randomUUID()},202);
+ const removing=await api(base+'/environments/production/secrets/VERIFICATION_SECRET','DELETE',{expected_revision:current.deployment_revision,idempotency_key:randomUUID()},202);
  const removed=await poll(base+'/operations/'+removing.id,['available']);
  const withoutSecret=await invoke(hostProd,'/api/health');
- assert.equal(withoutSecret.body.secret_configured,false);assert.equal(withoutSecret.body.release_id,removed.release_id);
- const deleteRelease=await api(base+'/releases/'+removed.release_id);assert.equal(deleteRelease.artifact_id,assetBuild.artifact_id);
- return {put_release:deployed.release_id,delete_release:removed.release_id,artifact:assetBuild.artifact_id,value_exposed:false};
+ assert.equal(withoutSecret.body.secret_configured,false);assert.equal(withoutSecret.body.version_id,removed.version_id);
+ const deleteVersion=await api(base+'/versions/'+removed.version_id);assert.equal(deleteVersion.artifact_id,assetBuild.artifact_id);
+ return {put_version:deployed.version_id,delete_version:removed.version_id,artifact:assetBuild.artifact_id,value_exposed:false};
 });
 await check('static domain serves pub/ directly and v1/ stays private',async()=>{
  const path='/'+org.id+'/'+service.id+'/'+assetArtifact.archive_sha256+'/index.html';
@@ -312,7 +312,7 @@ await check('gateway instances are isolated per domain binding',async()=>{
  const profile=await api(publicBase+'/network-profile','PUT',{network_profile:'external-service',expected_revision:0});
  assert.equal(profile.network_profile.id,'external-service');assert.deepEqual(profile.selected,['external']);
  const publicBuild=await buildAt(publicBase,source('public-'+run));
- const publicRelease=await publishAt(publicBase,publicBuild.id,'production',0);
+ const publicVersion=await publishAt(publicBase,publicBuild.id,'production',0);
  let publicHost;
  for(let i=0;i<20;i++){
   const envs=(await api(publicBase+'/environments','GET')).items;
@@ -330,7 +330,7 @@ await check('gateway instances are isolated per domain binding',async()=>{
  assert.equal(viaPublicOwn.status,200);
  const viaPrivateOwn=await invokeAt(gateway,privateHost);
  assert.equal(viaPrivateOwn.status,200);
- return {publicService:publicService.id,publicBuild:publicBuild.id,publicRelease:publicRelease.release_id,publicHost,privateHost,mixed:mixed.status,forgedPublic:viaPublicPrivateHost.status,forgedPrivate:viaPrivatePublicHost.status,public:viaPublicOwn.status,private:viaPrivateOwn.status};
+ return {publicService:publicService.id,publicBuild:publicBuild.id,publicVersion:publicVersion.version_id,publicHost,privateHost,mixed:mixed.status,forgedPublic:viaPublicPrivateHost.status,forgedPrivate:viaPrivatePublicHost.status,public:viaPublicOwn.status,private:viaPrivateOwn.status};
 });
 await check('exported console and API share the same origin',async()=>{
  const root=await request('/','GET',undefined,{token:null,headers:{host:new URL(origin).host}});assert.equal(root.status,200);assert(String(root.body).includes('<div id="root">'));
@@ -378,4 +378,34 @@ await check('background GC removes indexed artifact files and preserves live ass
  const live=testerGet(storage+'/pub/'+org.id+'/'+service.id+'/'+assetArtifact.archive_sha256+'/index.html');assert.equal(live.status,200);
  return {removed_artifact:artifact.id,removed_files:2,live_assets:live.status};
 });
+let savedVersion,previewDeployment,pinnedHost;
+await check('Previews Base config and secrets seed a new unpublished Preview',async()=>{
+ await api(base+'/previews-base','PATCH',{expected_revision:0,variables:{GREETING:'base-preview'}});
+ await api(base+'/previews-base/secrets','PATCH',{secrets:{apiToken:'preview-only-fixture'},expected_revision:0,idempotency_key:randomUUID()},201);
+ const preview=await api(base+'/environments','POST',{name:'cf-model-preview'},201);
+ assert.equal(preview.variables.GREETING,'base-preview');assert(preview.secret_names.includes('apiToken'));assert(!preview.version_id);
+ const production=(await api(base+'/environments')).items.find(e=>e.name==='production');assert(!production.secret_names.includes('apiToken'));
+ return {preview:preview.name,production_secret_isolated:true};
+});
+await check('saving a Version freezes bindings without deploying traffic',async()=>{
+ savedVersion=await api(base+'/environments/cf-model-preview/versions','POST',{build_id:b1.id,idempotency_key:randomUUID()},201);
+ let preview=(await api(base+'/environments')).items.find(e=>e.name==='cf-model-preview');assert(!preview.version_id);
+ await api(base+'/environments/cf-model-preview','PATCH',{expected_revision:preview.configuration_revision,variables:{GREETING:'changed-after-version'}});
+ previewDeployment=await api(base+'/environments/cf-model-preview/deployments','POST',{version_id:savedVersion.id,expected_revision:0,idempotency_key:randomUUID()},202);
+ await poll(base+'/operations/'+previewDeployment.id,['available'],150000);
+ preview=(await api(base+'/environments')).items.find(e=>e.name==='cf-model-preview');assert.equal((await invoke(environmentHost(preview))).body.greeting,'base-preview');
+ const deployments=(await api(base+'/deployments')).items;const deployed=deployments.find(d=>d.operation_id===previewDeployment.id);assert(deployed&&deployed.hosts.length);pinnedHost=deployed.hosts[0];assert.equal((await invoke(pinnedHost)).body.greeting,'base-preview');
+ return {version_id:savedVersion.id,deployment_id:deployed.id,pinned_host:pinnedHost};
+});
+await check('pinned deployment URL retains its version after another deployment',async()=>{
+ const next=await api(base+'/environments/cf-model-preview/versions','POST',{build_id:b1.id,idempotency_key:randomUUID()},201);
+ const op=await api(base+'/environments/cf-model-preview/deployments','POST',{version_id:next.id,expected_revision:1,idempotency_key:randomUUID()},202);await poll(base+'/operations/'+op.id,['available'],150000);
+ const preview=(await api(base+'/environments')).items.find(e=>e.name==='cf-model-preview');assert.equal((await invoke(environmentHost(preview))).body.greeting,'changed-after-version');assert.equal((await invoke(pinnedHost)).body.greeting,'base-preview');
+ return {previous_version:savedVersion.id,current_version:next.id,pinned_target_unchanged:true};
+});
+await check('deleting a Preview revokes its pinned deployment URLs',async()=>{
+ await api(base+'/environments/cf-model-preview','DELETE',undefined,204);
+ let revoked=false;for(let i=0;i<40;i++){const response=await invoke(pinnedHost);if([404,410].includes(response.status)){revoked=true;break}await sleep(1000)}assert(revoked);return {revoked:true};
+});
+
 console.log('PASS '+evidence.length+' kind backend end-to-end checks');

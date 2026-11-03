@@ -24,7 +24,7 @@ func (s *Server) workerApplication(r *http.Request) *workerapp.Service {
 }
 func workerRef(r *http.Request) workerapp.ServiceRef {
 	ref := workerapp.ServiceRef{Organization: r.PathValue("org"), Service: r.PathValue("resource"), Environment: r.PathValue("environment")}
-	for _, name := range []string{"build", "operation", "artifact", "release", "secret"} {
+	for _, name := range []string{"build", "operation", "artifact", "version", "secret"} {
 		if id := r.PathValue(name); id != "" {
 			ref.Item = id
 			break

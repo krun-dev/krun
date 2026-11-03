@@ -7,10 +7,10 @@
 
 | 范围 | 实现 | 边界 |
 | --- | --- | --- |
-| 控制面读取 | 站点 API 按组织/资源过滤 SQL；列表用资源 ID 游标；Runtime 按 Release/Artifact 主键查询；登录只读当前 identity，启动只注册来源；导航只加载当前用户的授权上下文 | 管理员的批量 IAM 管理操作仍保留独立的管理查询语义；没有给它们伪造授权缓存 |
+| 控制面读取 | 站点 API 按组织/资源过滤 SQL；列表用资源 ID 游标；Runtime 按 Version/Artifact 主键查询；登录只读当前 identity，启动只注册来源；导航只加载当前用户的授权上下文 | 管理员的批量 IAM 管理操作仍保留独立的管理查询语义；没有给它们伪造授权缓存 |
 | 网关协调 | 共享路由按 pool × domain 建通配 HTTPRoute；不加载全站点拓扑；命名空间清单一次分页读取并复用；已就绪路由每 30 秒修复，未就绪时每秒重试 | 共享路由是唯一入口模型 |
-| 发布 | 数据库触发器将变更合并成一条 service dirty 行；每批最多 256 站点；仅对变化路由/Release 写增量；有界批次在 CAS 事务内按顺序写入，无网络调用；操作优先发布自己的站点 | catalogue 变化会一次性入队重建，按有界批次推进；revision 仍是全局单调游标 |
-| Runtime 配置 | 紧凑 head 启动；冷 host 定向查询；仅缓存最多 4096 条 route 和其 Release；增量原地同步提交、按引用计数回收，不遍历全表；对象存储有 256 个 host hash shard | 每个 shard 的大小随所属站点数增长；百万条路由均匀分布时约 3906 条/shard；不要求每 Pod 下载全池 |
+| 发布 | 数据库触发器将变更合并成一条 service dirty 行；每批最多 256 站点；仅对变化路由/Version 写增量；有界批次在 CAS 事务内按顺序写入，无网络调用；操作优先发布自己的站点 | catalogue 变化会一次性入队重建，按有界批次推进；revision 仍是全局单调游标 |
+| Runtime 配置 | 紧凑 head 启动；冷 host 定向查询；仅缓存最多 4096 条 route 和其 Version；增量原地同步提交、按引用计数回收，不遍历全表；对象存储有 256 个 host hash shard | 每个 shard 的大小随所属站点数增长；百万条路由均匀分布时约 3906 条/shard；不要求每 Pod 下载全池 |
 | 资产 | finalize 独立保存有 digest 的 manifest；控制面用 single-flight + LRU；Runtime manifest 使用 LRU、合并并发回源、预建路径索引；资产字节缓存维持有界 LRU | 冷请求仍会依赖控制面签名与对象存储；独立静态域可直达对象存储/CDN |
 | 队列 | 可认领状态/租约筛选，`reconcile_after` 轮转；有界并行协调；`started_at` 区分执行时间与排队时间；认领后才做候选归档 I/O | 不引入额外消息队列；操作行仍是持久化工作队列 |
 | 清理 | dirty service retention scope；历史排名仅针对发生变化的站点；过期删除每批最多 1000 行；孤儿 input 有持久游标；资产对象归属索引 + S3 multi-delete；对象扫描有游标和批量上限；GC 独立于发布循环 | 对象 GC 每 10 秒最多执行 8 秒，数据库 retention 每分钟最多执行 20 秒；积压跨批次推进 |
@@ -65,7 +65,7 @@ Shard 在 repeatable-read 视图中读取，并用该视图的真实 head 命名
 
 测试分为真实 PostgreSQL 规模回归、实际 Runtime 函数复杂度测试、真实 workerd / Wrangler
 制品 smoke、独立 kind E2E 和 Playwright UI。百万站点 fixture 包含站点、placement 与
-production 环境，未包含百万个活跃 Release；单路由更新微基准不包含网络、业务代码和
+production 环境，未包含百万个活跃 Version；单路由更新微基准不包含网络、业务代码和
 端到端延迟。这些结果用于约束算法与元数据读取范围，不是生产 QPS 或发布吞吐承诺。
 
 复现命令（数据库必须是专用、可写的测试数据库）：

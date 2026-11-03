@@ -14,6 +14,9 @@ func (s *Store) RetainExpired(ctx context.Context) error {
 	at := now()
 	// Idle timeout and absolute expiry match the checks in authenticate.
 	sessionCutoff := at.Add(-30 * time.Minute)
+	if _, err := s.pool.Exec(ctx, `DELETE FROM krun_worker_deployments WHERE deployment_id IN(SELECT d.deployment_id FROM krun_worker_deployments d WHERE d.expires_at<=now() OR NOT EXISTS(SELECT 1 FROM krun_worker_environments e WHERE e.service_id=d.service_id AND e.env_name=d.env_name) ORDER BY d.expires_at LIMIT 1000)`); err != nil {
+		return err
+	}
 	statements := []struct {
 		sql  string
 		args []any
@@ -31,16 +34,17 @@ func (s *Store) RetainExpired(ctx context.Context) error {
 		{`DELETE FROM krun_worker_idempotency WHERE created_at <= $1`, []any{at.Add(-workerIdempotencyRetain)}},
 		{`DELETE FROM krun_worker_operations WHERE state IN ('succeeded','failed','available','superseded') AND created_at <= $1`, []any{at.Add(-workerOperationRetain)}},
 		{`UPDATE krun_worker_build_private SET log='' WHERE build_id IN (SELECT p.build_id FROM krun_worker_build_private p JOIN krun_worker_builds b ON b.build_id=p.build_id WHERE b.created_at<=$1 AND length(p.log)>0 ORDER BY b.created_at LIMIT 1000)`, []any{at.Add(-workerBuildLogRetain)}},
-		{`WITH victims AS MATERIALIZED (SELECT release_id FROM krun_worker_releases rel WHERE rel.created_at<=$1
- AND NOT EXISTS(SELECT 1 FROM krun_worker_environments e WHERE e.release_id=rel.release_id)
- AND NOT EXISTS(SELECT 1 FROM krun_worker_environments e WHERE e.confirmed_release_id=rel.release_id)
- AND NOT EXISTS(SELECT 1 FROM krun_worker_history h WHERE h.release_id=rel.release_id)
- AND NOT EXISTS(SELECT 1 FROM krun_worker_operations o WHERE o.release_id=rel.release_id)
- ORDER BY rel.created_at LIMIT 1000), bindings AS(DELETE FROM krun_worker_release_secrets WHERE release_id IN(SELECT release_id FROM victims))
- DELETE FROM krun_worker_releases WHERE release_id IN(SELECT release_id FROM victims)`, []any{at.Add(-WorkerArtifactRetain)}},
+		{`WITH victims AS MATERIALIZED (SELECT version_id FROM krun_worker_versions rel WHERE rel.created_at<=$1
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_environments e WHERE e.version_id=rel.version_id)
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_environments e WHERE e.confirmed_version_id=rel.version_id)
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_deployments d WHERE d.version_id=rel.version_id)
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_history h WHERE h.version_id=rel.version_id)
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_operations o WHERE o.version_id=rel.version_id)
+ ORDER BY rel.created_at LIMIT 1000), bindings AS(DELETE FROM krun_worker_version_secrets WHERE version_id IN(SELECT version_id FROM victims))
+ DELETE FROM krun_worker_versions WHERE version_id IN(SELECT version_id FROM victims)`, []any{at.Add(-WorkerArtifactRetain)}},
 		{`DELETE FROM krun_worker_secret_versions WHERE secret_version_id IN (SELECT secret.secret_version_id FROM krun_worker_secret_versions secret WHERE secret.created_at<=$1
  AND NOT EXISTS(SELECT 1 FROM krun_worker_environment_secrets b WHERE b.secret_version_id=secret.secret_version_id)
- AND NOT EXISTS(SELECT 1 FROM krun_worker_release_secrets b WHERE b.secret_version_id=secret.secret_version_id) ORDER BY secret.created_at LIMIT 1000)`, []any{at.Add(-WorkerArtifactRetain)}},
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_version_secrets b WHERE b.secret_version_id=secret.secret_version_id) ORDER BY secret.created_at LIMIT 1000)`, []any{at.Add(-WorkerArtifactRetain)}},
 	}
 	for _, statement := range statements {
 		if _, err := s.pool.Exec(ctx, boundedRetentionDelete(statement.sql), statement.args...); err != nil {
@@ -53,7 +57,7 @@ func (s *Store) RetainExpired(ctx context.Context) error {
 	return s.retainOrphanInputs(ctx)
 }
 
-// garbageArtifacts returns metadata whose release references have expired.
+// garbageArtifacts returns metadata whose version references have expired.
 // The controller removes the S3 objects first and only then calls
 // deleteGarbageArtifact, so a temporary object-store outage never loses the
 // keys needed for a later cleanup attempt.
@@ -69,7 +73,7 @@ func (s *Store) GarbageArtifacts(ctx context.Context, cutoff time.Time, limit in
 		WHERE a.created_at <= $1 AND (
 			a.state IN ('staging','finalized') OR (a.state='deleting' AND (a.gc_claimed_at IS NULL OR a.gc_claimed_at < now() - $3::interval))
 		) AND NOT EXISTS (
-			SELECT 1 FROM krun_worker_releases r WHERE r.artifact_id=a.artifact_id
+			SELECT 1 FROM krun_worker_versions r WHERE r.artifact_id=a.artifact_id
 		) AND NOT EXISTS (
 			SELECT 1 FROM krun_worker_builds b WHERE b.artifact_id=a.artifact_id
 		)
@@ -101,7 +105,7 @@ func (s *Store) ClaimGarbageArtifact(ctx context.Context, id, replica string, ex
 			a.state IN ('staging','finalized') OR (a.state='deleting' AND (a.gc_claimed_at IS NULL OR a.gc_claimed_at < now() - $3::interval))
 		)
 		AND a.use_revision=$4
-		AND NOT EXISTS (SELECT 1 FROM krun_worker_releases r WHERE r.artifact_id=a.artifact_id)
+		AND NOT EXISTS (SELECT 1 FROM krun_worker_versions r WHERE r.artifact_id=a.artifact_id)
 		AND NOT EXISTS (SELECT 1 FROM krun_worker_builds b WHERE b.artifact_id=a.artifact_id)`, id, replica, workerArtifactGCLease, expectedRevision)
 	if err != nil {
 		return false, err
@@ -115,7 +119,7 @@ func (s *Store) DeleteGarbageArtifact(ctx context.Context, id, replica string) e
 	}
 	_, err := s.pool.Exec(ctx, `DELETE FROM krun_worker_artifacts a
 		WHERE a.artifact_id=$1 AND a.state='deleting' AND a.gc_claimed_by=$2 AND NOT EXISTS (
-			SELECT 1 FROM krun_worker_releases r WHERE r.artifact_id=a.artifact_id
+			SELECT 1 FROM krun_worker_versions r WHERE r.artifact_id=a.artifact_id
 		) AND NOT EXISTS (
 			SELECT 1 FROM krun_worker_builds b WHERE b.artifact_id=a.artifact_id
 		)`, id, replica)
@@ -133,7 +137,7 @@ func (s *Store) BlockGarbageArtifact(ctx context.Context, id, replica string, ex
 	tag, err := s.pool.Exec(ctx, `UPDATE krun_worker_artifacts a
 		SET state='cleanup_blocked', gc_claimed_by=$2, gc_claimed_at=now()
 		WHERE artifact_id=$1 AND use_revision=$3 AND state IN ('staging','finalized','deleting')
-		AND NOT EXISTS (SELECT 1 FROM krun_worker_releases r WHERE r.artifact_id=a.artifact_id)
+		AND NOT EXISTS (SELECT 1 FROM krun_worker_versions r WHERE r.artifact_id=a.artifact_id)
 		AND NOT EXISTS (SELECT 1 FROM krun_worker_builds b WHERE b.artifact_id=a.artifact_id)`, id, replica, expectedRevision)
 	if err != nil {
 		return false, err

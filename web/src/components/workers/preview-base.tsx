@@ -1,0 +1,113 @@
+import { useEffect, useState } from "react";
+import { api } from "@/lib/api";
+import { t, errorMessage } from "@/lib/i18n";
+import type { Environment } from "@/lib/workers";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Field } from "@/components/common";
+export function PreviewBasePanel({
+  base,
+  notify,
+}: {
+  base: string;
+  notify: (s: string) => void;
+}) {
+  const [config, setConfig] = useState<Environment>();
+  const [variables, setVariables] = useState("{}");
+  const [name, setName] = useState("");
+  const [secret, setSecret] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function load() {
+    const value = await api<Environment>(base + "/previews-base");
+    setConfig(value);
+    setVariables(JSON.stringify(value.variables, null, 2));
+  }
+  useEffect(() => {
+    let current = true;
+    void api<Environment>(base + "/previews-base")
+      .then((v) => {
+        if (current) {
+          setConfig(v);
+          setVariables(JSON.stringify(v.variables, null, 2));
+        }
+      })
+      .catch((e) => {
+        if (current) notify(errorMessage(e));
+      });
+    return () => {
+      current = false;
+    };
+  }, [base, notify]);
+  async function save(secretChange: boolean) {
+    if (!config) return;
+    setBusy(true);
+    try {
+      if (secretChange) {
+        await api(base + "/previews-base/secrets", "PATCH", {
+          secrets: { [name]: secret },
+          expected_revision: 0,
+          idempotency_key: crypto.randomUUID(),
+        });
+        setSecret("");
+        setName("");
+      } else {
+        await api(base + "/previews-base", "PATCH", {
+          variables: JSON.parse(variables),
+          expected_revision: config.configuration_revision,
+        });
+      }
+      await load();
+      notify(t("预览基础配置已保存，仅影响新建 Preview。"));
+    } catch (e) {
+      notify(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="grid gap-4">
+      <p className="text-sm text-muted-foreground">
+        {t("新建 Preview 复制这里的变量与 Secret；已有 Preview 保持不变。")}
+      </p>
+      <Field label={t("普通变量 JSON")}>
+        <Textarea
+          value={variables}
+          onChange={(e) => setVariables(e.target.value)}
+          rows={6}
+        />
+      </Field>
+      <div>
+        <Button disabled={busy || !config} onClick={() => void save(false)}>
+          {t("保存预览基础变量")}
+        </Button>
+      </div>
+      <p className="text-sm">
+        {t("已有 Secret")}：{config?.secret_names?.join(", ") || "—"}
+      </p>
+      <Field label={t("Secret 名称")}>
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          autoComplete="off"
+        />
+      </Field>
+      <Field label={t("Secret 值")}>
+        <Input
+          type="password"
+          value={secret}
+          onChange={(e) => setSecret(e.target.value)}
+          autoComplete="new-password"
+        />
+      </Field>
+      <div>
+        <Button
+          disabled={busy || !config || !name}
+          onClick={() => void save(true)}
+        >
+          {t("保存预览基础 Secret")}
+        </Button>
+      </div>
+    </div>
+  );
+}

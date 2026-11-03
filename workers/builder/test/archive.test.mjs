@@ -80,7 +80,7 @@ writeFileSync(hostileNpmrc, `//127.0.0.1:${port}/registry/:_authToken=ambient-se
 const packageIntegrity = 'sha512-' + createHash('sha512').update(packageArchive).digest('base64');
 const packageURL = `http://127.0.0.1:${port}/registry/hono/-/hono-4.13.14.tgz`;
 const code = {
-  'index.ts': `import {Hono} from 'hono';import {createHash} from 'crypto';import {promisify} from 'node:util';const app=new Hono();app.get('/api/hello',c=>c.json({hello:true,framework:'hono',hash:createHash('sha256').update('ok').digest('hex'),promisify:typeof promisify,release:c.env.KRUN_RELEASE_ID}));app.all('*',c=>c.json({path:c.req.path}));export default app;`,
+  'index.ts': `import {Hono} from 'hono';import {createHash} from 'crypto';import {promisify} from 'node:util';const app=new Hono();app.get('/api/hello',c=>c.json({hello:true,framework:'hono',hash:createHash('sha256').update('ok').digest('hex'),promisify:typeof promisify,version:c.env.KRUN_VERSION_ID}));app.all('*',c=>c.json({path:c.req.path}));export default app;`,
   'package.json': JSON.stringify({name: 'fixture', version: '1.0.0', private: true, dependencies: {hono: '4.13.14'}}),
   'package-lock.json': JSON.stringify({name: 'fixture', version: '1.0.0', lockfileVersion: 3, requires: true, packages: {'': {name: 'fixture', version: '1.0.0', dependencies: {hono: '4.13.14'}}, 'node_modules/hono': {version: '4.13.14', resolved: packageURL, integrity: packageIntegrity}}}),
 };

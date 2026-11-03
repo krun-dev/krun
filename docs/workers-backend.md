@@ -29,17 +29,17 @@ sequenceDiagram
     A->>A: Build succeeded，登记 Artifact
     C->>A: build_id + 环境 + expected_revision
     A-->>C: 202 + queued Operation
-    A->>V: 在独立 validator 加载候选 Release（冷加载 + RPC）
-    A->>A: CAS 提交 Release，Operation committed
-    A->>A: 生成 config revision（routes + releases 的不可变投影）
+    A->>V: 在独立 validator 加载候选 Version（冷加载 + RPC）
+    A->>A: CAS 提交 Version，Operation committed
+    A->>A: 生成 config revision（routes + versions 的不可变投影）
     A->>S: 写入受影响的 host-hash shard checkpoint 与 compact latest.json
     W->>A: 增量长轮询 /config/changes?since=...
-    A-->>W: ops batch（release_put / route_upsert / route_delete）
+    A-->>W: ops batch（version_put / route_upsert / route_delete）
     W->>A: ack 已应用的 config revision
     A->>A: 当前所有 serving 成员已 ack -> Operation available（可观测性）
 ```
 
-构建和发布都异步处理。Build、源码、Operation、Release、历史、幂等记录和执行者身份都按实体持久化在 PostgreSQL 的 `krun_worker_*` 表中。边缘配置的当前发布头按 route / release 分行保存在 `worker_config_routes` 与 `worker_config_releases`，`worker_config_revisions` 只保存 revision 元数据，增量则是一条 op 一行的 `worker_config_ops`。runtime ack 存在独立的 `worker_runtime_acks`（每个 Pod 一行）。未完成的 Build / Operation 行就是持久化工作队列；控制服务重启后扫描恢复。多个控制服务通过行级 CAS 与超时租约竞争不同工作，配置发布通过 `worker_config_head` CAS 线性推进，不做 advisory-lock 选主。此版没有引入 Redis 或外部消息队列。
+构建和发布都异步处理。Build、源码、Operation、Version、历史、幂等记录和执行者身份都按实体持久化在 PostgreSQL 的 `krun_worker_*` 表中。边缘配置的当前发布头按 route / version 分行保存在 `worker_config_routes` 与 `worker_config_versions`，`worker_config_revisions` 只保存 revision 元数据，增量则是一条 op 一行的 `worker_config_ops`。runtime ack 存在独立的 `worker_runtime_acks`（每个 Pod 一行）。未完成的 Build / Operation 行就是持久化工作队列；控制服务重启后扫描恢复。多个控制服务通过行级 CAS 与超时租约竞争不同工作，配置发布通过 `worker_config_head` CAS 线性推进，不做 advisory-lock 选主。此版没有引入 Redis 或外部消息队列。
 
 Kubernetes、S3 和 runtime HTTP 请求均在 IAM 状态事务外进行。执行者的用户状态、AuthVersion、API Key 和当前权限会在执行及提交前重新检查。
 
@@ -80,28 +80,31 @@ kind 使用 MinIO 验证真实 S3 协议；尚未验证阿里云 OSS 专用 API 
 
 ## 环境、发布和回滚
 
-每个服务默认有 `production` 环境，可通过环境 API 创建和删除 preview。各自具有独立配置 revision、Release revision、Host 和历史。
+每个服务默认有 `production` 环境，可通过环境 API 创建和删除 preview。各自具有独立配置 revision、Version revision、Host 和历史。
 
 Build 是编译结果，不是某个环境的活动版本。同一个成功 Build 可发布到多个环境。构建请求的 `environment` 用于权限和构建记录，不会把生产变量写进制品。
 
-Release固定引用 Artifact、目标环境、构建 profile、compatibility 配置、配置 revision、普通变量和 Secret version 集合。资源池由服务 placement 决定，不写进 Release。ID 由这些内容计算，发布之后不修改；回滚恢复历史 Release 的代码、变量和 Secret。环境 API 中的 `variables` 是下一次发布使用的配置，运行中配置以生效的 Release 为准。
+Version 固定引用 Artifact、目标环境、构建 profile、compatibility 配置、普通变量和 Secret version 集合。创建版本不会改变线上流量，部署时使用创建时冻结的快照。`POST /environments/{env}/versions` 从成功 Build 或本服务已有制品创建版本；`POST /environments/{env}/deployments` 接受 `version_id` 部署已有版本，也支持 `build_id` 完成创建并部署。
 
-Secret 的行为与 Cloudflare Worker 默认命令一致：`PUT`（新增或轮换）和 `DELETE` 都创建不可变 Release 并立即进入发布流程，但复用当前 Artifact，不重新构建代码。每个环境保存 name → secret version 的期望映射，每个 Release 再固定一份映射，因此轮换后仍能准确回滚。值以 AES-256-GCM 加密后入库，AAD 绑定组织、服务、环境、名称和版本；公开 API 只返回名称与创建时间。`workers.secrets_keys` 是带版本的 key ring，`secrets_active_key` 只用于新写入，仍被保留 Release 引用的旧 key 不得删除。生产 key 应由 KMS/Secret Manager 注入配置，而不是提交到仓库。
+Deployment 独立记录目标 Version、Operation、创建时间、30 天的固定地址保留期以及提交时间。Operation 负责校验、CAS 提交和 ACK 收敛；只有通过校验并提交的 Deployment 才生成固定地址。环境地址跟随当前部署，固定地址在有效期内指向该次部署的 Version。删除 Preview、撤销服务或修改访问边界后会撤销相应路由；部署地址不会绕过当前网络边界。域名及资源池拓扑变更需要协调地址和路由。
 
-发布 API 提交 `expected_revision`，防止覆盖其他发布。幂等 key 相同且请求相同返回原对象；内容不同返回 409。候选验证失败不会修改 Release。每个 pool 必须配置与 serving Service 不同的 `validator_service`；控制面只从该 Service 的 Ready EndpointSlice 选择带 `role=krun-validator` 的 Pod。validator 使用相同 runtime 镜像和 Release/Secret 快照，但没有业务监听 Service、Gateway 入站、配置跟随或 Ack。生产部署仍应把它放进 gVisor、Kata 或 VM 等适合不可信代码的隔离边界。
+Previews Base 使用独立配置范围；新建 Preview 复制其普通变量与不可变 Secret 引用，后续 Base 修改只影响新建 Preview，生产配置独立。`GET/PATCH /previews-base` 管理基础变量，`PATCH /previews-base/secrets` 管理基础密钥。
+Secret 的普通写操作会自动部署：`PUT`（新增或轮换）和 `DELETE` 都创建不可变 Version 并立即进入发布流程，但复用当前 Artifact，不重新构建代码。每个环境保存 name → secret version 的期望映射，每个 Version 再固定一份映射，因此轮换后仍能准确回滚。值以 AES-256-GCM 加密后入库，AAD 绑定组织、服务、环境、名称和版本；公开 API 只返回名称与创建时间。首次部署前可以保存 Secret；`deploy:false` 只生成配置版本，批量接口 `PATCH /environments/{env}/secrets` 使用 name → value/null 表示新增、轮换或删除，一批变更只生成一个版本。`workers.secrets_keys` 是带版本的 key ring，`secrets_active_key` 只用于新写入，仍被保留 Version 引用的旧 key 不得删除。生产 key 应由 KMS/Secret Manager 注入配置，而不是提交到仓库。
+
+发布 API 提交 `expected_revision`，防止覆盖其他发布。幂等 key 相同且请求相同返回原对象；内容不同返回 409。候选验证失败不会修改 Version。每个 pool 必须配置与 serving Service 不同的 `validator_service`；控制面只从该 Service 的 Ready EndpointSlice 选择带 `role=krun-validator` 的 Pod。validator 使用相同 runtime 镜像和 Version/Secret 快照，但没有业务监听 Service、Gateway 入站、配置跟随或 Ack。生产部署仍应把它放进 gVisor、Kata 或 VM 等适合不可信代码的隔离边界。
 
 | Operation 状态 | 含义 |
 | --- | --- |
 | `queued` | 已持久化，尚未执行 |
 | `validating` | 正在检查制品并在独立 validator 中加载候选、执行顶层作用域和 `KrunValidation` |
-| `committed` | Release 已提交，正在等待 runtime 同步 |
-| `available` | 当前 serving 成员已采用包含该 Release 的配置 revision 并发送新鲜 Ack；不表示每个成员都已加载业务 isolate |
+| `committed` | Version 已提交，正在等待 runtime 同步 |
+| `available` | 当前 serving 成员已采用包含该 Version 的配置 revision 并发送新鲜 Ack；不表示每个成员都已加载业务 isolate |
 | `failed` | 提交前失败，或候选准备超过 deadline |
-| `superseded` | 后续已验证发布替换了尚未完成确认的 Release |
+| `superseded` | 后续已验证发布替换了尚未完成确认的 Version |
 
-`committed` 之后的基础设施故障保留状态并重试，不自动撤销 Release。只有 `queued` / `validating` 的操作会阻止新的发布和配置修改；`committed` 表示已提交、正在收敛，新发布可以入队并在提交时 supersede 尚未确认的旧操作。回滚也先验证候选，只有回滚成功提交时才将仍处于 `committed` 的原操作标记 `superseded`；若管理连接恢复后原操作先完成确认，则保留它的 `available` 状态及成功历史。历史 API 记录成功生效的 Release；未成功确认的尝试通过 Operation 查询。
+`committed` 之后的基础设施故障保留状态并重试，不自动撤销 Version。只有 `queued` / `validating` 的操作会阻止新的发布和配置修改；`committed` 表示已提交、正在收敛，新发布可以入队并在提交时 supersede 尚未确认的旧操作。回滚也先验证候选，只有回滚成功提交时才将仍处于 `committed` 的原操作标记 `superseded`；若管理连接恢复后原操作先完成确认，则保留它的 `available` 状态及成功历史。历史 API 记录成功生效的 Version；未成功确认的尝试通过 Operation 查询。
 
-此版没有跨 Pod 原子流量切换或灰度权重；短暂的新旧快照并存是预期行为。`confirmed_release_id` 保留上次已确认版本供状态展示，并非自动流量回退开关。
+此版没有跨 Pod 原子流量切换或灰度权重；短暂的新旧快照并存是预期行为。`confirmed_version_id` 保留上次已确认版本供状态展示，并非自动流量回退开关。
 
 ## 路由与代码加载
 
@@ -110,34 +113,34 @@ kgateway 私网 listener :8080
   → pool/domain 共享 HTTPRoute
   → runtime-default Service :8081
   → Pod 内可信入口 Worker
-  → Host 查找环境 Release
-  → immutable Release
+  → Host 查找环境 Version
+  → immutable Version
   → Worker Loader 加载业务 Worker
 ```
 
 共享模式 Host 形如 `w-{service-hash}-{environment}.p-{pool-hash}.workers.test`，入口标签由持久 placement 推导。
-URI 路径、query、method、body 保留；网关和入口清除客户端伪造的内部 scope/release header。
+URI 路径、query、method、body 保留；网关和入口清除客户端伪造的内部 scope/version header。
 未知 Host 在 Runtime 返回 404，未发布环境返回 503，关闭环境返回 410。
 旧的逐站点路由模式仍可用于小规模既有开发环境。DNS/TLS 与地址变化见 [规模改造](performance-scaling.md)。
 
 配置了资产的版本在入口 Worker 内多一层路径决策：`run_worker_first` 命中 → 业务 Worker；否则查资产表（含 `html_handling` 规范化）→ 命中直接返回（ETag/304）；未命中且是导航请求 → 按 `not_found_handling` 返回 `index.html`；其余交给业务 Worker。资产按文件从桶的 `pub/` 前缀懒加载并做进程内 LRU，归档（`v1/` 前缀）始终需要凭证。两个静态域（`static.{domain}` / `static.{internal_domain}`）各有一条共享 HTTPRoute，路径改写为桶对象 key 后直接反代对象存储。
 
-每个 Pod 只有一个 workerd 进程，可动态加载多个业务 Worker。入口通过固定 `PLATFORM` service binding 请求受限内部 API；内部制品接口只签发短时预签名 GET URL，runtime 冷加载时直连对象存储下载并在本地校验归档与模块 hash（控制面不再代理制品字节，Pod 也不持有 S3 凭证）。当 Release 含 Secret 时，入口再按精确 Release ID 从内部接口取值，核对绑定摘要后仅在 Loader 创建业务 isolate 时注入内存；Secret 不进入对象存储快照、公开 Release JSON 或业务日志。业务 Worker 不持有数据库或对象存储凭证。入口 Worker 的出网白名单使用 workerd 的 `network=(allow=[...])`，**只接受 CIDR**（`host:port` 会在启动时报 `invalid CIDR`），需覆盖对象存储 Service 的 ClusterIP 网段；Pod 级 NetworkPolicy 仍把实际目标钉在对象存储 Pod 的 :9000。Loader key 包含组织、服务、环境、Release、runtime 版本和构建 profile，使用不可变模块及显式变量，`globalOutbound: null`。
+每个 Pod 只有一个 workerd 进程，可动态加载多个业务 Worker。入口通过固定 `PLATFORM` service binding 请求受限内部 API；内部制品接口只签发短时预签名 GET URL，runtime 冷加载时直连对象存储下载并在本地校验归档与模块 hash（控制面不再代理制品字节，Pod 也不持有 S3 凭证）。当 Version 含 Secret 时，入口再按精确 Version ID 从内部接口取值，核对绑定摘要后仅在 Loader 创建业务 isolate 时注入内存；Secret 不进入对象存储快照、公开 Version JSON 或业务日志。业务 Worker 不持有数据库或对象存储凭证。入口 Worker 的出网白名单使用 workerd 的 `network=(allow=[...])`，**只接受 CIDR**（`host:port` 会在启动时报 `invalid CIDR`），需覆盖对象存储 Service 的 ClusterIP 网段；Pod 级 NetworkPolicy 仍把实际目标钉在对象存储 Pod 的 :9000。Loader key 包含组织、服务、环境、Version、runtime 版本和构建 profile，使用不可变模块及显式变量，`globalOutbound: null`。
 
 ### 边缘配置分发
 
 入口 Worker 使用紧凑 head、不可变 shard checkpoint、增量 ops 和有界内存视图：
 
 1. **bootstrap**：读取 pool 的紧凑 `latest.json`；对象存储不可用时回退到内部 `config/snapshot` 获取同样的 lazy head，不下载全池路由。
-2. **cold host**：内部 `config/routes/{host}` 按主键解析一条 route/Release；控制面不可用时读取该 host hash 对应的 immutable shard checkpoint。Runtime 缓存最多 4096 个 host。
-3. **follow**：`config/changes` 增量只更新已缓存 host；同步提交期间不 await、不复制全量 Map，用引用计数回收不再引用的 Release。
+2. **cold host**：内部 `config/routes/{host}` 按主键解析一条 route/Version；控制面不可用时读取该 host hash 对应的 immutable shard checkpoint。Runtime 缓存最多 4096 个 host。
+3. **follow**：`config/changes` 增量只更新已缓存 host；同步提交期间不 await、不复制全量 Map，用引用计数回收不再引用的 Version。
 4. **ack**：每 Pod 每 5 秒心跳，记录已应用 revision；ACK 仍用于收敛观察。
 
-`config/` 前缀与 `pub/`、`int/` 一样匿名可读，但只能通过集群内 endpoint 访问（`config_base_url` 必须指向私有地址）；生产应使用独立桶或带 VPC 条件的桶策略。对象存储快照只含 host → release 指针和不可变 Release 描述符，不含 Build、Operation、日志或 IAM 数据。PostgreSQL 不保存每个 revision 的全量投影，只保存一份归一化当前头和最近 512 个 revision 的逐实体 ops；超窗的 Pod 通过 409 重置为紧凑 head，再按需读取 host。
+`config/` 前缀与 `pub/`、`int/` 一样匿名可读，但只能通过集群内 endpoint 访问（`config_base_url` 必须指向私有地址）；生产应使用独立桶或带 VPC 条件的桶策略。对象存储快照只含 host → version 指针和不可变 Version 描述符，不含 Build、Operation、日志或 IAM 数据。PostgreSQL 不保存每个 revision 的全量投影，只保存一份归一化当前头和最近 512 个 revision 的逐实体 ops；超窗的 Pod 通过 409 重置为紧凑 head，再按需读取 host。
 
-控制面不可用时，已运行的 Pod 继续用最后一份内存视图服务；新 Pod 仍可从对象存储 bootstrap。尚未缓存的 Release 冷加载仍需控制面签发短时 presigned URL，因此“新版本冷启动”依赖控制面，“已加载版本继续服务”不依赖。
+控制面不可用时，已运行的 Pod 继续用最后一份内存视图服务；新 Pod 仍可从对象存储 bootstrap。尚未缓存的 Version 冷加载仍需控制面签发短时 presigned URL，因此“新版本冷启动”依赖控制面，“已加载版本继续服务”不依赖。
 
-controller 不对 serving Pod 做候选管理 RPC。`/validate` 只在独立 validator 成员上冷加载并运行 `KrunValidation`；commit 后由配置流传播，controller 通过 `worker_runtime_acks` 观察收敛，`available` 表示当前 serving 成员都已上报该 revision。serving readiness 只要求配置视图已加载；Release 在首次请求时懒加载，避免 Pod 启动成本随服务数量线性增长。validator readiness 不启动配置跟随或 Ack，也没有业务 socket。
+controller 不对 serving Pod 做候选管理 RPC。`/validate` 只在独立 validator 成员上冷加载并运行 `KrunValidation`；commit 后由配置流传播，controller 通过 `worker_runtime_acks` 观察收敛，`available` 表示当前 serving 成员都已上报该 revision。serving readiness 只要求配置视图已加载；Version 在首次请求时懒加载，避免 Pod 启动成本随服务数量线性增长。validator readiness 不启动配置跟随或 Ack，也没有业务 socket。
 
 资源池和 Network Profile 来自主 YAML，使用有效 placement 限定路由和内部数据访问；
 当前模型见 [资源池配置](workers-pools.md)。Secret binding 已支持，Service/DB binding 不在当前范围。
@@ -156,16 +159,16 @@ controller 不对 serving Pod 做候选管理 RPC。`/validate` 只在独立 val
 | `GET /builds/{id}/logs` | 构建完成后的日志，需 `log.read` |
 | `GET /builds/{id}/source` | 源码包下载 URL（或内联文件表），需 `source.read` |
 | `GET /artifacts/{id}` | 当前服务可见 Build 关联的制品记录 |
-| `GET /environments` | 可见环境和配置 / Release revision |
+| `GET /environments` | 可见环境和配置 / Version revision |
 | `PATCH /environments/{env}` | 开关及下一次发布变量 |
 | `GET /environments/{env}/secrets` | Secret 元数据（仅名称与创建时间） |
-| `PUT /environments/{env}/secrets/{name}` | 新增或轮换 Secret，自动创建并发布 Release |
-| `DELETE /environments/{env}/secrets/{name}` | 删除 Secret，自动创建并发布 Release |
-| `POST /environments/{env}/releases` | 发布成功 Build，返回 202 Operation |
-| `POST /environments/{env}/rollbacks` | 发布历史 Release，返回 202 Operation |
+| `PUT /environments/{env}/secrets/{name}` | 新增或轮换 Secret，自动创建并发布 Version |
+| `DELETE /environments/{env}/secrets/{name}` | 删除 Secret，自动创建并发布 Version |
+| `POST /environments/{env}/deployments` | 发布成功 Build，返回 202 Operation |
+| `POST /environments/{env}/rollbacks` | 发布历史 Version，返回 202 Operation |
 | `GET /environments/{env}/history` | 成功生效历史 |
 | `GET /operations` | 当前服务可见环境的发布操作，最多 100 条 |
-| `GET /releases/{id}` | 不可变 Release 配置与制品引用 |
+| `GET /versions/{id}` | 不可变 Version 配置与制品引用 |
 | `POST /environments/{env}/invoke` | 鉴权后经 Gateway 调用业务 Worker，返回文本响应封装 |
 | `GET /operations/{id}` | 步骤、错误、提交与生效状态 |
 
@@ -176,11 +179,11 @@ header 与该 pool 独立 token，不能只信任 header：
 | 方法与路径 | 用途 |
 | --- | --- |
 | `GET /api/internal/workers/config/snapshot` | 紧凑配置 head（bootstrap 回退） |
-| `GET /api/internal/workers/config/routes/{host}` | 当前 pool 的单条路由与 Release |
+| `GET /api/internal/workers/config/routes/{host}` | 当前 pool 的单条路由与 Version |
 | `GET /api/internal/workers/config/changes?since=&wait=5s` | 增量 ops：200 批次、204 超时、409 重新 bootstrap |
-| `GET /api/internal/workers/releases/{id}/assets` | 资产 manifest |
-| `GET /api/internal/workers/releases/{id}/assets/{path...}` | 单文件短时 presigned GET |
-| `GET /api/internal/workers/releases/{id}/secrets` | 精确 Release 的 Secret 值，仅供 runtime Loader |
+| `GET /api/internal/workers/versions/{id}/assets` | 资产 manifest |
+| `GET /api/internal/workers/versions/{id}/assets/{path...}` | 单文件短时 presigned GET |
+| `GET /api/internal/workers/versions/{id}/secrets` | 精确 Version 的 Secret 值，仅供 runtime Loader |
 | `GET /api/internal/workers/artifacts/{id}` | 制品短时 presigned GET |
 | `POST /api/internal/workers/ack` | 上报已应用的 config revision（每 Pod 一行） |
 
@@ -219,7 +222,7 @@ header 与该 pool 独立 token，不能只信任 header：
 回滚请求：
 
 ```json
-{"release_id": "rel_...", "expected_revision": 1, "idempotency_key": "rollback-001"}
+{"version_id": "rel_...", "expected_revision": 1, "idempotency_key": "rollback-001"}
 ```
 
 `build.start` 控制构建，`service.publish` / `service.rollback` 控制目标环境发布；队列提交时及执行时均检查。控制台调用需要目标环境的 `service.invoke`，内置 developer / publisher 角色具有该动作；不转发平台 Cookie 或 Authorization。集合 API 支持只拥有某个环境权限的 Key，隐藏其他环境。

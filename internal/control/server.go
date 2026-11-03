@@ -133,9 +133,9 @@ func (s *Server) routes() {
 		s.internalMux.HandleFunc("GET /api/internal/workers/config/snapshot", s.workerRuntimeConfigSnapshot)
 		s.internalMux.HandleFunc("GET /api/internal/workers/config/changes", s.workerRuntimeConfigChanges)
 		s.internalMux.HandleFunc("GET /api/internal/workers/config/routes/{host}", s.workerRuntimeConfigRoute)
-		s.internalMux.HandleFunc("GET /api/internal/workers/releases/{release}/assets", s.workerRuntimeReleaseAssets)
-		s.internalMux.HandleFunc("GET /api/internal/workers/releases/{release}/assets/{path...}", s.workerRuntimeReleaseAssetURL)
-		s.internalMux.HandleFunc("GET /api/internal/workers/releases/{release}/secrets", s.workerRuntimeReleaseSecrets)
+		s.internalMux.HandleFunc("GET /api/internal/workers/versions/{version}/assets", s.workerRuntimeVersionAssets)
+		s.internalMux.HandleFunc("GET /api/internal/workers/versions/{version}/assets/{path...}", s.workerRuntimeVersionAssetURL)
+		s.internalMux.HandleFunc("GET /api/internal/workers/versions/{version}/secrets", s.workerRuntimeVersionSecrets)
 		s.internalMux.HandleFunc("GET /api/internal/workers/artifacts/{artifact}", s.workerRuntimeArtifact)
 		s.internalMux.HandleFunc("POST /api/internal/workers/ack", s.workerRuntimeAck)
 	}
@@ -557,7 +557,7 @@ func Serve(ctx context.Context, c appconfig.Config) error {
 	retentionDone := make(chan struct{})
 	go func() {
 		defer close(retentionDone)
-		// Session / login expiry and every per-build, per-release row is pruned
+		// Session / login expiry and every per-build, per-version row is pruned
 		// here instead of on the request path.
 		retain(retentionCtx, store, time.Minute)
 	}()

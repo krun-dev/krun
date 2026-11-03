@@ -86,13 +86,13 @@ func (s *Service) Artifact(ctx context.Context, id, pool string) (Artifact, erro
 }
 
 type Secrets struct {
-	Release string            `json:"release_id"`
+	Version string            `json:"version_id"`
 	Digest  string            `json:"secret_digest"`
 	Values  map[string]string `json:"values"`
 }
 
-func (s *Service) Secrets(ctx context.Context, release, pool string) (Secrets, error) {
-	digest, encrypted, err := s.Store.EncryptedReleaseSecrets(ctx, release, pool)
+func (s *Service) Secrets(ctx context.Context, version, pool string) (Secrets, error) {
+	digest, encrypted, err := s.Store.EncryptedVersionSecrets(ctx, version, pool)
 	if err != nil {
 		return Secrets{}, err
 	}
@@ -109,7 +109,7 @@ func (s *Service) Secrets(ctx context.Context, release, pool string) (Secrets, e
 	if workerapp.WorkerSecretsDigest(versions) != digest {
 		return Secrets{}, domain.Problem(503, "WORKER_SECRET_UNAVAILABLE", "Worker secret binding mismatch")
 	}
-	return Secrets{Release: release, Digest: digest, Values: values}, nil
+	return Secrets{Version: version, Digest: digest, Values: values}, nil
 }
 func (s *Service) Ack(ctx context.Context, pool string, in domain.WorkerAck) error {
 	if in.Pool != pool || in.Pod == "" || in.UID == "" {
@@ -127,17 +127,17 @@ func (s *Service) Ack(ctx context.Context, pool string, in domain.WorkerAck) err
 }
 
 type Assets struct {
-	Release string                              `json:"release_id"`
+	Version string                              `json:"version_id"`
 	Config  *domain.WorkerAssetsConfig          `json:"config"`
 	Files   []workerartifact.WorkerManifestFile `json:"files"`
 }
 
-func (s *Service) Assets(ctx context.Context, release, pool string) (Assets, error) {
-	assets, err := s.Controller.ReleaseAssets(ctx, release, pool)
+func (s *Service) Assets(ctx context.Context, version, pool string) (Assets, error) {
+	assets, err := s.Controller.VersionAssets(ctx, version, pool)
 	if err != nil {
 		return Assets{}, err
 	}
-	return Assets{Release: assets.Release.ID, Config: assets.Config, Files: assets.Files}, nil
+	return Assets{Version: assets.Version.ID, Config: assets.Config, Files: assets.Files}, nil
 }
 
 type AssetURL struct {
@@ -148,8 +148,8 @@ type AssetURL struct {
 	DownloadURL string `json:"download_url"`
 }
 
-func (s *Service) AssetURL(ctx context.Context, release, name string, pool appconfig.WorkerRuntimePool) (AssetURL, error) {
-	assets, err := s.Controller.ReleaseAssets(ctx, release, pool.ID)
+func (s *Service) AssetURL(ctx context.Context, version, name string, pool appconfig.WorkerRuntimePool) (AssetURL, error) {
+	assets, err := s.Controller.VersionAssets(ctx, version, pool.ID)
 	if err != nil {
 		return AssetURL{}, err
 	}
@@ -167,7 +167,7 @@ func (s *Service) AssetURL(ctx context.Context, release, name string, pool appco
 	if appconfig.RuntimePoolHasAccess(pool, "public") {
 		prefix = "pub"
 	}
-	key := workerapp.WorkerAssetObjectKey(prefix, assets.Release.Organization, assets.Release.Service, assets.Artifact.ArchiveDigest, name)
+	key := workerapp.WorkerAssetObjectKey(prefix, assets.Version.Organization, assets.Version.Service, assets.Artifact.ArchiveDigest, name)
 	url, err := s.Controller.S3Runtime.PresignedGetObject(ctx, s.Config.S3Bucket, key, 15*time.Minute, nil)
 	if err != nil {
 		return AssetURL{}, domain.Problem(503, "ASSET_UNAVAILABLE", "Asset storage unavailable")
@@ -183,5 +183,5 @@ func (s *Service) Route(ctx context.Context, host, pool string) (workerapp.Worke
 	if err != nil {
 		return workerapp.WorkerConfigSnapshot{}, err
 	}
-	return workerapp.WorkerConfigSnapshot{Pool: pool, ConfigRevision: revision, Routes: projection.Routes, Releases: projection.Releases}, nil
+	return workerapp.WorkerConfigSnapshot{Pool: pool, ConfigRevision: revision, Routes: projection.Routes, Versions: projection.Versions}, nil
 }

@@ -115,7 +115,7 @@ func (s *Client) Call(ctx context.Context, host, gatewayID string, in Request, p
 	}
 	out.Body = string(raw)
 	out.Headers = make(map[string]string)
-	for _, name := range []string{"Content-Type", "X-Krun-Release", "X-Krun-Pod"} {
+	for _, name := range []string{"Content-Type", "X-Krun-Version", "X-Krun-Pod"} {
 		if value := resp.Header.Get(name); value != "" {
 			out.Headers[name] = value
 		}

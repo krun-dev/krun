@@ -34,7 +34,7 @@ func TestPostgresIAMRevisionCASRejectsLostUpdate(t *testing.T) {
 	}
 
 	ready := make(chan struct{}, 2)
-	release := make(chan struct{})
+	version := make(chan struct{})
 	errs := make(chan error, 2)
 	for i, candidate := range []*Store{store, other} {
 		i, candidate := i, candidate
@@ -42,7 +42,7 @@ func TestPostgresIAMRevisionCASRejectsLostUpdate(t *testing.T) {
 			errs <- candidate.Update(ctx, PartitionIAM, func(st *State) error {
 				resource := st.Resources["svc-cas"]
 				ready <- struct{}{}
-				<-release
+				<-version
 				resource.Name = []string{"first", "second"}[i]
 				resource.Revision++
 				st.Resources[resource.ID] = resource
@@ -54,7 +54,7 @@ func TestPostgresIAMRevisionCASRejectsLostUpdate(t *testing.T) {
 	}
 	<-ready
 	<-ready
-	close(release)
+	close(version)
 
 	succeeded, conflicted := 0, 0
 	for range 2 {
@@ -102,7 +102,7 @@ func TestPostgresOrganizationRevisionCASRejectsLostUpdate(t *testing.T) {
 	}
 
 	ready := make(chan struct{}, 2)
-	release := make(chan struct{})
+	version := make(chan struct{})
 	errs := make(chan error, 2)
 	for i, candidate := range []*Store{store, other} {
 		i, candidate := i, candidate
@@ -110,7 +110,7 @@ func TestPostgresOrganizationRevisionCASRejectsLostUpdate(t *testing.T) {
 			errs <- candidate.Update(ctx, PartitionIAM, func(st *State) error {
 				organization := st.Organizations["org-cas"]
 				ready <- struct{}{}
-				<-release
+				<-version
 				organization.Name = []string{"first", "second"}[i]
 				organization.Revision++
 				st.Organizations[organization.ID] = organization
@@ -121,7 +121,7 @@ func TestPostgresOrganizationRevisionCASRejectsLostUpdate(t *testing.T) {
 	}
 	<-ready
 	<-ready
-	close(release)
+	close(version)
 	assertOneRevisionConflict(t, errs)
 	state, err := store.Open(ctx, PartitionIAM)
 	if err != nil {
@@ -145,7 +145,7 @@ func TestPostgresUserProfileCASRejectsLostUpdate(t *testing.T) {
 	}
 
 	ready := make(chan struct{}, 2)
-	release := make(chan struct{})
+	version := make(chan struct{})
 	errs := make(chan error, 2)
 	for i, candidate := range []*Store{store, other} {
 		i, candidate := i, candidate
@@ -153,7 +153,7 @@ func TestPostgresUserProfileCASRejectsLostUpdate(t *testing.T) {
 			errs <- candidate.Update(ctx, PartitionIAM, func(st *State) error {
 				user := st.Users["profile-user"]
 				ready <- struct{}{}
-				<-release
+				<-version
 				user.Name = []string{"first", "second"}[i]
 				st.Users[user.ID] = user
 				st.Revision++
@@ -163,7 +163,7 @@ func TestPostgresUserProfileCASRejectsLostUpdate(t *testing.T) {
 	}
 	<-ready
 	<-ready
-	close(release)
+	close(version)
 	assertOneRevisionConflict(t, errs)
 }
 
@@ -172,14 +172,14 @@ func TestPostgresConcurrentJITIdentityIsRetryable(t *testing.T) {
 	other := secondPostgresStore(t)
 	ctx := context.Background()
 	ready := make(chan struct{}, 2)
-	release := make(chan struct{})
+	version := make(chan struct{})
 	errs := make(chan error, 2)
 	for i, candidate := range []*Store{store, other} {
 		i, candidate := i, candidate
 		go func() {
 			errs <- candidate.Update(ctx, PartitionIAM, func(st *State) error {
 				ready <- struct{}{}
-				<-release
+				<-version
 				id := []string{"jit-first", "jit-second"}[i]
 				st.Users[id] = User{ID: id, Source: "jit-source", Subject: "stable-subject", Name: id, Status: "active", AuthVersion: 1}
 				st.Revision++
@@ -189,7 +189,7 @@ func TestPostgresConcurrentJITIdentityIsRetryable(t *testing.T) {
 	}
 	<-ready
 	<-ready
-	close(release)
+	close(version)
 	assertOneRevisionConflict(t, errs)
 
 	// The caller can retry after REVISION_CONFLICT: the fresh snapshot resolves
@@ -218,14 +218,14 @@ func TestPostgresIdentityRegistrationIsInsertOrVerify(t *testing.T) {
 	other := secondPostgresStore(t)
 	ctx := context.Background()
 	ready := make(chan struct{}, 2)
-	release := make(chan struct{})
+	version := make(chan struct{})
 	errs := make(chan error, 2)
 	for _, candidate := range []*Store{store, other} {
 		candidate := candidate
 		go func() {
 			errs <- candidate.Update(ctx, PartitionIAM, func(st *State) error {
 				ready <- struct{}{}
-				<-release
+				<-version
 				st.Sources["provider:company"] = "company-source"
 				st.Sources["namespace:company-namespace"] = "company-source"
 				st.Sources["company-source"] = "same-fingerprint"
@@ -235,7 +235,7 @@ func TestPostgresIdentityRegistrationIsInsertOrVerify(t *testing.T) {
 	}
 	<-ready
 	<-ready
-	close(release)
+	close(version)
 	for range 2 {
 		if err := <-errs; err != nil {
 			t.Fatalf("identical concurrent registration must be idempotent: %v", err)
@@ -308,7 +308,7 @@ func TestPostgresIAMRevisionsAndAuditsAreRequestLocal(t *testing.T) {
 	}
 
 	ready := make(chan struct{}, 2)
-	release := make(chan struct{})
+	version := make(chan struct{})
 	errs := make(chan error, 2)
 	for i, candidate := range []*Store{store, other} {
 		i, candidate := i, candidate
@@ -317,7 +317,7 @@ func TestPostgresIAMRevisionsAndAuditsAreRequestLocal(t *testing.T) {
 				id := []string{"svc-one", "svc-two"}[i]
 				resource := st.Resources[id]
 				ready <- struct{}{}
-				<-release
+				<-version
 				resource.Name += "-updated"
 				resource.Revision++
 				st.Resources[id] = resource
@@ -329,7 +329,7 @@ func TestPostgresIAMRevisionsAndAuditsAreRequestLocal(t *testing.T) {
 	}
 	<-ready
 	<-ready
-	close(release)
+	close(version)
 	for range 2 {
 		if err := <-errs; err != nil {
 			t.Fatal(err)

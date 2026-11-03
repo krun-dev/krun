@@ -1,3 +1,5 @@
+import { PreviewBasePanel } from "./workers/preview-base";
+import { VersionsPanel } from "./workers/versions";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -62,7 +64,7 @@ import {
   idempotency,
   workerURL,
 } from "./workers/shared";
-import { OperationPanel, ReleaseSummary } from "./workers/release";
+import { OperationPanel, VersionSummary } from "./workers/version";
 import { ServiceDomains } from "./workers/domains";
 import { EnvironmentSettings, Invocation } from "./workers/environment";
 
@@ -307,9 +309,9 @@ export function WorkersPage({
                               {t(
                                 !env.enabled
                                   ? "未启用"
-                                  : env.release_id
-                                    ? env.release_id ===
-                                      env.confirmed_release_id
+                                  : env.version_id
+                                    ? env.version_id ===
+                                      env.confirmed_version_id
                                       ? "已发布"
                                       : "生效中"
                                     : "未发布",
@@ -570,16 +572,16 @@ function WorkerDetail({
       setBusy(false);
     }
   }
-  async function submitRelease(build: Build) {
+  async function submitVersion(build: Build) {
     if (!env) return;
     setBusy(true);
     try {
       const op = await api<Operation>(
-        base + "/environments/" + env.name + "/releases",
+        base + "/environments/" + env.name + "/deployments",
         "POST",
         {
           build_id: build.id,
-          expected_revision: env.release_revision,
+          expected_revision: env.deployment_revision,
           idempotency_key: idempotency(),
         },
       );
@@ -685,34 +687,34 @@ function WorkerDetail({
                 variant="outline"
                 className={cn(
                   e.enabled &&
-                    e.release_id === e.confirmed_release_id &&
-                    e.release_id
+                    e.version_id === e.confirmed_version_id &&
+                    e.version_id
                     ? "border-primary/40 text-primary"
-                    : e.enabled && e.release_id !== e.confirmed_release_id
+                    : e.enabled && e.version_id !== e.confirmed_version_id
                       ? "border-amber-500/40 text-amber-600 dark:text-amber-500"
                       : "",
                 )}
               >
                 {!e.enabled
                   ? t("未启用")
-                  : e.release_id !== e.confirmed_release_id
+                  : e.version_id !== e.confirmed_version_id
                     ? t("生效中")
-                    : e.release_id
+                    : e.version_id
                       ? t("已发布")
                       : t("未发布")}
               </Badge>
             </div>
             <div className="my-3 text-sm">
-              {t("Release")} r{e.release_revision}{" "}
+              {t("Version")} r{e.deployment_revision}{" "}
               <span className="text-muted-foreground">
-                · {shortID(e.release_id)}
+                · {shortID(e.version_id)}
               </span>
             </div>
             <div className="grid gap-1">
               {(e.hosts || []).map((host, i) => {
                 const d = domains.find((x) => x.id === (e.domains || [])[i]);
                 const text = d?.label ? `${host}（${d.label}）` : host;
-                return e.release_id && e.enabled ? (
+                return e.version_id && e.enabled ? (
                   <a
                     key={host}
                     href={workerURL(host)}
@@ -761,6 +763,8 @@ function WorkerDetail({
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
             <TabsTrigger value="delivery">{t("构建与发布")}</TabsTrigger>
+            <TabsTrigger value="preview-base">{t("预览基础配置")}</TabsTrigger>
+            <TabsTrigger value="versions">{t("版本与部署")}</TabsTrigger>
             <TabsTrigger value="source">{t("代码源")}</TabsTrigger>
             <TabsTrigger value="routing">{t("路由与域名")}</TabsTrigger>
             <TabsTrigger value="settings">{t("环境配置")}</TabsTrigger>
@@ -834,7 +838,7 @@ function WorkerDetail({
                         ) : null}
                       </TableCell>
                       <TableCell>
-                        <ReleaseSummary
+                        <VersionSummary
                           build={b}
                           data={data}
                           onSelect={(name) => setEnvironment(name)}
@@ -848,6 +852,31 @@ function WorkerDetail({
                             onClick={() => void inspectBuild(b)}
                           >
                             {t("日志与制品")}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={b.state !== "succeeded" || busy}
+                            onClick={() => {
+                              void api(
+                                base +
+                                  "/environments/" +
+                                  env.name +
+                                  "/versions",
+                                "POST",
+                                {
+                                  build_id: b.id,
+                                  idempotency_key: crypto.randomUUID(),
+                                },
+                              )
+                                .then(() => {
+                                  reload();
+                                  notify(t("版本已保存，线上部署未改变。"));
+                                })
+                                .catch((e) => notify(errorMessage(e)));
+                            }}
+                          >
+                            {t("保存版本")}
                           </Button>
                           <Button
                             variant="outline"
@@ -903,7 +932,7 @@ function WorkerDetail({
                       <div>
                         <span className="font-medium">r{h.revision}</span>{" "}
                         <code className="ml-2 text-xs">
-                          {shortID(h.release_id)}
+                          {shortID(h.version_id)}
                         </code>
                         <p className="mt-1 text-xs text-muted-foreground">
                           {h.kind} · {new Date(h.time).toLocaleString()}
@@ -915,11 +944,11 @@ function WorkerDetail({
                         disabled={
                           rollbackBusy ||
                           !env.enabled ||
-                          env.release_id === h.release_id
+                          env.version_id === h.version_id
                         }
                         onClick={() =>
                           setRollback({
-                            id: h.release_id,
+                            id: h.version_id,
                             revision: h.revision,
                           })
                         }
@@ -931,6 +960,18 @@ function WorkerDetail({
                 )}
               </CardContent>
             </Card>
+          </TabsContent>
+          <TabsContent value="preview-base" className="mt-5">
+            <PreviewBasePanel base={base} notify={notify} />
+          </TabsContent>
+          <TabsContent value="versions" className="mt-5">
+            <VersionsPanel
+              base={base}
+              env={env}
+              data={data}
+              reload={reload}
+              notify={notify}
+            />
           </TabsContent>
           <TabsContent value="source" className="mt-5 grid gap-3">
             <h3 className="flex items-center gap-2 text-sm font-medium">
@@ -1071,7 +1112,7 @@ function WorkerDetail({
             </SelectField>
           </Field>
           <p className="text-sm">
-            {shortID(publish?.id)} → {env?.name} / r{env?.release_revision}
+            {shortID(publish?.id)} → {env?.name} / r{env?.deployment_revision}
           </p>
           <pre className="max-h-40 overflow-auto rounded-md bg-secondary p-3 text-xs">
             {JSON.stringify(env?.variables, null, 2)}
@@ -1079,7 +1120,7 @@ function WorkerDetail({
           <Button
             disabled={busy || active || !env?.enabled}
             onClick={() => {
-              if (publish) void submitRelease(publish);
+              if (publish) void submitVersion(publish);
             }}
           >
             {busy ? t("提交中…") : t("确认发布")}
@@ -1096,7 +1137,7 @@ function WorkerDetail({
           <DialogHeader>
             <DialogTitle>{t("回滚历史版本")}</DialogTitle>
             <DialogDescription>
-              {t("恢复该历史 Release 的代码和变量，仍需验证并等待生效。")}
+              {t("恢复该历史 Version 的代码和变量，仍需验证并等待生效。")}
             </DialogDescription>
           </DialogHeader>
           <p className="text-sm">
@@ -1112,8 +1153,8 @@ function WorkerDetail({
                   base + "/environments/" + env.name + "/rollbacks",
                   "POST",
                   {
-                    release_id: rollback.id,
-                    expected_revision: env.release_revision,
+                    version_id: rollback.id,
+                    expected_revision: env.deployment_revision,
                     idempotency_key: idempotency(),
                   },
                 );
@@ -1163,5 +1204,5 @@ function WorkerDetail({
   );
 }
 
-// Per-build release chips: only environments this build reached appear,
-// colored by the shared release state system.
+// Per-build version chips: only environments this build reached appear,
+// colored by the shared version state system.

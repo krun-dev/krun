@@ -14,12 +14,12 @@ import (
 func TestPostgresConfigDeltaMovesAndDeletesRoutes(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
-	moving := workerConfigRoute{Service: "moving", Host: "move.workers.test", Pool: "old", Path: "/", Enabled: true, Release: "shared"}
-	keeping := workerConfigRoute{Service: "keeping", Host: "keep.workers.test", Pool: "old", Path: "/", Enabled: true, Release: "kept"}
-	deleting := workerConfigRoute{Service: "deleting", Host: "delete.workers.test", Pool: "old", Path: "/", Enabled: true, Release: "orphan"}
+	moving := workerConfigRoute{Service: "moving", Host: "move.workers.test", Pool: "old", Path: "/", Enabled: true, Version: "shared"}
+	keeping := workerConfigRoute{Service: "keeping", Host: "keep.workers.test", Pool: "old", Path: "/", Enabled: true, Version: "kept"}
+	deleting := workerConfigRoute{Service: "deleting", Host: "delete.workers.test", Pool: "old", Path: "/", Enabled: true, Version: "orphan"}
 	before := workerConfigProjection{
 		Routes: []workerConfigRoute{deleting, keeping, moving},
-		Releases: map[string]WorkerRelease{
+		Versions: map[string]WorkerVersion{
 			"shared": {ID: "shared"}, "kept": {ID: "kept"}, "orphan": {ID: "orphan"},
 		},
 	}
@@ -39,7 +39,7 @@ func TestPostgresConfigDeltaMovesAndDeletesRoutes(t *testing.T) {
 	moving.Pool = "new"
 	after := workerConfigProjection{
 		Routes:   []workerConfigRoute{keeping, moving},
-		Releases: map[string]WorkerRelease{"shared": {ID: "shared"}, "kept": {ID: "kept"}},
+		Versions: map[string]WorkerVersion{"shared": {ID: "shared"}, "kept": {ID: "kept"}},
 	}
 	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_dirty(service_id) VALUES ('moving'), ('deleting')`); err != nil {
 		t.Fatal(err)
@@ -56,8 +56,8 @@ func TestPostgresConfigDeltaMovesAndDeletesRoutes(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(projection, after) {
 		t.Fatalf("projection=%+v want=%+v err=%v", projection, after, err)
 	}
-	var releaseLocations []string
-	rows, err := postgresTestPool(store).Query(ctx, `SELECT release_id || '/' || pool FROM worker_config_releases ORDER BY release_id, pool`)
+	var versionLocations []string
+	rows, err := postgresTestPool(store).Query(ctx, `SELECT version_id || '/' || pool FROM worker_config_versions ORDER BY version_id, pool`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,12 +66,12 @@ func TestPostgresConfigDeltaMovesAndDeletesRoutes(t *testing.T) {
 		if err := rows.Scan(&location); err != nil {
 			t.Fatal(err)
 		}
-		releaseLocations = append(releaseLocations, location)
+		versionLocations = append(versionLocations, location)
 	}
 	err = rows.Err()
 	rows.Close()
-	if err != nil || !reflect.DeepEqual(releaseLocations, []string{"kept/old", "shared/new"}) {
-		t.Fatalf("release locations=%v err=%v", releaseLocations, err)
+	if err != nil || !reflect.DeepEqual(versionLocations, []string{"kept/old", "shared/new"}) {
+		t.Fatalf("version locations=%v err=%v", versionLocations, err)
 	}
 	for _, location := range []struct {
 		pool, host string
@@ -107,17 +107,17 @@ func TestPostgresConfigDeltaRollsBackFailedBatch(t *testing.T) {
 	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_dirty(service_id, generation) VALUES ('svc', 1)`); err != nil {
 		t.Fatal(err)
 	}
-	// The release and route writes precede the invalid log entry in the batch.
+	// The version and route writes precede the invalid log entry in the batch.
 	// A payload whose host differs from the log's host violates its CHECK.
 	ops := []workerConfigOp{
-		{Type: "release_put", Pool: "default", Release: &WorkerRelease{ID: "release"}},
-		{Type: "route_upsert", Pool: "default", Host: "route.workers.test", Route: &workerConfigRoute{Host: "wrong.workers.test", Release: "release"}},
+		{Type: "version_put", Pool: "default", Version: &WorkerVersion{ID: "version"}},
+		{Type: "route_upsert", Pool: "default", Host: "route.workers.test", Route: &workerConfigRoute{Host: "wrong.workers.test", Version: "version"}},
 	}
 	revision, won, err := store.AppendConfigDelta(ctx, 0, []workerDirtyService{{ID: "svc", Generation: 1}}, ops)
 	if err == nil || !strings.Contains(err.Error(), "apply config operations") || won || revision != 0 {
 		t.Fatalf("revision=%d won=%v err=%v", revision, won, err)
 	}
-	for _, table := range []string{"worker_config_revisions", "worker_config_ops", "worker_config_routes", "worker_config_releases", "worker_config_checkpoints"} {
+	for _, table := range []string{"worker_config_revisions", "worker_config_ops", "worker_config_routes", "worker_config_versions", "worker_config_checkpoints"} {
 		var count int
 		if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM `+table).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("%s count=%d err=%v", table, count, err)
@@ -142,7 +142,7 @@ func TestPostgresConfigDeltaRollsBackCleanupFailureAndRetries(t *testing.T) {
 		`INSERT INTO worker_config_revisions(config_revision, digest) VALUES (1, 'expired'), (512, 'current')`,
 		`INSERT INTO worker_config_ops(config_revision, ordinal, pool, op_type, host) VALUES (1, 0, 'old', 'route_delete', 'expired.workers.test')`,
 		`INSERT INTO worker_config_dirty(service_id, generation) VALUES ('svc', 1)`,
-		`INSERT INTO worker_config_releases(release_id, pool, payload) VALUES ('release', 'old', '{"id":"release"}')`,
+		`INSERT INTO worker_config_versions(version_id, pool, payload) VALUES ('version', 'old', '{"id":"version"}')`,
 		`CREATE FUNCTION fail_config_cleanup() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'cleanup failed'; END $$`,
 		`CREATE TRIGGER fail_config_cleanup BEFORE DELETE ON worker_config_revisions FOR EACH ROW EXECUTE FUNCTION fail_config_cleanup()`,
 	}
@@ -155,7 +155,7 @@ func TestPostgresConfigDeltaRollsBackCleanupFailureAndRetries(t *testing.T) {
 		_, _ = postgresTestPool(store).Exec(ctx, `DROP TRIGGER IF EXISTS fail_config_cleanup ON worker_config_revisions`)
 		_, _ = postgresTestPool(store).Exec(ctx, `DROP FUNCTION IF EXISTS fail_config_cleanup()`)
 	})
-	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_routes(host, pool, enabled, release_id, service_id, shard) VALUES ($1, 'old', true, 'release', 'svc', $2)`, host, shard); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_routes(host, pool, enabled, version_id, service_id, shard) VALUES ($1, 'old', true, 'version', 'svc', $2)`, host, shard); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_checkpoints(pool, shard, revision, published_revision) VALUES ('old', $1, 512, 512)`, shard); err != nil {
@@ -169,7 +169,7 @@ func TestPostgresConfigDeltaRollsBackCleanupFailureAndRetries(t *testing.T) {
 	}
 	for table, want := range map[string]int{
 		"worker_config_revisions": 2, "worker_config_ops": 1, "worker_config_routes": 1,
-		"worker_config_releases": 1, "worker_config_dirty": 1,
+		"worker_config_versions": 1, "worker_config_dirty": 1,
 	} {
 		var count int
 		if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM `+table).Scan(&count); err != nil || count != want {
@@ -191,7 +191,7 @@ func TestPostgresConfigDeltaRollsBackCleanupFailureAndRetries(t *testing.T) {
 	}
 	for table, want := range map[string]int{
 		"worker_config_revisions": 2, "worker_config_ops": 1, "worker_config_routes": 0,
-		"worker_config_releases": 0, "worker_config_dirty": 0,
+		"worker_config_versions": 0, "worker_config_dirty": 0,
 	} {
 		var count int
 		if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM `+table).Scan(&count); err != nil || count != want {

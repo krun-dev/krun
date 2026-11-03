@@ -174,7 +174,7 @@ type State struct {
 	PendingLogin *LoginCommit `json:"-"`
 	// PendingWorkerSecrets is a request-local write command. Ciphertext never
 	// enters the generic WorkerState snapshot; persistWorkers consumes it in
-	// the same transaction as the environment, Release and Operation rows.
+	// the same transaction as the environment, Version and Operation rows.
 	PendingWorkerSecrets map[string]EncryptedWorkerSecret `json:"-"`
 }
 

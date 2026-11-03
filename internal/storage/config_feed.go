@@ -21,7 +21,7 @@ func (s *Store) ConfigRevisionsSince(ctx context.Context, since int64, limit int
 				'pool', op.pool,
 				'host', NULLIF(op.host,''),
 				'route', CASE WHEN op.op_type='route_upsert' THEN op.payload END,
-				'release', CASE WHEN op.op_type='release_put' THEN op.payload END
+				'version', CASE WHEN op.op_type='version_put' THEN op.payload END
 			)) ORDER BY op.ordinal) FROM worker_config_ops op
 				WHERE op.config_revision=revision.config_revision AND ($3='' OR op.pool=$3)), '[]'::jsonb),
 			revision.created_at

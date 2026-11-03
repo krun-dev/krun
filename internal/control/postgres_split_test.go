@@ -441,12 +441,12 @@ func TestPostgresCommitRequiresMatchingRevision(t *testing.T) {
 			Service: "svc-1", Organization: "org-1", Domains: []string{"internal"},
 			Environments: map[string]WorkerEnvironment{"production": {Name: "production", Enabled: true, Revision: 3, ConfigRevision: 1}},
 		}
-		st.Workers.Operations["op-1"] = WorkerOperation{ID: "op-1", Kind: "publish", Organization: "org-1", Service: "svc-1", Environment: "production", State: "validating", Release: "rel-1", ExpectedRevision: 2, Created: now()}
+		st.Workers.Operations["op-1"] = WorkerOperation{ID: "op-1", Kind: "publish", Organization: "org-1", Service: "svc-1", Environment: "production", State: "validating", Version: "rel-1", ExpectedRevision: 2, Created: now()}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	committed, err := store.CommitOperation(ctx, WorkerOperation{ID: "op-1", Service: "svc-1", Environment: "production", Release: "rel-1", ExpectedRevision: 2})
+	committed, err := store.CommitOperation(ctx, WorkerOperation{ID: "op-1", Service: "svc-1", Environment: "production", Version: "rel-1", ExpectedRevision: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,8 +460,8 @@ func TestPostgresCommitRequiresMatchingRevision(t *testing.T) {
 	if got := st.Workers.Operations["op-1"].State; got != "failed" {
 		t.Errorf("operation state = %q, want failed", got)
 	}
-	if got := st.Workers.Services["svc-1"].Environments["production"].Release; got != "" {
-		t.Errorf("release = %q, want it untouched", got)
+	if got := st.Workers.Services["svc-1"].Environments["production"].Version; got != "" {
+		t.Errorf("version = %q, want it untouched", got)
 	}
 }
 
@@ -560,7 +560,7 @@ func TestPostgresRetentionPrunesBuildsAndSessions(t *testing.T) {
 			st.Workers.BuildPrivate[id] = WorkerBuildPrivate{Actor: WorkerActor{User: "u"}, Log: "log"}
 		}
 		st.Workers.Artifacts["art-old"] = WorkerArtifact{ID: "art-old", Organization: "o", State: "finalized", ArchiveDigest: "archive-old", ObjectKey: "v1/o/old.tar.gz", StorageLocation: "test", Bucket: "test", Created: old}
-		st.Workers.Releases["rel-old"] = WorkerRelease{ID: "rel-old", Organization: "o", Service: "s", Environment: "production", Artifact: "art-old", ArchiveDigest: "archive-old", Created: old}
+		st.Workers.Versions["rel-old"] = WorkerVersion{ID: "rel-old", Organization: "o", Service: "s", Environment: "production", Artifact: "art-old", ArchiveDigest: "archive-old", Created: old}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -589,15 +589,15 @@ func TestPostgresRetentionPrunesBuildsAndSessions(t *testing.T) {
 	if builds != 5 {
 		t.Errorf("builds under the per-service cap must be kept, got %d", builds)
 	}
-	var releases, artifacts int
-	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_worker_releases WHERE release_id='rel-old'`).Scan(&releases); err != nil {
+	var versions, artifacts int
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_worker_versions WHERE version_id='rel-old'`).Scan(&versions); err != nil {
 		t.Fatal(err)
 	}
 	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_worker_artifacts WHERE artifact_id='art-old'`).Scan(&artifacts); err != nil {
 		t.Fatal(err)
 	}
-	if releases != 0 || artifacts != 1 {
-		t.Fatalf("release/artifact GC handoff broken: releases=%d artifacts=%d", releases, artifacts)
+	if versions != 0 || artifacts != 1 {
+		t.Fatalf("version/artifact GC handoff broken: versions=%d artifacts=%d", versions, artifacts)
 	}
 	candidates, err := store.GarbageArtifacts(ctx, at.Add(-workerArtifactRetain), 10)
 	if err != nil || len(candidates) != 1 || candidates[0].ID != "art-old" {
@@ -687,9 +687,9 @@ func TestPostgresPendingWorkIncludesBuildActor(t *testing.T) {
 		st.Workers.Services["s1"] = WorkerService{Service: "s1", Organization: "o1", Domains: []string{"internal"}, Environments: map[string]WorkerEnvironment{"production": {Name: "production", Enabled: true, ConfigRevision: 1}}}
 		st.Workers.Builds["b1"] = WorkerBuild{ID: "b1", Organization: "o1", Service: "s1", Environment: "production", State: "queued", Created: now()}
 		st.Workers.BuildPrivate["b1"] = WorkerBuildPrivate{Actor: WorkerActor{User: "u1", AuthVersion: 3}, Files: map[string]string{"index.js": "x"}}
-		st.Workers.Releases["r1"] = WorkerRelease{ID: "r1", Organization: "o1", Service: "s1", Environment: "production", Artifact: "a1"}
+		st.Workers.Versions["r1"] = WorkerVersion{ID: "r1", Organization: "o1", Service: "s1", Environment: "production", Artifact: "a1"}
 		st.Workers.Artifacts["a1"] = WorkerArtifact{ID: "a1", Organization: "o1", State: "finalized"}
-		st.Workers.Operations["op1"] = WorkerOperation{ID: "op1", Kind: "publish", Organization: "o1", Service: "s1", Environment: "production", State: "queued", Release: "r1", Created: now()}
+		st.Workers.Operations["op1"] = WorkerOperation{ID: "op1", Kind: "publish", Organization: "o1", Service: "s1", Environment: "production", State: "queued", Version: "r1", Created: now()}
 		st.Workers.OperationPrivate["op1"] = WorkerOperationPrivate{Actor: WorkerActor{User: "u1", AuthVersion: 3}}
 		return nil
 	}); err != nil {
@@ -705,11 +705,11 @@ func TestPostgresPendingWorkIncludesBuildActor(t *testing.T) {
 	if len(pending.BuildPrivate["b1"].Files) == 0 {
 		t.Fatal("build source files not loaded")
 	}
-	if _, ok := pending.Releases["r1"]; !ok {
-		t.Fatal("release referenced by an in-flight operation not loaded")
+	if _, ok := pending.Versions["r1"]; !ok {
+		t.Fatal("version referenced by an in-flight operation not loaded")
 	}
 	if _, ok := pending.Artifacts["a1"]; !ok {
-		t.Fatal("artifact referenced by that release not loaded")
+		t.Fatal("artifact referenced by that version not loaded")
 	}
 	if got := pending.OperationPrivate["op1"].Actor; got.User != "u1" {
 		t.Fatalf("operation actor not loaded: %+v", got)
@@ -731,12 +731,12 @@ func TestPostgresCommitMarksStepsDone(t *testing.T) {
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
 		st.Workers.Services["s1"] = WorkerService{Service: "s1", Organization: "o1", Domains: []string{"internal"},
 			Environments: map[string]WorkerEnvironment{"production": {Name: "production", Enabled: true, ConfigRevision: 1}}}
-		st.Workers.Operations["op1"] = WorkerOperation{ID: "op1", Kind: "publish", Organization: "o1", Service: "s1", Environment: "production", State: "validating", Release: "r1", ExpectedRevision: 0, Steps: steps, Created: now()}
+		st.Workers.Operations["op1"] = WorkerOperation{ID: "op1", Kind: "publish", Organization: "o1", Service: "s1", Environment: "production", State: "validating", Version: "r1", ExpectedRevision: 0, Steps: steps, Created: now()}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	committed, err := store.CommitOperation(ctx, WorkerOperation{ID: "op1", Service: "s1", Environment: "production", Release: "r1", ExpectedRevision: 0})
+	committed, err := store.CommitOperation(ctx, WorkerOperation{ID: "op1", Service: "s1", Environment: "production", Version: "r1", ExpectedRevision: 0})
 	if err != nil {
 		t.Fatal(err)
 	}

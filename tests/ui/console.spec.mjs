@@ -53,8 +53,8 @@ async function waitRevision(context, revision) {
     .poll(
       async () => {
         const e = await currentEnvironment(context);
-        return e.release_id && e.release_id === e.confirmed_release_id
-          ? e.release_revision
+        return e.version_id && e.version_id === e.confirmed_version_id
+          ? e.deployment_revision
           : 0;
       },
       { timeout: 150_000, intervals: [1000, 2000] },
@@ -234,13 +234,13 @@ test("UI saves variables, publishes new configuration, and rolls back", async ({
     .getByRole("button", { name: "确认回滚", exact: true })
     .click();
   await waitRevision(context, 3);
-  const release = await api(
+  const version = await api(
     context,
     workerBase() +
-      "/releases/" +
-      (await currentEnvironment(context)).release_id,
+      "/versions/" +
+      (await currentEnvironment(context)).version_id,
   );
-  expect(release.variables.UI_MARKER).toBeUndefined();
+  expect(version.variables.UI_MARKER).toBeUndefined();
 });
 test("UI creates a Worker and a preview environment", async ({ page }) => {
   await page.goto(locationFor());
@@ -282,4 +282,74 @@ test("mobile navigation and Workers layout remain usable", async ({ page }) => {
     path: ".data/performance-ui-mobile.png",
     fullPage: false,
   });
+});
+
+test("UI saves an undeployed Version and lists pinned deployments", async ({
+  page,
+  context,
+}) => {
+  await context.addCookies(cookies);
+  await page.goto(locationFor(workflow.id));
+  await page.getByRole("tab", { name: "构建与发布", exact: true }).click();
+  const before = await currentEnvironment(context);
+  const upload = page.waitForResponse(
+    (r) =>
+      r.request().method() === "POST" &&
+      r.url().endsWith("/environments/production/versions"),
+  );
+  await page
+    .getByRole("button", { name: "保存版本", exact: true })
+    .first()
+    .click();
+  const response = await upload;
+  expect(response.status()).toBe(201);
+  const version = await response.json();
+  await expect
+    .poll(async () =>
+      Object.values(
+        (await api(context, workerBase() + "/overview")).versions,
+      ).some((v) => v.id === version.id),
+    )
+    .toBe(true);
+  expect((await currentEnvironment(context)).version_id).toBe(
+    before.version_id,
+  );
+  await page.getByRole("tab", { name: "版本与部署", exact: true }).click();
+  await expect(
+    page.getByText(version.id.slice(0, 16), { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "部署记录与固定地址" }),
+  ).toBeVisible();
+  await expect(page.locator('a[href*="-d-"]').first()).toBeVisible();
+  await page.screenshot({
+    path: ".data/cf-model-ui-versions.png",
+    fullPage: true,
+  });
+});
+
+test("UI configures Previews Base without changing production", async ({
+  page,
+  context,
+}) => {
+  await context.addCookies(cookies);
+  await page.goto(locationFor(workflow.id));
+  await page.getByRole("tab", { name: "预览基础配置", exact: true }).click();
+  const production = await currentEnvironment(context);
+  await page
+    .locator("textarea")
+    .fill(JSON.stringify({ GREETING: "base-from-ui" }));
+  await page
+    .getByRole("button", { name: "保存预览基础变量", exact: true })
+    .click();
+  await expect(
+    page.getByText("预览基础配置已保存，仅影响新建 Preview。", { exact: true }),
+  ).toBeVisible();
+  const preview = await api(context, workerBase() + "/environments", "POST", {
+    name: "base-" + run,
+  });
+  expect(preview.variables.GREETING).toBe("base-from-ui");
+  expect((await currentEnvironment(context)).version_id).toBe(
+    production.version_id,
+  );
 });

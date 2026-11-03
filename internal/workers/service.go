@@ -11,7 +11,7 @@ import (
 )
 
 // ServiceRef identifies an organization service and, when applicable, one of
-// its environments or subordinate items. Item is a build, release, operation,
+// its environments or subordinate items. Item is a build, version, operation,
 // artifact or secret name, as specified by the called operation.
 type ServiceRef struct{ Organization, Service, Environment, Item string }
 

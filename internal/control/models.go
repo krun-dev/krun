@@ -58,7 +58,7 @@ type WorkerService = domain.WorkerService
 
 type WorkerPlacement = domain.WorkerPlacement
 
-type WorkerRelease = domain.WorkerRelease
+type WorkerVersion = domain.WorkerVersion
 
 type WorkerSecretVersion = domain.WorkerSecretVersion
 

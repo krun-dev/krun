@@ -25,7 +25,7 @@ func contains(xs []string, x string) bool {
 const workerBaseline = "production"
 
 // Retained row limits. Every table that grows per request, per build or per
-// release has a bound here and a matching DELETE in retention.go.
+// version has a bound here and a matching DELETE in retention.go.
 const (
 	WorkerBuildRetainPerService = 100
 	workerBuildLogRetain        = 7 * 24 * time.Hour

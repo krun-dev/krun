@@ -194,7 +194,7 @@ func TestNetworkProfileApprovalAndPublishedPlacementLock(t *testing.T) {
 		if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
 			service := s.workerService(st, Target{ID: "svc-a", Organization: "org-a"})
 			env := service.Environments[appconfig.WorkerBaseline]
-			env.Release = "release-existing"
+			env.Version = "version-existing"
 			service.Environments[appconfig.WorkerBaseline] = env
 			st.Workers.Services[service.Service] = service
 			return nil
@@ -658,7 +658,7 @@ func TestWorkerConfigProjectionRequiresDurablePlacement(t *testing.T) {
 	}
 
 	projection := workerapp.WorkerConfigFromState(st, config)
-	if len(projection.Routes) != 0 || len(projection.Releases) != 0 {
+	if len(projection.Routes) != 0 || len(projection.Versions) != 0 {
 		t.Fatalf("service without placement entered runtime projection: %+v", projection)
 	}
 }
@@ -826,7 +826,7 @@ func TestProcessOperationStopsAfterCommitCASConflict(t *testing.T) {
 				"addresses": []string{"127.0.0.1"}, "conditions": map[string]any{"ready": ready}, "targetRef": map[string]any{"uid": uid},
 			}}}}})
 		case r.URL.Path == "/validate":
-			_ = json.NewEncoder(w).Encode(map[string]any{"pod_uid": "validator-pod-1", "release_id": "rel-cas", "archive_sha256": code.ArchiveDigest})
+			_ = json.NewEncoder(w).Encode(map[string]any{"pod_uid": "validator-pod-1", "version_id": "rel-cas", "archive_sha256": code.ArchiveDigest})
 		default:
 			http.NotFound(w, r)
 		}
@@ -848,11 +848,11 @@ func TestProcessOperationStopsAfterCommitCASConflict(t *testing.T) {
 		Kube: &kubernetes.Client{Base: apiServer.URL, Namespace: c.Namespace, Client: apiServer.Client()},
 		Http: apiServer.Client(), AssetCache: map[string]workerapp.WorkerCachedAssets{}, Replica: "test",
 	}
-	release := WorkerRelease{ID: "rel-cas", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-cas", ArchiveDigest: code.ArchiveDigest, ModuleDigest: code.Digest}
+	version := WorkerVersion{ID: "rel-cas", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-cas", ArchiveDigest: code.ArchiveDigest, ModuleDigest: code.Digest}
 	artifact := WorkerArtifact{ID: "art-cas", Organization: "org-a", State: "finalized", Profile: code.Profile, ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: code.CompatibilityFlags, Size: len(raw), ObjectKey: "v1/org-a/archive.tar.gz", StorageLocation: "test", Bucket: "artifacts", Created: now()}
-	op := WorkerOperation{ID: "op-cas", Kind: "publish", Service: "svc-a", Organization: "org-a", Environment: "production", State: "validating", Release: release.ID, ExpectedRevision: 99, Created: now()}
+	op := WorkerOperation{ID: "op-cas", Kind: "publish", Service: "svc-a", Organization: "org-a", Environment: "production", State: "validating", Version: version.ID, ExpectedRevision: 99, Created: now()}
 	state := WorkerState{
-		Releases: map[string]WorkerRelease{release.ID: release}, Artifacts: map[string]WorkerArtifact{artifact.ID: artifact},
+		Versions: map[string]WorkerVersion{version.ID: version}, Artifacts: map[string]WorkerArtifact{artifact.ID: artifact},
 		Operations: map[string]WorkerOperation{op.ID: op}, OperationPrivate: map[string]WorkerOperationPrivate{op.ID: {Actor: WorkerActor{User: "admin", AuthVersion: 1}}},
 	}
 	if err := controller.ProcessOperation(context.Background(), op, state, true); err != nil {

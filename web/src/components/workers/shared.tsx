@@ -5,7 +5,7 @@ import { pending } from "@/lib/workers";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
-// Shared vocabulary for the Workers console: state labels, release-state icons
+// Shared vocabulary for the Workers console: state labels, version-state icons
 // and colours, and the public URL helper. Each panel imports only this module,
 // so moving a tab into its own file never drags the whole page along.
 
@@ -27,7 +27,7 @@ export const artifactIcons: Record<string, typeof Check> = {
   生效中: Clock,
   不可用: Minus,
 };
-// Release state color system (single source of truth):
+// Version state color system (single source of truth):
 //   当前   → primary (brand): the good, expected state
 //   生效中 → amber: transient, worth the eye
 //   历史   → muted: superseded, no attention needed
@@ -50,7 +50,7 @@ export const stepStates: Record<string, string> = {
 export const stepNames: Record<string, string> = {
   artifact: "制品检查",
   candidate: "候选验证",
-  commit: "提交 Release",
+  commit: "提交 Version",
   synchronize: "运行副本确认",
 };
 export const idempotency = () => crypto.randomUUID();

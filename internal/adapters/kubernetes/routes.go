@@ -95,7 +95,7 @@ func (k *Client) EnsureRoute(ctx context.Context, name, runtimeService string, g
 	}
 	sort.Strings(hosts)
 	gatewayName, gatewayNamespace, section := g.Name, g.Namespace, g.Section
-	spec := map[string]any{"parentRefs": []any{map[string]string{"name": gatewayName, "namespace": gatewayNamespace, "sectionName": section}}, "hostnames": hosts, "rules": []any{map[string]any{"filters": []any{map[string]any{"type": "RequestHeaderModifier", "requestHeaderModifier": map[string]any{"remove": []string{"x-krun-scope", "x-krun-release", "x-forwarded-host", "x-internal"}}}}, "backendRefs": []any{map[string]any{"name": runtimeService, "port": 8081}}}}}
+	spec := map[string]any{"parentRefs": []any{map[string]string{"name": gatewayName, "namespace": gatewayNamespace, "sectionName": section}}, "hostnames": hosts, "rules": []any{map[string]any{"filters": []any{map[string]any{"type": "RequestHeaderModifier", "requestHeaderModifier": map[string]any{"remove": []string{"x-krun-scope", "x-krun-version", "x-forwarded-host", "x-internal"}}}}, "backendRefs": []any{map[string]any{"name": runtimeService, "port": 8081}}}}}
 	var current struct {
 		Metadata struct {
 			Generation int `json:"generation"`

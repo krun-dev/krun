@@ -30,7 +30,7 @@ func TestPostgresWorkerCompatibilityMetadataRoundTrip(t *testing.T) {
 			Artifact: artifact.ID, Created: created, Finished: &finished,
 		}
 		st.Workers.Artifacts[artifact.ID] = artifact
-		st.Workers.Releases["rel-compat"] = WorkerRelease{
+		st.Workers.Versions["rel-compat"] = WorkerVersion{
 			ID: "rel-compat", Organization: "org-compat", Service: "svc-compat", Environment: appconfig.WorkerBaseline,
 			Artifact: artifact.ID, Profile: artifact.Profile, ArchiveDigest: artifact.ArchiveDigest, ModuleDigest: artifact.ModuleDigest,
 			CompatibilityDate: artifact.CompatibilityDate, CompatibilityFlags: append([]string(nil), flags...),
@@ -47,36 +47,36 @@ func TestPostgresWorkerCompatibilityMetadataRoundTrip(t *testing.T) {
 	}
 	build := state.Workers.Builds["bld-compat"]
 	storedArtifact := state.Workers.Artifacts[artifact.ID]
-	release := state.Workers.Releases["rel-compat"]
+	version := state.Workers.Versions["rel-compat"]
 	for name, got := range map[string][]string{
-		"build": build.CompatibilityFlags, "artifact": storedArtifact.CompatibilityFlags, "release": release.CompatibilityFlags,
+		"build": build.CompatibilityFlags, "artifact": storedArtifact.CompatibilityFlags, "version": version.CompatibilityFlags,
 	} {
 		if !reflect.DeepEqual(got, flags) {
 			t.Fatalf("%s compatibility flags = %v, want %v", name, got, flags)
 		}
 	}
-	if build.CompatibilityDate != artifact.CompatibilityDate || storedArtifact.Profile != workerartifact.WorkerProfile || release.CompatibilityDate != artifact.CompatibilityDate || release.Profile != workerartifact.WorkerProfile {
-		t.Fatalf("compatibility metadata did not round-trip: build=%+v artifact=%+v release=%+v", build, storedArtifact, release)
+	if build.CompatibilityDate != artifact.CompatibilityDate || storedArtifact.Profile != workerartifact.WorkerProfile || version.CompatibilityDate != artifact.CompatibilityDate || version.Profile != workerartifact.WorkerProfile {
+		t.Fatalf("compatibility metadata did not round-trip: build=%+v artifact=%+v version=%+v", build, storedArtifact, version)
 	}
 
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
-		st.Workers.Releases["rel-mismatch"] = WorkerRelease{
+		st.Workers.Versions["rel-mismatch"] = WorkerVersion{
 			ID: "rel-mismatch", Organization: artifact.Organization, Service: "svc-compat", Environment: appconfig.WorkerBaseline,
 			Artifact: artifact.ID, Profile: artifact.Profile, ArchiveDigest: artifact.ArchiveDigest, ModuleDigest: artifact.ModuleDigest,
 			CompatibilityDate: "2026-09-27", CompatibilityFlags: []string{"nodejs_compat"}, Variables: map[string]string{}, Created: created,
 		}
 		return nil
 	}); err == nil {
-		t.Fatal("release with artifact compatibility mismatch was persisted")
+		t.Fatal("version with artifact compatibility mismatch was persisted")
 	}
 
 	err = store.Update(ctx, PartitionWorkers, func(st *State) error {
-		release := st.Workers.Releases["rel-compat"]
-		release.CompatibilityDate = "2026-09-27"
-		st.Workers.Releases[release.ID] = release
+		version := st.Workers.Versions["rel-compat"]
+		version.CompatibilityDate = "2026-09-27"
+		st.Workers.Versions[version.ID] = version
 		return nil
 	})
 	if err == nil || !strings.Contains(err.Error(), "immutable") {
-		t.Fatalf("existing release descriptor was mutated: %v", err)
+		t.Fatalf("existing version descriptor was mutated: %v", err)
 	}
 }

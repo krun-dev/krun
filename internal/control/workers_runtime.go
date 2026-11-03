@@ -39,7 +39,7 @@ func (s *Server) workerRuntimeConfigSnapshot(w http.ResponseWriter, r *http.Requ
 		s.writeError(w, r, err)
 		return
 	}
-	s.json(w, 200, map[string]any{"pool": pool.ID, "config_revision": head, "lazy_routes": true, "routes": []workerConfigRoute{}, "releases": map[string]WorkerRelease{}})
+	s.json(w, 200, map[string]any{"pool": pool.ID, "config_revision": head, "lazy_routes": true, "routes": []workerConfigRoute{}, "versions": map[string]WorkerVersion{}})
 }
 
 // workerRuntimeConfigChanges is the incremental feed. since=0 means bootstrap
@@ -121,17 +121,17 @@ func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {
 	s.json(w, 200, out)
 }
 
-// workerRuntimeReleaseSecrets is the only plaintext delivery path. It is
+// workerRuntimeVersionSecrets is the only plaintext delivery path. It is
 // available solely on the internal listener, requires the runtime credential,
-// and returns values for one immutable Release. Values are never cached by the
+// and returns values for one immutable Version. Values are never cached by the
 // control plane or included in edge snapshots.
-func (s *Server) workerRuntimeReleaseSecrets(w http.ResponseWriter, r *http.Request) {
+func (s *Server) workerRuntimeVersionSecrets(w http.ResponseWriter, r *http.Request) {
 	pool, allowed := s.workerRuntimePool(r)
 	if !allowed {
 		s.writeError(w, r, forbidden())
 		return
 	}
-	out, err := s.runtimeApplication().Secrets(r.Context(), r.PathValue("release"), pool.ID)
+	out, err := s.runtimeApplication().Secrets(r.Context(), r.PathValue("version"), pool.ID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -157,13 +157,13 @@ func (s *Server) workerRuntimeAck(w http.ResponseWriter, r *http.Request) {
 	s.json(w, 200, map[string]bool{"ok": true})
 }
 
-func (s *Server) workerRuntimeReleaseAssets(w http.ResponseWriter, r *http.Request) {
+func (s *Server) workerRuntimeVersionAssets(w http.ResponseWriter, r *http.Request) {
 	pool, allowed := s.workerRuntimePool(r)
 	if !allowed {
 		s.writeError(w, r, forbidden())
 		return
 	}
-	out, err := s.runtimeApplication().Assets(r.Context(), r.PathValue("release"), pool.ID)
+	out, err := s.runtimeApplication().Assets(r.Context(), r.PathValue("version"), pool.ID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -171,13 +171,13 @@ func (s *Server) workerRuntimeReleaseAssets(w http.ResponseWriter, r *http.Reque
 	s.json(w, 200, out)
 }
 
-func (s *Server) workerRuntimeReleaseAssetURL(w http.ResponseWriter, r *http.Request) {
+func (s *Server) workerRuntimeVersionAssetURL(w http.ResponseWriter, r *http.Request) {
 	pool, allowed := s.workerRuntimePool(r)
 	if !allowed {
 		s.writeError(w, r, forbidden())
 		return
 	}
-	out, err := s.runtimeApplication().AssetURL(r.Context(), r.PathValue("release"), r.PathValue("path"), pool)
+	out, err := s.runtimeApplication().AssetURL(r.Context(), r.PathValue("version"), r.PathValue("path"), pool)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -185,7 +185,7 @@ func (s *Server) workerRuntimeReleaseAssetURL(w http.ResponseWriter, r *http.Req
 	s.json(w, 200, out)
 }
 
-// A cold host resolves exactly one normalized route and immutable release.
+// A cold host resolves exactly one normalized route and immutable version.
 func (s *Server) workerRuntimeConfigRoute(w http.ResponseWriter, r *http.Request) {
 	pool, allowed := s.workerRuntimePool(r)
 	if !allowed {

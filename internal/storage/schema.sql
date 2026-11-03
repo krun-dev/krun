@@ -288,9 +288,9 @@ CREATE TABLE IF NOT EXISTS krun_worker_environments (
 	enabled              boolean NOT NULL DEFAULT true,
 	config_revision      integer NOT NULL DEFAULT 1,
 	variables            jsonb NOT NULL DEFAULT '{}'::jsonb,
-	release_revision     integer NOT NULL DEFAULT 0,
-	release_id           text NOT NULL DEFAULT '',
-	confirmed_release_id text NOT NULL DEFAULT '',
+	deployment_revision     integer NOT NULL DEFAULT 0,
+	version_id           text NOT NULL DEFAULT '',
+	confirmed_version_id text NOT NULL DEFAULT '',
 	updated_at           timestamptz NOT NULL DEFAULT now(),
 	PRIMARY KEY (service_id, env_name)
 );
@@ -389,8 +389,8 @@ CREATE TABLE IF NOT EXISTS krun_worker_artifacts (
 );
 CREATE INDEX IF NOT EXISTS krun_worker_artifacts_created ON krun_worker_artifacts (created_at);
 
-CREATE TABLE IF NOT EXISTS krun_worker_releases (
-	release_id      text PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS krun_worker_versions (
+	version_id      text PRIMARY KEY,
 	org_id          text NOT NULL,
 	service_id      text NOT NULL,
 	env_name        text NOT NULL,
@@ -405,14 +405,29 @@ CREATE TABLE IF NOT EXISTS krun_worker_releases (
 	secret_digest   text NOT NULL DEFAULT '',
 	created_at      timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS krun_worker_releases_service ON krun_worker_releases (service_id, env_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS krun_worker_versions_service ON krun_worker_versions (service_id, env_name, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS krun_worker_release_secrets (
-	release_id        text NOT NULL,
+CREATE TABLE IF NOT EXISTS krun_worker_version_secrets (
+	version_id        text NOT NULL,
 	name              text NOT NULL,
 	secret_version_id text NOT NULL,
-	PRIMARY KEY (release_id, name)
+	PRIMARY KEY (version_id, name)
 );
+
+CREATE TABLE IF NOT EXISTS krun_worker_deployments (
+ deployment_id text PRIMARY KEY,
+ org_id text NOT NULL,
+ service_id text NOT NULL,
+ env_name text NOT NULL,
+ version_id text NOT NULL,
+ operation_id text NOT NULL UNIQUE,
+ created_at timestamptz NOT NULL,
+ expires_at timestamptz NOT NULL,
+ committed_at timestamptz,
+ CHECK (expires_at > created_at)
+);
+CREATE INDEX IF NOT EXISTS krun_worker_deployments_service ON krun_worker_deployments(service_id,env_name,created_at DESC);
+CREATE INDEX IF NOT EXISTS krun_worker_deployments_expiry ON krun_worker_deployments(expires_at);
 
 CREATE TABLE IF NOT EXISTS krun_worker_operations (
 	operation_id       text PRIMARY KEY,
@@ -422,11 +437,11 @@ CREATE TABLE IF NOT EXISTS krun_worker_operations (
 	env_name           text NOT NULL,
 	state              text NOT NULL,
 	build_id           text NOT NULL DEFAULT '',
-	release_id         text NOT NULL DEFAULT '',
+	version_id         text NOT NULL DEFAULT '',
 	expected_revision  integer NOT NULL DEFAULT 0,
 	config_revision    integer NOT NULL DEFAULT 0,
 	edge_revision      bigint NOT NULL DEFAULT 0,
-	release_revision   integer NOT NULL DEFAULT 0,
+	deployment_revision   integer NOT NULL DEFAULT 0,
 	error              text NOT NULL DEFAULT '',
 	steps              jsonb NOT NULL DEFAULT '[]'::jsonb,
 	actor_user_id      text NOT NULL DEFAULT '',
@@ -445,7 +460,7 @@ CREATE TABLE IF NOT EXISTS krun_worker_history (
 	service_id   text NOT NULL,
 	env_name     text NOT NULL,
 	revision     integer NOT NULL,
-	release_id   text NOT NULL,
+	version_id   text NOT NULL,
 	operation_id text NOT NULL,
 	kind         text NOT NULL,
 	created_at   timestamptz NOT NULL DEFAULT now(),
@@ -468,43 +483,44 @@ CREATE TABLE IF NOT EXISTS worker_config_revisions (
 );
 
 CREATE TABLE IF NOT EXISTS worker_config_routes (
+ expires_at timestamptz,
  service_id text NOT NULL,
  shard text NOT NULL CHECK(shard ~ '^[0-9a-f]{2}$'),
 	host       text PRIMARY KEY,
 	pool       text NOT NULL,
 	path       text NOT NULL DEFAULT '',
 	enabled    boolean NOT NULL,
-	release_id text NOT NULL DEFAULT ''
+	version_id text NOT NULL DEFAULT ''
 );
 
-CREATE TABLE IF NOT EXISTS worker_config_releases (
-	release_id text NOT NULL,
+CREATE TABLE IF NOT EXISTS worker_config_versions (
+	version_id text NOT NULL,
 	pool       text NOT NULL,
 	payload    jsonb NOT NULL CHECK (jsonb_typeof(payload) = 'object'),
-	PRIMARY KEY (release_id, pool)
+	PRIMARY KEY (version_id, pool)
 );
 
 CREATE TABLE IF NOT EXISTS worker_config_ops (
 	config_revision bigint NOT NULL,
 	ordinal         integer NOT NULL CHECK (ordinal >= 0),
 	pool            text NOT NULL,
-	op_type         text NOT NULL CHECK (op_type IN ('release_put','route_upsert','route_delete')),
+	op_type         text NOT NULL CHECK (op_type IN ('version_put','route_upsert','route_delete')),
 	host            text NOT NULL DEFAULT '',
-	release_id      text NOT NULL DEFAULT '',
+	version_id      text NOT NULL DEFAULT '',
 	payload         jsonb CHECK (payload IS NULL OR jsonb_typeof(payload) = 'object'),
 	PRIMARY KEY (config_revision, ordinal),
 	CHECK (
-		(op_type='release_put' AND host='' AND release_id<>'' AND payload IS NOT NULL AND payload->>'id'=release_id)
-		OR (op_type='route_upsert' AND host<>'' AND payload IS NOT NULL AND payload->>'host'=host AND COALESCE(payload->>'release','')=release_id)
-		OR (op_type='route_delete' AND host<>'' AND release_id='' AND payload IS NULL)
+		(op_type='version_put' AND host='' AND version_id<>'' AND payload IS NOT NULL AND payload->>'id'=version_id)
+		OR (op_type='route_upsert' AND host<>'' AND payload IS NOT NULL AND payload->>'host'=host AND COALESCE(payload->>'version','')=version_id)
+		OR (op_type='route_delete' AND host<>'' AND version_id='' AND payload IS NULL)
 	)
 );
 
 CREATE INDEX IF NOT EXISTS worker_config_routes_service ON worker_config_routes(service_id);
-CREATE INDEX IF NOT EXISTS worker_config_routes_release ON worker_config_routes(release_id,pool);
+CREATE INDEX IF NOT EXISTS worker_config_routes_version ON worker_config_routes(version_id,pool);
 CREATE INDEX IF NOT EXISTS worker_config_routes_shard ON worker_config_routes(pool,shard,host);
 CREATE INDEX IF NOT EXISTS worker_config_ops_pool ON worker_config_ops(pool,config_revision,ordinal);
-CREATE INDEX IF NOT EXISTS krun_worker_releases_artifact ON krun_worker_releases(artifact_id,service_id);
+CREATE INDEX IF NOT EXISTS krun_worker_versions_artifact ON krun_worker_versions(artifact_id,service_id);
 CREATE INDEX IF NOT EXISTS krun_resources_page ON krun_resources(org_id,kind,resource_id);
 CREATE INDEX IF NOT EXISTS krun_worker_idempotency_prefix ON krun_worker_idempotency(idem_key text_pattern_ops);
 CREATE INDEX IF NOT EXISTS krun_worker_builds_schedulable ON krun_worker_builds(reconcile_after,created_at) WHERE state NOT IN ('succeeded','failed');
@@ -525,16 +541,16 @@ END $$;
 CREATE OR REPLACE TRIGGER worker_build_retention AFTER INSERT OR UPDATE OF state ON krun_worker_builds FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_retention();
 CREATE OR REPLACE TRIGGER worker_history_retention AFTER INSERT ON krun_worker_history FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_retention();
 CREATE INDEX IF NOT EXISTS worker_retention_scopes_generation ON worker_retention_scopes(generation,service_id);
-CREATE INDEX IF NOT EXISTS krun_worker_releases_age ON krun_worker_releases(created_at);
+CREATE INDEX IF NOT EXISTS krun_worker_versions_age ON krun_worker_versions(created_at);
 CREATE INDEX IF NOT EXISTS krun_worker_operations_age ON krun_worker_operations(created_at);
 CREATE INDEX IF NOT EXISTS krun_worker_builds_age ON krun_worker_builds(created_at);
-CREATE INDEX IF NOT EXISTS krun_worker_environments_release ON krun_worker_environments(release_id);
-CREATE INDEX IF NOT EXISTS krun_worker_environments_confirmed ON krun_worker_environments(confirmed_release_id);
-CREATE INDEX IF NOT EXISTS krun_worker_history_release ON krun_worker_history(release_id);
-CREATE INDEX IF NOT EXISTS krun_worker_operations_release ON krun_worker_operations(release_id);
+CREATE INDEX IF NOT EXISTS krun_worker_environments_version ON krun_worker_environments(version_id);
+CREATE INDEX IF NOT EXISTS krun_worker_environments_confirmed ON krun_worker_environments(confirmed_version_id);
+CREATE INDEX IF NOT EXISTS krun_worker_history_version ON krun_worker_history(version_id);
+CREATE INDEX IF NOT EXISTS krun_worker_operations_version ON krun_worker_operations(version_id);
 CREATE INDEX IF NOT EXISTS krun_worker_builds_artifact ON krun_worker_builds(artifact_id);
 CREATE INDEX IF NOT EXISTS krun_worker_environment_secrets_version ON krun_worker_environment_secrets(secret_version_id);
-CREATE INDEX IF NOT EXISTS krun_worker_release_secrets_version ON krun_worker_release_secrets(secret_version_id);
+CREATE INDEX IF NOT EXISTS krun_worker_version_secrets_version ON krun_worker_version_secrets(secret_version_id);
 CREATE TABLE IF NOT EXISTS worker_config_dirty (
  service_id text PRIMARY KEY,
  generation bigint NOT NULL DEFAULT nextval('worker_dirty_seq')
@@ -558,7 +574,7 @@ BEGIN
  RETURN NULL;
 END $$;
 CREATE OR REPLACE TRIGGER worker_services_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_services FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
-CREATE OR REPLACE TRIGGER worker_env_config_dirty AFTER INSERT OR DELETE OR UPDATE OF enabled,release_id ON krun_worker_environments FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
+CREATE OR REPLACE TRIGGER worker_env_config_dirty AFTER INSERT OR DELETE OR UPDATE OF enabled,version_id ON krun_worker_environments FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
 CREATE OR REPLACE TRIGGER worker_domains_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_service_domains FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
 CREATE OR REPLACE TRIGGER worker_placements_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_service_placements FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
 CREATE OR REPLACE FUNCTION krun_mark_resource_config_dirty() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -574,3 +590,5 @@ CREATE TABLE IF NOT EXISTS worker_runtime_acks (
 	revision   bigint NOT NULL,
 	updated_at timestamptz NOT NULL
 );
+
+CREATE OR REPLACE TRIGGER deployment_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_deployments FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();

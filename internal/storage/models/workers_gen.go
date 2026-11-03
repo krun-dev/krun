@@ -48,9 +48,9 @@ type Environment struct {
 	Enabled            bool            `bun:"enabled"`
 	ConfigRevision     int             `bun:"config_revision"`
 	Variables          json.RawMessage `bun:"variables,type:jsonb"`
-	ReleaseRevision    int             `bun:"release_revision"`
-	ReleaseID          string          `bun:"release_id"`
-	ConfirmedReleaseID string          `bun:"confirmed_release_id"`
+	DeploymentRevision int             `bun:"deployment_revision"`
+	VersionID          string          `bun:"version_id"`
+	ConfirmedVersionID string          `bun:"confirmed_version_id"`
 	UpdatedAt          time.Time       `bun:"updated_at"`
 }
 
@@ -146,9 +146,9 @@ type Artifact struct {
 	GcClaimedAt        *time.Time      `bun:"gc_claimed_at"`
 }
 
-type Release struct {
-	bun.BaseModel      `bun:"table:krun_worker_releases,alias:krun_worker_releases"`
-	ReleaseID          string          `bun:"release_id,pk"`
+type Version struct {
+	bun.BaseModel      `bun:"table:krun_worker_versions,alias:krun_worker_versions"`
+	VersionID          string          `bun:"version_id,pk"`
 	OrgID              string          `bun:"org_id"`
 	ServiceID          string          `bun:"service_id"`
 	EnvName            string          `bun:"env_name"`
@@ -164,38 +164,51 @@ type Release struct {
 	CreatedAt          time.Time       `bun:"created_at"`
 }
 
-type ReleaseSecret struct {
-	bun.BaseModel   `bun:"table:krun_worker_release_secrets,alias:krun_worker_release_secrets"`
-	ReleaseID       string `bun:"release_id,pk"`
+type VersionSecret struct {
+	bun.BaseModel   `bun:"table:krun_worker_version_secrets,alias:krun_worker_version_secrets"`
+	VersionID       string `bun:"version_id,pk"`
 	Name            string `bun:"name,pk"`
 	SecretVersionID string `bun:"secret_version_id"`
 }
 
+type Deployment struct {
+	bun.BaseModel `bun:"table:krun_worker_deployments,alias:krun_worker_deployments"`
+	DeploymentID  string     `bun:"deployment_id,pk"`
+	OrgID         string     `bun:"org_id"`
+	ServiceID     string     `bun:"service_id"`
+	EnvName       string     `bun:"env_name"`
+	VersionID     string     `bun:"version_id"`
+	OperationID   string     `bun:"operation_id"`
+	CreatedAt     time.Time  `bun:"created_at"`
+	ExpiresAt     time.Time  `bun:"expires_at"`
+	CommittedAt   *time.Time `bun:"committed_at"`
+}
+
 type Operation struct {
-	bun.BaseModel    `bun:"table:krun_worker_operations,alias:krun_worker_operations"`
-	OperationID      string          `bun:"operation_id,pk"`
-	Kind             string          `bun:"kind"`
-	OrgID            string          `bun:"org_id"`
-	ServiceID        string          `bun:"service_id"`
-	EnvName          string          `bun:"env_name"`
-	State            string          `bun:"state"`
-	BuildID          string          `bun:"build_id"`
-	ReleaseID        string          `bun:"release_id"`
-	ExpectedRevision int             `bun:"expected_revision"`
-	ConfigRevision   int             `bun:"config_revision"`
-	EdgeRevision     int64           `bun:"edge_revision"`
-	ReleaseRevision  int             `bun:"release_revision"`
-	Error            string          `bun:"error"`
-	Steps            json.RawMessage `bun:"steps,type:jsonb"`
-	ActorUserID      string          `bun:"actor_user_id"`
-	ActorKeyID       string          `bun:"actor_key_id"`
-	ActorAuthVersion int             `bun:"actor_auth_version"`
-	StartedAt        *time.Time      `bun:"started_at"`
-	ReconcileAfter   time.Time       `bun:"reconcile_after"`
-	CreatedAt        time.Time       `bun:"created_at"`
-	FinishedAt       *time.Time      `bun:"finished_at"`
-	ClaimedBy        string          `bun:"claimed_by"`
-	ClaimedAt        *time.Time      `bun:"claimed_at"`
+	bun.BaseModel      `bun:"table:krun_worker_operations,alias:krun_worker_operations"`
+	OperationID        string          `bun:"operation_id,pk"`
+	Kind               string          `bun:"kind"`
+	OrgID              string          `bun:"org_id"`
+	ServiceID          string          `bun:"service_id"`
+	EnvName            string          `bun:"env_name"`
+	State              string          `bun:"state"`
+	BuildID            string          `bun:"build_id"`
+	VersionID          string          `bun:"version_id"`
+	ExpectedRevision   int             `bun:"expected_revision"`
+	ConfigRevision     int             `bun:"config_revision"`
+	EdgeRevision       int64           `bun:"edge_revision"`
+	DeploymentRevision int             `bun:"deployment_revision"`
+	Error              string          `bun:"error"`
+	Steps              json.RawMessage `bun:"steps,type:jsonb"`
+	ActorUserID        string          `bun:"actor_user_id"`
+	ActorKeyID         string          `bun:"actor_key_id"`
+	ActorAuthVersion   int             `bun:"actor_auth_version"`
+	StartedAt          *time.Time      `bun:"started_at"`
+	ReconcileAfter     time.Time       `bun:"reconcile_after"`
+	CreatedAt          time.Time       `bun:"created_at"`
+	FinishedAt         *time.Time      `bun:"finished_at"`
+	ClaimedBy          string          `bun:"claimed_by"`
+	ClaimedAt          *time.Time      `bun:"claimed_at"`
 }
 
 type History struct {
@@ -203,7 +216,7 @@ type History struct {
 	ServiceID     string    `bun:"service_id,pk"`
 	EnvName       string    `bun:"env_name,pk"`
 	Revision      int       `bun:"revision,pk"`
-	ReleaseID     string    `bun:"release_id"`
+	VersionID     string    `bun:"version_id"`
 	OperationID   string    `bun:"operation_id"`
 	Kind          string    `bun:"kind"`
 	CreatedAt     time.Time `bun:"created_at"`

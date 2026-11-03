@@ -78,18 +78,18 @@ export default {async fetch(){return Response.json({source:'real-wrangler-artifa
  'src/empty.wasm':Buffer.from([0,97,115,109,1,0,0,0]),
 });
 
-let artifact=null,release=null,descriptor=null,artifactDownloads=0;
+let artifact=null,version=null,descriptor=null,artifactDownloads=0;
 const server=createServer((request,response)=>{
  const chunks=[];request.on('data',chunk=>chunks.push(chunk));request.on('end',()=>{
   if(request.url==='/source'){response.writeHead(200,{'content-type':'application/gzip'});response.end(project);return;}
   if(request.url==='/upload'&&request.method==='PUT'){artifact=Buffer.concat(chunks);response.writeHead(200);response.end();return;}
   if(request.url==='/artifact'){artifactDownloads++;response.writeHead(200,{'content-type':'application/gzip','content-length':artifact.length});response.end(artifact);return;}
-  if(request.url==='/api/internal/workers/config/snapshot'){response.setHeader('content-type','application/json');response.end(JSON.stringify({pool:'default',config_revision:1,lazy_routes:true,routes:[],releases:{}}));return;}
-  if(request.url==='/api/internal/workers/config/routes/wrangler.test'){response.setHeader('content-type','application/json');response.end(JSON.stringify({pool:'default',config_revision:1,routes:[{host:'wrangler.test',path:'/',enabled:true,release:release.id}],releases:{[release.id]:release}}));return;}
+  if(request.url==='/api/internal/workers/config/snapshot'){response.setHeader('content-type','application/json');response.end(JSON.stringify({pool:'default',config_revision:1,lazy_routes:true,routes:[],versions:{}}));return;}
+  if(request.url==='/api/internal/workers/config/routes/wrangler.test'){response.setHeader('content-type','application/json');response.end(JSON.stringify({pool:'default',config_revision:1,routes:[{host:'wrangler.test',path:'/',enabled:true,version:version.id}],versions:{[version.id]:version}}));return;}
   if(request.url.startsWith('/api/internal/workers/config/changes')){response.writeHead(204);response.end();return;}
   if(request.url==='/api/internal/workers/ack'){response.setHeader('content-type','application/json');response.end('{"ok":true}');return;}
-  if(request.url==='/api/internal/workers/artifacts/'+release.artifact_id){response.setHeader('content-type','application/json');response.end(JSON.stringify(descriptor));return;}
-  if(request.url==='/api/internal/workers/releases/'+release.id+'/assets'){response.setHeader('content-type','application/json');response.end(JSON.stringify({release_id:release.id,config:null,files:[]}));return;}
+  if(request.url==='/api/internal/workers/artifacts/'+version.artifact_id){response.setHeader('content-type','application/json');response.end(JSON.stringify(descriptor));return;}
+  if(request.url==='/api/internal/workers/versions/'+version.id+'/assets'){response.setHeader('content-type','application/json');response.end(JSON.stringify({version_id:version.id,config:null,files:[]}));return;}
   response.writeHead(404);response.end('not found');
  });
 });
@@ -106,8 +106,8 @@ try{
  assert.ok(manifest.modules.some(module=>module.type==='text'),'Wrangler artifact lost Text module');
  assert.ok(manifest.modules.some(module=>module.type==='data'),'Wrangler artifact lost Data module');
  assert.ok(manifest.modules.some(module=>module.type==='wasm'),'Wrangler artifact lost Wasm module');
- release={id:'rel_wrangler_runtime',service_id:'svc',organization_id:'org',environment:'production',artifact_id:'art_wrangler_runtime',profile:manifest.profile,compatibility_date:manifest.compatibility_date,compatibility_flags:manifest.compatibility_flags,module_sha256:main.sha256,archive_sha256:sha256(artifact),variables:{},pool:'default'};
- descriptor={artifact_id:release.artifact_id,archive_sha256:release.archive_sha256,size:artifact.length,download_url:`http://127.0.0.1:${platformPort}/artifact`};
+ version={id:'rel_wrangler_runtime',service_id:'svc',organization_id:'org',environment:'production',artifact_id:'art_wrangler_runtime',profile:manifest.profile,compatibility_date:manifest.compatibility_date,compatibility_flags:manifest.compatibility_flags,module_sha256:main.sha256,archive_sha256:sha256(artifact),variables:{},pool:'default'};
+ descriptor={artifact_id:version.artifact_id,archive_sha256:version.archive_sha256,size:artifact.length,download_url:`http://127.0.0.1:${platformPort}/artifact`};
 
  const privatePort=await freePort(),managementPort=await freePort();
  const config=`using W = import "/workerd/workerd.capnp";
@@ -128,13 +128,13 @@ const config :W.Config = (
  let validation;
  for(let attempt=0;attempt<100;attempt++){
   if(exited)throw new Error('workerd exited before readiness\n'+output);
-  try{validation=await fetch(`http://127.0.0.1:${managementPort}/validate`,{method:'POST',headers:{authorization:'Bearer management-token','content-type':'application/json'},body:JSON.stringify({release,artifact:descriptor})});break;}catch{await new Promise(resolve=>setTimeout(resolve,50));}
+  try{validation=await fetch(`http://127.0.0.1:${managementPort}/validate`,{method:'POST',headers:{authorization:'Bearer management-token','content-type':'application/json'},body:JSON.stringify({version,artifact:descriptor})});break;}catch{await new Promise(resolve=>setTimeout(resolve,50));}
  }
  assert.ok(validation,'workerd did not become ready\n'+output);const validationText=await validation.text();assert.equal(validation.status,200,validationText+'\n'+output);
  const response=await new Promise((resolve,reject)=>{const request=httpRequest({hostname:'127.0.0.1',port:privatePort,path:'/run',headers:{host:'wrangler.test'}},incoming=>{const chunks=[];incoming.on('data',chunk=>chunks.push(chunk));incoming.on('end',()=>resolve({status:incoming.statusCode,headers:incoming.headers,body:Buffer.concat(chunks).toString('utf8')}));});request.on('error',reject);request.end();});
  assert.equal(response.status,200,response.body+'\n'+output);
  assert.deepEqual(JSON.parse(response.body),{source:'real-wrangler-artifact',message:'wrangler-to-workerd',data:[4,5,6],wasm:true});
- assert.equal(response.headers['x-krun-release'],release.id);assert.ok(artifactDownloads>=1,'runtime never downloaded the Wrangler artifact');
+ assert.equal(response.headers['x-krun-version'],version.id);assert.ok(artifactDownloads>=1,'runtime never downloaded the Wrangler artifact');
  console.log('REAL WRANGLER ARTIFACT TO WORKERD SMOKE PASSED');
 }finally{
  if(child&&!exited){child.kill('SIGTERM');await new Promise(resolve=>{const timeout=setTimeout(resolve,2000);child.once('exit',()=>{clearTimeout(timeout);resolve();});});}

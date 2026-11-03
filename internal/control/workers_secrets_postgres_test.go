@@ -18,7 +18,7 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 		t.Fatal(err)
 	}
 	refs := map[string]string{"API_TOKEN": encrypted.Version.ID}
-	release := WorkerRelease{
+	version := WorkerVersion{
 		ID: "rel-secret-postgres", Organization: "org-secret", Service: "svc-secret", Environment: "production",
 		Artifact: "art-secret-postgres", ArchiveDigest: "archive", ModuleDigest: "module",
 		ConfigRevision: 2, Variables: map[string]string{}, SecretDigest: workerapp.WorkerSecretsDigest(refs),
@@ -27,16 +27,16 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 	if err = store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.SecretVersions[encrypted.Version.ID] = encrypted.Version
 		st.PendingWorkerSecrets = map[string]encryptedWorkerSecret{encrypted.Version.ID: encrypted}
-		st.Workers.Services[release.Service] = WorkerService{
-			Service: release.Service, Organization: release.Organization,
+		st.Workers.Services[version.Service] = WorkerService{
+			Service: version.Service, Organization: version.Organization,
 			Environments: map[string]WorkerEnvironment{
 				"production": {Name: "production", Enabled: true, ConfigRevision: 2, Variables: map[string]string{}, SecretNames: []string{"API_TOKEN"}, SecretVersions: refs},
 			},
 		}
 		placed := now()
-		st.Workers.Placements[workerPlacementKey(release.Service, "default")] = WorkerPlacement{Service: release.Service, Organization: release.Organization, NetworkProfile: "default", Pool: "default", Role: "primary", State: "active", Revision: 1, Created: placed, Updated: placed}
-		st.Workers.Artifacts[release.Artifact] = WorkerArtifact{ID: release.Artifact, Organization: release.Organization, State: "finalized", ArchiveDigest: release.ArchiveDigest, ModuleDigest: release.ModuleDigest, Created: now()}
-		st.Workers.Releases[release.ID] = release
+		st.Workers.Placements[workerPlacementKey(version.Service, "default")] = WorkerPlacement{Service: version.Service, Organization: version.Organization, NetworkProfile: "default", Pool: "default", Role: "primary", State: "active", Revision: 1, Created: placed, Updated: placed}
+		st.Workers.Artifacts[version.Artifact] = WorkerArtifact{ID: version.Artifact, Organization: version.Organization, State: "finalized", ArchiveDigest: version.ArchiveDigest, ModuleDigest: version.ModuleDigest, Created: now()}
+		st.Workers.Versions[version.ID] = version
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -53,9 +53,9 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	environment := loaded.Workers.Services[release.Service].Environments["production"]
-	if environment.SecretVersions["API_TOKEN"] != encrypted.Version.ID || loaded.Workers.Releases[release.ID].SecretVersions["API_TOKEN"] != encrypted.Version.ID {
-		t.Fatalf("relational bindings not reloaded: env=%v release=%v", environment.SecretVersions, loaded.Workers.Releases[release.ID].SecretVersions)
+	environment := loaded.Workers.Services[version.Service].Environments["production"]
+	if environment.SecretVersions["API_TOKEN"] != encrypted.Version.ID || loaded.Workers.Versions[version.ID].SecretVersions["API_TOKEN"] != encrypted.Version.ID {
+		t.Fatalf("relational bindings not reloaded: env=%v version=%v", environment.SecretVersions, loaded.Workers.Versions[version.ID].SecretVersions)
 	}
 	var topologyBefore, topologyAfter string
 	if err = postgresTestPool(store).QueryRow(ctx, `SELECT COALESCE(max(generation),0)::text FROM worker_config_dirty`).Scan(&topologyBefore); err != nil {
@@ -74,8 +74,8 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 	if topologyAfter != topologyBefore {
 		t.Fatalf("unchanged placement advanced topology generation: before=%s after=%s", topologyBefore, topologyAfter)
 	}
-	digest, values, err := store.EncryptedReleaseSecrets(ctx, release.ID, "default")
-	if err != nil || digest != release.SecretDigest || len(values) != 1 {
+	digest, values, err := store.EncryptedVersionSecrets(ctx, version.ID, "default")
+	if err != nil || digest != version.SecretDigest || len(values) != 1 {
 		t.Fatalf("runtime lookup: digest=%q values=%d err=%v", digest, len(values), err)
 	}
 	plain, err := workerapp.DecryptWorkerSecret(config, values[0])

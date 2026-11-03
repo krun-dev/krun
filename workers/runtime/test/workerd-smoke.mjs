@@ -52,14 +52,14 @@ export default {
 
 const entrySource = `
 import {WorkerEntrypoint} from 'cloudflare:workers';
-export class ReleaseAssets extends WorkerEntrypoint {
+export class VersionAssets extends WorkerEntrypoint {
   async fetch() {
-    return new Response('asset:' + this.ctx.props.release_id);
+    return new Response('asset:' + this.ctx.props.version_id);
   }
 }
 export default class extends WorkerEntrypoint {
   async fetch(request) {
-    const assets = this.ctx.exports.ReleaseAssets({props: {release_id: 'rel-smoke'}});
+    const assets = this.ctx.exports.VersionAssets({props: {version_id: 'rel-smoke'}});
     const worker = await this.env.LOADER.get('krun-v2-smoke', async () => ({
       compatibilityDate: '2026-09-28',
       compatibilityFlags: ['nodejs_compat'],

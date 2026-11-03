@@ -55,11 +55,19 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET "+base+"/environments/{environment}/secrets", protect(false, s.workerSecretList))
 	m.HandleFunc("PUT "+base+"/environments/{environment}/secrets/{secret}", protect(false, s.workerSecretPut))
 	m.HandleFunc("DELETE "+base+"/environments/{environment}/secrets/{secret}", protect(false, s.workerSecretDelete))
-	m.HandleFunc("POST "+base+"/environments/{environment}/releases", protect(false, s.workerPublish))
+	m.HandleFunc("POST "+base+"/environments/{environment}/deployments", protect(false, s.workerPublish))
 	m.HandleFunc("POST "+base+"/environments/{environment}/rollbacks", protect(false, s.workerRollback))
-	m.HandleFunc("GET "+base+"/environments/{environment}/history", protect(false, s.workerReleaseHistory))
+	m.HandleFunc("GET "+base+"/environments/{environment}/history", protect(false, s.workerVersionHistory))
 	m.HandleFunc("GET "+base+"/operations", protect(false, s.workerOperationList))
-	m.HandleFunc("GET "+base+"/releases/{release}", protect(false, s.workerReleaseGet))
+	m.HandleFunc("GET "+base+"/previews-base", protect(false, s.workerPreviewBase))
+	m.HandleFunc("PATCH "+base+"/previews-base", protect(false, s.workerPreviewBase))
+	m.HandleFunc("PATCH "+base+"/previews-base/secrets", protect(false, s.workerSecretBatch))
+	m.HandleFunc("PATCH "+base+"/environments/{environment}/secrets", protect(false, s.workerSecretBatch))
+	m.HandleFunc("POST "+base+"/environments/{environment}/versions", protect(false, s.workerVersionUpload))
+	m.HandleFunc("GET "+base+"/versions", protect(false, s.workerVersionList))
+	m.HandleFunc("GET "+base+"/deployments", protect(false, s.workerDeploymentList))
+	m.HandleFunc("GET "+base+"/deployments/{deployment}", protect(false, s.workerDeploymentList))
+	m.HandleFunc("GET "+base+"/versions/{version}", protect(false, s.workerVersionGet))
 	m.HandleFunc("POST "+base+"/environments/{environment}/invoke", s.workerInvoke)
 	m.HandleFunc("GET "+base+"/operations/{operation}", protect(false, s.workerOperationGet))
 	m.HandleFunc("GET "+base+"/artifacts/{artifact}", protect(false, s.workerArtifactGet))
@@ -215,14 +223,14 @@ func (s *Server) workerEnvironmentUpdate(st *State, p Principal, r *http.Request
 }
 
 func (s *Server) workerPublish(st *State, p Principal, r *http.Request) (any, int, error) {
-	return s.workerReleaseCreate(st, p, r, "publish")
+	return s.workerDeploymentCreate(st, p, r, "publish")
 }
 
 func (s *Server) workerRollback(st *State, p Principal, r *http.Request) (any, int, error) {
-	return s.workerReleaseCreate(st, p, r, "rollback")
+	return s.workerDeploymentCreate(st, p, r, "rollback")
 }
 
-func (s *Server) workerReleaseCreate(st *State, p Principal, r *http.Request, kind string) (any, int, error) {
+func (s *Server) workerDeploymentCreate(st *State, p Principal, r *http.Request, kind string) (any, int, error) {
 	env := r.PathValue("environment")
 	if !appconfig.WorkerEnvValid(env) {
 		return nil, 0, notFound()
@@ -231,11 +239,11 @@ func (s *Server) workerReleaseCreate(st *State, p Principal, r *http.Request, ki
 	if e != nil {
 		return nil, 0, e
 	}
-	var in workerapp.WorkerReleaseCreateInput
+	var in workerapp.WorkerDeploymentCreateInput
 	if e = body(r, &in); e != nil {
 		return nil, 0, e
 	}
-	out, outcome, err := s.workerApplication(r).WorkerReleaseCreate(r.Context(), st, p, workerRef(r), t, env, kind, in)
+	out, outcome, err := s.workerApplication(r).WorkerDeploymentCreate(r.Context(), st, p, workerRef(r), t, env, kind, in)
 	return out, workerHTTPStatus(outcome), err
 }
 
@@ -244,8 +252,8 @@ func (s *Server) workerOperationGet(st *State, p Principal, r *http.Request) (an
 	return out, workerHTTPStatus(outcome), err
 }
 
-func (s *Server) workerReleaseHistory(st *State, p Principal, r *http.Request) (any, int, error) {
-	out, outcome, err := s.workerApplication(r).WorkerReleaseHistory(r.Context(), st, p, workerRef(r))
+func (s *Server) workerVersionHistory(st *State, p Principal, r *http.Request) (any, int, error) {
+	out, outcome, err := s.workerApplication(r).WorkerVersionHistory(r.Context(), st, p, workerRef(r))
 	return out, workerHTTPStatus(outcome), err
 }
 
@@ -263,7 +271,7 @@ func (s *Server) workerOperationList(st *State, p Principal, r *http.Request) (a
 	return out, workerHTTPStatus(outcome), err
 }
 
-func (s *Server) workerReleaseGet(st *State, p Principal, r *http.Request) (any, int, error) {
-	out, outcome, err := s.workerApplication(r).WorkerReleaseGet(r.Context(), st, p, workerRef(r))
+func (s *Server) workerVersionGet(st *State, p Principal, r *http.Request) (any, int, error) {
+	out, outcome, err := s.workerApplication(r).WorkerVersionGet(r.Context(), st, p, workerRef(r))
 	return out, workerHTTPStatus(outcome), err
 }

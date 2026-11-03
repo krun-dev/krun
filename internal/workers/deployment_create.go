@@ -13,15 +13,15 @@ import (
 	securetoken "github.com/krun-dev/krun/internal/securetoken"
 )
 
-type WorkerReleaseCreateInput struct {
+type WorkerDeploymentCreateInput struct {
 	Build    string `json:"build_id,omitempty"`
-	Release  string `json:"release_id,omitempty"`
+	Version  string `json:"version_id,omitempty"`
 	Revision int    `json:"expected_revision"`
 	Key      string `json:"idempotency_key"`
 }
 
-func PublicWorkerRelease(release domain.WorkerRelease) domain.WorkerRelease {
-	return release
+func PublicWorkerVersion(version domain.WorkerVersion) domain.WorkerVersion {
+	return version
 }
 
 func WorkerBusy(st *domain.State, service, env string) bool {
@@ -35,9 +35,9 @@ func WorkerBusy(st *domain.State, service, env string) bool {
 	return false
 }
 
-func (s *Service) WorkerReleaseCreate(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef, t authorization.Target, env string, kind string, in WorkerReleaseCreateInput) (any, Outcome, error) {
+func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef, t authorization.Target, env string, kind string, in WorkerDeploymentCreateInput) (any, Outcome, error) {
 	if in.Key == "" || len(in.Key) > 128 || in.Revision < 0 {
-		return nil, Read, domain.Problem(422, "WORKER_RELEASE_INVALID", "expected_revision and idempotency_key required")
+		return nil, Read, domain.Problem(422, "WORKER_VERSION_INVALID", "expected_revision and idempotency_key required")
 	}
 	ws := s.WorkerService(st, t)
 	current := ws.Environments[env]
@@ -57,19 +57,25 @@ func (s *Service) WorkerReleaseCreate(ctx context.Context, st *domain.State, p a
 		return nil, Read, domain.Problem(409, "ENVIRONMENT_DISABLED", "Target environment is disabled")
 	}
 	if current.Revision != in.Revision {
-		return nil, Read, domain.Problem(409, "REVISION_CONFLICT", "Environment release changed")
+		return nil, Read, domain.Problem(409, "REVISION_CONFLICT", "Environment version changed")
 	}
 	for _, active := range st.Workers.Operations {
-		// Cancellation is only possible before commit; a committed release is
+		// Cancellation is only possible before commit; a committed version is
 		// durable and may be replaced by a newer publish.
 		if active.Service == t.ID && active.Environment == env && !appconfig.WorkerTerminal(active.State) && active.State != "committed" {
-			return nil, Read, domain.Problem(409, "RELEASE_BUSY", "Wait for the active release operation")
+			return nil, Read, domain.Problem(409, "DEPLOYMENT_BUSY", "Wait for the active version operation")
 		}
 	}
-	var release domain.WorkerRelease
-	if kind == "publish" {
-		if in.Build == "" || in.Release != "" {
-			return nil, Read, domain.Problem(422, "WORKER_RELEASE_INVALID", "Publish requires build_id only")
+	var version domain.WorkerVersion
+	if kind == "publish" && in.Version != "" && in.Build == "" {
+		var exists bool
+		version, exists = st.Workers.Versions[in.Version]
+		if !exists || version.Service != t.ID || version.Organization != t.Organization || version.Environment != env {
+			return nil, Read, domain.NotFound()
+		}
+	} else if kind == "publish" {
+		if in.Build == "" || in.Version != "" {
+			return nil, Read, domain.Problem(422, "WORKER_VERSION_INVALID", "Publish requires build_id only")
 		}
 		b, ok := st.Workers.Builds[in.Build]
 		if !ok || b.Service != t.ID || b.Organization != t.Organization {
@@ -82,36 +88,37 @@ func (s *Service) WorkerReleaseCreate(ctx context.Context, st *domain.State, p a
 		if !ok || a.State != "finalized" {
 			return nil, Read, domain.Problem(409, "ARTIFACT_UNAVAILABLE", "Artifact unavailable")
 		}
-		release = domain.WorkerRelease{Service: t.ID, Organization: t.Organization, Environment: env, Artifact: a.ID, Profile: a.Profile, ArchiveDigest: a.ArchiveDigest, ModuleDigest: a.ModuleDigest, CompatibilityDate: a.CompatibilityDate, CompatibilityFlags: append([]string(nil), a.CompatibilityFlags...), ConfigRevision: current.ConfigRevision, Variables: current.Variables, SecretDigest: WorkerSecretsDigest(current.SecretVersions), SecretVersions: domain.CloneStringsMap(current.SecretVersions)}
-		raw, _ := json.Marshal(release)
-		release.ID = "rel_" + workerartifact.BytesDigest(raw)
-		release.Created = time.Now().UTC()
-		if old, ok := st.Workers.Releases[release.ID]; ok {
-			release = old
+		version = domain.WorkerVersion{Service: t.ID, Organization: t.Organization, Environment: env, Artifact: a.ID, Profile: a.Profile, ArchiveDigest: a.ArchiveDigest, ModuleDigest: a.ModuleDigest, CompatibilityDate: a.CompatibilityDate, CompatibilityFlags: append([]string(nil), a.CompatibilityFlags...), ConfigRevision: current.ConfigRevision, Variables: current.Variables, SecretDigest: WorkerSecretsDigest(current.SecretVersions), SecretVersions: domain.CloneStringsMap(current.SecretVersions)}
+		raw, _ := json.Marshal(version)
+		version.ID = "rel_" + workerartifact.BytesDigest(raw)
+		version.Created = time.Now().UTC()
+		if old, ok := st.Workers.Versions[version.ID]; ok {
+			version = old
 		}
-		st.Workers.Releases[release.ID] = release
+		st.Workers.Versions[version.ID] = version
 	} else {
-		if in.Release == "" || in.Build != "" {
-			return nil, Read, domain.Problem(422, "WORKER_RELEASE_INVALID", "Rollback requires release_id only")
+		if in.Version == "" || in.Build != "" {
+			return nil, Read, domain.Problem(422, "WORKER_VERSION_INVALID", "Rollback requires version_id only")
 		}
-		d, ok := st.Workers.Releases[in.Release]
+		d, ok := st.Workers.Versions[in.Version]
 		if !ok || d.Service != t.ID || d.Organization != t.Organization || d.Environment != env {
 			return nil, Read, domain.NotFound()
 		}
 		historical := false
 		for _, h := range st.Workers.Histories[t.ID+"/"+env] {
-			if h.Release == d.ID {
+			if h.Version == d.ID {
 				historical = true
 			}
 		}
 		if !historical {
-			return nil, Read, domain.Problem(409, "ROLLBACK_NOT_PUBLISHED", "Rollback target must be a successfully published release")
+			return nil, Read, domain.Problem(409, "ROLLBACK_NOT_PUBLISHED", "Rollback target must be a successfully published version")
 		}
-		release = d
+		version = d
 	}
 	id = securetoken.NewID("op")
-	op := domain.WorkerOperation{ID: id, Kind: kind, Organization: t.Organization, Service: t.ID, Environment: env, State: "queued", Build: in.Build, Release: release.ID, ExpectedRevision: current.Revision, ConfigRevision: current.ConfigRevision, Steps: []domain.WorkerStep{{Name: "artifact", State: "pending"}, {Name: "candidate", State: "pending"}, {Name: "commit", State: "pending"}, {Name: "synchronize", State: "pending"}}, Created: time.Now().UTC()}
+	op := domain.WorkerOperation{ID: id, Kind: kind, Organization: t.Organization, Service: t.ID, Environment: env, State: "queued", Build: in.Build, Version: version.ID, ExpectedRevision: current.Revision, ConfigRevision: current.ConfigRevision, Steps: []domain.WorkerStep{{Name: "artifact", State: "pending"}, {Name: "candidate", State: "pending"}, {Name: "commit", State: "pending"}, {Name: "synchronize", State: "pending"}}, Created: time.Now().UTC()}
 	st.Workers.Operations[id] = op
+	RememberDeployment(st, op)
 	st.Workers.OperationPrivate[id] = domain.WorkerOperationPrivate{Actor: WorkerActor(p)}
 	WorkerRemember(st, key, in, id)
 	return op, Queued, nil
@@ -128,7 +135,7 @@ func (s *Service) WorkerOperationGet(ctx context.Context, st *domain.State, p au
 
 }
 
-func (s *Service) WorkerReleaseHistory(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
+func (s *Service) WorkerVersionHistory(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
 	env := ref.Environment
 	if !appconfig.WorkerEnvValid(env) {
 		return nil, Read, domain.NotFound()
@@ -193,12 +200,12 @@ func (s *Service) WorkerOperationList(ctx context.Context, st *domain.State, p a
 
 }
 
-func (s *Service) WorkerReleaseGet(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
-	d, ok := st.Workers.Releases[ref.Item]
+func (s *Service) WorkerVersionGet(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
+	d, ok := st.Workers.Versions[ref.Item]
 	if !ok || d.Service != ref.Service || d.Organization != ref.Organization {
 		return nil, Read, domain.NotFound()
 	}
 	_, e := s.WorkerTarget(st, ref, d.Environment, "service.version.read", p)
-	return PublicWorkerRelease(d), Read, e
+	return PublicWorkerVersion(d), Read, e
 
 }

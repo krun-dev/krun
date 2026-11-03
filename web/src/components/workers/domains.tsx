@@ -98,7 +98,7 @@ export function ServiceDomains({
     }
   }
 
-  const placementLocked = environments.some((environment) => environment.release_id);
+  const placementLocked = environments.some((environment) => environment.version_id);
   const profiles =
     currentProfile && !networkProfiles.some((profile) => profile.id === currentProfile.id)
       ? [currentProfile, ...networkProfiles]

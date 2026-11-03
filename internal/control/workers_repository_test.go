@@ -87,7 +87,7 @@ func TestRepositoryBindingSnapshotAndBuildRetry(t *testing.T) {
 	if r.Code != 202 || first.Repository == nil || first.Repository.Repository != "team/nested/worker" || first.SourceDigest != "" {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	updated := strings.Replace(strings.Replace(payload, `"ref":"main"`, `"ref":"release/v2"`, 1), `"expected_revision":0`, `"expected_revision":1`, 1)
+	updated := strings.Replace(strings.Replace(payload, `"ref":"main"`, `"ref":"version/v2"`, 1), `"expected_revision":0`, `"expected_revision":1`, 1)
 	if r := request(s, "PUT", base+"/repository", "krun_cli_admin", updated); r.Code != 200 {
 		t.Fatal(r.Code, r.Body.String())
 	}

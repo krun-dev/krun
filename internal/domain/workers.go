@@ -89,12 +89,13 @@ type WorkerEnvironment struct {
 	// internal immutable binding map and is deliberately absent from JSON.
 	SecretNames    []string          `json:"secret_names"`
 	SecretVersions map[string]string `json:"-"`
-	Revision       int               `json:"release_revision"`
-	Release        string            `json:"release_id,omitempty"`
-	Confirmed      string            `json:"confirmed_release_id,omitempty"`
+	Revision       int               `json:"deployment_revision"`
+	Version        string            `json:"version_id,omitempty"`
+	Confirmed      string            `json:"confirmed_version_id,omitempty"`
 }
 
 type WorkerService struct {
+	PreviewBase        *WorkerEnvironment      `json:"previews_base,omitempty"`
 	Repository         *WorkerRepositorySource `json:"repository_source,omitempty"`
 	RepositoryRevision int                     `json:"repository_revision"`
 	// DomainsRevision is the optimistic-concurrency token for replacing the
@@ -130,7 +131,7 @@ type WorkerPlacement struct {
 	Updated        time.Time `json:"updated_at"`
 }
 
-type WorkerRelease struct {
+type WorkerVersion struct {
 	ID                 string            `json:"id"`
 	Service            string            `json:"service_id"`
 	Organization       string            `json:"organization_id"`
@@ -171,30 +172,42 @@ type WorkerStep struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+type WorkerDeployment struct {
+	ID           string     `json:"id"`
+	Organization string     `json:"organization_id"`
+	Service      string     `json:"service_id"`
+	Environment  string     `json:"environment"`
+	Version      string     `json:"version_id"`
+	Operation    string     `json:"operation_id"`
+	Created      time.Time  `json:"created_at"`
+	Expires      time.Time  `json:"expires_at"`
+	Committed    *time.Time `json:"committed_at,omitempty"`
+}
+
 type WorkerOperation struct {
-	ID               string       `json:"id"`
-	Kind             string       `json:"kind"`
-	Service          string       `json:"service_id"`
-	Organization     string       `json:"organization_id"`
-	Environment      string       `json:"environment"`
-	State            string       `json:"state"`
-	Build            string       `json:"build_id,omitempty"`
-	Release          string       `json:"release_id"`
-	ExpectedRevision int          `json:"expected_revision"`
-	ConfigRevision   int          `json:"configuration_revision"`
-	EdgeRevision     int          `json:"edge_revision,omitempty"`
-	ReleaseRevision  int          `json:"release_revision,omitempty"`
-	Error            string       `json:"error,omitempty"`
-	Steps            []WorkerStep `json:"steps"`
-	Created          time.Time    `json:"created_at"`
-	Finished         *time.Time   `json:"finished_at,omitempty"`
+	ID                 string       `json:"id"`
+	Kind               string       `json:"kind"`
+	Service            string       `json:"service_id"`
+	Organization       string       `json:"organization_id"`
+	Environment        string       `json:"environment"`
+	State              string       `json:"state"`
+	Build              string       `json:"build_id,omitempty"`
+	Version            string       `json:"version_id"`
+	ExpectedRevision   int          `json:"expected_revision"`
+	ConfigRevision     int          `json:"configuration_revision"`
+	EdgeRevision       int          `json:"edge_revision,omitempty"`
+	DeploymentRevision int          `json:"deployment_revision,omitempty"`
+	Error              string       `json:"error,omitempty"`
+	Steps              []WorkerStep `json:"steps"`
+	Created            time.Time    `json:"created_at"`
+	Finished           *time.Time   `json:"finished_at,omitempty"`
 }
 
 type WorkerOperationPrivate struct{ Actor WorkerActor }
 
 type WorkerHistory struct {
 	Revision  int       `json:"revision"`
-	Release   string    `json:"release_id"`
+	Version   string    `json:"version_id"`
 	Operation string    `json:"operation_id"`
 	Kind      string    `json:"kind"`
 	Time      time.Time `json:"time"`
@@ -220,7 +233,8 @@ type WorkerState struct {
 	Builds           map[string]WorkerBuild
 	BuildPrivate     map[string]WorkerBuildPrivate
 	Artifacts        map[string]WorkerArtifact
-	Releases         map[string]WorkerRelease
+	Deployments      map[string]WorkerDeployment
+	Versions         map[string]WorkerVersion
 	Operations       map[string]WorkerOperation
 	OperationPrivate map[string]WorkerOperationPrivate
 	Histories        map[string][]WorkerHistory

@@ -17,21 +17,21 @@ console.log(
 for (const n of [10000, 100000, 1000000]) {
   let routes = Array.from({ length: n }, (_, i) => ({
     host: `s${i}.example.invalid`,
-    release: `r${i}`,
+    version: `r${i}`,
     pool: "default",
     enabled: true,
   }));
-  let releases = Object.fromEntries(
-    routes.map((r, i) => [r.release, { id: r.release, service_id: `s${i}` }]),
+  let versions = Object.fromEntries(
+    routes.map((r, i) => [r.version, { id: r.version, service_id: `s${i}` }]),
   );
   runtime.applySnapshot({
     config_revision: 1,
     pool: "default",
     routes,
-    releases,
+    versions,
   });
   routes = null;
-  releases = null;
+  versions = null;
   const samples = [];
   for (let i = 0; i < 3; i++) {
     globalThis.gc?.();
@@ -46,7 +46,7 @@ for (const n of [10000, 100000, 1000000]) {
             host: "s0.example.invalid",
             route: {
               host: "s0.example.invalid",
-              release: "r0",
+              version: "r0",
               pool: "default",
               enabled: true,
             },
@@ -58,6 +58,6 @@ for (const n of [10000, 100000, 1000000]) {
     samples.push(Number((performance.now() - start).toFixed(3)));
   }
   console.log(
-    JSON.stringify({ routes: n, releases: n, single_route_update_ms: samples }),
+    JSON.stringify({ routes: n, versions: n, single_route_update_ms: samples }),
   );
 }

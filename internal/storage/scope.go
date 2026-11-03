@@ -61,17 +61,17 @@ func queueStateRead(ctx context.Context, b *pgx.Batch, query string) {
 		pred = `true`
 	case "krun_worker_services", "krun_worker_service_placements", "krun_worker_service_domains", "krun_worker_environments":
 		pred = services
-	case "krun_worker_builds", "krun_worker_releases", "krun_worker_operations", "krun_worker_history", "krun_worker_secret_versions", "krun_worker_environment_secrets":
+	case "krun_worker_deployments", "krun_worker_builds", "krun_worker_versions", "krun_worker_operations", "krun_worker_history", "krun_worker_secret_versions", "krun_worker_environment_secrets":
 		if !scope.Summary {
 			pred = services
 		}
 	case "krun_worker_artifacts":
 		if !scope.Summary {
-			pred = `artifact_id IN (SELECT artifact_id FROM krun_worker_builds WHERE ` + services + ` UNION SELECT artifact_id FROM krun_worker_releases WHERE ` + services + `)`
+			pred = `artifact_id IN (SELECT artifact_id FROM krun_worker_builds WHERE ` + services + ` UNION SELECT artifact_id FROM krun_worker_versions WHERE ` + services + `)`
 		}
-	case "krun_worker_release_secrets":
+	case "krun_worker_version_secrets":
 		if !scope.Summary {
-			pred = `release_id IN (SELECT release_id FROM krun_worker_releases WHERE ` + services + `)`
+			pred = `version_id IN (SELECT version_id FROM krun_worker_versions WHERE ` + services + `)`
 		}
 	case "krun_worker_idempotency":
 		if !scope.Summary {

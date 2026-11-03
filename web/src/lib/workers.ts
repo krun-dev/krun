@@ -27,7 +27,7 @@ export type WorkerServiceSummary = Resource & {
   network_profile: WorkerNetworkProfile;
   environments: Pick<
     Environment,
-    "name" | "enabled" | "release_id" | "confirmed_release_id" | "domains" | "hosts"
+    "name" | "enabled" | "version_id" | "confirmed_version_id" | "domains" | "hosts"
   >[];
 };
 export type Build = {
@@ -51,9 +51,9 @@ export type Environment = {
   configuration_revision: number;
   variables: Record<string, string>;
   secret_names: string[];
-  release_revision: number;
-  release_id?: string;
-  confirmed_release_id?: string;
+  deployment_revision: number;
+  version_id?: string;
+  confirmed_version_id?: string;
 };
 
 /** Platform-configured domain. label is a free-form note, not a routing concept. */
@@ -76,7 +76,7 @@ export type WorkerRouting = {
   revision: number;
   network_profile: WorkerNetworkProfile;
 };
-export type Release = {
+export type Version = {
   id: string;
   artifact_id: string;
   environment: string;
@@ -89,7 +89,7 @@ export type Operation = {
   kind: string;
   state: string;
   environment: string;
-  release_id: string;
+  version_id: string;
   build_id?: string;
   error?: string;
   created_at: string;
@@ -97,7 +97,7 @@ export type Operation = {
 };
 export type History = {
   revision: number;
-  release_id: string;
+  version_id: string;
   operation_id: string;
   kind: string;
   time: string;
@@ -107,7 +107,7 @@ export type WorkerData = {
   environments: Environment[];
   operations: Operation[];
   histories: Record<string, History[]>;
-  releases: Record<string, Release>;
+  versions: Record<string, Version>;
   domainsRevision: number;
 };
 type WorkerOverview = {
@@ -115,11 +115,11 @@ type WorkerOverview = {
   environments: {
     environment: Environment;
     history: History[];
-    current_release?: Release;
-    confirmed_release?: Release;
+    current_version?: Version;
+    confirmed_version?: Version;
   }[];
   operations: Operation[];
-  releases: Record<string, Release>;
+  versions: Record<string, Version>;
   domains_revision: number;
 };
 export const pending = (state: string) =>
@@ -176,7 +176,7 @@ export function useWorkerData(base: string, revision: number) {
               entry.history,
             ]),
           ),
-          releases: overview.releases,
+          versions: overview.versions,
           domainsRevision: overview.domains_revision,
         });
         setError("");

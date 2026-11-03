@@ -18,15 +18,15 @@ func workerConfigFixture() (*State, *Store) {
 	st, _, _ := fixture()
 	// Hosts are derived from the domain catalog, not stored.
 	ws := WorkerService{Service: "svc-a", Organization: "org-a", Domains: []string{"internal"}, Environments: map[string]WorkerEnvironment{
-		"production": {Name: "production", Enabled: true, Release: "rel-1"},
-		"preview":    {Name: "preview", Enabled: false, Release: "rel-1"},
+		"production": {Name: "production", Enabled: true, Version: "rel-1"},
+		"preview":    {Name: "preview", Enabled: false, Version: "rel-1"},
 		"empty":      {Name: "empty", Enabled: true},
 	}}
 	st.Workers.Services["svc-a"] = ws
 	placed := now()
 	st.Workers.Placements[workerPlacementKey("svc-a", "default")] = WorkerPlacement{Service: "svc-a", Organization: "org-a", NetworkProfile: "default", Pool: "default", Role: "primary", State: "active", Revision: 1, Created: placed, Updated: placed}
-	st.Workers.Releases["rel-1"] = WorkerRelease{ID: "rel-1", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1", ArchiveDigest: "archive-1", ModuleDigest: "module-1", Variables: map[string]string{"A": "1"}}
-	st.Workers.Releases["rel-unused"] = WorkerRelease{ID: "rel-unused", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1"}
+	st.Workers.Versions["rel-1"] = WorkerVersion{ID: "rel-1", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1", ArchiveDigest: "archive-1", ModuleDigest: "module-1", Variables: map[string]string{"A": "1"}}
+	st.Workers.Versions["rel-unused"] = WorkerVersion{ID: "rel-unused", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1"}
 	st.Workers.Services["svc-deleted"] = WorkerService{Service: "svc-deleted", Organization: "org-a", Environments: map[string]WorkerEnvironment{}}
 	_ = store.Update(context.Background(), PartitionAll, func(state *State) error { *state = *st; return nil })
 	return st, store
@@ -83,11 +83,11 @@ func TestWorkerConfigProjection(t *testing.T) {
 	if p.Routes[1].Enabled {
 		t.Fatal("disabled environment must stay in the projection with enabled=false")
 	}
-	if p.Routes[0].Release != "" || p.Routes[2].Release != "rel-1" {
-		t.Fatalf("release pointers lost: %+v", p.Routes)
+	if p.Routes[0].Version != "" || p.Routes[2].Version != "rel-1" {
+		t.Fatalf("version pointers lost: %+v", p.Routes)
 	}
-	if _, ok := p.Releases["rel-1"]; !ok || len(p.Releases) != 1 {
-		t.Fatalf("only referenced releases should be projected: %+v", p.Releases)
+	if _, ok := p.Versions["rel-1"]; !ok || len(p.Versions) != 1 {
+		t.Fatalf("only referenced versions should be projected: %+v", p.Versions)
 	}
 	digest, _, err := workerapp.WorkerConfigDigest(p)
 	if err != nil || digest == "" {
@@ -107,22 +107,22 @@ func TestWorkerConfigDiffOrdering(t *testing.T) {
 		if op.Type == "route_upsert" {
 			seenRoute = true
 		}
-		if op.Type == "release_put" && seenRoute {
-			t.Fatal("release_put must precede the routes that reference it")
+		if op.Type == "version_put" && seenRoute {
+			t.Fatal("version_put must precede the routes that reference it")
 		}
 	}
 	next := first
 	next.Routes = append([]workerConfigRoute(nil), first.Routes...)
-	next.Releases = map[string]WorkerRelease{"rel-1": first.Releases["rel-1"]}
+	next.Versions = map[string]WorkerVersion{"rel-1": first.Versions["rel-1"]}
 	prodHost := appconfig.HostFor(appconfig.WorkerSlug("org-a", "svc-a"), "production", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers.test"))
 	for i := range next.Routes {
 		if next.Routes[i].Host == prodHost {
-			next.Routes[i].Release = "rel-2"
+			next.Routes[i].Version = "rel-2"
 		}
 	}
-	next.Releases["rel-2"] = WorkerRelease{ID: "rel-2", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-2"}
+	next.Versions["rel-2"] = WorkerVersion{ID: "rel-2", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-2"}
 	ops = workerapp.DiffWorkerConfig(&first, next)
-	if len(ops) != 2 || ops[0].Type != "release_put" || ops[0].Release.ID != "rel-2" || ops[1].Type != "route_upsert" || ops[1].Host != prodHost {
+	if len(ops) != 2 || ops[0].Type != "version_put" || ops[0].Version.ID != "rel-2" || ops[1].Type != "route_upsert" || ops[1].Host != prodHost {
 		t.Fatalf("unexpected migration ops: %+v", ops)
 	}
 	next.Routes = next.Routes[:1]
@@ -213,7 +213,7 @@ func TestWorkerRuntimeConfigChanges(t *testing.T) {
 	}()
 	s.routes()
 	ctx := context.Background()
-	payload, _ := json.Marshal(workerConfigProjection{Routes: []workerConfigRoute{{Host: "w.workers.test", Enabled: true, Release: "rel-1", Pool: "default"}}, Releases: map[string]WorkerRelease{}})
+	payload, _ := json.Marshal(workerConfigProjection{Routes: []workerConfigRoute{{Host: "w.workers.test", Enabled: true, Version: "rel-1", Pool: "default"}}, Versions: map[string]WorkerVersion{}})
 	ops, _ := json.Marshal([]workerConfigOp{{Type: "route_upsert", Pool: "default", Host: "w.workers.test"}})
 	if _, _, err := store.AppendConfigRevision(ctx, "d1", payload, ops, 512); err != nil {
 		t.Fatal(err)
@@ -262,10 +262,10 @@ func TestMultiPoolRuntimeConfigIsolation(t *testing.T) {
 	ctx := context.Background()
 	projection := workerConfigProjection{
 		Routes: []workerConfigRoute{
-			{Host: "private.workers.test", Enabled: true, Release: "rel-private", Pool: "private-a"},
-			{Host: "public.workers.test", Enabled: true, Release: "rel-public", Pool: "public-b"},
+			{Host: "private.workers.test", Enabled: true, Version: "rel-private", Pool: "private-a"},
+			{Host: "public.workers.test", Enabled: true, Version: "rel-public", Pool: "public-b"},
 		},
-		Releases: map[string]WorkerRelease{
+		Versions: map[string]WorkerVersion{
 			"rel-private": {ID: "rel-private"},
 			"rel-public":  {ID: "rel-public"},
 		},

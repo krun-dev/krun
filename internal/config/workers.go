@@ -41,7 +41,7 @@ type WorkersConfig struct {
 	Gateways []WorkerGateway `json:"gateways"`
 	Domains  []WorkerDomain  `json:"domains"`
 	// SecretsKeys is a versioned ring of base64-encoded 32-byte AES keys used
-	// only by the control plane. Keep old versions while retained Releases
+	// only by the control plane. Keep old versions while retained Versions
 	// reference them; new writes use SecretsActiveKey.
 	SecretsKeys       map[string]string `json:"secrets_keys"`
 	SecretsActiveKey  string            `json:"secrets_active_key"`
@@ -70,7 +70,7 @@ type WorkerRuntimePool struct {
 	PrivateEgress  string            `json:"private_egress"`
 	PublicEgress   string            `json:"public_egress"`
 	RuntimeService string            `json:"runtime_service"`
-	// ValidatorService selects a dedicated workerd Deployment that loads release
+	// ValidatorService selects a dedicated workerd Deployment that loads version
 	// candidates before commit. It must not be the serving RuntimeService.
 	ValidatorService        string `json:"validator_service"`
 	ValidatorManagementBase string `json:"validator_management_base"`

@@ -43,16 +43,16 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 	if op.State != "committed" && time.Now().UTC().Sub(started) > 180*time.Second {
 		return w.FailOperation(ctx, op.ID, "Candidate preparation deadline exceeded")
 	}
-	release, ok := state.Releases[op.Release]
+	version, ok := state.Versions[op.Version]
 	if !ok {
-		return w.FailOperation(ctx, op.ID, "Release unavailable")
+		return w.FailOperation(ctx, op.ID, "Version unavailable")
 	}
-	placement, placed := domain.ActiveWorkerPlacement(&state, release.Service)
+	placement, placed := domain.ActiveWorkerPlacement(&state, version.Service)
 	pool, ok := w.Config.RuntimePool(placement.Pool)
 	if !placed || !ok {
 		return w.FailOperation(ctx, op.ID, "Runtime pool unavailable")
 	}
-	artifact, ok := state.Artifacts[release.Artifact]
+	artifact, ok := state.Artifacts[version.Artifact]
 	if !ok {
 		return w.FailOperation(ctx, op.ID, "Artifact unavailable")
 	}
@@ -80,7 +80,7 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 			return e
 		}
 		if auth != nil {
-			return w.FailOperation(ctx, op.ID, "Release permission revoked")
+			return w.FailOperation(ctx, op.ID, "Version permission revoked")
 		}
 	}
 	pods, e := w.Kube.RuntimeMembers(ctx, pool.ID, pool.RuntimeService)
@@ -108,7 +108,7 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 		if e != nil {
 			return w.NoteOperation(ctx, op.ID, "Artifact URL unavailable")
 		}
-		result, status, e := w.Management(ctx, pool, candidate, pool.ValidatorManagementBase, "/validate", map[string]any{"release": release, "artifact": map[string]any{"download_url": signed, "size": artifact.Size, "archive_sha256": artifact.ArchiveDigest}})
+		result, status, e := w.Management(ctx, pool, candidate, pool.ValidatorManagementBase, "/validate", map[string]any{"version": version, "artifact": map[string]any{"download_url": signed, "size": artifact.Size, "archive_sha256": artifact.ArchiveDigest}})
 		if e != nil {
 			return w.NoteOperation(ctx, op.ID, "Runtime validation temporarily unavailable")
 		}
@@ -123,8 +123,8 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 		if pool.ValidatorManagementBase != "" {
 			uidMatches = true
 		}
-		if !uidMatches || result["release_id"] != release.ID || result["archive_sha256"] != release.ArchiveDigest {
-			return w.FailOperation(ctx, op.ID, fmt.Sprintf("Candidate identity mismatch (pod %s uid %s vs %s, release %s vs %s, archive %s vs %s)", candidate.Name, candidate.UID, result["pod_uid"], release.ID, result["release_id"], release.ArchiveDigest, result["archive_sha256"]))
+		if !uidMatches || result["version_id"] != version.ID || result["archive_sha256"] != version.ArchiveDigest {
+			return w.FailOperation(ctx, op.ID, fmt.Sprintf("Candidate identity mismatch (pod %s uid %s vs %s, version %s vs %s, archive %s vs %s)", candidate.Name, candidate.UID, result["pod_uid"], version.ID, result["version_id"], version.ArchiveDigest, result["archive_sha256"]))
 		}
 		after, e := w.Kube.ValidatorMembers(ctx, pool.ID, pool.ValidatorService)
 		if e != nil {
@@ -140,7 +140,7 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 			return e
 		}
 		if auth != nil {
-			return w.FailOperation(ctx, op.ID, "Release permission revoked")
+			return w.FailOperation(ctx, op.ID, "Version permission revoked")
 		}
 		committed, e := w.Service.Store.CommitOperation(ctx, op)
 		if e != nil {

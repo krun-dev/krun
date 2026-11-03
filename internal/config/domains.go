@@ -231,7 +231,7 @@ func WorkerVariablesValid(vars map[string]string) bool {
 		return false
 	}
 	size := 0
-	re := regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
+	re := regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]{0,127}$`)
 	for k, v := range vars {
 		if !re.MatchString(k) || strings.HasPrefix(k, "KRUN_") {
 			return false

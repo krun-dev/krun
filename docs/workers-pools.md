@@ -16,7 +16,7 @@ Service 或凭据。每个池对应部署侧维护的 workerd 运行环境。
 重新分配已有服务。
 
 一个服务的 production 与所有 preview 环境共用一个 active primary placement。
-Release 固定代码和配置，不携带 pool；路由和内部制品访问根据有效 placement 限定池。
+Version 固定代码和配置，不携带 pool；路由和内部制品访问根据有效 placement 限定池。
 首次发布后不能由组织侧切换 Network Profile。
 
 ## 入口与域名
@@ -35,7 +35,7 @@ Release 固定代码和配置，不携带 pool；路由和内部制品访问根�
 对象存储为每个池保存紧凑 head 和 256 个 host-hash shard checkpoint。Runtime 内存
 缓存有界，不在启动时加载全池站点。详见 [规模与验证](performance-scaling.md)。
 
-内部 listener 要求 `X-Runtime-Pool` 和对应 Runtime token；路由、Release、Artifact、
+内部 listener 要求 `X-Runtime-Pool` 和对应 Runtime token；路由、Version、Artifact、
 Secret 与资产读取继续校验该池有效 placement。validator 的 management token 用于
 候选验证，不进入业务 binding。业务 Worker 无平台 token、对象存储密钥或控制面 binding。
 

@@ -53,7 +53,7 @@ function artifactArchive(manifest, moduleFiles, assetFiles = {}) {
   return new Uint8Array(gzipSync(Buffer.concat([...parts, Buffer.alloc(1024)])));
 }
 
-const release = {id: 'rel_test', service_id: 'svc', organization_id: 'org', environment: 'production', artifact_id: 'art', archive_sha256: 'a'.repeat(64), module_sha256: 'b'.repeat(64), variables: {}, pool: 'default'};
+const version = {id: 'rel_test', service_id: 'svc', organization_id: 'org', environment: 'production', artifact_id: 'art', archive_sha256: 'a'.repeat(64), module_sha256: 'b'.repeat(64), variables: {}, pool: 'default'};
 const files = {
   'index.html': '<!doctype html><title>root</title>',
   'about.html': '<!doctype html><h1>about</h1>',
@@ -91,31 +91,31 @@ globalThis.fetch = async (url) => {
 
 function platformFor(manifestConfig, fileList, rel, options = {}) {
   const changes = options.changes || [];
-  let route={host:"w-test.workers.test",path:"/",enabled:true,release:rel.id};
+  let route={host:"w-test.workers.test",path:"/",enabled:true,version:rel.id,...(options.expires?{expires_at:options.expires}:{})};
   let revision=options.revision||1;
-  const releases=new Map([[rel.id,rel]]);
+  const versions=new Map([[rel.id,rel]]);
   return {
     async fetch(request) {
       const url = new URL(request.url);
       const path = url.pathname.replace('/api/internal/workers', '');
       if (path === '/config/snapshot') {
-        return Response.json({pool:'default',config_revision:revision,lazy_routes:true,routes:[],releases:{}});
+        return Response.json({pool:'default',config_revision:revision,lazy_routes:true,routes:[],versions:{}});
       }
-      if(path.startsWith('/config/routes/'))return Response.json({pool:"default",config_revision:revision,routes:[route],releases:Object.fromEntries(releases)});
+      if(path.startsWith('/config/routes/'))return Response.json({pool:"default",config_revision:revision,routes:[route],versions:Object.fromEntries(versions)});
       if (path.startsWith('/config/changes')) {
-        if (changes.length){const batch=changes.shift();revision=batch.to;for(const op of batch.ops){if(op.type==='release_put')releases.set(op.release.id,op.release);if(op.type==='route_upsert')route=op.route;}return Response.json(batch);}
+        if (changes.length){const batch=changes.shift();revision=batch.to;for(const op of batch.ops){if(op.type==='version_put')versions.set(op.version.id,op.version);if(op.type==='route_upsert')route=op.route;}return Response.json(batch);}
         return new Response(null, {status: 204});
       }
       if (path === '/ack') return Response.json({ok: true});
       if (path === '/artifacts/' + rel.artifact_id && options.artifact) {
         return Response.json(options.artifact);
       }
-      const assetMatch = path.match(/^\/releases\/([^/]+)\/assets$/);
+      const assetMatch = path.match(/^\/versions\/([^/]+)\/assets$/);
       if (assetMatch) {
         const id = decodeURIComponent(assetMatch[1]);
-        return Response.json({release_id: id, config: id === rel.id ? manifestConfig : null, files: id === rel.id ? fileList : []});
+        return Response.json({version_id: id, config: id === rel.id ? manifestConfig : null, files: id === rel.id ? fileList : []});
       }
-      const m = path.match(new RegExp(`^/releases/${rel.id}/assets/(.+)$`));
+      const m = path.match(new RegExp(`^/versions/${rel.id}/assets/(.+)$`));
       if (m) {
         const name = m[1].split('/').map(decodeURIComponent).join('/');
         const info = meta[name];
@@ -127,8 +127,8 @@ function platformFor(manifestConfig, fileList, rel, options = {}) {
   };
 }
 
-function makeEnv(manifestConfig, fileList, relId = release.id, options = {}) {
-  const rel = {...release, ...(options.release || {}), id: relId};
+function makeEnv(manifestConfig, fileList, relId = version.id, options = {}) {
+  const rel = {...version, ...(options.version || {}), id: relId};
   const workerResponses = [];
   const env = {
     POD_NAME: 'pod', POD_UID: 'uid', RUNTIME_TOKEN: 't', MANAGEMENT_TOKEN: 'm', ASSETS_CACHE_MAX: '1048576',
@@ -214,9 +214,9 @@ await check('asset response carries ETag and 304 on revalidation', async () => {
   const second = await call(handler, '/', {'if-none-match': etag});
   assert.equal(second.status, 304);
 });
-await check('response advertises release and pod identity', async () => {
+await check('response advertises version and pod identity', async () => {
   const r = await call(handler, '/');
-  assert.equal(r.headers.get('x-krun-release'), release.id);
+  assert.equal(r.headers.get('x-krun-version'), version.id);
   assert.equal(r.headers.get('x-krun-pod'), 'uid');
 });
 await check('hashed asset gets immutable caching', async () => {
@@ -254,18 +254,18 @@ await check('non-navigation miss without SPA config goes to the worker', async (
   assert.equal((await r.json()).worker, true);
 });
 await check('incremental op switches the route without a snapshot refetch', async () => {
-  const plain = {...release, id: 'rel_plain'};
+  const plain = {...version, id: 'rel_plain'};
   const changes = [{from: 1, to: 2, ops: [
-    {type: 'release_put', release: plain},
-    {type: 'route_upsert', host: 'w-test.workers.test', route: {host: 'w-test.workers.test', path: '/', enabled: true, release: 'rel_plain'}},
+    {type: 'version_put', version: plain},
+    {type: 'route_upsert', host: 'w-test.workers.test', route: {host: 'w-test.workers.test', path: '/', enabled: true, version: 'rel_plain'}},
   ]}];
-  const incEnv = makeEnv(null, [], release.id, {changes});
+  const incEnv = makeEnv(null, [], version.id, {changes});
   const incEntry = await freshEntry();
   const inc = new incEntry.Private(incEnv, {});
   let switched = false;
   for (let i = 0; i < 60; i++) {
     const r = await call(inc, '/');
-    if (r.headers.get('x-krun-release') === 'rel_plain') {
+    if (r.headers.get('x-krun-version') === 'rel_plain') {
       assert.equal((await r.json()).worker, true);
       switched = true;
       break;
@@ -281,17 +281,17 @@ await check('bootstrap reads a compact head without downloading a whole-pool sna
   const module=await freshEntry();const handler=new module.Private(env,{});
   const response=await call(handler,'/');
   assert.equal(response.status,200);assert.equal((await response.json()).worker,true);
-  assert.equal(response.headers.get('x-krun-release'),relId);
+  assert.equal(response.headers.get('x-krun-version'),relId);
   assert(downloads.includes('config:latest.json'));
   assert(!downloads.some(key=>key.startsWith('config:snapshots/')));
 });
 await check('readiness starts the follow loop for an idle Pod', async () => {
-  const plain = {...release, id: 'rel_idle'};
+  const plain = {...version, id: 'rel_idle'};
   const changes = [{from: 1, to: 2, ops: [
-    {type: 'release_put', release: plain},
-    {type: 'route_upsert', host: 'w-test.workers.test', route: {host: 'w-test.workers.test', path: '/', enabled: true, release: 'rel_idle'}},
+    {type: 'version_put', version: plain},
+    {type: 'route_upsert', host: 'w-test.workers.test', route: {host: 'w-test.workers.test', path: '/', enabled: true, version: 'rel_idle'}},
   ]}];
-  const idleEnv = makeEnv(null, [], release.id, {changes});
+  const idleEnv = makeEnv(null, [], version.id, {changes});
   const idleEntry = await freshEntry();
   const management = new idleEntry.Management(idleEnv, {});
   const ready = await management.fetch(new Request('http://pod/ready'));
@@ -300,7 +300,7 @@ await check('readiness starts the follow loop for an idle Pod', async () => {
   let switched = false;
   for (let i = 0; i < 60; i++) {
     const r = await call(priv, '/');
-    if (r.headers.get('x-krun-release') === 'rel_idle') {
+    if (r.headers.get('x-krun-version') === 'rel_idle') {
       switched = true;
       break;
     }
@@ -311,7 +311,7 @@ await check('readiness starts the follow loop for an idle Pod', async () => {
 
 await check('isolated validator readiness does not follow or ack serving config', async () => {
   let platformCalls = 0;
-  const validatorEnv = makeEnv(null, [], release.id);
+  const validatorEnv = makeEnv(null, [], version.id);
   validatorEnv.VALIDATOR_ONLY = 'true';
   validatorEnv.PLATFORM = {async fetch() { platformCalls++; throw new Error('validator must not read serving config'); }};
   const validatorEntry = await freshEntry();
@@ -346,11 +346,11 @@ await check('profile v2 loads typed modules, compatibility config and an isolate
   const manifest = {schema_version: 2, profile: 'workerd-bundle-v2', compatibility_date: '2026-09-28', compatibility_flags: ['nodejs_compat'], main_module: 'index.js', modules, assets: {...manifestConfig, files: assetManifestFiles}};
   const archive = artifactArchive(manifest, moduleFiles, files);
   artifactObjects.set('v2.tar.gz', archive);
-  const v2Release = {...release, profile: manifest.profile, compatibility_date: manifest.compatibility_date, compatibility_flags: manifest.compatibility_flags, module_sha256: modules[0].sha256, archive_sha256: await digest(archive), variables: {MODE: 'test'}};
-  const artifact = {artifact_id: 'art', archive_sha256: v2Release.archive_sha256, size: archive.length, download_url: 'http://artifacts.test/v2.tar.gz'};
-  const v2Env = makeEnv(manifestConfig, fileList, 'rel_v2', {exerciseLoader: true, release: v2Release, artifact});
+  const v2Version = {...version, profile: manifest.profile, compatibility_date: manifest.compatibility_date, compatibility_flags: manifest.compatibility_flags, module_sha256: modules[0].sha256, archive_sha256: await digest(archive), variables: {MODE: 'test'}};
+  const artifact = {artifact_id: 'art', archive_sha256: v2Version.archive_sha256, size: archive.length, download_url: 'http://artifacts.test/v2.tar.gz'};
+  const v2Env = makeEnv(manifestConfig, fileList, 'rel_v2', {exerciseLoader: true, version: v2Version, artifact});
   const v2Entry = await freshEntry();
-  const ctx = {exports: {ReleaseAssets: ({props}) => new v2Entry.ReleaseAssets(v2Env, {props})}};
+  const ctx = {exports: {VersionAssets: ({props}) => new v2Entry.VersionAssets(v2Env, {props})}};
   const v2 = new v2Entry.Private(v2Env, ctx);
   const response = await call(v2, '/api/load');
   assert.equal(response.status, 200);
@@ -390,11 +390,11 @@ await check('prototype-magic asset binding names are rejected before WorkerLoade
   };
   const archive = artifactArchive(manifest, {'index.js': module}, {'index.html': files['index.html']});
   artifactObjects.set('magic-binding.tar.gz', archive);
-  const magicRelease = {...release, id: 'rel_magic', profile: manifest.profile, compatibility_date: manifest.compatibility_date, compatibility_flags: [], module_sha256: moduleDigest, archive_sha256: await digest(archive), variables: {MODE: 'magic'}};
-  const artifact = {artifact_id: 'art', archive_sha256: magicRelease.archive_sha256, size: archive.length, download_url: 'http://artifacts.test/magic-binding.tar.gz'};
-  const magicEnv = makeEnv(magicConfig, [fileList[0]], magicRelease.id, {exerciseLoader: true, release: magicRelease, artifact});
+  const magicVersion = {...version, id: 'rel_magic', profile: manifest.profile, compatibility_date: manifest.compatibility_date, compatibility_flags: [], module_sha256: moduleDigest, archive_sha256: await digest(archive), variables: {MODE: 'magic'}};
+  const artifact = {artifact_id: 'art', archive_sha256: magicVersion.archive_sha256, size: archive.length, download_url: 'http://artifacts.test/magic-binding.tar.gz'};
+  const magicEnv = makeEnv(magicConfig, [fileList[0]], magicVersion.id, {exerciseLoader: true, version: magicVersion, artifact});
   const magicEntry = await freshEntry();
-  const ctx = {exports: {ReleaseAssets: ({props}) => new magicEntry.ReleaseAssets(magicEnv, {props})}};
+  const ctx = {exports: {VersionAssets: ({props}) => new magicEntry.VersionAssets(magicEnv, {props})}};
   const response = await call(new magicEntry.Private(magicEnv, ctx), '/api/load');
   assert.equal(response.status, 503);
 });
@@ -408,11 +408,11 @@ await check('asset binding cannot replace variables or reserved platform binding
   manifest.assets = {directory: 'public', binding: 'ASSETS', run_worker_first: ['/api/*'], not_found_handling: 'none', html_handling: 'none', files: [{path: 'index.html', sha256: meta['index.html'].sha256, size_bytes: meta['index.html'].size, content_type: meta['index.html'].type}]};
   const archive = artifactArchive(manifest, {'index.js': module}, {'index.html': files['index.html']});
   artifactObjects.set('collision.tar.gz', archive);
-  const collisionRelease = {...release, profile: manifest.profile, compatibility_date: manifest.compatibility_date, compatibility_flags: [], module_sha256: moduleDigest, archive_sha256: await digest(archive), variables: {ASSETS: 'attacker'}};
-  const artifact = {artifact_id: 'art', archive_sha256: collisionRelease.archive_sha256, size: archive.length, download_url: 'http://artifacts.test/collision.tar.gz'};
-  const collisionEnv = makeEnv(manifest.assets, [fileList[0]], 'rel_collision', {exerciseLoader: true, release: collisionRelease, artifact});
+  const collisionVersion = {...version, profile: manifest.profile, compatibility_date: manifest.compatibility_date, compatibility_flags: [], module_sha256: moduleDigest, archive_sha256: await digest(archive), variables: {ASSETS: 'attacker'}};
+  const artifact = {artifact_id: 'art', archive_sha256: collisionVersion.archive_sha256, size: archive.length, download_url: 'http://artifacts.test/collision.tar.gz'};
+  const collisionEnv = makeEnv(manifest.assets, [fileList[0]], 'rel_collision', {exerciseLoader: true, version: collisionVersion, artifact});
   const collisionEntry = await freshEntry();
-  const ctx = {exports: {ReleaseAssets: ({props}) => new collisionEntry.ReleaseAssets(collisionEnv, {props})}};
+  const ctx = {exports: {VersionAssets: ({props}) => new collisionEntry.VersionAssets(collisionEnv, {props})}};
   const response = await call(new collisionEntry.Private(collisionEnv, ctx), '/api/load');
   assert.equal(response.status, 503);
 });
@@ -424,12 +424,12 @@ await check('candidate validation rejects undeclared artifact entries', async ()
   const parts = [tarFile('manifest.json', JSON.stringify(manifest)), tarFile('modules/index.js', module), tarFile('modules/undeclared.js', 'bad'), Buffer.alloc(1024)];
   const archive = new Uint8Array(gzipSync(Buffer.concat(parts)));
   artifactObjects.set('invalid.tar.gz', archive);
-  const invalidRelease = {...release, profile: manifest.profile, compatibility_date: manifest.compatibility_date, compatibility_flags: [], module_sha256: moduleDigest, archive_sha256: await digest(archive)};
-  const invalidArtifact = {artifact_id: 'art', archive_sha256: invalidRelease.archive_sha256, size: archive.length, download_url: 'http://artifacts.test/invalid.tar.gz'};
-  const invalidEnv = makeEnv(null, [], 'rel_invalid', {exerciseLoader: true, release: invalidRelease});
+  const invalidVersion = {...version, profile: manifest.profile, compatibility_date: manifest.compatibility_date, compatibility_flags: [], module_sha256: moduleDigest, archive_sha256: await digest(archive)};
+  const invalidArtifact = {artifact_id: 'art', archive_sha256: invalidVersion.archive_sha256, size: archive.length, download_url: 'http://artifacts.test/invalid.tar.gz'};
+  const invalidEnv = makeEnv(null, [], 'rel_invalid', {exerciseLoader: true, version: invalidVersion});
   const invalidEntry = await freshEntry();
   const management = new invalidEntry.Management(invalidEnv, {exports: {}});
-  const response = await management.fetch(new Request('http://pod/validate', {method: 'POST', headers: {authorization: 'Bearer m', 'content-type': 'application/json'}, body: JSON.stringify({release: invalidRelease, artifact: invalidArtifact})}));
+  const response = await management.fetch(new Request('http://pod/validate', {method: 'POST', headers: {authorization: 'Bearer m', 'content-type': 'application/json'}, body: JSON.stringify({version: invalidVersion, artifact: invalidArtifact})}));
   assert.equal(response.status, 503);
 });
 
@@ -456,15 +456,20 @@ await check('candidate validation rejects malformed typed module payloads', asyn
     };
     const archive = artifactArchive(manifest, {'index.js': main, [item.name]: bytes});
     artifactObjects.set(item.key + '.tar.gz', archive);
-    const invalidRelease = {...release, id: 'rel_' + item.key, profile: manifest.profile, compatibility_date: manifest.compatibility_date, compatibility_flags: [], module_sha256: mainDigest, archive_sha256: await digest(archive)};
-    const invalidArtifact = {artifact_id: 'art', archive_sha256: invalidRelease.archive_sha256, size: archive.length, download_url: 'http://artifacts.test/' + item.key + '.tar.gz'};
-    const invalidEnv = makeEnv(null, [], invalidRelease.id, {exerciseLoader: true, release: invalidRelease});
+    const invalidVersion = {...version, id: 'rel_' + item.key, profile: manifest.profile, compatibility_date: manifest.compatibility_date, compatibility_flags: [], module_sha256: mainDigest, archive_sha256: await digest(archive)};
+    const invalidArtifact = {artifact_id: 'art', archive_sha256: invalidVersion.archive_sha256, size: archive.length, download_url: 'http://artifacts.test/' + item.key + '.tar.gz'};
+    const invalidEnv = makeEnv(null, [], invalidVersion.id, {exerciseLoader: true, version: invalidVersion});
     const invalidEntry = await freshEntry();
     const management = new invalidEntry.Management(invalidEnv, {exports: {}});
-    const response = await management.fetch(new Request('http://pod/validate', {method: 'POST', headers: {authorization: 'Bearer m', 'content-type': 'application/json'}, body: JSON.stringify({release: invalidRelease, artifact: invalidArtifact})}));
+    const response = await management.fetch(new Request('http://pod/validate', {method: 'POST', headers: {authorization: 'Bearer m', 'content-type': 'application/json'}, body: JSON.stringify({version: invalidVersion, artifact: invalidArtifact})}));
     assert.equal(response.status, 503, item.key + ' was accepted');
   }
 });
 
+await check('expired deployment URLs stop before delayed route cleanup',async()=>{
+ const isolated=await freshEntry();const env=makeEnv(null,[],version.id,{expires:new Date(Date.now()-1000).toISOString()});
+ const response=await new isolated.Private(env,{}).fetch(new Request('http://w-test.workers.test/'));
+ assert.equal(response.status,410);assert.equal(env.__workerResponses.length,0);
+});
 console.log(failures === 0 ? 'ALL RUNTIME CHECKS PASSED' : failures + ' CHECK(S) FAILED');
 process.exit(failures === 0 ? 0 : 1);

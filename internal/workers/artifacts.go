@@ -68,7 +68,7 @@ func (w *Controller) FinalizeBuild(ctx context.Context, b domain.WorkerBuild) (d
 }
 
 // artifactCode stays as the control plane's own integrity check when promoting
-// a build and validating a release candidate; runtime cold loads verify the
+// a build and validating a version candidate; runtime cold loads verify the
 // same digests locally after downloading via the presigned URL.
 func (w *Controller) ArtifactCode(ctx context.Context, a domain.WorkerArtifact) (workerartifact.WorkerCode, error) {
 	if a.StorageLocation != w.Config.S3LocationID || a.Bucket != w.Config.S3Bucket {
