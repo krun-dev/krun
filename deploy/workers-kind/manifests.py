@@ -171,7 +171,11 @@ deployment('backend',[{'name':'backend','image':f'krun-workers-backend:{tag}','i
 capnp=f'''using W = import "/workerd/workerd.capnp";
 const config :W.Config = (
  services = [
-  (name="entry",worker=(modules=[(name="entry.js",esModule=embed "/app/entry.js"),(name="assets.js",esModule=embed "/app/assets.js")],compatibilityDate="2026-09-28",compatibilityFlags=["experimental", "enable_ctx_exports"],bindings=[
+  (name="entry",worker=(modules=[
+   (name="entry.js",esModule=embed "/app/entry.js"),
+   (name="assets.js",esModule=embed "/app/assets.js"),
+   (name="storage.js",esModule=embed "/app/storage.js")
+  ],compatibilityDate="2026-09-28",compatibilityFlags=["experimental", "enable_ctx_exports"],bindings=[
    (name="LOADER",workerLoader=(id="workers-mvp-default")),
    (name="PLATFORM",service="platform"),
    (name="POD_NAME",text=embed "/pod/name"),
@@ -193,7 +197,11 @@ const config :W.Config = (
 validator_capnp='''using W = import "/workerd/workerd.capnp";
 const config :W.Config = (
  services = [
-  (name="entry",worker=(modules=[(name="entry.js",esModule=embed "/app/entry.js"),(name="assets.js",esModule=embed "/app/assets.js")],compatibilityDate="2026-09-28",compatibilityFlags=["experimental", "enable_ctx_exports"],bindings=[
+  (name="entry",worker=(modules=[
+   (name="entry.js",esModule=embed "/app/entry.js"),
+   (name="assets.js",esModule=embed "/app/assets.js"),
+   (name="storage.js",esModule=embed "/app/storage.js")
+  ],compatibilityDate="2026-09-28",compatibilityFlags=["experimental", "enable_ctx_exports"],bindings=[
    (name="LOADER",workerLoader=(id="workers-mvp-validator-default")),
    (name="PLATFORM",service="platform"),
    (name="POD_NAME",text=embed "/pod/name"),

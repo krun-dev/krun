@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Single local-first development environment.
-# Development machine: control plane + Postgres + MinIO + builder + Vite.
+# Development machine: control plane + Postgres + builder + Vite; optional MinIO.
 # Remote host: nginx and kind with serving runtime + validator + kgateway only.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -17,25 +17,22 @@ REMOTE="$KRUN_DEV_REMOTE"
 KUBECONFIG_REMOTE="${KRUN_DEV_KUBECONFIG:-~/kind/kubeconfig}"
 mkdir -p .data
 
-# 1. MinIO is deliberately an independently managed local process. Starting it
-# requires credentials from .data/dev.yaml, so this script only verifies the
-# configured local endpoint and never duplicates those secrets in dev.env.
-MINIO_LOCAL_URL="${KRUN_DEV_MINIO_LOCAL_URL:-http://127.0.0.1:9000}"
-if ! curl -fsS -o /dev/null --max-time 2 "$MINIO_LOCAL_URL/minio/health/ready"; then
-  echo "local MinIO is not ready at $MINIO_LOCAL_URL; start it before dev-up" >&2
-  exit 1
-fi
+# 1. Load storage settings from the main YAML and probe standard S3 bucket
+# access. Managed buckets may be created by the controller; external buckets
+# must already exist. An external S3 endpoint needs no local MinIO process.
+go run ./cmd/krun-dev-runtime --config .data/dev.yaml --check-storage
 
 # 2. Tunnels: Kubernetes API, isolated validator management, and gateways.
 if ! lsof -nP -iTCP:38443 -sTCP:LISTEN >/dev/null 2>&1; then
-  nohup ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
-    -L 127.0.0.1:38443:127.0.0.1:38443 "$REMOTE" >.data/tunnel-k8s.log 2>&1 &
-  echo $! >.data/tunnel-k8s.pid
+  python3 scripts/dev-ssh-tunnel.py tunnel-k8s ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
+    -L 127.0.0.1:38443:127.0.0.1:38443 "$REMOTE"
 fi
 validator_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:38084/ready 2>/dev/null || true)
 private_gateway_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:38080/ 2>/dev/null || true)
 public_gateway_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:38081/ 2>/dev/null || true)
-if [[ "$validator_code" != "200" && "$validator_code" != "503" ]] || [[ "$private_gateway_code" == "000" || "$public_gateway_code" == "000" ]]; then
+if [[ "${1:-}" == "--refresh-tunnels" || -f .data/runtime-tunnel-refresh-needed ]] ||
+  [[ "$validator_code" != "200" && "$validator_code" != "503" ]] ||
+  [[ "$private_gateway_code" == "000" || "$public_gateway_code" == "000" ]]; then
   # A validator rollout replaces the pod behind the port-forward; the listening
   # SSH socket can survive while the remote channel is dead. Probe /ready and
   # restart the tunnel on connection failure (000), not on a 503 readiness.
@@ -50,26 +47,38 @@ if [[ "$validator_code" != "200" && "$validator_code" != "503" ]] || [[ "$privat
   # Clear only these three development port-forwards before binding the same
   # remote ports again.
   ssh -o ConnectTimeout=8 "$REMOTE" \
-    "pkill -f '[p]ort-forward.*38084:8083' 2>/dev/null || true; \
-     pkill -f '[p]ort-forward.*38080:8080' 2>/dev/null || true; \
-     pkill -f '[p]ort-forward.*38081:8080' 2>/dev/null || true"
+    "pkill -f '^([^ ]*/)?kubectl .*port-forward .*(38084:8083|38080:8080|38081:8080)' 2>/dev/null || true"
   # 38080 fronts the private Gateway instance, 38081 the public one. Console
   # invoke picks the target by the environment's network scope.
-  nohup ssh -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
+  remote_runtime_command="
+    kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp \
+      port-forward deployment/runtime-validator-default 38084:8083 \
+      --address 127.0.0.1 &
+    kubectl --kubeconfig $KUBECONFIG_REMOTE -n kgateway-system \
+      port-forward svc/workers-mvp 38080:8080 \
+      --address 127.0.0.1 &
+    kubectl --kubeconfig $KUBECONFIG_REMOTE -n kgateway-system \
+      port-forward deploy/workers-public 38081:8080 \
+      --address 127.0.0.1 &
+    wait
+  "
+  python3 scripts/dev-ssh-tunnel.py tunnel-runtime ssh \
+    -o ExitOnForwardFailure=yes \
+    -o ServerAliveInterval=15 \
     -L 127.0.0.1:38084:127.0.0.1:38084 \
     -L 127.0.0.1:38080:127.0.0.1:38080 \
-    -L 127.0.0.1:38081:127.0.0.1:38081 "$REMOTE" \
-    "kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp port-forward deployment/runtime-validator-default 38084:8083 --address 127.0.0.1 & kubectl --kubeconfig $KUBECONFIG_REMOTE -n kgateway-system port-forward svc/workers-mvp 38080:8080 --address 127.0.0.1 & kubectl --kubeconfig $KUBECONFIG_REMOTE -n kgateway-system port-forward deploy/workers-public 38081:8080 --address 127.0.0.1 & wait" \
-    >.data/tunnel-runtime.log 2>&1 &
-  tunnel_pid=$!
-  echo "$tunnel_pid" >.data/tunnel-runtime.pid
+    -L 127.0.0.1:38081:127.0.0.1:38081 \
+    "$REMOTE" "$remote_runtime_command"
+  tunnel_pid="$(cat .data/tunnel-runtime.pid)"
 
   tunnel_ready=false
   for _ in $(seq 1 20); do
     validator_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:38084/ready 2>/dev/null || true)
     private_gateway_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:38080/ 2>/dev/null || true)
     public_gateway_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:38081/ 2>/dev/null || true)
-    if [[ ("$validator_code" == "200" || "$validator_code" == "503") && "$private_gateway_code" != "000" && "$public_gateway_code" != "000" ]]; then
+    if [[ ("$validator_code" == "200" || "$validator_code" == "503") &&
+      "$private_gateway_code" != "000" &&
+      "$public_gateway_code" != "000" ]]; then
       tunnel_ready=true
       break
     fi
@@ -82,6 +91,7 @@ if [[ "$validator_code" != "200" && "$validator_code" != "503" ]] || [[ "$privat
     echo "validator/Gateway tunnels failed; check .data/tunnel-runtime.log" >&2
     exit 1
   fi
+  rm -f .data/runtime-tunnel-refresh-needed
 fi
 
 # 3. Control plane binary. Backend/builder code changes only need a restart;

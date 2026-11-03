@@ -1,24 +1,20 @@
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import assert from "node:assert/strict";
+import { loadRuntimeSource } from "./entry-source.mjs";
 const directory = mkdtempSync(join(tmpdir(), "krun-scaling-"));
-const source = readFileSync(
-  new URL("../entry.js", import.meta.url),
-  "utf8",
-).replace("from './assets.js'",'from '+JSON.stringify(new URL('../assets.js',import.meta.url).href)).replace(
-  "import {WorkerEntrypoint} from 'cloudflare:workers';",
-  "class WorkerEntrypoint {}",
-);
+const source = loadRuntimeSource();
 writeFileSync(
   join(directory, "entry.mjs"),
   source +
-    "\nexport {applySnapshot,applyBatch,resolveRoute,assetManifest};export const inspect=()=>({view,versionRefs,routeVersions,manifests});",
+    `export { applySnapshot, applyBatch, resolveRoute, assetManifest };
+export const inspect = () => ({ view, versionRefs, routeVersions, manifests });
+`,
 );
 let serial = 0;
-const fresh = () =>
-  import("file://" + join(directory, "entry.mjs") + "?v=" + serial++);
+const fresh = () => import("file://" + join(directory, "entry.mjs") + "?v=" + serial++);
 const environment = (fetch) => ({
   RUNTIME_POOL: "default",
   RUNTIME_TOKEN: "fixture",
@@ -34,20 +30,19 @@ try {
       version: `version-${i}`,
     })),
     versions: Object.fromEntries(
-      Array.from({ length: count }, (_, i) => [
-        `version-${i}`,
-        { id: `version-${i}` },
-      ]),
+      Array.from({ length: count }, (_, i) => [`version-${i}`, { id: `version-${i}` }]),
     ),
   });
   const before = runtime.inspect();
   // Iterating either entire index on an incremental update is a regression,
   // independently of machine speed and wall-clock benchmark variance.
-  for (const index of [before.view.routes, before.view.versions])
-    for (const method of [Symbol.iterator, "entries", "values", "keys"])
+  for (const index of [before.view.routes, before.view.versions]) {
+    for (const method of [Symbol.iterator, "entries", "values", "keys"]) {
       index[method] = () => {
         throw new Error("incremental update scanned full index");
       };
+    }
+  }
   assert(
     runtime.applyBatch({
       from: 1,
@@ -75,9 +70,7 @@ try {
   );
   assert(runtime.inspect().view.routes.has("site-0.test"));
   assert.equal(runtime.inspect().view.revision, 2);
-  console.log(
-    "PASS bounded incremental update and malformed-batch atomicity at 100k routes",
-  );
+  console.log("PASS bounded incremental update and malformed-batch atomicity at 100k routes");
   const lazy = await fresh();
   lazy.applySnapshot({
     pool: "default",
@@ -87,9 +80,7 @@ try {
   let requests = 0;
   const env = environment(async (request) => {
     requests++;
-    const host = decodeURIComponent(
-      new URL(request.url).pathname.split("/").at(-1),
-    );
+    const host = decodeURIComponent(new URL(request.url).pathname.split("/").at(-1));
     return Response.json({
       pool: "default",
       config_revision: 2,
@@ -97,9 +88,7 @@ try {
       versions: { [host]: { id: host } },
     });
   });
-  await Promise.all(
-    Array.from({ length: 20 }, () => lazy.resolveRoute(env, "cold.test")),
-  );
+  await Promise.all(Array.from({ length: 20 }, () => lazy.resolveRoute(env, "cold.test")));
   assert.equal(requests, 1);
   // A cold lookup can observe a newer revision than the following delta feed.
   lazy.applyBatch({
@@ -113,7 +102,9 @@ try {
       },
     ],
   });
-  for (let i = 0; i < 4100; i++) await lazy.resolveRoute(env, `cold-${i}.test`);
+  for (let i = 0; i < 4100; i++) {
+    await lazy.resolveRoute(env, `cold-${i}.test`);
+  }
   const view = lazy.inspect();
   assert.equal(view.view.routes.size, 4096);
   assert.equal(view.view.versions.size, 4096);
@@ -144,9 +135,7 @@ try {
     return Response.json({ config: null, files: [] });
   });
   await Promise.all(
-    Array.from({ length: 20 }, () =>
-      assets.assetManifest(assetEnv, { id: "hot" }),
-    ),
+    Array.from({ length: 20 }, () => assets.assetManifest(assetEnv, { id: "hot" })),
   );
   assert.equal(assetCalls, 1);
   for (let i = 0; i < 600; i++) {
@@ -157,9 +146,7 @@ try {
   const callsBefore = assetCalls;
   await assets.assetManifest(assetEnv, { id: "hot" });
   assert.equal(assetCalls, callsBefore);
-  console.log(
-    "PASS single-flight manifest loading and LRU without whole-cache invalidation",
-  );
+  console.log("PASS single-flight manifest loading and LRU without whole-cache invalidation");
   const fallback = await fresh();
   fallback.applySnapshot({
     pool: "default",
@@ -173,12 +160,10 @@ try {
     versions: { fallback: { id: "fallback" } },
   };
   const compressed = gzipSync(JSON.stringify(snapshot));
-  const digest = Buffer.from(
-    await crypto.subtle.digest("SHA-256", compressed),
-  ).toString("hex");
+  const digest = Buffer.from(await crypto.subtle.digest("SHA-256", compressed)).toString("hex");
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) =>
-    String(url).endsWith("/latest.json")
+    (url instanceof Request ? url.url : String(url)).endsWith("/latest.json")
       ? Response.json({
           snapshot: "shards/fixture/7.json.gz",
           sha256: digest,
@@ -190,16 +175,11 @@ try {
       throw new Error("control down");
     });
     env.CONFIG_BASE = "http://config.test";
-    assert.equal(
-      (await fallback.resolveRoute(env, "fallback.test")).version,
-      "fallback",
-    );
+    assert.equal((await fallback.resolveRoute(env, "fallback.test")).version, "fallback");
   } finally {
     globalThis.fetch = originalFetch;
   }
-  console.log(
-    "PASS immutable shard fallback while control plane is unavailable",
-  );
+  console.log("PASS immutable shard fallback while control plane is unavailable");
 } finally {
   rmSync(directory, { recursive: true, force: true });
 }

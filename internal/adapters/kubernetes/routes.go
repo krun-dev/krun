@@ -95,7 +95,34 @@ func (k *Client) EnsureRoute(ctx context.Context, name, runtimeService string, g
 	}
 	sort.Strings(hosts)
 	gatewayName, gatewayNamespace, section := g.Name, g.Namespace, g.Section
-	spec := map[string]any{"parentRefs": []any{map[string]string{"name": gatewayName, "namespace": gatewayNamespace, "sectionName": section}}, "hostnames": hosts, "rules": []any{map[string]any{"filters": []any{map[string]any{"type": "RequestHeaderModifier", "requestHeaderModifier": map[string]any{"remove": []string{"x-krun-scope", "x-krun-version", "x-forwarded-host", "x-internal"}}}}, "backendRefs": []any{map[string]any{"name": runtimeService, "port": 8081}}}}}
+	spec := map[string]any{
+		"parentRefs": []any{
+			map[string]string{
+				"name":        gatewayName,
+				"namespace":   gatewayNamespace,
+				"sectionName": section,
+			},
+		},
+		"hostnames": hosts,
+		"rules": []any{
+			map[string]any{
+				"filters": []any{
+					map[string]any{
+						"type": "RequestHeaderModifier",
+						"requestHeaderModifier": map[string]any{
+							"remove": []string{
+								"x-krun-scope",
+								"x-krun-version",
+								"x-forwarded-host",
+								"x-internal",
+							},
+						},
+					},
+				},
+				"backendRefs": []any{map[string]any{"name": runtimeService, "port": 8081}},
+			},
+		},
+	}
 	var current struct {
 		Metadata struct {
 			Generation int `json:"generation"`
@@ -118,7 +145,12 @@ func (k *Client) EnsureRoute(ctx context.Context, name, runtimeService string, g
 	}
 	e := k.Call(ctx, "GET", base+"/"+name, nil, &current)
 	if KubeMissing(e) {
-		e = k.Call(ctx, "POST", base, map[string]any{"apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute", "metadata": map[string]string{"name": name, "namespace": k.Namespace}, "spec": spec}, nil)
+		e = k.Call(ctx, "POST", base, map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "HTTPRoute",
+			"metadata":   map[string]string{"name": name, "namespace": k.Namespace},
+			"spec":       spec,
+		}, nil)
 		if KubeConflict(e) {
 			return false, nil
 		}
@@ -191,7 +223,7 @@ func (k *Client) EnsureRoute(ctx context.Context, name, runtimeService string, g
 }
 
 // One shared static route per (domain, Gateway) serves every service. Requests
-// are rewritten to path-style object keys so the bucket stays the origin and
+// use either a direct object origin or the trusted runtime for signed reads.
 // Gateway API needs no per-service rules. Assets are copied into one prefix per
 // domain; the route for a domain only exists on that domain's Gateway instance.
 func (k *Client) EnsureStaticRoute(ctx context.Context, c *appconfig.WorkersConfig, domainID string, prefix string) error {
@@ -204,29 +236,69 @@ func (k *Client) EnsureStaticRoute(ctx context.Context, c *appconfig.WorkersConf
 		return nil
 	}
 	host := d.StaticDomain
+	backend, port := c.StaticService, c.StaticServicePort
+	if c.S3UsesSignedAccess() {
+		for _, pool := range c.RuntimePools {
+			if appconfig.RuntimePoolHasAccess(pool, d.Access) {
+				backend, port = pool.RuntimeService, 8081
+				break
+			}
+		}
+	}
 	// One route per domain: they carry different hostnames and may sit on
 	// different Gateway instances.
 	name := "workers-static-" + domainID
 	gatewayName, gatewayNamespace, section := g.Name, g.Namespace, g.Section
 	base := "/apis/gateway.networking.k8s.io/v1/namespaces/" + k.Namespace + "/httproutes"
 	spec := map[string]any{
-		"parentRefs": []any{map[string]string{"name": gatewayName, "namespace": gatewayNamespace, "sectionName": section}},
-		"hostnames":  []string{host},
-		"rules": []any{map[string]any{
-			"matches": []any{map[string]any{"path": map[string]string{"type": "PathPrefix", "value": "/"}}},
-			"filters": []any{
-				map[string]any{"type": "URLRewrite", "urlRewrite": map[string]any{"path": map[string]string{"type": "ReplacePrefixMatch", "replacePrefixMatch": "/" + c.S3Bucket + "/" + prefix + "/"}}},
-				map[string]any{"type": "ResponseHeaderModifier", "responseHeaderModifier": map[string]any{"set": []map[string]string{{"name": "Access-Control-Allow-Origin", "value": "*"}}}},
+		"parentRefs": []any{
+			map[string]string{
+				"name":        gatewayName,
+				"namespace":   gatewayNamespace,
+				"sectionName": section,
 			},
-			"backendRefs": []any{map[string]any{"name": c.StaticService, "port": c.StaticServicePort}},
-		}},
+		},
+		"hostnames": []string{host},
+		"rules": []any{
+			map[string]any{
+				"matches": []any{map[string]any{"path": map[string]string{"type": "PathPrefix", "value": "/"}}},
+				"filters": []any{
+					map[string]any{
+						"type": "URLRewrite",
+						"urlRewrite": map[string]any{
+							"path": map[string]string{
+								"type":               "ReplacePrefixMatch",
+								"replacePrefixMatch": c.StaticRoutePrefix(prefix),
+							},
+						},
+					},
+					map[string]any{
+						"type": "ResponseHeaderModifier",
+						"responseHeaderModifier": map[string]any{
+							"set": []map[string]string{
+								{
+									"name":  "Access-Control-Allow-Origin",
+									"value": "*",
+								},
+							},
+						},
+					},
+				},
+				"backendRefs": []any{map[string]any{"name": backend, "port": port}},
+			},
+		},
 	}
 	var current struct {
 		Spec json.RawMessage `json:"spec"`
 	}
 	e := k.Call(ctx, "GET", base+"/"+name, nil, &current)
 	if KubeMissing(e) {
-		e = k.Call(ctx, "POST", base, map[string]any{"apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute", "metadata": map[string]string{"name": name, "namespace": k.Namespace}, "spec": spec}, nil)
+		e = k.Call(ctx, "POST", base, map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "HTTPRoute",
+			"metadata":   map[string]string{"name": name, "namespace": k.Namespace},
+			"spec":       spec,
+		}, nil)
 		if KubeConflict(e) {
 			return nil
 		}
@@ -243,6 +315,10 @@ func (k *Client) EnsureStaticRoute(ctx context.Context, c *appconfig.WorkersConf
 			Section   string `json:"sectionName"`
 		} `json:"parentRefs"`
 		Rules []struct {
+			BackendRefs []struct {
+				Name string `json:"name"`
+				Port int    `json:"port"`
+			} `json:"backendRefs"`
 			Filters []struct {
 				URLRewrite *struct {
 					Path struct {
@@ -259,7 +335,7 @@ func (k *Client) EnsureStaticRoute(ctx context.Context, c *appconfig.WorkersConf
 		old.Parent[0].Namespace != gatewayNamespace || old.Parent[0].Section != section
 	// The object prefix is part of the desired state too; changing which prefix
 	// a domain serves must rewrite the route, not just the hostname.
-	want := "/" + c.S3Bucket + "/" + prefix + "/"
+	want := c.StaticRoutePrefix(prefix)
 	rewriteDrift := true
 	if len(old.Rules) == 1 {
 		for _, f := range old.Rules[0].Filters {
@@ -268,7 +344,11 @@ func (k *Client) EnsureStaticRoute(ctx context.Context, c *appconfig.WorkersConf
 			}
 		}
 	}
-	if parentDrift || rewriteDrift || len(old.Hosts) != 1 || old.Hosts[0] != host {
+	backendDrift := len(old.Rules) != 1 ||
+		len(old.Rules[0].BackendRefs) != 1 ||
+		old.Rules[0].BackendRefs[0].Name != backend ||
+		old.Rules[0].BackendRefs[0].Port != port
+	if parentDrift || rewriteDrift || backendDrift || len(old.Hosts) != 1 || old.Hosts[0] != host {
 		return k.Call(ctx, "PATCH", base+"/"+name, map[string]any{"spec": spec}, nil)
 	}
 	return nil

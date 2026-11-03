@@ -19,12 +19,25 @@ CLUSTER="$KRUN_DEV_CLUSTER"
 IMAGE="${KRUN_DEV_RUNTIME_IMAGE:-krun-worker-runtime:dev}"
 
 ssh -o ConnectTimeout=8 "$REMOTE" "rm -rf /tmp/krun-runtime && mkdir -p /tmp/krun-runtime"
-scp workers/runtime/Dockerfile workers/runtime/entry.js workers/runtime/assets.js workers/runtime/package.json workers/runtime/package-lock.json \
-  "$REMOTE:/tmp/krun-runtime/"
+runtime_files=(
+  workers/runtime/Dockerfile
+  workers/runtime/entry.js
+  workers/runtime/assets.js
+  workers/runtime/storage.js
+  workers/runtime/package.json
+  workers/runtime/package-lock.json
+)
+scp "${runtime_files[@]}" "$REMOTE:/tmp/krun-runtime/"
 ssh -o ConnectTimeout=8 "$REMOTE" "set -e
   cd /tmp/krun-runtime
   docker build -t '$IMAGE' .
   kind load docker-image --name '$CLUSTER' '$IMAGE'
+"
+if [[ "${1:-}" == "--build-only" ]]; then
+  exit 0
+fi
+touch .data/runtime-tunnel-refresh-needed
+ssh -o ConnectTimeout=8 "$REMOTE" "set -e
   kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp set image deployment/runtime-default deployment/runtime-validator-default workerd='$IMAGE'
   kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp rollout restart deployment/runtime-default deployment/runtime-validator-default
   kubectl --kubeconfig $KUBECONFIG_REMOTE -n workers-mvp rollout status deployment/runtime-default --timeout=180s

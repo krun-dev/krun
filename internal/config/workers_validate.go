@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"path"
 	"regexp"
@@ -88,6 +89,48 @@ func (c *WorkersConfig) Validate() error {
 	if e := c.ValidateCatalog(dns); e != nil {
 		return e
 	}
+	if c.S3Region == "" {
+		c.S3Region = "us-east-1"
+	}
+	if !regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`).MatchString(c.S3Region) {
+		return fmt.Errorf("invalid Workers S3 region")
+	}
+	if c.S3AddressingStyle == "" {
+		c.S3AddressingStyle = "auto"
+	}
+	if c.S3AddressingStyle != "auto" && c.S3AddressingStyle != "path" && c.S3AddressingStyle != "virtual" {
+		return fmt.Errorf("invalid Workers S3 addressing style")
+	}
+	if c.S3BucketMode == "" {
+		c.S3BucketMode = "managed"
+	}
+	if c.S3BucketMode != "managed" && c.S3BucketMode != "external" {
+		return fmt.Errorf("invalid Workers S3 bucket mode")
+	}
+	if c.S3AccessMode == "" {
+		c.S3AccessMode = "direct"
+		if c.S3BucketMode == "external" {
+			c.S3AccessMode = "signed"
+		}
+	}
+	if c.S3AccessMode != "direct" && c.S3AccessMode != "signed" {
+		return fmt.Errorf("invalid Workers S3 access mode")
+	}
+	if c.S3Prefix != "" {
+		hasUnsafeCharacters := strings.ContainsAny(c.S3Prefix, "\\?#%") ||
+			strings.IndexFunc(c.S3Prefix, func(r rune) bool {
+				return r <= 32 || r == 127
+			}) >= 0
+		invalidPath := len(c.S3Prefix) > 160 ||
+			path.Clean(c.S3Prefix) != c.S3Prefix ||
+			path.IsAbs(c.S3Prefix) ||
+			strings.HasPrefix(c.S3Prefix, "../") ||
+			c.S3Prefix == "." || c.S3Prefix == ".."
+		if invalidPath || hasUnsafeCharacters {
+			return fmt.Errorf("invalid Workers S3 prefix")
+		}
+	}
+
 	u, e = url.Parse(c.S3Endpoint)
 	if e != nil || u.Host == "" || u.Path != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return fmt.Errorf("invalid Workers S3 endpoint")
@@ -107,6 +150,14 @@ func (c *WorkersConfig) Validate() error {
 		}
 	} else {
 		c.S3RuntimeEndpoint = c.S3BuilderEndpoint
+	}
+	if c.S3AddressingStyle == "virtual" {
+		for _, endpoint := range []string{c.S3Endpoint, c.S3BuilderEndpoint, c.S3RuntimeEndpoint} {
+			u, _ := url.Parse(endpoint)
+			if net.ParseIP(u.Hostname()) != nil {
+				return fmt.Errorf("Workers S3 virtual addressing requires a DNS endpoint")
+			}
+		}
 	}
 	if (c.BuilderMode != "local" && c.BuilderImage == "") || c.S3AccessKey == "" || c.S3SecretKey == "" {
 		return fmt.Errorf("Workers image and credentials required")
@@ -133,7 +184,7 @@ func (c *WorkersConfig) Validate() error {
 		return fmt.Errorf("clone_directory must be an absolute path")
 	}
 	if c.ConfigBaseURL == "" {
-		c.ConfigBaseURL = strings.TrimSuffix(c.S3Endpoint, "/") + "/" + c.S3Bucket + "/config"
+		c.ConfigBaseURL = c.S3ObjectURL(c.S3RuntimeEndpoint, "config")
 	}
 	u, e = url.Parse(c.ConfigBaseURL)
 	if e != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {

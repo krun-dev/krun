@@ -185,3 +185,45 @@ func (s *Service) Route(ctx context.Context, host, pool string) (workerapp.Worke
 	}
 	return workerapp.WorkerConfigSnapshot{Pool: pool, ConfigRevision: revision, Routes: projection.Routes, Versions: projection.Versions}, nil
 }
+
+// StaticAssetURL authorizes an immutable asset in this runtime pool. Private
+// external buckets never need anonymous access or a bucket-wide policy rewrite.
+func (s *Service) StaticAssetURL(
+	ctx context.Context,
+	organization, service, digest, name, prefix string,
+	pool appconfig.WorkerRuntimePool,
+) (AssetURL, error) {
+	invalidPrefix := prefix != "pub" && prefix != "int"
+	invalidDigest := len(digest) != 64 || strings.Trim(digest, "0123456789abcdef") != ""
+	invalidOwner := organization == "" || service == "" ||
+		strings.ContainsAny(organization+service, "/\\")
+	if invalidPrefix || invalidDigest || invalidOwner {
+		return AssetURL{}, domain.NotFound()
+	}
+	if _, ok := workerartifact.WorkerAssetPath(name); !ok {
+		return AssetURL{}, domain.NotFound()
+	}
+	access := "private"
+	if prefix == "pub" {
+		access = "public"
+	}
+	if !appconfig.RuntimePoolHasAccess(pool, access) {
+		return AssetURL{}, domain.Forbidden()
+	}
+	file, err := s.Controller.StaticAsset(ctx, prefix, organization, service, digest, name)
+	if err != nil {
+		return AssetURL{}, err
+	}
+	key := workerapp.WorkerAssetObjectKey(prefix, organization, service, digest, name)
+	signed, err := s.Controller.S3Runtime.PresignedGetObject(ctx, s.Config.S3Bucket, key, 15*time.Minute, nil)
+	if err != nil {
+		return AssetURL{}, domain.Problem(503, "ASSET_UNAVAILABLE", "Asset storage unavailable")
+	}
+	return AssetURL{
+		Path:        name,
+		Digest:      file.Digest,
+		Size:        file.Size,
+		ContentType: file.ContentType,
+		DownloadURL: signed.String(),
+	}, nil
+}

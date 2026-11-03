@@ -199,3 +199,25 @@ func (s *Server) workerRuntimeConfigRoute(w http.ResponseWriter, r *http.Request
 	}
 	s.json(w, 200, out)
 }
+
+func (s *Server) workerRuntimeStaticAssetURL(w http.ResponseWriter, r *http.Request) {
+	pool, ok := s.workerRuntimePool(r)
+	if !ok {
+		s.writeError(w, r, forbidden())
+		return
+	}
+	out, err := s.runtimeApplication().StaticAssetURL(
+		r.Context(),
+		r.PathValue("organization"),
+		r.PathValue("service"),
+		r.PathValue("digest"),
+		r.PathValue("path"),
+		r.PathValue("prefix"),
+		pool,
+	)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	s.json(w, 200, out)
+}

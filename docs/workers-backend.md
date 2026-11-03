@@ -239,3 +239,13 @@ header 与该 pool 独立 token，不能只信任 header：
 尚无跨构建依赖缓存、构建取消、运行日志 API 或独立消息队列。已有数据库租约队列轮转、有界并行协调、增量配置发布和共享网关路由，见 [百万站点改造](performance-scaling.md)。完成 Job 30 分钟后由 TTL 清理，控制器按保留策略清理源码上传、日志、操作和无引用制品。实验部署采用开发登录和单节点 kind，不能直接视作生产部署模板。
 
 仓库来源构建、服务列表与管理员来源配置见 [仓库构建说明](workers-repositories.md)。内联源码 API 仍可用于小 Worker；新控制台从仓库发起构建。
+
+## 外部私有对象存储
+
+`workers.s3_region`、`s3_addressing_style` 和 `s3_prefix` 控制签名 Region、寻址方式
+和物理对象隔离。`s3_bucket_mode: external` 使用既有桶，不进行桶或策略管理；
+`s3_access_mode: signed` 独立控制私有读取，也可用于自动建桶的 `managed` 模式。
+配置分发由可信 entry worker 使用 SigV4 读取；制品和单文件资产使用短期预签名 URL。
+签名模式的共享静态域名转到 serving runtime，通过内部鉴权的 asset metadata 接口
+取得签名下载地址，校验内容并使用有界缓存；WorkerLoader 子环境没有存储凭据或
+外网能力。开发环境的配置渲染和复现步骤见 [local-first](local-dev.md)。

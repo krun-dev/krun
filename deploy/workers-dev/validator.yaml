@@ -76,7 +76,7 @@ spec:
                   fieldPath: metadata.uid
         - name: secrets
           secret:
-            secretName: workers-credentials
+            secretName: workers-runtime
             items:
               - key: KRUN_RUNTIME_TOKEN
                 path: KRUN_RUNTIME_TOKEN

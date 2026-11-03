@@ -29,12 +29,15 @@ var NewWorkerS3Endpoint = objectstore.NewWorkerS3Endpoint
 var NewWorkerS3 = objectstore.NewWorkerS3
 
 func (w *Controller) EnsureBucket(ctx context.Context) error {
+	if w.Config.S3BucketMode == "external" {
+		return nil
+	}
 	ok, e := w.S3.BucketExists(ctx, w.Config.S3Bucket)
 	if e != nil {
 		return e
 	}
 	if !ok {
-		e = w.S3.MakeBucket(ctx, w.Config.S3Bucket, objectstore.MakeBucketOptions{Region: "us-east-1"})
+		e = w.S3.MakeBucket(ctx, w.Config.S3Bucket, objectstore.MakeBucketOptions{Region: w.Config.S3Region})
 		if e != nil {
 			ok, check := w.S3.BucketExists(ctx, w.Config.S3Bucket)
 			if check == nil && ok {
@@ -51,7 +54,26 @@ func (w *Controller) EnsureBucket(ctx context.Context) error {
 // Only pub/ and int/ are anonymous, plus the runtime-readable config prefix.
 // The v1/ artifact segment (which contains code) always requires credentials.
 func (w *Controller) EnsureAssetPolicy(ctx context.Context) error {
-	policy := fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::%s/pub/*","arn:aws:s3:::%s/int/*","arn:aws:s3:::%s/config/*"]}]}`, w.Config.S3Bucket, w.Config.S3Bucket, w.Config.S3Bucket)
+	if w.Config.S3BucketMode == "external" || w.Config.S3UsesSignedAccess() {
+		return nil
+	}
+	policy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [{
+   "Effect": "Allow",
+   "Principal": {"AWS": ["*"]},
+   "Action": ["s3:GetObject"],
+   "Resource": [
+    "arn:aws:s3:::%s/*",
+    "arn:aws:s3:::%s/*",
+    "arn:aws:s3:::%s/*"
+   ]
+  }]
+ }`,
+		w.Config.S3Bucket+"/"+w.Config.S3Key("pub"),
+		w.Config.S3Bucket+"/"+w.Config.S3Key("int"),
+		w.Config.S3Bucket+"/"+w.Config.S3Key("config"),
+	)
 	return w.S3.SetBucketPolicy(ctx, w.Config.S3Bucket, policy)
 }
 
@@ -180,7 +202,12 @@ func (w *Controller) PutAssetObjects(ctx context.Context, b domain.WorkerBuild, 
 			for key := range tasks {
 				_, tail, _ := strings.Cut(key, "/"+a.ArchiveDigest+"/")
 				meta := code.AssetFiles[tail]
-				if err := w.PutBytes(ctx, key, code.AssetBytes[tail], objectstore.PutObjectOptions{ContentType: meta.ContentType, CacheControl: WorkerAssetCacheControl(tail)}); err != nil {
+				options := objectstore.PutObjectOptions{
+					ContentType:  meta.ContentType,
+					CacheControl: WorkerAssetCacheControl(tail),
+					UserMetadata: map[string]string{"krun-sha256": meta.Digest},
+				}
+				if err := w.PutBytes(ctx, key, code.AssetBytes[tail], options); err != nil {
 					errs <- err
 				}
 			}
@@ -193,4 +220,33 @@ func (w *Controller) PutAssetObjects(ctx context.Context, b domain.WorkerBuild, 
 		failures = append(failures, err)
 	}
 	return errors.Join(failures...)
+}
+
+// StaticAsset reads only immutable per-file asset metadata. Static domains have
+// the same visibility as the former pub/int origins, independently of pool placement.
+func (w *Controller) StaticAsset(ctx context.Context, prefix, organization, service, digest, name string) (workerartifact.WorkerManifestFile, error) {
+	key := WorkerAssetObjectKey(prefix, organization, service, digest, name)
+	info, err := w.S3.StatObject(ctx, w.Config.S3Bucket, key, objectstore.StatObjectOptions{})
+	if err != nil {
+		if objectstore.ToErrorResponse(err).Code == "NoSuchKey" {
+			return workerartifact.WorkerManifestFile{}, domain.NotFound()
+		}
+		return workerartifact.WorkerManifestFile{}, err
+	}
+	hash := ""
+	for key, value := range info.UserMetadata {
+		if strings.EqualFold(key, "krun-sha256") {
+			hash = value
+		}
+	}
+	if len(hash) != 64 || strings.Trim(hash, "0123456789abcdef") != "" || info.Size < 0 || info.Size > workerartifact.WorkerAssetMax {
+		return workerartifact.WorkerManifestFile{}, domain.NotFound()
+	}
+	kind, _ := workerartifact.WorkerAssetType(name)
+	return workerartifact.WorkerManifestFile{
+		Path:        name,
+		Digest:      hash,
+		Size:        int(info.Size),
+		ContentType: kind,
+	}, nil
 }

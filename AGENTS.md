@@ -80,7 +80,7 @@
 
 1. `npm run build`（改前端时可 `npx vite build --watch`）产出 `dist/console/`。
 2. 让 `/api/*` 到 Go，三选一：本地 Nginx、Vite `server.proxy`、或让 Go 直接托管（`static_dir: dist`，访问 `http://127.0.0.1:8080/`）。
-3. Workers 日常开发用 **local-first**：控制面、Postgres、MinIO、builder、Vite 都在开发机；集群只保留 serving runtime、独立 validator（均为 workerd）+ kgateway。见 [docs/local-dev.md](docs/local-dev.md) 和 `scripts/dev-up.sh`。`deploy/workers-kind` 的完整栈只用于独立 e2e，不要和 local-first 同时运行。
+3. Workers 日常开发用 **local-first**：控制面、Postgres、builder、Vite 都在开发机；对象存储可用本地 MinIO 或主配置中的 S3 兼容服务；集群只保留 serving runtime、独立 validator（均为 workerd）+ kgateway。见 [docs/local-dev.md](docs/local-dev.md) 和 `scripts/dev-up.sh`。`deploy/workers-kind` 的完整栈只用于独立 e2e，不要和 local-first 同时运行。
 
 本地这些进程只在开发机上存在，不进生产、不进发布产物。
 
@@ -115,7 +115,7 @@ fingerprint；已有库与基线不一致时拒绝启动，由开发者显式重
 ## 7. 当前状态（已核实）
 
 - 后端接口统一在 `/api/` 下，前端 `base` 为 `/`。
-- 日常开发使用 **local-first** 拓扑，见 [docs/local-dev.md](docs/local-dev.md)：控制面、Postgres、MinIO、builder、Vite 在开发机；集群只保留 serving runtime、独立 validator（均为 workerd）+ kgateway。
+- 日常开发使用 **local-first** 拓扑，见 [docs/local-dev.md](docs/local-dev.md)：控制面、Postgres、builder、Vite 在开发机；对象存储可用本地 MinIO 或主配置中的 S3 兼容服务；集群只保留 serving runtime、独立 validator（均为 workerd）+ kgateway。
 - `deploy/workers-kind` 是完整独立 e2e 环境（backend/Postgres/MinIO 都在集群里），已标注不要和 local-first 同时运行。
 - 生产 OSS + CDN 的 `/api/*` 同域转发规则仍需部署侧落地（第 2 节）。
 
@@ -128,7 +128,7 @@ fingerprint；已有库与基线不一致时拒绝启动，由开发者显式重
 5. **提交前必须**：`make check-secrets` 通过。它会用 `.data/dev.yaml` / `.data/dev.env` 里的真实值扫描 tracked 文件，并检查私钥 / AWS key 模式；`make test` 也会执行。
 6. **配置加载只有一处**：所有运行期配置从 `LoadConfig` 进入；不要新增运行期读取非公开环境变量的开关。地址、profile、运行模式都必须显式出现在主 YAML。Workers 配置也在同一份 YAML 的 `workers:` 段，不允许独立文件或目录。
 7. **配置示例必须可加载**：`config/development.example.yaml` 和 `config/example.yaml` 由测试覆盖；示例只能使用占位符，不能写真实凭据。
-8. **dev 拓扑保持一致**：local-first；控制面/Postgres/MinIO/builder/Vite 在开发机，集群只保留 serving runtime、独立 validator + kgateway。变更拓扑时同步修改 `docs/local-dev.md` 和 `scripts/dev-*.sh`。
+8. **dev 拓扑保持一致**：local-first；控制面/Postgres/builder/Vite 在开发机；对象存储使用本地 MinIO 或主配置中声明的外部 S3/TOS。集群只保留 serving runtime、独立 validator + kgateway。变更拓扑时同步修改 `docs/local-dev.md` 和 `scripts/dev-*.sh`。
 
 ## 9. 持久化设计约束（硬约束）
 
@@ -171,3 +171,13 @@ fingerprint；已有库与基线不一致时拒绝启动，由开发者显式重
 
 - ORM 使用 Bun，仅允许在 `internal/storage` 及其子包中导入。数据库行模型在 `internal/storage/models`，由 `schema.sql` 生成；改表后运行 `go generate ./internal/storage/models`，提交前 `make check-storage-models` 必须通过。
 - 不使用 ORM 自动建表、迁移、关联保存、软删除或级联。更新显式指定列，CAS 显式校验 revision 和影响行数；标准 CRUD 用模型，批量投影、租约、队列及清理允许保留专用 SQL。ORM 与原生 pgx 复用同一连接池。
+
+## 11. 可读性与格式
+
+- 手写代码按人的阅读顺序组织：一个语句一行，用空行分开校验、准备、执行和返回。
+- 条件和循环体使用大括号，多个变量分别声明；避免把多个动作挤进一行。
+- 长条件、调用参数、结构体和嵌套配置要换行；不要为了少占行数压缩逻辑。
+- 过长的流程按职责拆成有意义的小函数，命名说明实际用途；不要为了格式拆出无意义的包装。
+- 测试中的 Worker 源码也保持可读的多行格式，不写成一长串字符串。
+- Go 使用 `gofmt`；Workers JavaScript 使用仓库 Prettier 配置，运行
+  `npm run format:workers` 和 `npm run check:workers-format`。格式化不替代人工检查逻辑分段。

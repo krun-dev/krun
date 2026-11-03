@@ -217,6 +217,11 @@ workers:
   # 可省略；分别用于 builder 上传和 runtime 下载时看到的同一个桶地址。
   s3_builder_endpoint: https://s3.builder.internal.example.com
   s3_runtime_endpoint: https://s3.runtime.internal.example.com
+  s3_region: us-east-1
+  s3_addressing_style: auto # auto / path / virtual；按端点能力选择，不按厂商切换代码
+  s3_prefix: "" # 同一桶中的独立对象前缀，例如 dev/run；不带首尾斜杠
+  s3_bucket_mode: managed # managed 自动建桶；external 使用已有桶且不修改策略
+  s3_access_mode: signed # signed 私有签名读取；direct 通过静态源站直接读取
   s3_bucket: krun-artifacts
   s3_location_id: primary
   s3_access_key: ${KRUN_S3_ACCESS:-replace-me}

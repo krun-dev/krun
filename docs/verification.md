@@ -6,12 +6,15 @@ Workers 后端另有独立 kind 端到端验收，覆盖真实构建 Job、S3 �
 
 ## 当前基线验收
 
-2026-11-02 在新的专用 PostgreSQL 数据库与对象桶上验证：
+2026-11-03 在专用 PostgreSQL 数据库、独立 kind 对象桶及私有 S3/TOS 上验证：
 
 - `make test` 全部通过，包含真实 PostgreSQL、Go race/vet、前端权限和国际化、builder、真实 workerd / Wrangler 制品 smoke。
-- 完整 kind E2E 31/31，通过真实构建、发布、回滚、重启恢复、网络与权限隔离、共享路由、shard checkpoint 和资产 GC。
-- Playwright UI 7/7，覆盖桌面与移动端、106 站点分页、页外深链接、仓库 HEAD 构建、发布调用、配置发布与回滚；浏览器 JavaScript 异常检查通过。
-- 百万站点元数据回归通过；单站点查询仅加载目标站点，登录和组织导航不加载站点目录。
+- 完整 kind E2E 35/35，通过真实构建、发布、回滚、重启恢复、网络与权限隔离、共享路由、shard checkpoint、资产 GC、未部署 Version 与固定部署地址。
+- Playwright UI 15/15：控制台 10 项覆盖桌面与移动端、106 站点分页、页外深链接、仓库构建、发布调用、回滚、JSON 变量与版本元数据；OAuth 5 项覆盖 CLI、设备授权、刷新、撤销与官方 Wrangler 登录。浏览器 JavaScript 异常检查通过。
+- 官方 Wrangler 兼容 E2E 29/29，覆盖资产、规则文件、`--keep-vars`、Preview、Secret、版本与回滚。
+- 私有存储 E2E 5/5，覆盖上传、本地构建、发布、ASSETS、静态域、浏览器调用与业务 Worker 的 HTTP/TCP 出站隔离；控制面暂停后替换 Runtime Pod，私有 TOS 冷启动通过。
+- MinIO 的 path / virtual / auto 寻址实测通过，SDK 预签名上传、下载及 Runtime SigV4 读取一致；AWS 寻址和签名单测通过，未使用真实 AWS 账号联调。
+- Runtime 10 万路由增量更新、并发回源合并和有界缓存回归通过。
 - 静态产物、密钥检查及文档链接检查通过。
 
 基线校验覆盖空库初始化、重复启动，以及 fingerprint 不匹配或缺失时保留原数据并拒绝启动。

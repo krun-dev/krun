@@ -13,6 +13,7 @@
 | 认证、授权与 CLI | [认证 API](auth-api.md) |
 | 身份提供商本地联调 | [SSO](sso-local-testing.md) |
 | 存储、CAS、保留期与初始化 | [存储](storage.md) |
+| S3 兼容对象存储与访问模式 | [对象存储](object-storage.md) |
 | Worker 构建、发布、回滚与内部 API | [后端](workers-backend.md) |
 | 控制台操作 | [控制台](workers-console.md) |
 | 资源池与 Network Profile | [资源池](workers-pools.md) |

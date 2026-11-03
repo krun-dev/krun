@@ -129,6 +129,7 @@ func (s *Server) routes() {
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { s.writeError(w, r, notFound()) })
 	s.internalMux = http.NewServeMux()
 	if s.Config.Workers != nil {
+		s.internalMux.HandleFunc("GET /api/internal/workers/static-assets/{prefix}/{organization}/{service}/{digest}/{path...}", s.workerRuntimeStaticAssetURL)
 		s.internalMux.HandleFunc("GET /api/internal/workers/config/snapshot", s.workerRuntimeConfigSnapshot)
 		s.internalMux.HandleFunc("GET /api/internal/workers/config/changes", s.workerRuntimeConfigChanges)
 		s.internalMux.HandleFunc("GET /api/internal/workers/config/routes/{host}", s.workerRuntimeConfigRoute)

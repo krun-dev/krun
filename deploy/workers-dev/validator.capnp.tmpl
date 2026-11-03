@@ -1,20 +1,49 @@
 using W = import "/workerd/workerd.capnp";
+
 const config :W.Config = (
- services = [
-  (name="entry",worker=(modules=[(name="entry.js",esModule=embed "/app/entry.js"),(name="assets.js",esModule=embed "/app/assets.js")],compatibilityDate="2026-09-28",compatibilityFlags=["experimental", "enable_ctx_exports"],bindings=[
-   (name="LOADER",workerLoader=(id="workers-mvp-validator-default")),
-   (name="PLATFORM",service="platform"),
-   (name="POD_NAME",text=embed "/pod/name"),
-   (name="POD_UID",text=embed "/pod/uid"),
-   (name="RUNTIME_TOKEN",text=embed "/secrets/KRUN_RUNTIME_TOKEN"),
-   (name="MANAGEMENT_TOKEN",text=embed "/secrets/KRUN_MANAGEMENT_TOKEN"),
-   (name="RUNTIME_POOL",text="default"),
-   (name="VALIDATOR_ONLY",text="true"),
-   (name="ASSETS_CACHE_MAX",text="16777216")
-  ],globalOutbound="storage")),
-  (name="platform",external=(address="__CONTROL_HOST__:9001",http=())),
-  (name="storage",network=(allow=["__MINIO_HOST__/32","__CONTROL_HOST__/32"]))
- ], sockets=[
-  (name="management",address="*:8083",http=(),service=(name="entry",entrypoint="Management"))
- ]
+  services = [
+    (
+      name = "entry",
+      worker = (
+        modules = [
+          (name = "entry.js", esModule = embed "/app/entry.js"),
+          (name = "assets.js", esModule = embed "/app/assets.js"),
+          (name = "storage.js", esModule = embed "/app/storage.js")
+        ],
+        compatibilityDate = "2026-09-28",
+        compatibilityFlags = ["experimental", "enable_ctx_exports"],
+        bindings = [
+          (name = "LOADER", workerLoader = (id = "workers-mvp-validator-default")),
+          (name = "PLATFORM", service = "platform"),
+          (name = "POD_NAME", text = embed "/pod/name"),
+          (name = "POD_UID", text = embed "/pod/uid"),
+          (name = "RUNTIME_TOKEN", text = embed "/secrets/KRUN_RUNTIME_TOKEN"),
+          (name = "MANAGEMENT_TOKEN", text = embed "/secrets/KRUN_MANAGEMENT_TOKEN"),
+          (name = "RUNTIME_POOL", text = "default"),
+          (name = "VALIDATOR_ONLY", text = "true"),
+          (name = "ASSETS_CACHE_MAX", text = "16777216")
+        ],
+        globalOutbound = "storage"
+      )
+    ),
+    (
+      name = "platform",
+      external = (address = "__CONTROL_HOST__:__CONTROL_PORT__", http = ())
+    ),
+    (
+      name = "storage",
+      network = (
+        allow = [__STORAGE_ALLOW__],
+        tlsOptions = (trustBrowserCas = true)
+      )
+    )
+  ],
+  sockets = [
+    (
+      name = "management",
+      address = "*:8083",
+      http = (),
+      service = (name = "entry", entrypoint = "Management")
+    )
+  ]
 );

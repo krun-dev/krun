@@ -24,6 +24,7 @@ test:
 	go test -race ./...
 	go vet ./...
 	npm run check
+	npm run check:workers-format
 	npm run test:permissions
 	npm run test:i18n
 	npm --prefix web test
