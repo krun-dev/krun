@@ -86,6 +86,11 @@ Build 是编译结果，不是某个环境的活动版本。同一个成功 Buil
 
 Version 固定引用 Artifact、目标环境、构建 profile、compatibility 配置、普通变量和 Secret version 集合。创建版本不会改变线上流量，部署时使用创建时冻结的快照。`POST /environments/{env}/versions` 从成功 Build 或本服务已有制品创建版本；`POST /environments/{env}/deployments` 接受 `version_id` 部署已有版本，也支持 `build_id` 完成创建并部署。
 
+普通变量支持 JSON 字符串、对象、数组、数字、布尔和 null，嵌套值随版本独立冻结。
+环境配置的 `version_metadata` 指定元数据 binding 名，留空关闭；运行时提供
+`{id,tag,timestamp}`。创建版本可以传 `tag`（最多 100 bytes）和 `message`（最多
+1000 bytes），两者与创建时间一同保持不可变，控制台版本列表展示标签和说明。
+
 Deployment 独立记录目标 Version、Operation、创建时间、30 天的固定地址保留期以及提交时间。Operation 负责校验、CAS 提交和 ACK 收敛；只有通过校验并提交的 Deployment 才生成固定地址。环境地址跟随当前部署，固定地址在有效期内指向该次部署的 Version。删除 Preview、撤销服务或修改访问边界后会撤销相应路由；部署地址不会绕过当前网络边界。域名及资源池拓扑变更需要协调地址和路由。
 
 Previews Base 使用独立配置范围；新建 Preview 复制其普通变量与不可变 Secret 引用，后续 Base 修改只影响新建 Preview，生产配置独立。`GET/PATCH /previews-base` 管理基础变量，`PATCH /previews-base/secrets` 管理基础密钥。

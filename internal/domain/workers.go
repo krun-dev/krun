@@ -71,8 +71,10 @@ type WorkerArtifact struct {
 }
 
 type WorkerEnvironment struct {
-	Name    string `json:"name"`
-	Enabled bool   `json:"enabled"`
+	VersionMetadata string `json:"version_metadata,omitempty"`
+	AssetsBinding   string `json:"assets_binding,omitempty"`
+	Name            string `json:"name"`
+	Enabled         bool   `json:"enabled"`
 	// Domains mirrors the service-level selection, in catalog order. Routing
 	// decisions live on the service; this copy keeps each environment row
 	// self-describing for projections and API responses.
@@ -84,7 +86,7 @@ type WorkerEnvironment struct {
 	// Presentation only: routing uses Hosts.
 	DisplayHosts   map[string]string `json:"display_hosts,omitempty"`
 	ConfigRevision int               `json:"configuration_revision"`
-	Variables      map[string]string `json:"variables"`
+	Variables      WorkerVariables   `json:"variables"`
 	// SecretNames is safe metadata for the console. SecretVersions is the
 	// internal immutable binding map and is deliberately absent from JSON.
 	SecretNames    []string          `json:"secret_names"`
@@ -132,18 +134,22 @@ type WorkerPlacement struct {
 }
 
 type WorkerVersion struct {
-	ID                 string            `json:"id"`
-	Service            string            `json:"service_id"`
-	Organization       string            `json:"organization_id"`
-	Environment        string            `json:"environment"`
-	Artifact           string            `json:"artifact_id"`
-	Profile            string            `json:"profile"`
-	ArchiveDigest      string            `json:"archive_sha256"`
-	ModuleDigest       string            `json:"module_sha256"`
-	CompatibilityDate  string            `json:"compatibility_date"`
-	CompatibilityFlags []string          `json:"compatibility_flags,omitempty"`
-	ConfigRevision     int               `json:"configuration_revision"`
-	Variables          map[string]string `json:"variables"`
+	VersionMetadata    string          `json:"version_metadata,omitempty"`
+	AssetsBinding      string          `json:"assets_binding,omitempty"`
+	Tag                string          `json:"tag,omitempty"`
+	Message            string          `json:"message,omitempty"`
+	ID                 string          `json:"id"`
+	Service            string          `json:"service_id"`
+	Organization       string          `json:"organization_id"`
+	Environment        string          `json:"environment"`
+	Artifact           string          `json:"artifact_id"`
+	Profile            string          `json:"profile"`
+	ArchiveDigest      string          `json:"archive_sha256"`
+	ModuleDigest       string          `json:"module_sha256"`
+	CompatibilityDate  string          `json:"compatibility_date"`
+	CompatibilityFlags []string        `json:"compatibility_flags,omitempty"`
+	ConfigRevision     int             `json:"configuration_revision"`
+	Variables          WorkerVariables `json:"variables"`
 	// SecretDigest is safe to distribute with the edge descriptor. The
 	// version IDs and values stay in PostgreSQL and are fetched only through
 	// the authenticated runtime endpoint.

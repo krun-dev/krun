@@ -25,7 +25,7 @@ func workerConfigFixture() (*State, *Store) {
 	st.Workers.Services["svc-a"] = ws
 	placed := now()
 	st.Workers.Placements[workerPlacementKey("svc-a", "default")] = WorkerPlacement{Service: "svc-a", Organization: "org-a", NetworkProfile: "default", Pool: "default", Role: "primary", State: "active", Revision: 1, Created: placed, Updated: placed}
-	st.Workers.Versions["rel-1"] = WorkerVersion{ID: "rel-1", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1", ArchiveDigest: "archive-1", ModuleDigest: "module-1", Variables: map[string]string{"A": "1"}}
+	st.Workers.Versions["rel-1"] = WorkerVersion{ID: "rel-1", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1", ArchiveDigest: "archive-1", ModuleDigest: "module-1", Variables: map[string]any{"A": "1"}}
 	st.Workers.Versions["rel-unused"] = WorkerVersion{ID: "rel-unused", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1"}
 	st.Workers.Services["svc-deleted"] = WorkerService{Service: "svc-deleted", Organization: "org-a", Environments: map[string]WorkerEnvironment{}}
 	_ = store.Update(context.Background(), PartitionAll, func(state *State) error { *state = *st; return nil })

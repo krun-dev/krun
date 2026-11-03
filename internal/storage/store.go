@@ -20,6 +20,7 @@ import (
 //
 // No upstream HTTP calls may run inside Update.
 type Store struct {
+	assetSessions map[string]domain.WorkerAssetSession
 	oauthAuthorizations map[string]domain.OAuthAuthorization
 	oauthGrants         map[string]domain.OAuthGrant
 	oauthRefresh        map[string]domain.OAuthRefresh

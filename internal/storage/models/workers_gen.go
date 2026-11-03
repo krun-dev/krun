@@ -43,6 +43,8 @@ type ServiceDomain struct {
 
 type Environment struct {
 	bun.BaseModel      `bun:"table:krun_worker_environments,alias:krun_worker_environments"`
+	VersionMetadata    string          `bun:"version_metadata"`
+	AssetsBinding      string          `bun:"assets_binding"`
 	ServiceID          string          `bun:"service_id,pk"`
 	EnvName            string          `bun:"env_name,pk"`
 	Enabled            bool            `bun:"enabled"`
@@ -52,6 +54,28 @@ type Environment struct {
 	VersionID          string          `bun:"version_id"`
 	ConfirmedVersionID string          `bun:"confirmed_version_id"`
 	UpdatedAt          time.Time       `bun:"updated_at"`
+}
+
+type AssetSession struct {
+	bun.BaseModel  `bun:"table:krun_worker_asset_sessions,alias:krun_worker_asset_sessions"`
+	SessionID      string    `bun:"session_id,pk"`
+	OrgID          string    `bun:"org_id"`
+	ServiceID      string    `bun:"service_id"`
+	UploadHash     string    `bun:"upload_hash"`
+	CompletionHash string    `bun:"completion_hash"`
+	CreatedAt      time.Time `bun:"created_at"`
+	ExpiresAt      time.Time `bun:"expires_at"`
+}
+
+type AssetSessionFile struct {
+	bun.BaseModel `bun:"table:krun_worker_asset_session_files,alias:krun_worker_asset_session_files"`
+	SessionID     string `bun:"session_id,pk"`
+	Path          string `bun:"path,pk"`
+	Hash          string `bun:"hash"`
+	SizeBytes     int    `bun:"size_bytes"`
+	ObjectKey     string `bun:"object_key"`
+	ContentType   string `bun:"content_type"`
+	Uploaded      bool   `bun:"uploaded"`
 }
 
 type SecretVersion struct {
@@ -148,6 +172,10 @@ type Artifact struct {
 
 type Version struct {
 	bun.BaseModel      `bun:"table:krun_worker_versions,alias:krun_worker_versions"`
+	VersionMetadata    string          `bun:"version_metadata"`
+	AssetsBinding      string          `bun:"assets_binding"`
+	Tag                string          `bun:"tag"`
+	Message            string          `bun:"message"`
 	VersionID          string          `bun:"version_id,pk"`
 	OrgID              string          `bun:"org_id"`
 	ServiceID          string          `bun:"service_id"`

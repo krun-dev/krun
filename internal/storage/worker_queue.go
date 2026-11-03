@@ -89,7 +89,7 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 			}
 		}
 		if len(versionIDs) > 0 {
-			rows, err = s.pool.Query(ctx, `SELECT version_id, org_id, service_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at
+			rows, err = s.pool.Query(ctx, `SELECT version_id, org_id, service_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message
 				FROM krun_worker_versions WHERE version_id = ANY($1)`, versionIDs)
 			if err != nil {
 				return state, err
@@ -169,13 +169,13 @@ func readVersionRows(rows pgx.Rows, state *domain.WorkerState) error {
 	for rows.Next() {
 		var r domain.WorkerVersion
 		var variables, flags []byte
-		if err := rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.Profile, &r.ArchiveDigest, &r.ModuleDigest, &r.CompatibilityDate, &flags, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created); err != nil {
+		if err := rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.Profile, &r.ArchiveDigest, &r.ModuleDigest, &r.CompatibilityDate, &flags, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created, &r.VersionMetadata, &r.AssetsBinding, &r.Tag, &r.Message); err != nil {
 			return err
 		}
 		if err := json.Unmarshal(flags, &r.CompatibilityFlags); err != nil {
 			return err
 		}
-		r.Variables = map[string]string{}
+		r.Variables = map[string]any{}
 		if len(variables) > 0 {
 			if err := json.Unmarshal(variables, &r.Variables); err != nil {
 				return err

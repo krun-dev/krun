@@ -12,6 +12,8 @@ import (
 
 // A version freezes executable content and bindings without changing traffic.
 type WorkerVersionUploadInput struct {
+	Tag      string `json:"tag,omitempty"`
+	Message  string `json:"message,omitempty"`
 	Build    string `json:"build_id,omitempty"`
 	Artifact string `json:"artifact_id,omitempty"`
 	Key      string `json:"idempotency_key"`
@@ -21,6 +23,9 @@ func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p a
 	target, err := s.WorkerTarget(st, ref, ref.Environment, "service.publish", p)
 	if err != nil {
 		return nil, Read, err
+	}
+	if len(in.Tag) > 100 || len(in.Message) > 1000 {
+		return nil, Read, domain.Problem(422, "WORKER_VERSION_INVALID", "Version tag or message is too long")
 	}
 	if in.Key == "" || len(in.Key) > 128 {
 		return nil, Read, domain.Problem(422, "IDEMPOTENCY_REQUIRED", "idempotency_key required")
@@ -76,13 +81,14 @@ func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p a
 		return nil, Read, domain.NotFound()
 	}
 	version := SnapshotVersion(target.Organization, target.ID, ref.Environment, artifact, environment)
+	version.Tag, version.Message = in.Tag, in.Message
 	st.Workers.Versions[version.ID] = version
 	WorkerRemember(st, key, in, version.ID)
 	s.audit(st, p, "workers.version.create", target.ID+"/"+ref.Environment, true)
 	return version, Created, nil
 }
 func SnapshotVersion(org, service, environment string, artifact domain.WorkerArtifact, config domain.WorkerEnvironment) domain.WorkerVersion {
-	return domain.WorkerVersion{ID: securetoken.UUID(), Organization: org, Service: service, Environment: environment, Artifact: artifact.ID, Profile: artifact.Profile, ArchiveDigest: artifact.ArchiveDigest, ModuleDigest: artifact.ModuleDigest, CompatibilityDate: artifact.CompatibilityDate, CompatibilityFlags: append([]string(nil), artifact.CompatibilityFlags...), ConfigRevision: config.ConfigRevision, Variables: domain.CloneStringsMap(config.Variables), SecretVersions: domain.CloneStringsMap(config.SecretVersions), SecretDigest: WorkerSecretsDigest(config.SecretVersions), Created: time.Now().UTC()}
+	return domain.WorkerVersion{ID: securetoken.UUID(), VersionMetadata: config.VersionMetadata, AssetsBinding: config.AssetsBinding, Organization: org, Service: service, Environment: environment, Artifact: artifact.ID, Profile: artifact.Profile, ArchiveDigest: artifact.ArchiveDigest, ModuleDigest: artifact.ModuleDigest, CompatibilityDate: artifact.CompatibilityDate, CompatibilityFlags: append([]string(nil), artifact.CompatibilityFlags...), ConfigRevision: config.ConfigRevision, Variables: domain.CloneWorkerVariables(config.Variables), SecretVersions: domain.CloneStringsMap(config.SecretVersions), SecretDigest: WorkerSecretsDigest(config.SecretVersions), Created: time.Now().UTC()}
 }
 func (s *Service) WorkerVersionList(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
 	if _, err := s.WorkerCollectionTarget(st, ref, "service.version.read", p); err != nil {

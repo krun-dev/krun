@@ -88,7 +88,7 @@ func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, 
 		if !ok || a.State != "finalized" {
 			return nil, Read, domain.Problem(409, "ARTIFACT_UNAVAILABLE", "Artifact unavailable")
 		}
-		version = domain.WorkerVersion{Service: t.ID, Organization: t.Organization, Environment: env, Artifact: a.ID, Profile: a.Profile, ArchiveDigest: a.ArchiveDigest, ModuleDigest: a.ModuleDigest, CompatibilityDate: a.CompatibilityDate, CompatibilityFlags: append([]string(nil), a.CompatibilityFlags...), ConfigRevision: current.ConfigRevision, Variables: current.Variables, SecretDigest: WorkerSecretsDigest(current.SecretVersions), SecretVersions: domain.CloneStringsMap(current.SecretVersions)}
+		version = domain.WorkerVersion{VersionMetadata: current.VersionMetadata, AssetsBinding: current.AssetsBinding, Service: t.ID, Organization: t.Organization, Environment: env, Artifact: a.ID, Profile: a.Profile, ArchiveDigest: a.ArchiveDigest, ModuleDigest: a.ModuleDigest, CompatibilityDate: a.CompatibilityDate, CompatibilityFlags: append([]string(nil), a.CompatibilityFlags...), ConfigRevision: current.ConfigRevision, Variables: domain.CloneWorkerVariables(current.Variables), SecretDigest: WorkerSecretsDigest(current.SecretVersions), SecretVersions: domain.CloneStringsMap(current.SecretVersions)}
 		raw, _ := json.Marshal(version)
 		version.ID = "rel_" + workerartifact.BytesDigest(raw)
 		version.Created = time.Now().UTC()

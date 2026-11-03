@@ -47,6 +47,9 @@ Runtime 配置分发和保留期。浏览器会话需要原有 CSRF 校验；CLI
 | `GET /accounts/{account}/workers/subdomain` | Wrangler 所需的账户子域元数据 |
 | `GET /accounts/{account}/workers/scripts` | 已登记且有权读取的 Script |
 | `PUT /accounts/{account}/workers/scripts/{script}` | 上传已打包 ES modules，创建 Version 并部署 |
+| `POST .../scripts/{script}/assets-upload-session` | 提交资产清单，取得限定 Worker 的一小时上传凭据和待传文件分组 |
+| `POST /accounts/{account}/workers/assets/upload?base64=true` | 上传 multipart 资产分组；完整上传后取得部署所需 completion token |
+| `POST /accounts/{account}/workers/assets/upload/{hash}` | 上传单个原始资产文件 |
 | `DELETE /accounts/{account}/workers/scripts/{script}` | 删除服务及 Script 名称映射，后台清理关联实体 |
 | `GET .../scripts/{script}/settings`、`.../script-settings` | 配置和脱敏绑定 |
 | `POST/GET .../scripts/{script}/versions`、`GET .../versions/{id}` | 只上传版本、列出版本、读取版本 |
@@ -67,15 +70,26 @@ Version 固定代码、普通变量和 Secret 引用；只上传不会改变生�
 Previews Base 只在创建 Preview 时复制；不会覆盖已存在 Preview 或生产环境。
 固定部署地址沿用 krun 的 30 天保留期，删除目标环境或服务后失效。
 
-当前支持 `plain_text`、`secret_text`，以及已打包 ESM、CommonJS 依赖、文本、数据、Wasm
+当前支持 `plain_text`、`json`、`secret_text`、`version_metadata`、`assets`，以及已打包 ESM、CommonJS 依赖、文本、数据、Wasm
 和 source map 模块；主模块必须为 ESM。沿用 krun 的模块、变量、Secret、Preview 数量
 和请求大小限制。错误采用 Cloudflare envelope 和数字 code，底层仍执行 krun 权限。
 
-这不是完整 Cloudflare 平台实现。资产 upload-session、灰度比例、托管 URL 关闭、
+JSON 变量保留对象、数组、数字、布尔及 null 类型，随 Version 冻结；原生控制台同样可以编辑。
+`version_metadata` 将 `{id,tag,timestamp}` 注入指定 binding。上传 annotations 的
+`workers/tag`、`workers/message` 分别保存版本标签和说明，长度上限为 100、1000 bytes。
+
+官方 Wrangler 的资产部署、只上传 Version、Preview 和纯静态 Worker 均使用上述上传流程。
+清单逐文件保存，按 Wrangler 的内容 hash 和声明大小校验；上传凭据不能跨组织，completion
+token 只能绑定到签发时的 Worker，且未传完或过期时不能部署。资产打包进现有不可变制品，
+因此部署、回滚和固定地址复用原有运行链路；`keep_assets` 可以保留当前部署的资产。
+会话和文件元数据保留一小时，临时对象登记到现有 upload 清理任务，最长保留 24 小时。
+
+这不是完整 Cloudflare 平台实现。灰度比例、托管 URL 关闭、
 Cloudflare 自定义域名/Zone/Routes、定时任务、tail、KV/R2/D1/DO/Queue/Service bindings、
-Service Worker 格式及版本标签/描述不在当前支持范围内。版本上传和 Preview 的 annotations
-不会保存；部署接口拒绝非空描述。缺失接口和不支持的绑定会返回错误。静态资产仍可走
-krun 原有构建入口。
+Service Worker 格式不在当前支持范围内。资产路由沿用 krun 支持的 `run_worker_first`、
+`none` / `single-page-application` 和 `none` / `auto-trailing-slash`；非根 `base_path`、
+`_headers`、`_redirects` 会被拒绝。部署接口仍拒绝非空部署描述，版本标签/说明独立保存。
+缺失接口和不支持的绑定会返回错误。静态资产也可以继续走 krun 原有构建入口。
 
 协议验证使用仓库固定的 Wrangler 4.155.0。复现需先运行独立 kind 后端 E2E 完成初始化，
 再让控制台同源入口可从本机访问：

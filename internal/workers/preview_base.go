@@ -17,7 +17,7 @@ func (s *Service) PreviewBase(ctx context.Context, st *domain.State, p authoriza
 		return nil, Read, err
 	}
 	service := s.WorkerServiceView(st, target)
-	base := domain.WorkerEnvironment{Name: domain.PreviewBaseName, Enabled: true, Variables: map[string]string{}, SecretVersions: map[string]string{}}
+	base := domain.WorkerEnvironment{Name: domain.PreviewBaseName, Enabled: true, Variables: map[string]any{}, SecretVersions: map[string]string{}}
 	if service.PreviewBase != nil {
 		base = *service.PreviewBase
 	}
@@ -36,7 +36,13 @@ func (s *Service) PreviewBase(ctx context.Context, st *domain.State, p authoriza
 				return nil, Read, domain.Problem(409, "WORKER_BINDING_CONFLICT", "A Secret already uses this binding name")
 			}
 		}
-		base.Variables = domain.CloneStringsMap(in.Variables)
+		base.Variables = domain.CloneWorkerVariables(in.Variables)
+	}
+	if in.VersionMetadata != nil {
+		base.VersionMetadata = *in.VersionMetadata
+	}
+	if err := ValidateWorkerBindings(base); err != nil {
+		return nil, Read, err
 	}
 	base.ConfigRevision++
 	service.PreviewBase = &base

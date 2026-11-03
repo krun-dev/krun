@@ -15,9 +15,10 @@ type WorkerEnvironmentCreateInput struct {
 }
 
 type WorkerEnvironmentUpdateInput struct {
-	Revision  int               `json:"expected_revision"`
-	Enabled   *bool             `json:"enabled"`
-	Variables map[string]string `json:"variables"`
+	VersionMetadata *string        `json:"version_metadata,omitempty"`
+	Revision        int            `json:"expected_revision"`
+	Enabled         *bool          `json:"enabled"`
+	Variables       map[string]any `json:"variables"`
 }
 
 func (s *Service) WorkerEnvironments(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
@@ -82,9 +83,10 @@ func (s *Service) WorkerEnvironmentCreate(ctx context.Context, st *domain.State,
 	if previews >= limit {
 		return nil, Read, domain.Problem(409, "ENVIRONMENT_LIMIT", "Too many preview environments")
 	}
-	env := domain.WorkerEnvironment{Name: in.Name, Enabled: true, ConfigRevision: 1, Variables: map[string]string{}, SecretVersions: map[string]string{}}
+	env := domain.WorkerEnvironment{Name: in.Name, Enabled: true, ConfigRevision: 1, Variables: map[string]any{}, SecretVersions: map[string]string{}}
 	if ws.PreviewBase != nil && !in.IgnoreBase {
-		env.Variables = domain.CloneStringsMap(ws.PreviewBase.Variables)
+		env.Variables = domain.CloneWorkerVariables(ws.PreviewBase.Variables)
+		env.VersionMetadata = ws.PreviewBase.VersionMetadata
 		env.SecretVersions = domain.CloneStringsMap(ws.PreviewBase.SecretVersions)
 		env.SecretNames = domain.WorkerSecretNames(env.SecretVersions)
 	}
@@ -153,6 +155,12 @@ func (s *Service) WorkerEnvironmentUpdate(ctx context.Context, st *domain.State,
 		current.Variables = in.Variables
 	}
 	s.SyncEnvironmentHosts(&current, t.Organization, t.ID, ws.Domains, ws.NetworkProfile, s.Config.Workers.ServicePool(st.Workers, ws))
+	if in.VersionMetadata != nil {
+		current.VersionMetadata = *in.VersionMetadata
+	}
+	if err := ValidateWorkerBindings(current); err != nil {
+		return nil, Read, err
+	}
 	current.ConfigRevision++
 	ws.Environments[env] = current
 	st.Workers.Services[t.ID] = ws

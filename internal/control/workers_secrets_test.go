@@ -14,6 +14,7 @@ import (
 	"time"
 
 	appconfig "github.com/krun-dev/krun/internal/config"
+	"github.com/krun-dev/krun/internal/domain"
 	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
@@ -45,7 +46,7 @@ func seedPublishedWorker(t *testing.T, store *Store) WorkerVersion {
 	version := WorkerVersion{
 		ID: "rel_secret_base", Organization: "org-a", Service: "svc-a", Environment: "production",
 		Artifact: "art_secret", ArchiveDigest: strings.Repeat("a", 64), ModuleDigest: strings.Repeat("b", 64),
-		ConfigRevision: 1, Variables: map[string]string{"PLAIN": "visible"}, Created: now(),
+		ConfigRevision: 1, Variables: map[string]any{"PLAIN": "visible"}, Created: now(),
 		SecretVersions: map[string]string{},
 	}
 	err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
@@ -59,7 +60,7 @@ func seedPublishedWorker(t *testing.T, store *Store) WorkerVersion {
 		environment.Version, environment.Confirmed = version.ID, version.ID
 		environment.Revision = 3
 		environment.ConfigRevision = 1
-		environment.Variables = cloneStringsMap(version.Variables)
+		environment.Variables = domain.CloneWorkerVariables(version.Variables)
 		environment.SecretVersions = map[string]string{}
 		service.Environments[version.Environment] = environment
 		st.Workers.Services[version.Service] = service

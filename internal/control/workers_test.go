@@ -25,7 +25,7 @@ func workerTestServer(t *testing.T) (*Server, *Store, string) {
 	// A default preview so build/permission tests have a non-baseline target.
 	if e := store.Update(context.Background(), PartitionAll, func(st *State) error {
 		ws := s.workerService(st, Target{ID: "svc-a", Organization: "org-a"})
-		ws.Environments["fix-demo"] = WorkerEnvironment{Name: "fix-demo", Enabled: true, Domains: []string{"internal"}, ConfigRevision: 1, Variables: map[string]string{}}
+		ws.Environments["fix-demo"] = WorkerEnvironment{Name: "fix-demo", Enabled: true, Domains: []string{"internal"}, ConfigRevision: 1, Variables: map[string]any{}}
 		st.Workers.Services["svc-a"] = ws
 		return nil
 	}); e != nil {

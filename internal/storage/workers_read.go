@@ -20,12 +20,12 @@ func (s *Store) loadWorkers(ctx context.Context, st *domain.State) error {
 	queueStateRead(ctx, batch, `SELECT service_id, org_id, network_profile, repository, repository_revision, domains_revision, preview_revision FROM krun_worker_services`)
 	queueStateRead(ctx, batch, `SELECT service_id, pool_id, org_id, network_profile, role, state, revision, created_at, updated_at FROM krun_worker_service_placements`)
 	queueStateRead(ctx, batch, `SELECT service_id, domain_id FROM krun_worker_service_domains ORDER BY service_id, ordinal`)
-	queueStateRead(ctx, batch, `SELECT service_id, env_name, enabled, config_revision, variables, deployment_revision, version_id, confirmed_version_id FROM krun_worker_environments`)
+	queueStateRead(ctx, batch, `SELECT service_id, env_name, enabled, config_revision, variables, deployment_revision, version_id, confirmed_version_id, version_metadata, assets_binding FROM krun_worker_environments`)
 	queueStateRead(ctx, batch, `SELECT secret_version_id, org_id, service_id, env_name, name, value_digest, key_version, created_by, created_at FROM krun_worker_secret_versions`)
 	queueStateRead(ctx, batch, `SELECT service_id, env_name, name, secret_version_id FROM krun_worker_environment_secrets`)
 	queueStateRead(ctx, batch, `SELECT build_id, org_id, service_id, env_name, state, entrypoint, source_digest, profile, compatibility_date, compatibility_flags, job, artifact_id, error, repository, assets, created_at, finished_at, claimed_by, claimed_at FROM krun_worker_builds`)
 	queueStateRead(ctx, batch, `SELECT artifact_id, org_id, state, profile, archive_digest, manifest_digest, module_digest, compatibility_date, compatibility_flags, size_bytes, object_key, storage_location, bucket, created_at FROM krun_worker_artifacts`)
-	queueStateRead(ctx, batch, `SELECT version_id, org_id, service_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at FROM krun_worker_versions`)
+	queueStateRead(ctx, batch, `SELECT version_id, org_id, service_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message FROM krun_worker_versions`)
 	queueStateRead(ctx, batch, `SELECT version_id, name, secret_version_id FROM krun_worker_version_secrets`)
 	queueStateRead(ctx, batch, `SELECT deployment_id,org_id,service_id,env_name,version_id,operation_id,created_at,expires_at,committed_at FROM krun_worker_deployments`)
 	queueStateRead(ctx, batch, `SELECT operation_id, kind, org_id, service_id, env_name, state, build_id, version_id, expected_revision, config_revision, edge_revision, deployment_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at FROM krun_worker_operations`)
@@ -127,11 +127,11 @@ func readWorkerEnvironments(results pgx.BatchResults, st *domain.State) error {
 		var service, name string
 		var env domain.WorkerEnvironment
 		var variables []byte
-		if err = rows.Scan(&service, &name, &env.Enabled, &env.ConfigRevision, &variables, &env.Revision, &env.Version, &env.Confirmed); err != nil {
+		if err = rows.Scan(&service, &name, &env.Enabled, &env.ConfigRevision, &variables, &env.Revision, &env.Version, &env.Confirmed, &env.VersionMetadata, &env.AssetsBinding); err != nil {
 			return err
 		}
 		env.Name = name
-		env.Variables = map[string]string{}
+		env.Variables = map[string]any{}
 		env.SecretVersions = map[string]string{}
 		if len(variables) > 0 {
 			if err = json.Unmarshal(variables, &env.Variables); err != nil {
@@ -273,13 +273,13 @@ func readWorkerVersions(results pgx.BatchResults, st *domain.State) error {
 	for rows.Next() {
 		var r domain.WorkerVersion
 		var variables, flags []byte
-		if err = rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.Profile, &r.ArchiveDigest, &r.ModuleDigest, &r.CompatibilityDate, &flags, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created); err != nil {
+		if err = rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.Profile, &r.ArchiveDigest, &r.ModuleDigest, &r.CompatibilityDate, &flags, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created, &r.VersionMetadata, &r.AssetsBinding, &r.Tag, &r.Message); err != nil {
 			return err
 		}
 		if err = json.Unmarshal(flags, &r.CompatibilityFlags); err != nil {
 			return err
 		}
-		r.Variables = map[string]string{}
+		r.Variables = map[string]any{}
 		r.SecretVersions = map[string]string{}
 		if len(variables) > 0 {
 			if err = json.Unmarshal(variables, &r.Variables); err != nil {

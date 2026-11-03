@@ -17,7 +17,7 @@ func TestPostgresSourceUploadReservationDefeatsStaleGCClaim(t *testing.T) {
 		st.Workers.Services["source-service"] = WorkerService{
 			Service: "source-service", Organization: "source-org",
 			Environments: map[string]WorkerEnvironment{appconfig.WorkerBaseline: {
-				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{},
+				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]any{},
 			}},
 		}
 		return nil

@@ -275,6 +275,8 @@ CREATE TABLE IF NOT EXISTS krun_worker_service_domains (
 );
 
 CREATE TABLE IF NOT EXISTS krun_worker_environments (
+ version_metadata text NOT NULL DEFAULT '',
+ assets_binding text NOT NULL DEFAULT '',
 	service_id           text NOT NULL,
 	env_name             text NOT NULL,
 	enabled              boolean NOT NULL DEFAULT true,
@@ -286,6 +288,30 @@ CREATE TABLE IF NOT EXISTS krun_worker_environments (
 	updated_at           timestamptz NOT NULL DEFAULT now(),
 	PRIMARY KEY (service_id, env_name)
 );
+
+-- CF asset sessions expire after one hour. Each file is an individual row;
+-- staging objects use the existing 24-hour source-upload GC inventory.
+CREATE TABLE IF NOT EXISTS krun_worker_asset_sessions (
+ session_id text PRIMARY KEY,
+ org_id text NOT NULL,
+ service_id text NOT NULL,
+ upload_hash text NOT NULL UNIQUE,
+ completion_hash text NOT NULL UNIQUE,
+ created_at timestamptz NOT NULL,
+ expires_at timestamptz NOT NULL CHECK (expires_at > created_at)
+);
+CREATE INDEX IF NOT EXISTS krun_worker_asset_sessions_expiry ON krun_worker_asset_sessions(expires_at);
+CREATE TABLE IF NOT EXISTS krun_worker_asset_session_files (
+ session_id text NOT NULL,
+ path text NOT NULL,
+ hash text NOT NULL,
+ size_bytes integer NOT NULL CHECK (size_bytes >= 0 AND size_bytes <= 5242880),
+ object_key text NOT NULL,
+ content_type text NOT NULL DEFAULT 'application/octet-stream',
+ uploaded boolean NOT NULL DEFAULT false,
+ PRIMARY KEY(session_id,path)
+);
+CREATE INDEX IF NOT EXISTS krun_worker_asset_session_files_hash ON krun_worker_asset_session_files(session_id,hash);
 
 CREATE TABLE IF NOT EXISTS krun_worker_secret_versions (
 	secret_version_id text PRIMARY KEY,
@@ -382,6 +408,10 @@ CREATE TABLE IF NOT EXISTS krun_worker_artifacts (
 CREATE INDEX IF NOT EXISTS krun_worker_artifacts_created ON krun_worker_artifacts (created_at);
 
 CREATE TABLE IF NOT EXISTS krun_worker_versions (
+ version_metadata text NOT NULL DEFAULT '',
+ assets_binding text NOT NULL DEFAULT '',
+ tag text NOT NULL DEFAULT '',
+ message text NOT NULL DEFAULT '',
 	version_id      text PRIMARY KEY,
 	org_id          text NOT NULL,
 	service_id      text NOT NULL,

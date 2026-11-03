@@ -182,7 +182,7 @@ func (s *Service) WorkerSecretBatch(ctx context.Context, st *domain.State, p aut
 	current, ok := service.Environments[environment]
 	base := environment == domain.PreviewBaseName
 	if base {
-		current = domain.WorkerEnvironment{Name: domain.PreviewBaseName, Enabled: true, Variables: map[string]string{}, SecretVersions: map[string]string{}}
+		current = domain.WorkerEnvironment{Name: domain.PreviewBaseName, Enabled: true, Variables: map[string]any{}, SecretVersions: map[string]string{}}
 		if service.PreviewBase != nil {
 			current = *service.PreviewBase
 		}
@@ -230,6 +230,9 @@ func (s *Service) WorkerSecretBatch(ctx context.Context, st *domain.State, p aut
 		return nil, Read, domain.Problem(422, "WORKER_SECRET_INVALID", "At most 100 secrets are supported per environment")
 	}
 	current.SecretVersions = versions
+	if err := ValidateWorkerBindings(current); err != nil {
+		return nil, Read, err
+	}
 	current.SecretNames = domain.WorkerSecretNames(versions)
 	current.ConfigRevision++
 	if base {

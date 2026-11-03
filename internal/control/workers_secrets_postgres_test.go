@@ -21,7 +21,7 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 	version := WorkerVersion{
 		ID: "rel-secret-postgres", Organization: "org-secret", Service: "svc-secret", Environment: "production",
 		Artifact: "art-secret-postgres", ArchiveDigest: "archive", ModuleDigest: "module",
-		ConfigRevision: 2, Variables: map[string]string{}, SecretDigest: workerapp.WorkerSecretsDigest(refs),
+		ConfigRevision: 2, Variables: map[string]any{}, SecretDigest: workerapp.WorkerSecretsDigest(refs),
 		SecretVersions: refs, Created: now(),
 	}
 	if err = store.Update(ctx, PartitionWorkers, func(st *State) error {
@@ -30,7 +30,7 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 		st.Workers.Services[version.Service] = WorkerService{
 			Service: version.Service, Organization: version.Organization,
 			Environments: map[string]WorkerEnvironment{
-				"production": {Name: "production", Enabled: true, ConfigRevision: 2, Variables: map[string]string{}, SecretNames: []string{"API_TOKEN"}, SecretVersions: refs},
+				"production": {Name: "production", Enabled: true, ConfigRevision: 2, Variables: map[string]any{}, SecretNames: []string{"API_TOKEN"}, SecretVersions: refs},
 			},
 		}
 		placed := now()

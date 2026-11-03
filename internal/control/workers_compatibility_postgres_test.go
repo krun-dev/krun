@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -34,7 +35,7 @@ func TestPostgresWorkerCompatibilityMetadataRoundTrip(t *testing.T) {
 			ID: "rel-compat", Organization: "org-compat", Service: "svc-compat", Environment: appconfig.WorkerBaseline,
 			Artifact: artifact.ID, Profile: artifact.Profile, ArchiveDigest: artifact.ArchiveDigest, ModuleDigest: artifact.ModuleDigest,
 			CompatibilityDate: artifact.CompatibilityDate, CompatibilityFlags: append([]string(nil), flags...),
-			Variables: map[string]string{}, Created: created,
+			Variables: map[string]any{"CONFIG": map[string]any{"values": []any{true, nil, json.Number("42")}}}, VersionMetadata: "CF_VERSION_METADATA", Tag: "fixture-tag", Message: "fixture message", Created: created,
 		}
 		return nil
 	}); err != nil {
@@ -48,6 +49,9 @@ func TestPostgresWorkerCompatibilityMetadataRoundTrip(t *testing.T) {
 	build := state.Workers.Builds["bld-compat"]
 	storedArtifact := state.Workers.Artifacts[artifact.ID]
 	version := state.Workers.Versions["rel-compat"]
+	if version.VersionMetadata != "CF_VERSION_METADATA" || version.Tag != "fixture-tag" || version.Message != "fixture message" || !reflect.DeepEqual(version.Variables["CONFIG"], map[string]any{"values": []any{true, nil, json.Number("42")}}) {
+		t.Fatal("typed bindings and version annotations did not round-trip", version)
+	}
 	for name, got := range map[string][]string{
 		"build": build.CompatibilityFlags, "artifact": storedArtifact.CompatibilityFlags, "version": version.CompatibilityFlags,
 	} {
@@ -63,7 +67,7 @@ func TestPostgresWorkerCompatibilityMetadataRoundTrip(t *testing.T) {
 		st.Workers.Versions["rel-mismatch"] = WorkerVersion{
 			ID: "rel-mismatch", Organization: artifact.Organization, Service: "svc-compat", Environment: appconfig.WorkerBaseline,
 			Artifact: artifact.ID, Profile: artifact.Profile, ArchiveDigest: artifact.ArchiveDigest, ModuleDigest: artifact.ModuleDigest,
-			CompatibilityDate: "2026-09-27", CompatibilityFlags: []string{"nodejs_compat"}, Variables: map[string]string{}, Created: created,
+			CompatibilityDate: "2026-09-27", CompatibilityFlags: []string{"nodejs_compat"}, Variables: map[string]any{}, Created: created,
 		}
 		return nil
 	}); err == nil {

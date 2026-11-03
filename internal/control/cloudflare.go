@@ -255,6 +255,9 @@ func (s *Server) cloudflareRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET "+base+"/workers/subdomain", s.cfProtected(s.cfAccountSubdomain))
 	scripts := base + "/workers/scripts"
 	m.HandleFunc("GET "+scripts, s.cfProtected(s.cfScripts))
+	m.HandleFunc("POST "+scripts+"/{script}/assets-upload-session", s.cfTransport(s.cfAssetSession))
+	m.HandleFunc("POST "+base+"/workers/assets/upload", s.cfTransport(s.cfAssetUpload))
+	m.HandleFunc("POST "+base+"/workers/assets/upload/{hash}", s.cfTransport(s.cfAssetUpload))
 	m.HandleFunc("PUT "+scripts+"/{script}", s.cfTransport(s.cfUpload))
 	m.HandleFunc("DELETE "+scripts+"/{script}", s.cfTransport(s.cfDeleteScript))
 	for _, path := range []string{scripts + "/{script}/settings", scripts + "/{script}/script-settings", base + "/workers/workers/{script}", base + "/workers/services/{script}", scripts + "/{script}/subdomain"} {

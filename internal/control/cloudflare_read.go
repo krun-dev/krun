@@ -81,7 +81,17 @@ func cfBindings(env WorkerEnvironment) []any {
 	}
 	sort.Strings(keys)
 	for _, name := range keys {
-		out = append(out, map[string]any{"name": name, "type": "plain_text", "text": env.Variables[name]})
+		if value, ok := env.Variables[name].(string); ok {
+			out = append(out, map[string]any{"name": name, "type": "plain_text", "text": value})
+		} else {
+			out = append(out, map[string]any{"name": name, "type": "json", "json": env.Variables[name]})
+		}
+	}
+	if env.VersionMetadata != "" {
+		out = append(out, map[string]any{"name": env.VersionMetadata, "type": "version_metadata"})
+	}
+	if env.AssetsBinding != "" {
+		out = append(out, map[string]any{"name": env.AssetsBinding, "type": "assets"})
 	}
 	for _, name := range domain.WorkerSecretNames(env.SecretVersions) {
 		out = append(out, map[string]any{"name": name, "type": "secret_text"})
@@ -135,7 +145,7 @@ func (s *Server) cfScriptDetails(st *State, p Principal, r *http.Request) (any, 
 	return map[string]any{"id": script.Name, "name": script.Name, "tag": script.Service, "subdomain": subdomain, "previews_base_config": map[string]any{"env": cfEnvBindings(base)}, "default_environment": map[string]any{"environment": "production", "script": map[string]any{"id": script.Name, "tag": script.Service, "last_deployed_from": "api", "compatibility_date": version.CompatibilityDate, "compatibility_flags": version.CompatibilityFlags, "bindings": cfBindings(env)}}}, 200, nil
 }
 func cfVersion(v WorkerVersion, number int) map[string]any {
-	return map[string]any{"id": v.ID, "number": number, "metadata": map[string]any{"created_on": v.Created, "has_preview": false, "source": "api", "author_id": "krun", "author_email": "", "annotations": map[string]any{}}, "resources": map[string]any{"script": map[string]any{"etag": v.ArchiveDigest, "handlers": []string{"fetch"}}, "script_runtime": map[string]any{"compatibility_date": v.CompatibilityDate, "compatibility_flags": v.CompatibilityFlags}, "bindings": cfBindings(WorkerEnvironment{Variables: v.Variables, SecretVersions: v.SecretVersions})}}
+	return map[string]any{"id": v.ID, "number": number, "metadata": map[string]any{"created_on": v.Created, "has_preview": false, "source": "api", "author_id": "krun", "author_email": ""}, "annotations": map[string]any{"workers/tag": v.Tag, "workers/message": v.Message}, "resources": map[string]any{"script": map[string]any{"etag": v.ArchiveDigest, "handlers": []string{"fetch"}}, "script_runtime": map[string]any{"compatibility_date": v.CompatibilityDate, "compatibility_flags": v.CompatibilityFlags}, "bindings": cfBindings(WorkerEnvironment{Variables: v.Variables, SecretVersions: v.SecretVersions, VersionMetadata: v.VersionMetadata, AssetsBinding: v.AssetsBinding})}}
 }
 func (s *Server) cfVersions(st *State, p Principal, r *http.Request) (any, int, error) {
 	out, _, err := s.workerApplication(r).WorkerVersionList(r.Context(), st, p, workerRef(r))
@@ -195,6 +205,12 @@ func (s *Server) cfSecrets(st *State, p Principal, r *http.Request) (any, int, e
 		return nil, 0, err
 	}
 	out := []any{}
+	if env.VersionMetadata != "" {
+		out = append(out, map[string]any{"name": env.VersionMetadata, "type": "version_metadata"})
+	}
+	if env.AssetsBinding != "" {
+		out = append(out, map[string]any{"name": env.AssetsBinding, "type": "assets"})
+	}
 	for _, name := range domain.WorkerSecretNames(env.SecretVersions) {
 		out = append(out, map[string]any{"name": name, "type": "secret_text"})
 	}
@@ -278,8 +294,10 @@ func (s *Server) cfPreviewDeployments(st *State, p Principal, r *http.Request) (
 		return nil, 0, problem(404, "PREVIEW_DEPLOYMENT_NOT_FOUND", "Preview deployment not found")
 	}
 	out := cfDeployment(selected)
+	version := st.Workers.Versions[selected.Version]
+	out["annotations"] = map[string]string{"workers/tag": version.Tag, "workers/message": version.Message}
 	out["id"] = selected.ID
-	out["env"] = cfEnvBindings(WorkerEnvironment{Variables: st.Workers.Versions[selected.Version].Variables, SecretVersions: st.Workers.Versions[selected.Version].SecretVersions})
+	out["env"] = cfEnvBindings(WorkerEnvironment{Variables: st.Workers.Versions[selected.Version].Variables, SecretVersions: st.Workers.Versions[selected.Version].SecretVersions, VersionMetadata: st.Workers.Versions[selected.Version].VersionMetadata, AssetsBinding: st.Workers.Versions[selected.Version].AssetsBinding})
 	out["urls"] = s.cfDeploymentURLs(st, selected)
 	return out, 200, nil
 }

@@ -5,6 +5,11 @@ Worker 代码与资产属于同一个 Artifact。Version 固定 Artifact、变�
 
 ## 构建与格式
 
+Cloudflare 兼容入口支持官方 Wrangler 的 asset upload-session、分批上传和 completion
+token：先上传资产，再将资产与代码打包为同一个不可变 Artifact；也支持纯静态 Worker。
+绑定、路由选项和限制见 [Cloudflare API](cloudflare-api.md)。上传会话和逐文件元数据保留
+一小时；临时对象最长保留 24 小时，由现有 upload GC 清理，失败可以重试。
+
 源码上传或仓库构建可以配置 `assets.directory`、`binding`、`run_worker_first`、
 `not_found_handling` 和 `html_handling`。Wrangler/custom build 先生成产物，再由可信
 packer 收集资产。所有制品使用 `workerd-bundle-v2` profile、manifest schema 2；

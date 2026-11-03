@@ -12,7 +12,7 @@ func TestWorkerCompatibilityEmptyFlagsSurviveStateClone(t *testing.T) {
 	created := now()
 	state.Workers.Builds["build"] = WorkerBuild{ID: "build", CompatibilityFlags: []string{}, Created: created}
 	state.Workers.Artifacts["artifact"] = WorkerArtifact{ID: "artifact", CompatibilityFlags: []string{}, Created: created}
-	state.Workers.Versions["version"] = WorkerVersion{ID: "version", CompatibilityFlags: []string{}, Variables: map[string]string{}, SecretVersions: map[string]string{}, Created: created}
+	state.Workers.Versions["version"] = WorkerVersion{ID: "version", CompatibilityFlags: []string{}, Variables: map[string]any{}, SecretVersions: map[string]string{}, Created: created}
 
 	cloned, err := cloneState(state)
 	if err != nil {
@@ -35,7 +35,7 @@ func TestWriteVersionsRejectsExistingDescriptorMutation(t *testing.T) {
 	after := newWorkerState()
 	version := WorkerVersion{
 		ID: "version", Artifact: "artifact", Profile: "workerd-bundle-v2",
-		CompatibilityDate: "2026-09-01", Variables: map[string]string{}, Created: now(),
+		CompatibilityDate: "2026-09-01", Variables: map[string]any{}, Created: now(),
 	}
 	before.Versions[version.ID] = version
 	version.CompatibilityDate = "2026-09-27"

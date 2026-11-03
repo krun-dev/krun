@@ -400,7 +400,7 @@
   "发布构建版本": "Publish build",
   "发布进度": "Version progress",
   "发送请求": "Send request",
-  "变量必须是字符串键值对象。": "Variables must be a JSON object with string values.",
+  "变量必须是 JSON 对象。": "Variables must be a JSON object.",
   "启用环境": "Enable environment",
   "响应信息": "Response details",
   "响应超过 64 KiB，已截断。": "Response exceeded 64 KiB and was truncated.",
@@ -661,5 +661,7 @@
   "仅在你主动发起终端登录时授权。不确定时，请取消。": "Only approve if you started this sign-in from your terminal. If unsure, cancel.",
   "krun · 为团队构建的开发平台": "krun · A developer platform built for teams",
   "登录以连接 {{application}}": "Sign in to connect {{application}}",
-  "继续": "Continue"
+  "继续": "Continue",
+  "版本元数据绑定": "Version metadata binding",
+  "将版本 ID、标签和创建时间注入此变量；留空关闭。": "Expose the version ID, tag and creation time through this binding. Leave empty to disable."
 }

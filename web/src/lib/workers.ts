@@ -49,7 +49,8 @@ export type Environment = {
   /** One route host per selected domain, in the same order. */
   hosts: string[];
   configuration_revision: number;
-  variables: Record<string, string>;
+  variables: Record<string, unknown>;
+  version_metadata?: string;
   secret_names: string[];
   deployment_revision: number;
   version_id?: string;
@@ -80,7 +81,10 @@ export type Version = {
   id: string;
   artifact_id: string;
   environment: string;
-  variables: Record<string, string>;
+  variables: Record<string, unknown>;
+  version_metadata?: string;
+  tag?: string;
+  message?: string;
   configuration_revision: number;
   archive_sha256: string;
 };

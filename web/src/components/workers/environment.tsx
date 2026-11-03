@@ -35,6 +35,7 @@ export function EnvironmentSettings({
   const [variables, setVariables] = useState(
     JSON.stringify(env.variables, null, 2),
   );
+  const [versionMetadata, setVersionMetadata] = useState(env.version_metadata || "");
   const [revision, setRevision] = useState(env.configuration_revision);
   const [secretName, setSecretName] = useState("");
   const [secretValue, setSecretValue] = useState("");
@@ -145,6 +146,9 @@ export function EnvironmentSettings({
             onChange={(e) => setVariables(e.target.value)}
           />
         </Field>
+        <Field label={t("版本元数据绑定")} hint={t("将版本 ID、标签和创建时间注入此变量；留空关闭。") }>
+          <Input aria-label={t("版本元数据绑定")} value={versionMetadata} placeholder="CF_VERSION_METADATA" onChange={(e) => setVersionMetadata(e.target.value)} />
+        </Field>
         {stale ? (
           <p role="alert" className="text-sm text-destructive">
             {t("配置已被更新，请先加载最新配置。")}
@@ -159,11 +163,10 @@ export function EnvironmentSettings({
                 if (
                   !parsed ||
                   typeof parsed !== "object" ||
-                  Array.isArray(parsed) ||
-                  Object.values(parsed).some((v) => typeof v !== "string")
+                  Array.isArray(parsed)
                 )
-                  throw new Error(t("变量必须是字符串键值对象。"));
-                void save({ expected_revision: revision, variables: parsed });
+                  throw new Error(t("变量必须是 JSON 对象。"));
+                void save({ expected_revision: revision, variables: parsed, version_metadata: versionMetadata });
               } catch (e) {
                 notify(errorMessage(e));
               }
@@ -175,6 +178,7 @@ export function EnvironmentSettings({
             variant="outline"
             onClick={() => {
               setVariables(JSON.stringify(env.variables, null, 2));
+              setVersionMetadata(env.version_metadata || "");
               setRevision(env.configuration_revision);
             }}
           >

@@ -354,6 +354,11 @@ async function worker(env,ctx,d,artifact) {
   // `__proto__`; the assets binding below uses defineProperty for the same reason.
   // A normal prototype is required because WorkerLoader structured-clones env.
   const childEnv={...(d.variables||{}),...secrets,KRUN_ENVIRONMENT:d.environment,KRUN_SERVICE_ID:d.service_id,KRUN_VERSION_ID:d.id};
+  if(d.version_metadata){
+   const name=d.version_metadata;
+   if(!bindingName.test(name)||name.startsWith('KRUN_')||reservedBindings.has(name)||magicBindings.has(name)||Object.hasOwn(childEnv,name))throw new Error('version metadata binding name conflicts with environment');
+   Object.defineProperty(childEnv,name,{value:{id:d.id,tag:d.tag||'',timestamp:d.created_at},enumerable:true,writable:false,configurable:false});
+  }
   const assetBinding=manifest.assets?.binding;
   if(assetBinding){
    if(!bindingName.test(assetBinding)||assetBinding.startsWith('KRUN_')||reservedBindings.has(assetBinding)||magicBindings.has(assetBinding)||Object.hasOwn(childEnv,assetBinding))throw new Error('asset binding name conflicts with environment');

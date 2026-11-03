@@ -116,7 +116,7 @@ func (s *Service) NormalizeService(ws domain.WorkerService, states ...*domain.St
 		baseline.ConfigRevision = 1
 	}
 	if baseline.Variables == nil {
-		baseline.Variables = map[string]string{}
+		baseline.Variables = map[string]any{}
 	}
 	if baseline.SecretVersions == nil {
 		baseline.SecretVersions = map[string]string{}
@@ -219,7 +219,11 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 		operations = operations[:100]
 	}
 	versions := map[string]domain.WorkerVersion{}
-	for id,version := range st.Workers.Versions {if version.Service==t.ID && version.Organization==t.Organization && versionVisible[version.Environment] {versionIDs[id]=true}}
+	for id, version := range st.Workers.Versions {
+		if version.Service == t.ID && version.Organization == t.Organization && versionVisible[version.Environment] {
+			versionIDs[id] = true
+		}
+	}
 	for id := range versionIDs {
 		if version, ok := st.Workers.Versions[id]; ok && version.Service == t.ID && version.Organization == t.Organization && versionVisible[version.Environment] {
 			versions[id] = PublicWorkerVersion(version)

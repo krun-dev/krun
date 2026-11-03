@@ -16,13 +16,11 @@ func (s *Store) ConfigRevisionsSince(ctx context.Context, since int64, limit int
 	if s.pool != nil {
 		pool, _ := ctx.Value(WorkerRuntimeFeedPoolKey{}).(string)
 		rows, err := s.pool.Query(ctx, `SELECT revision.config_revision, revision.digest,
-			COALESCE((SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
-				'type', op.op_type,
-				'pool', op.pool,
-				'host', NULLIF(op.host,''),
-				'route', CASE WHEN op.op_type='route_upsert' THEN op.payload END,
-				'version', CASE WHEN op.op_type='version_put' THEN op.payload END
-			)) ORDER BY op.ordinal) FROM worker_config_ops op
+			COALESCE((SELECT jsonb_agg((jsonb_build_object('type',op.op_type,'pool',op.pool)
+                || CASE WHEN op.host<>'' THEN jsonb_build_object('host',op.host) ELSE '{}'::jsonb END
+                || CASE op.op_type WHEN 'route_upsert' THEN jsonb_build_object('route',op.payload)
+                   WHEN 'version_put' THEN jsonb_build_object('version',op.payload) ELSE '{}'::jsonb END
+			) ORDER BY op.ordinal) FROM worker_config_ops op
 				WHERE op.config_revision=revision.config_revision AND ($3='' OR op.pool=$3)), '[]'::jsonb),
 			revision.created_at
 			FROM worker_config_revisions revision

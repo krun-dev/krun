@@ -17,7 +17,7 @@ func (w *Controller) ImportModules(ctx context.Context, ref ServiceRef, actor do
 	}
 	at := time.Now().UTC()
 	owner := "upload-" + securetoken.UUID()
-	b := domain.WorkerBuild{ID: securetoken.NewID("bld"), Organization: ref.Organization, Service: ref.Service, Environment: ref.Environment, State: "building", Entrypoint: code.MainModule, Profile: code.Profile, CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: code.CompatibilityFlags, Created: at, ClaimedBy: owner, ClaimedAt: &at}
+	b := domain.WorkerBuild{ID: securetoken.NewID("bld"), Organization: ref.Organization, Service: ref.Service, Environment: ref.Environment, State: "building", Assets: code.Assets, Entrypoint: code.MainModule, Profile: code.Profile, CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: code.CompatibilityFlags, Created: at, ClaimedBy: owner, ClaimedAt: &at}
 	if err = w.Service.Store.StartUploadedBuild(ctx, b, actor); err != nil {
 		return b, err
 	}

@@ -97,7 +97,12 @@ UPDATE krun_worker_environments SET version_id=$4, deployment_revision=deploymen
 | `krun_worker_idempotency` | 7 天 |
 | `krun_worker_history` | 每 (service, env) 最近 50 条 |
 | `krun_worker_secret_versions` | 无环境或 Version 引用后保留 30 天 |
+| `krun_worker_asset_sessions` / `krun_worker_asset_session_files` | 资产上传能力及逐文件清单，一小时过期；文件先删、会话后删 |
 | `worker_config_revisions` | 512 条 |
+
+CF 资产临时对象在写入前登记 `krun_worker_source_uploads`，由现有 upload GC 在 24 小时后
+删除对象并移除登记；会话过期不会丢失临时对象的清理索引。变量仍属于对应环境或版本行的
+配置字段，支持 JSON 值；版本元数据 binding、标签及说明使用显式列，不引入整状态快照。
 
 ## Schema 基线
 

@@ -114,7 +114,7 @@ func TestPostgresWorkerRepositoryRevisionCASIsExclusive(t *testing.T) {
 		st.Workers.Services["svc-repository-cas"] = WorkerService{
 			Service: "svc-repository-cas", Organization: "org-1", Domains: []string{"internal"},
 			Environments: map[string]WorkerEnvironment{appconfig.WorkerBaseline: {
-				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{},
+				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]any{},
 			}},
 		}
 		return nil
@@ -161,7 +161,7 @@ func TestPostgresWorkerEnvironmentConfigCASIsExclusive(t *testing.T) {
 		st.Workers.Services["svc-environment-cas"] = WorkerService{
 			Service: "svc-environment-cas", Organization: "org-1", Domains: []string{"internal"},
 			Environments: map[string]WorkerEnvironment{appconfig.WorkerBaseline: {
-				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{},
+				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]any{},
 			}},
 		}
 		return nil
@@ -179,7 +179,7 @@ func TestPostgresWorkerEnvironmentConfigCASIsExclusive(t *testing.T) {
 				if environment.ConfigRevision != 1 {
 					return problem(409, "REVISION_CONFLICT", "test did not load the shared pre-image")
 				}
-				environment.Variables = map[string]string{"VALUE": value}
+				environment.Variables = map[string]any{"VALUE": value}
 				environment.ConfigRevision++
 				service.Environments[appconfig.WorkerBaseline] = environment
 				st.Workers.Services[service.Service] = service
@@ -210,7 +210,7 @@ func TestPostgresWorkerDomainsCASIsExclusive(t *testing.T) {
 		st.Workers.Services["svc-domains-cas"] = WorkerService{
 			Service: "svc-domains-cas", Organization: "org-1", Domains: []string{"internal"},
 			Environments: map[string]WorkerEnvironment{appconfig.WorkerBaseline: {
-				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{},
+				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]any{},
 			}},
 		}
 		return nil
@@ -261,7 +261,7 @@ func TestPostgresWorkerPreviewSetCASPreventsConcurrentLimitOverflow(t *testing.T
 		st.Workers.Services["svc-preview-cas"] = WorkerService{
 			Service: "svc-preview-cas", Organization: "org-1", Domains: []string{"internal"},
 			Environments: map[string]WorkerEnvironment{appconfig.WorkerBaseline: {
-				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]string{},
+				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]any{},
 			}},
 		}
 		return nil
@@ -282,7 +282,7 @@ func TestPostgresWorkerPreviewSetCASPreventsConcurrentLimitOverflow(t *testing.T
 					return problem(409, "ENVIRONMENT_LIMIT", "test did not load the shared pre-image")
 				}
 				service.Environments[preview] = WorkerEnvironment{
-					Name: preview, Enabled: true, ConfigRevision: 1, Variables: map[string]string{},
+					Name: preview, Enabled: true, ConfigRevision: 1, Variables: map[string]any{},
 				}
 				service.PreviewRevision++
 				st.Workers.Services[service.Service] = service

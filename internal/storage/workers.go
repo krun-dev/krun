@@ -176,9 +176,9 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 			}
 			if !ok {
 				tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_environments
-					(service_id, env_name, enabled, config_revision, variables, deployment_revision, version_id, confirmed_version_id)
-					VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (service_id, env_name) DO NOTHING`,
-					id, name, env.Enabled, env.ConfigRevision, variables, env.Revision, env.Version, env.Confirmed)
+					(service_id, env_name, enabled, config_revision, variables, deployment_revision, version_id, confirmed_version_id, version_metadata, assets_binding)
+					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (service_id, env_name) DO NOTHING`,
+					id, name, env.Enabled, env.ConfigRevision, variables, env.Revision, env.Version, env.Confirmed, env.VersionMetadata, env.AssetsBinding)
 				if err != nil {
 					return err
 				}
@@ -188,11 +188,11 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 			} else {
 				tag, err := tx.Exec(ctx, `UPDATE krun_worker_environments
 					SET enabled=$3, config_revision=$4, variables=$5, deployment_revision=$6,
-					    version_id=$7, confirmed_version_id=$8, updated_at=now()
+					    version_id=$7, confirmed_version_id=$8, version_metadata=$13, assets_binding=$14, updated_at=now()
 					WHERE service_id=$1 AND env_name=$2 AND config_revision=$9
 					  AND deployment_revision=$10 AND version_id=$11 AND confirmed_version_id=$12`,
 					id, name, env.Enabled, env.ConfigRevision, variables, env.Revision, env.Version, env.Confirmed,
-					oldEnv.ConfigRevision, oldEnv.Revision, oldEnv.Version, oldEnv.Confirmed)
+					oldEnv.ConfigRevision, oldEnv.Revision, oldEnv.Version, oldEnv.Confirmed, env.VersionMetadata, env.AssetsBinding)
 				if err != nil {
 					return err
 				}
@@ -314,7 +314,7 @@ func sameWorkerPlacement(a, b domain.WorkerPlacement) bool {
 func defaultWorkerBaseline(name string, env domain.WorkerEnvironment) bool {
 	return name == workerBaseline && env.Name == workerBaseline && env.Enabled &&
 		env.ConfigRevision == 1 && env.Revision == 0 && env.Version == "" && env.Confirmed == "" &&
-		len(env.Variables) == 0 && len(env.SecretVersions) == 0
+		len(env.Variables) == 0 && len(env.SecretVersions) == 0 && env.VersionMetadata == "" && env.AssetsBinding == ""
 }
 
 func PreviewCount(environments map[string]domain.WorkerEnvironment) int {
@@ -355,7 +355,7 @@ func replaceServiceDomains(ctx context.Context, tx pgx.Tx, service string, domai
 }
 
 func sameEnvironment(a, b domain.WorkerEnvironment) bool {
-	return a.Name == b.Name && a.Enabled == b.Enabled && a.ConfigRevision == b.ConfigRevision &&
+	return a.VersionMetadata == b.VersionMetadata && a.AssetsBinding == b.AssetsBinding && a.Name == b.Name && a.Enabled == b.Enabled && a.ConfigRevision == b.ConfigRevision &&
 		a.Revision == b.Revision && a.Version == b.Version && a.Confirmed == b.Confirmed &&
 		reflect.DeepEqual(a.Variables, b.Variables) && reflect.DeepEqual(a.SecretVersions, b.SecretVersions)
 }
@@ -580,7 +580,7 @@ func sameArtifactContent(a, b domain.WorkerArtifact) bool {
 }
 
 func sameVersion(a, b domain.WorkerVersion) bool {
-	return a.ID == b.ID && a.Service == b.Service && a.Organization == b.Organization &&
+	return a.VersionMetadata == b.VersionMetadata && a.AssetsBinding == b.AssetsBinding && a.Tag == b.Tag && a.Message == b.Message && a.ID == b.ID && a.Service == b.Service && a.Organization == b.Organization &&
 		a.Environment == b.Environment && a.Artifact == b.Artifact && a.Profile == b.Profile && a.ArchiveDigest == b.ArchiveDigest &&
 		a.ModuleDigest == b.ModuleDigest && a.CompatibilityDate == b.CompatibilityDate &&
 		sameStrings(a.CompatibilityFlags, b.CompatibilityFlags) && a.ConfigRevision == b.ConfigRevision &&
@@ -605,13 +605,13 @@ func writeVersions(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 		if err != nil {
 			return err
 		}
-		tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_versions (version_id, org_id, service_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at)
-				SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14
+		tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_versions (version_id, org_id, service_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message)
+				SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18
 				WHERE EXISTS (SELECT 1 FROM krun_worker_artifacts
 					WHERE artifact_id=$5 AND state='finalized' AND org_id=$2
 					  AND profile=$6 AND archive_digest=$7 AND module_digest=$8
 					  AND compatibility_date=$9 AND compatibility_flags=$10)
-				ON CONFLICT (version_id) DO UPDATE SET version_id=excluded.version_id`, id, r.Organization, r.Service, r.Environment, r.Artifact, r.Profile, r.ArchiveDigest, r.ModuleDigest, r.CompatibilityDate, flags, r.ConfigRevision, variables, r.SecretDigest, r.Created)
+				ON CONFLICT (version_id) DO UPDATE SET version_id=excluded.version_id`, id, r.Organization, r.Service, r.Environment, r.Artifact, r.Profile, r.ArchiveDigest, r.ModuleDigest, r.CompatibilityDate, flags, r.ConfigRevision, variables, r.SecretDigest, r.Created, r.VersionMetadata, r.AssetsBinding, r.Tag, r.Message)
 		if err != nil {
 			return err
 		}

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -226,7 +227,7 @@ func WorkerOperationAction(kind string) string {
 	return "service." + kind
 }
 
-func WorkerVariablesValid(vars map[string]string) bool {
+func WorkerVariablesValid(vars map[string]any) bool {
 	if len(vars) > 32 {
 		return false
 	}
@@ -236,7 +237,11 @@ func WorkerVariablesValid(vars map[string]string) bool {
 		if !re.MatchString(k) || strings.HasPrefix(k, "KRUN_") {
 			return false
 		}
-		size += len(v)
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return false
+		}
+		size += len(k) + len(raw)
 	}
 	return size <= 16<<10
 }

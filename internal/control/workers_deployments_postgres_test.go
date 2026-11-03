@@ -14,7 +14,7 @@ func TestPostgresDeploymentCommitPublishesPinnedRouteAndProtectsVersion(t *testi
 	ctx := context.Background()
 	seedPerformanceSites(t, store, 2)
 	artifact := WorkerArtifact{ID: "artifact", Organization: "tenant", State: "finalized", Created: now()}
-	version := WorkerVersion{ID: "version", Organization: "tenant", Service: "site-000002", Environment: "production", Artifact: artifact.ID, Created: now(), Variables: map[string]string{}}
+	version := WorkerVersion{ID: "version", Organization: "tenant", Service: "site-000002", Environment: "production", Artifact: artifact.ID, Created: now(), Variables: map[string]any{}}
 	op := WorkerOperation{ID: "op-deploy", Kind: "publish", Organization: version.Organization, Service: version.Service, Environment: version.Environment, Version: version.ID, State: "queued", Created: now(), Steps: []domain.WorkerStep{{Name: "artifact"}, {Name: "candidate"}, {Name: "commit"}, {Name: "synchronize"}}}
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Artifacts[artifact.ID] = artifact

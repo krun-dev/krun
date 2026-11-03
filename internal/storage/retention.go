@@ -9,6 +9,13 @@ import (
 
 func (s *Store) RetainExpired(ctx context.Context) error {
 	if s.pool == nil {
+		s.mu.Lock()
+		for id, a := range s.assetSessions {
+			if !now().Before(a.Expires) {
+				delete(s.assetSessions, id)
+			}
+		}
+		s.mu.Unlock()
 		return s.DeleteAuditsBefore(ctx, now().Add(-AuditRetention))
 	}
 	at := now()
@@ -21,6 +28,8 @@ func (s *Store) RetainExpired(ctx context.Context) error {
 		sql  string
 		args []any
 	}{
+		{`DELETE FROM krun_worker_asset_session_files WHERE NOT EXISTS(SELECT 1 FROM krun_worker_asset_sessions s WHERE s.session_id=krun_worker_asset_session_files.session_id AND s.expires_at > $1)`, []any{at}},
+		{`DELETE FROM krun_worker_asset_sessions WHERE expires_at <= $1`, []any{at}},
 		{`DELETE FROM krun_worker_scripts WHERE service_id IN(SELECT s.service_id FROM krun_worker_scripts s WHERE s.created_at < now()-interval '10 minutes' AND NOT EXISTS(SELECT 1 FROM krun_resources r WHERE r.resource_id=s.service_id AND r.org_id=s.org_id AND r.kind='service') LIMIT 1000)`, nil},
 		{`DELETE FROM krun_oauth_authorizations WHERE expires_at <= $1`, []any{at}},
 		{`DELETE FROM krun_oauth_refresh_tokens WHERE expires_at <= $1 OR NOT EXISTS(SELECT 1 FROM krun_oauth_grants g WHERE g.grant_id=krun_oauth_refresh_tokens.grant_id)`, []any{at}},

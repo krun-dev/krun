@@ -1,6 +1,7 @@
 package control
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"mime"
@@ -14,18 +15,21 @@ import (
 )
 
 type cfBinding struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Name string          `json:"name"`
+	Type string          `json:"type"`
+	Text string          `json:"text"`
+	JSON json.RawMessage `json:"json"`
 }
 type cfUploadMetadata struct {
-	Main     string                `json:"main_module"`
-	Date     string                `json:"compatibility_date"`
-	Flags    []string              `json:"compatibility_flags"`
-	Bindings []cfBinding           `json:"bindings"`
-	Env      map[string]*cfBinding `json:"env"`
-	Keep     []string              `json:"keep_bindings"`
-	Assets   json.RawMessage       `json:"assets"`
+	Main        string                `json:"main_module"`
+	Date        string                `json:"compatibility_date"`
+	Flags       []string              `json:"compatibility_flags"`
+	Bindings    []cfBinding           `json:"bindings"`
+	Env         map[string]*cfBinding `json:"env"`
+	Keep        []string              `json:"keep_bindings"`
+	Assets      json.RawMessage       `json:"assets"`
+	KeepAssets  bool                  `json:"keep_assets"`
+	Annotations map[string]string     `json:"annotations"`
 }
 
 func cfReadUpload(r *http.Request) (cfUploadMetadata, []workerartifact.UploadedModule, error) {
@@ -96,13 +100,14 @@ func cfReadUpload(r *http.Request) (cfUploadMetadata, []workerartifact.UploadedM
 	if !seen {
 		return meta, nil, problem(400, "INVALID_REQUEST", "Missing metadata")
 	}
-	if len(meta.Assets) > 0 && string(meta.Assets) != "null" {
-		return meta, nil, problem(422, "UNSUPPORTED_ASSETS", "Assets upload sessions are not supported by this API")
-	}
 	return meta, modules, nil
 }
 func cfBindingInput(meta cfUploadMetadata, preview bool) (workerapp.BindingsInput, error) {
-	in := workerapp.BindingsInput{Variables: map[string]string{}, Secrets: map[string]*string{}, ReplaceVariables: !preview, KeepSecrets: preview}
+	in := workerapp.BindingsInput{Variables: map[string]any{}, Secrets: map[string]*string{}, ReplaceVariables: !preview, KeepSecrets: preview}
+	if !preview {
+		in.VersionMetadata = new(string)
+		in.AssetsBinding = new(string)
+	}
 	for _, kind := range meta.Keep {
 		if kind == "secret_text" {
 			in.KeepSecrets = true
@@ -111,40 +116,57 @@ func cfBindingInput(meta cfUploadMetadata, preview bool) (workerapp.BindingsInpu
 		}
 	}
 	seen := map[string]bool{}
-	for _, b := range meta.Bindings {
-		if seen[b.Name] {
-			return in, problem(422, "INVALID_REQUEST", "Duplicate binding name")
+	apply := func(name string, b *cfBinding) error {
+		if seen[name] {
+			return problem(422, "INVALID_REQUEST", "Duplicate binding name")
 		}
-		seen[b.Name] = true
-		switch b.Type {
-		case "plain_text":
-			in.Variables[b.Name] = b.Text
-		case "secret_text":
-			value := b.Text
-			in.Secrets[b.Name] = &value
-		case "inherit":
-			in.KeepSecrets = true
-			in.Inherit = append(in.Inherit, b.Name)
-		default:
-			return in, problem(422, "UNSUPPORTED_BINDING", "Unsupported binding type: "+b.Type)
-		}
-	}
-	for name, b := range meta.Env {
+		seen[name] = true
 		if b == nil {
 			in.Secrets[name] = nil
-			continue
+			return nil
 		}
 		switch b.Type {
 		case "plain_text":
 			in.Variables[name] = b.Text
+		case "json":
+			var value any
+			decoder := json.NewDecoder(bytes.NewReader(b.JSON))
+			decoder.UseNumber()
+			if len(b.JSON) == 0 || decoder.Decode(&value) != nil {
+				return problem(422, "INVALID_REQUEST", "Invalid JSON binding")
+			}
+			in.Variables[name] = value
 		case "secret_text":
 			value := b.Text
 			in.Secrets[name] = &value
+		case "version_metadata":
+			if in.VersionMetadata != nil && *in.VersionMetadata != "" {
+				return problem(422, "INVALID_REQUEST", "Only one version metadata binding is supported")
+			}
+			value := name
+			in.VersionMetadata = &value
+		case "assets":
+			if in.AssetsBinding != nil && *in.AssetsBinding != "" {
+				return problem(422, "INVALID_REQUEST", "Only one assets binding is supported")
+			}
+			value := name
+			in.AssetsBinding = &value
 		case "inherit":
 			in.KeepSecrets = true
 			in.Inherit = append(in.Inherit, name)
 		default:
-			return in, problem(422, "UNSUPPORTED_BINDING", "Unsupported Preview binding type")
+			return problem(422, "UNSUPPORTED_BINDING", "Unsupported binding type: "+b.Type)
+		}
+		return nil
+	}
+	for _, b := range meta.Bindings {
+		if err := apply(b.Name, &b); err != nil {
+			return in, err
+		}
+	}
+	for name, b := range meta.Env {
+		if err := apply(name, b); err != nil {
+			return in, err
 		}
 	}
 	return in, nil
@@ -167,11 +189,6 @@ func (s *Server) cfUpload(w http.ResponseWriter, r *http.Request) {
 	input, err := cfBindingInput(meta, r.PathValue("preview") != "")
 	if err != nil {
 		s.writeError(w, r, err)
-		return
-	}
-	raw, err := workerartifact.PackModules(meta.Main, meta.Date, meta.Flags, modules, nil, nil)
-	if err != nil {
-		s.writeError(w, r, problem(422, "WORKER_ARCHIVE_INVALID", err.Error()))
 		return
 	}
 	script, err := s.cfEnsureScript(r, r.PathValue("script"))
@@ -198,6 +215,20 @@ func (s *Server) cfUpload(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, problem(503, "WORKERS_NOT_CONFIGURED", "Worker upload controller unavailable"))
 		return
 	}
+	assets, files, err := s.cfUploadedAssets(r, meta, input)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if meta.Main == "" && assets != nil {
+		meta.Main = "index.js"
+		modules = []workerartifact.UploadedModule{{Name: meta.Main, Type: "esm", Data: []byte(`export default {fetch(){return new Response("Not Found",{status:404})}}`)}}
+	}
+	raw, err := workerartifact.PackModules(meta.Main, meta.Date, meta.Flags, modules, assets, files)
+	if err != nil {
+		s.writeError(w, r, problem(422, "WORKER_ARCHIVE_INVALID", err.Error()))
+		return
+	}
 	build, err := s.workers.ImportModules(r.Context(), workerRef(r), actor, raw)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -212,7 +243,7 @@ func (s *Server) cfUpload(w http.ResponseWriter, r *http.Request) {
 		if e := app.StageBindings(st, p, ref, input); e != nil {
 			return e
 		}
-		out, _, e := app.WorkerVersionUpload(r.Context(), st, p, ref, workerapp.WorkerVersionUploadInput{Build: build.ID, Key: securetoken.UUID()})
+		out, _, e := app.WorkerVersionUpload(r.Context(), st, p, ref, workerapp.WorkerVersionUploadInput{Build: build.ID, Key: securetoken.UUID(), Tag: meta.Annotations["workers/tag"], Message: meta.Annotations["workers/message"]})
 		if e != nil {
 			return e
 		}

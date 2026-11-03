@@ -15,6 +15,7 @@ export function PreviewBasePanel({
 }) {
   const [config, setConfig] = useState<Environment>();
   const [variables, setVariables] = useState("{}");
+  const [versionMetadata, setVersionMetadata] = useState("");
   const [name, setName] = useState("");
   const [secret, setSecret] = useState("");
   const [busy, setBusy] = useState(false);
@@ -22,6 +23,7 @@ export function PreviewBasePanel({
     const value = await api<Environment>(base + "/previews-base");
     setConfig(value);
     setVariables(JSON.stringify(value.variables, null, 2));
+    setVersionMetadata(value.version_metadata || "");
   }
   useEffect(() => {
     let current = true;
@@ -30,6 +32,7 @@ export function PreviewBasePanel({
         if (current) {
           setConfig(v);
           setVariables(JSON.stringify(v.variables, null, 2));
+          setVersionMetadata(v.version_metadata || "");
         }
       })
       .catch((e) => {
@@ -54,6 +57,7 @@ export function PreviewBasePanel({
       } else {
         await api(base + "/previews-base", "PATCH", {
           variables: JSON.parse(variables),
+          version_metadata: versionMetadata,
           expected_revision: config.configuration_revision,
         });
       }
@@ -76,6 +80,10 @@ export function PreviewBasePanel({
           onChange={(e) => setVariables(e.target.value)}
           rows={6}
         />
+      </Field>
+      <Field label={t("版本元数据绑定")}>
+        <Input value={versionMetadata} placeholder="CF_VERSION_METADATA" onChange={(e) => setVersionMetadata(e.target.value)} />
+        <p className="text-xs text-muted-foreground">{t("将版本 ID、标签和创建时间注入此变量；留空关闭。")}</p>
       </Field>
       <div>
         <Button disabled={busy || !config} onClick={() => void save(false)}>

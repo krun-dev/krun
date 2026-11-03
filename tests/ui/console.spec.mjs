@@ -338,7 +338,7 @@ test("UI configures Previews Base without changing production", async ({
   const production = await currentEnvironment(context);
   await page
     .locator("textarea")
-    .fill(JSON.stringify({ GREETING: "base-from-ui" }));
+    .fill(JSON.stringify({ GREETING: "base-from-ui", CONFIG: { nested: [1, true, null] } }));
   await page
     .getByRole("button", { name: "保存预览基础变量", exact: true })
     .click();
@@ -349,7 +349,26 @@ test("UI configures Previews Base without changing production", async ({
     name: "base-" + run,
   });
   expect(preview.variables.GREETING).toBe("base-from-ui");
+  expect(preview.variables.CONFIG).toEqual({ nested: [1, true, null] });
   expect((await currentEnvironment(context)).version_id).toBe(
     production.version_id,
   );
+});
+
+
+test("UI edits JSON values and metadata bindings, then displays immutable version tags", async ({page,context})=>{
+ await context.addCookies(cookies);await page.goto(locationFor(workflow.id));
+ await page.getByRole('tab',{name:'环境配置',exact:true}).click();
+ await page.getByRole('textbox',{name:'环境变量 JSON'}).fill(JSON.stringify({CONFIG:{nested:[1,true,null]},COUNT:7,FLAG:false}));
+ await page.getByRole('textbox',{name:'版本元数据绑定',exact:true}).fill('CF_VERSION_METADATA');
+ await page.getByRole('button',{name:'保存配置',exact:true}).click();
+ await expect.poll(async()=>(await currentEnvironment(context)).variables.CONFIG).toEqual({nested:[1,true,null]});
+ expect((await currentEnvironment(context)).version_metadata).toBe('CF_VERSION_METADATA');
+ const overview=await api(context,workerBase()+'/overview');
+ const build=Object.values(overview.builds).find(b=>b.state==='succeeded');expect(build).toBeTruthy();
+ const version=await api(context,workerBase()+'/environments/production/versions','POST',{build_id:build.id,tag:'ui-json-v1',message:'JSON configuration snapshot',idempotency_key:randomUUID()});
+ expect(version.variables.COUNT).toBe(7);expect(version.variables.FLAG).toBe(false);expect(version.version_metadata).toBe('CF_VERSION_METADATA');
+ await page.goto(locationFor(workflow.id));await page.getByRole('tab',{name:'版本与部署',exact:true}).click();
+ await expect(page.getByText('ui-json-v1',{exact:true})).toBeVisible();await expect(page.getByText('JSON configuration snapshot',{exact:true})).toBeVisible();
+ await page.screenshot({path:'.data/bindings/ui-json-version.png',fullPage:true});
 });

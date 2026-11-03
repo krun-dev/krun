@@ -31,7 +31,7 @@ func TestVersionUploadFreezesConfigurationWithoutDeploying(t *testing.T) {
 		if env.Version != active.ID || len(st.Workers.Operations) != 0 || len(st.Workers.Deployments) != 0 {
 			t.Fatal("upload changed traffic")
 		}
-		env.Variables = map[string]string{"PLAIN": "changed after upload"}
+		env.Variables = map[string]any{"PLAIN": "changed after upload"}
 		env.ConfigRevision++
 		service := st.Workers.Services["svc-a"]
 		service.Environments["production"] = env
@@ -56,6 +56,40 @@ func TestVersionUploadFreezesConfigurationWithoutDeploying(t *testing.T) {
 		d := st.Workers.Deployments[workerapp.DeploymentID(op.ID)]
 		if d.Version != version.ID || d.Committed != nil {
 			t.Fatal("candidate became routable before validation")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBuildDeploymentFreezesJSONAndVersionMetadata(t *testing.T) {
+	server, store, base := workerTestServer(t)
+	seedPublishedWorker(t, store)
+	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
+		service := st.Workers.Services["svc-a"]
+		env := service.Environments["production"]
+		env.VersionMetadata = "META"
+		env.Variables = map[string]any{"CONFIG": map[string]any{"nullable": nil, "items": []any{true, "two"}}}
+		service.Environments["production"] = env
+		st.Workers.Services["svc-a"] = service
+		st.Workers.Builds["build-meta"] = WorkerBuild{ID: "build-meta", Organization: "org-a", Service: "svc-a", Environment: "production", State: "succeeded", Artifact: "art_secret", Created: now()}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	response := request(server, "POST", base+"/environments/production/deployments", "krun_cli_admin", `{"build_id":"build-meta","expected_revision":3,"idempotency_key":"native-metadata"}`)
+	if response.Code != 202 {
+		t.Fatalf("native build deployment: %d %s", response.Code, response.Body.String())
+	}
+	var op WorkerOperation
+	if err := json.Unmarshal(response.Body.Bytes(), &op); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.View(context.Background(), PartitionWorkers, func(st *State) error {
+		version := st.Workers.Versions[op.Version]
+		if version.VersionMetadata != "META" || version.Variables["CONFIG"].(map[string]any)["nullable"] != nil {
+			t.Fatal("native deployment lost frozen bindings", version)
 		}
 		return nil
 	}); err != nil {

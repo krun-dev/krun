@@ -66,6 +66,90 @@ await check('official Preview Secret creates a new Preview deployment',async()=>
 await check('official Preview delete removes only its target',async()=>{await wrangler(['preview','delete','--name','branch-one','--skip-confirmation']);await api(workerPath+'/previews/branch-one','GET',undefined,false,404);await invoke('production',{marker:'second'})});
 await check('traffic splitting is explicitly rejected',async()=>{const r=await api(scriptPath+'/deployments','POST',{strategy:'percentage',versions:[{version_id:firstVersion,percentage:50},{version_id:secondVersion,percentage:50}]},false,422);assert.equal(r.success,false)});
 await check('first Secret on a nonexistent Worker follows Wrangler placeholder deployment',async()=>{const other='cf-secret-'+randomUUID().slice(0,8);await wrangler(['secret','put','initialToken','--name',other],'fixture-initial\n');const list=await api(cf+'/workers/scripts/'+other+'/secrets');assert(list.result.some(b=>b.name==='initialToken'));await api(cf+'/workers/scripts/'+other,'DELETE')});
+// Bindings must survive the complete official upload/deploy/rollback path.
+let bindingsVersion, bindingsConfig;
+async function invokePath(url, environment='production') {
+ return api(native+'/environments/'+environment+'/invoke','POST',{path:url,method:'GET'});
+}
+await check('asset capabilities reject corrupt files, incomplete tokens and cross-Worker reuse',async()=>{
+ const started=(await api(scriptPath+'/assets-upload-session','POST',{manifest:{'/fixture.txt':{hash:'0'.repeat(32),size:4}}})).result;
+ const form=new FormData();form.append('0'.repeat(32),new Blob([Buffer.from('bad!').toString('base64')]),'file');
+ const response=await fetch(origin+cf+'/workers/assets/upload?base64=true',{method:'POST',headers:{authorization:'Bearer '+started.jwt},body:form});assert.equal(response.status,422);
+ function deployment(jwt){const form=new FormData();form.append('metadata',JSON.stringify({main_module:'index.js',compatibility_date:'2026-09-28',assets:{jwt}}));form.append('index.js',new Blob(['export default {fetch(){return new Response("ok")}}'],{type:'application/javascript+module'}),'index.js');return form}
+ const incomplete=await fetch(origin+scriptPath,{method:'PUT',headers:{authorization:'Bearer '+token},body:deployment(started.jwt)});assert.equal(incomplete.status,401);
+ const completed=(await api(scriptPath+'/assets-upload-session','POST',{manifest:{}})).result;
+ const other='cf-cap-'+randomUUID().slice(0,8);await api(cf+'/workers/workers','POST',{name:other});
+ const crossed=await fetch(origin+cf+'/workers/scripts/'+other,{method:'PUT',headers:{authorization:'Bearer '+token},body:deployment(completed.jwt)});assert.equal(crossed.status,403);
+ await api(cf+'/workers/scripts/'+other,'DELETE');
+});
+await check('official Wrangler uploads JSON, version metadata and assets without deploying',async()=>{
+ const assets=path.join(directory,'public');mkdirSync(assets,{recursive:true});
+ writeFileSync(path.join(assets,'index.html'),'<h1>assets-one</h1>');
+ writeFileSync(path.join(assets,'readme.txt'),'binding-file-one');
+ writeFileSync(path.join(assets,'empty.txt'),'');
+ bindingsConfig={name:script,main:'index.js',compatibility_date:'2026-09-28',workers_dev:true,preview_urls:true,
+  vars:{CONFIG:{nested:{enabled:true,nullable:null},items:[1,'two',null]},COUNT:42,FLAG:false,EMPTY:null},
+  version_metadata:{binding:'META'},assets:{directory:'public',binding:'ASSETS',run_worker_first:['/api/*','/bound']},
+  previews:{vars:{CONFIG:{preview:true}},version_metadata:{binding:'META'}}};
+ writeFileSync(config,JSON.stringify(bindingsConfig));
+ writeFileSync(source,`export default {async fetch(request,env){const url=new URL(request.url);if(url.pathname==='/bound')return env.ASSETS.fetch(new Request('https://assets.invalid/readme.txt'));return Response.json({config:env.CONFIG,count:env.COUNT,flag:env.FLAG,empty:env.EMPTY,meta:env.META})}}`);
+ await wrangler(['versions','upload','--tag','assets-one','--message','JSON and asset fixture']);
+ const version=(await api(scriptPath+'/versions')).result.items[0];bindingsVersion=version.id;
+ assert.equal(version.annotations['workers/tag'],'assets-one');
+ assert.equal(version.annotations['workers/message'],'JSON and asset fixture');
+ assert(version.resources.bindings.some(b=>b.name==='CONFIG'&&b.type==='json'));
+ assert(version.resources.bindings.some(b=>b.name==='META'&&b.type==='version_metadata'));
+ assert(version.resources.bindings.some(b=>b.name==='ASSETS'&&b.type==='assets'));
+ await invoke('production',{marker:'second'});
+});
+await check('deployed JSON values and version metadata retain their actual types',async()=>{
+ const output=await wrangler(['versions','deploy',bindingsVersion+'@100%','--yes']);assert(output.includes('assets-one'));
+ let value;for(let i=0;i<60;i++){const r=await invokePath('/api/config');try{value=JSON.parse(r.body)}catch{};if(value?.meta?.id===bindingsVersion)break;await new Promise(r=>setTimeout(r,500))}
+ assert.deepEqual(value.config,{nested:{enabled:true,nullable:null},items:[1,'two',null]});assert.equal(value.count,42);assert.equal(value.flag,false);assert.equal(value.empty,null);
+ assert.equal(value.meta.tag,'assets-one');assert.equal(value.meta.id,bindingsVersion);assert(Number.isFinite(Date.parse(value.meta.timestamp)));
+ const settings=(await api(scriptPath+'/settings')).result;assert.deepEqual(settings.bindings.find(b=>b.name==='CONFIG').json,value.config);
+});
+await check('official asset uploads serve static files and the ASSETS fetch binding',async()=>{
+ const root=await invokePath('/');assert.equal(root.status,200);assert(root.body.includes('assets-one'));
+ const bound=await invokePath('/bound');assert.equal(bound.status,200);assert.equal(bound.body,'binding-file-one');
+ const empty=await invokePath('/empty.txt');assert.equal(empty.status,200);assert.equal(empty.body,'');
+});
+await check('changing assets creates another immutable version and rollback restores old files',async()=>{
+ writeFileSync(path.join(directory,'public','index.html'),'<h1>assets-two</h1>');writeFileSync(path.join(directory,'public','readme.txt'),'binding-file-two');
+ bindingsConfig.vars.CONFIG={changed:true};writeFileSync(config,JSON.stringify(bindingsConfig));
+ await wrangler(['versions','upload','--tag','assets-two']);
+ assert((await invokePath('/')).body.includes('assets-one'));
+ const next=(await api(scriptPath+'/versions')).result.items[0].id;
+ await wrangler(['versions','deploy',next+'@100%','--yes']);
+ await assertEventually(async()=>assert((await invokePath('/')).body.includes('assets-two')));
+ const output=await wrangler(['versions','deploy',bindingsVersion+'@100%','--yes']);assert(output.includes('assets-one'));
+ await assertEventually(async()=>assert((await invokePath('/')).body.includes('assets-one')));
+ assert.equal((await invokePath('/bound')).body,'binding-file-one');
+ const value=JSON.parse((await invokePath('/api/config')).body);assert.equal(value.meta.tag,'assets-one');assert.equal(value.config.nested.enabled,true);
+});
+async function assertEventually(fn){let error;for(let i=0;i<60;i++){try{await fn();return}catch(e){error=e;await new Promise(r=>setTimeout(r,500))}}throw error}
+await check('keep_assets reuses the deployed immutable files during a code-only upload',async()=>{
+ const form=new FormData();form.append('metadata',JSON.stringify({main_module:'index.js',compatibility_date:'2026-09-28',keep_assets:true,bindings:[{name:'ASSETS',type:'assets'},{name:'META',type:'version_metadata'}],annotations:{'workers/tag':'kept-assets'}}));
+ form.append('index.js',new Blob(['export default {fetch(request,env){if(new URL(request.url).pathname==="/bound")return env.ASSETS.fetch(new Request("https://assets.invalid/readme.txt"));return Response.json({meta:env.META})}}'],{type:'application/javascript+module'}),'index.js');
+ const response=await fetch(origin+scriptPath,{method:'PUT',headers:{authorization:'Bearer '+token},body:form});const body=await response.json();assert.equal(response.status,200,JSON.stringify(body));
+ await assertEventually(async()=>assert((await invokePath('/')).body.includes('assets-one')));assert.equal((await invokePath('/bound')).body,'binding-file-one');
+ await assertEventually(async()=>assert.equal(JSON.parse((await invokePath('/api/metadata')).body).meta.tag,'kept-assets'));
+});
+await check('official Preview assets and JSON bindings remain isolated from production',async()=>{
+ await wrangler(['preview','--name','assets-preview','--tag','preview-assets']);
+ await assertEventually(async()=>assert((await invokePath('/','assets-preview')).body.includes('assets-two')));
+ assert((await invokePath('/')).body.includes('assets-one'));
+ const value=JSON.parse((await invokePath('/api/config','assets-preview')).body);assert.deepEqual(value.config,{preview:true});assert(value.meta&&value.meta.id!==bindingsVersion);assert.equal(value.meta.tag,'preview-assets');const details=(await api(workerPath+'/previews/assets-preview/deployments/latest')).result;assert.equal(details.annotations['workers/tag'],'preview-assets');assert.equal((await invokePath('/bound','assets-preview')).body,'binding-file-two');
+ await wrangler(['preview','delete','--name','assets-preview','--skip-confirmation']);
+});
+await check('official Wrangler deploy supports an assets-only Worker',async()=>{
+ const other='cf-assets-'+randomUUID().slice(0,8);writeFileSync(config,JSON.stringify({name:other,compatibility_date:'2026-09-28',assets:{directory:'public'}}));
+ await wrangler(['deploy']);const details=(await api(cf+'/workers/workers/'+other)).result;
+ const base='/api/v1/orgs/'+org.id+'/services/'+details.tag+'/workers';
+ await assertEventually(async()=>{const r=await api(base+'/environments/production/invoke','POST',{path:'/',method:'GET'});assert.equal(r.status,200);assert(r.body.includes('assets-two'))});
+ await api(cf+'/workers/scripts/'+other,'DELETE');
+ writeFileSync(config,JSON.stringify({name:script,main:'index.js',compatibility_date:'2026-09-28',workers_dev:true,preview_urls:true}));code('second');
+});
 await check('deleted Script names receive a fresh internal service identity',async()=>{const before=(await api(workerPath)).result.tag;await api(scriptPath,'DELETE');await api(workerPath,'GET',undefined,false,404);code('recreated');await wrangler(['deploy']);const after=(await api(workerPath)).result.tag;assert.notEqual(before,after);const secrets=(await api(scriptPath+'/secrets')).result;assert.equal(secrets.length,0)});
 await check('native service deletion cannot resurrect a previous Script identity',async()=>{const id=(await api(workerPath)).result.tag;await api('/api/v1/orgs/'+org.id+'/services/'+id,'DELETE',undefined,false,204);const response=await api(cf+'/workers/workers','POST',{name:script},false,409);assert.equal(response.success,false);await api('/api/v1/orgs/'+org.id+'/services/'+id,'GET',undefined,false,404)});
 console.log('CF WRANGLER E2E PASSED '+results.length+' cases');

@@ -1,6 +1,7 @@
 package workers
 
 import (
+	workerartifact "github.com/krun-dev/krun/internal/artifact"
 	"strings"
 
 	"github.com/krun-dev/krun/internal/authorization"
@@ -11,7 +12,9 @@ import (
 // StageBindings changes desired configuration; callers explicitly snapshot and
 // deploy afterward. A nil secret deletes it, while omitted secrets are retained.
 type BindingsInput struct {
-	Variables        map[string]string
+	VersionMetadata  *string
+	AssetsBinding    *string
+	Variables        map[string]any
 	Secrets          map[string]*string
 	ReplaceVariables bool
 	KeepSecrets      bool
@@ -33,7 +36,7 @@ func (s *Service) StageBindings(st *domain.State, p authorization.Principal, ref
 	service := s.WorkerService(st, target)
 	current, ok := service.Environments[env]
 	if env == domain.PreviewBaseName {
-		current = domain.WorkerEnvironment{Name: env, Enabled: true, Variables: map[string]string{}, SecretVersions: map[string]string{}}
+		current = domain.WorkerEnvironment{Name: env, Enabled: true, Variables: map[string]any{}, SecretVersions: map[string]string{}}
 		if service.PreviewBase != nil {
 			current = *service.PreviewBase
 		}
@@ -46,15 +49,25 @@ func (s *Service) StageBindings(st *domain.State, p authorization.Principal, ref
 		return domain.Problem(409, "DEPLOYMENT_BUSY", "Wait for the active deployment")
 	}
 	for _, name := range in.Inherit {
+		if name == current.VersionMetadata {
+			value := name
+			in.VersionMetadata = &value
+			continue
+		}
+		if name == current.AssetsBinding {
+			value := name
+			in.AssetsBinding = &value
+			continue
+		}
 		if _, secret := current.SecretVersions[name]; !secret {
 			if _, plain := current.Variables[name]; !plain {
 				return domain.Problem(422, "WORKER_BINDINGS_INVALID", "Inherited binding does not exist")
 			}
 		}
 	}
-	vars := domain.CloneStringsMap(current.Variables)
+	vars := domain.CloneWorkerVariables(current.Variables)
 	if in.ReplaceVariables {
-		vars = map[string]string{}
+		vars = map[string]any{}
 	}
 	for _, name := range in.Inherit {
 		if value, ok := current.Variables[name]; ok {
@@ -103,6 +116,15 @@ func (s *Service) StageBindings(st *domain.State, p authorization.Principal, ref
 	}
 	current.Variables = vars
 	current.SecretVersions = secrets
+	if in.VersionMetadata != nil {
+		current.VersionMetadata = *in.VersionMetadata
+	}
+	if in.AssetsBinding != nil {
+		current.AssetsBinding = *in.AssetsBinding
+	}
+	if err := ValidateWorkerBindings(current); err != nil {
+		return err
+	}
 	current.SecretNames = domain.WorkerSecretNames(secrets)
 	current.ConfigRevision++
 	if env == domain.PreviewBaseName {
@@ -112,5 +134,28 @@ func (s *Service) StageBindings(st *domain.State, p authorization.Principal, ref
 	}
 	st.Workers.Services[target.ID] = service
 	s.audit(st, p, "workers.bindings.change", target.ID+"/"+env, true)
+	return nil
+}
+
+func ValidateWorkerBindings(env domain.WorkerEnvironment) error {
+	seen := map[string]bool{}
+	for name := range env.Variables {
+		seen[name] = true
+	}
+	for name := range env.SecretVersions {
+		if seen[name] {
+			return domain.Problem(409, "WORKER_BINDING_CONFLICT", "Binding names must be unique")
+		}
+		seen[name] = true
+	}
+	for _, name := range []string{env.VersionMetadata, env.AssetsBinding} {
+		if name == "" {
+			continue
+		}
+		if !workerartifact.WorkerAssetBindingName.MatchString(name) || strings.HasPrefix(name, "KRUN_") || workerartifact.WorkerReservedBindings[name] || seen[name] {
+			return domain.Problem(422, "WORKER_BINDING_CONFLICT", "Invalid or duplicate binding name")
+		}
+		seen[name] = true
+	}
 	return nil
 }
