@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.js";
 
-const env = { KRUN_ENVIRONMENT: "test", KRUN_RELEASE_ID: "rel_test" };
+const env = { KRUN_ENVIRONMENT: "test", KRUN_VERSION_ID: "rel_test" };
 
-test("health exposes release context without caching", async () => {
+test("health exposes version context without caching", async () => {
   const response = await worker.fetch(new Request("https://example.test/api/health"), env);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "no-store");
@@ -13,7 +13,7 @@ test("health exposes release context without caching", async () => {
     ok: true,
     service: "krun-workers-fullstack",
     environment: "test",
-    release_id: "rel_test",
+    version_id: "rel_test",
     secret_configured: false,
   });
 });
@@ -57,7 +57,7 @@ test("unknown paths are explicit JSON 404s", async () => {
   assert.deepEqual(await response.json(), { error: "not_found", path: "/api/missing" });
 });
 
-test("ASSETS binding is release-scoped and callable from Hono", async () => {
+test("ASSETS binding is version-scoped and callable from Hono", async () => {
   const response = await worker.fetch(
     new Request("https://example.test/api/asset-check"),
     {...env, ASSETS: {fetch: async () => new Response("<h1>STATIC HTML</h1>")}},

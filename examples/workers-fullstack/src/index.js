@@ -11,7 +11,7 @@ async function health(request, env) {
     ok: true,
     service,
     environment: env.KRUN_ENVIRONMENT ?? "local-test",
-    release_id: env.KRUN_RELEASE_ID ?? "local-test",
+    version_id: env.KRUN_VERSION_ID ?? "local-test",
     secret_configured:
       typeof env.VERIFICATION_SECRET === "string" &&
       env.VERIFICATION_SECRET.length > 0,

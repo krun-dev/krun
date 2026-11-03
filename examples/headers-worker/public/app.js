@@ -60,9 +60,9 @@ function render(data) {
     body.append(tr);
   }
   $("header-count").textContent = names.length + " headers";
-  $("release").textContent = data.environment?.KRUN_RELEASE_ID
-    ? "release " + data.environment.KRUN_RELEASE_ID.slice(0, 16)
-    : "release —";
+  $("version").textContent = data.environment?.KRUN_VERSION_ID
+    ? "version " + data.environment.KRUN_VERSION_ID.slice(0, 16)
+    : "version —";
 }
 
 function status(text, error = false) {

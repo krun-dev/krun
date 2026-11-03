@@ -1,6 +1,6 @@
 const status = document.querySelector("#api-status");
 const environment = document.querySelector("#environment");
-const release = document.querySelector("#release");
+const version = document.querySelector("#version");
 const route = document.querySelector("#current-route");
 const form = document.querySelector("#echo-form");
 const result = document.querySelector("#echo-result");
@@ -15,7 +15,7 @@ async function loadHealth() {
     status.textContent = data.ok ? "API 已连通" : "API 返回异常";
     status.dataset.state = data.ok ? "ok" : "error";
     environment.textContent = data.environment;
-    release.textContent = data.release_id;
+    version.textContent = data.version_id;
   } catch (error) {
     status.textContent = `API 请求失败：${error.message}`;
     status.dataset.state = "error";

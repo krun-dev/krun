@@ -62,14 +62,14 @@ tar 里**不能有目录条目**（`src/`、`assets/` 本身），builder 只接
 2. 把 `source.tar.gz` PUT 到 `upload_url`。URL 指向集群内 MinIO 时，需要从能访问 MinIO 的位置执行（例如 kind 的 tester Pod 或 port-forward）。
 3. `POST .../workers/builds`，body 使用上面的构建配置，并带上 `source_type: "upload"` 和 `source_upload`。
 4. 轮询 `GET .../workers/builds/{id}` 到 `succeeded`。
-5. `GET .../workers/environments` 取 production 的 `release_revision`。
-6. `POST .../workers/environments/production/releases`，body 为 `{build_id, expected_revision, idempotency_key}`。
+5. `GET .../workers/environments` 取 production 的 `deployment_revision`。
+6. `POST .../workers/environments/production/versions`，body 为 `{build_id, expected_revision, idempotency_key}`。
 7. 轮询 `GET .../workers/operations/{id}` 到 `available`。
 8. 打开 production 的 host（形如 `w-xxxxxxxx-production.workers.test`），或者用控制台的 invoke 调用 `/headers`。
 
 ## 验证点
 
-- `GET /` 返回页面，响应头带 `x-krun-release` / `x-krun-pod`；
+- `GET /` 返回页面，响应头带 `x-krun-version` / `x-krun-pod`；
 - `GET /headers` 返回 JSON，`headers["x-demo"]` 能看到页面表单里发送的自定义 header；
-- `environment.KRUN_ENVIRONMENT` / `KRUN_SERVICE_ID` / `KRUN_RELEASE_ID` 来自当前 Release；
+- `environment.KRUN_ENVIRONMENT` / `KRUN_SERVICE_ID` / `KRUN_VERSION_ID` 来自当前 Version；
 - 页面默认遮罩 `authorization`、`cookie` 等敏感 header，勾选“显示敏感 header”后可见。

@@ -173,12 +173,12 @@ const artifact = await api(base + "/artifacts/" + build.artifact_id);
 const environments = (await api(base + "/environments")).items;
 const production = environments.find((item) => item.name === "production");
 assert(production, "production environment is missing");
-const queuedRelease = await api(base + "/environments/production/releases", "POST", {
+const queuedVersion = await api(base + "/environments/production/versions", "POST", {
   build_id: build.id,
-  expected_revision: production.release_revision,
+  expected_revision: production.deployment_revision,
   idempotency_key: randomUUID(),
 }, 202);
-const operation = await poll(base + "/operations/" + queuedRelease.id, ["available"]);
+const operation = await poll(base + "/operations/" + queuedVersion.id, ["available"]);
 let current = (await api(base + "/environments")).items.find((item) => item.name === "production");
 const host = current.display_hosts?.internal ?? current.hosts?.[0] ?? current.host;
 assert(host, "production host is missing");
@@ -186,7 +186,7 @@ assert(host, "production host is missing");
 const initialSecrets = await api(base + "/environments/production/secrets");
 if (initialSecrets.items.some((item) => item.name === "VERIFICATION_SECRET")) {
   const queuedCleanup = await api(base + "/environments/production/secrets/VERIFICATION_SECRET", "DELETE", {
-    expected_revision: current.release_revision,
+    expected_revision: current.deployment_revision,
     idempotency_key: randomUUID(),
   }, 202);
   await poll(base + "/operations/" + queuedCleanup.id, ["available"]);
@@ -203,29 +203,29 @@ assert.equal(assetBinding.status, 200); assert.deepEqual(assetBinding.body, { st
 const secretValue = "local-secret-" + randomUUID();
 const queuedSecret = await api(base + "/environments/production/secrets/VERIFICATION_SECRET", "PUT", {
   value: secretValue,
-  expected_revision: current.release_revision,
+  expected_revision: current.deployment_revision,
   idempotency_key: randomUUID(),
 }, 202);
 const secretOperation = await poll(base + "/operations/" + queuedSecret.id, ["available"]);
-const secretRelease = await api(base + "/releases/" + secretOperation.release_id);
-assert.equal(secretRelease.artifact_id, artifact.id);
+const secretVersion = await api(base + "/versions/" + secretOperation.version_id);
+assert.equal(secretVersion.artifact_id, artifact.id);
 const secretHealth = await gatewayRequest(host, "/api/health");
 assert.equal(secretHealth.body.secret_configured, true);
-assert.equal(secretHealth.body.release_id, secretOperation.release_id);
+assert.equal(secretHealth.body.version_id, secretOperation.version_id);
 const secretList = await api(base + "/environments/production/secrets");
 assert(secretList.items.some((item) => item.name === "VERIFICATION_SECRET"));
 assert(!JSON.stringify(secretList).includes(secretValue));
 const secretEnvironment = (await api(base + "/environments")).items.find((item) => item.name === "production");
 const queuedDelete = await api(base + "/environments/production/secrets/VERIFICATION_SECRET", "DELETE", {
-  expected_revision: secretEnvironment.release_revision,
+  expected_revision: secretEnvironment.deployment_revision,
   idempotency_key: randomUUID(),
 }, 202);
 const deleteOperation = await poll(base + "/operations/" + queuedDelete.id, ["available"]);
-const deleteRelease = await api(base + "/releases/" + deleteOperation.release_id);
-assert.equal(deleteRelease.artifact_id, artifact.id);
+const deleteVersion = await api(base + "/versions/" + deleteOperation.version_id);
+assert.equal(deleteVersion.artifact_id, artifact.id);
 const deletedHealth = await gatewayRequest(host, "/api/health");
 assert.equal(deletedHealth.body.secret_configured, false);
-assert.equal(deletedHealth.body.release_id, deleteOperation.release_id);
+assert.equal(deletedHealth.body.version_id, deleteOperation.version_id);
 const echo = await gatewayRequest(host, "/api/echo", {
   method: "POST",
   headers: { "content-type": "application/json" },
@@ -263,7 +263,7 @@ console.log(JSON.stringify({
   build: build.id,
   artifact: artifact.id,
   operation: operation.id,
-  release: deleteOperation.release_id,
+  version: deleteOperation.version_id,
   host,
   checks: {
     root: root.status,
@@ -276,8 +276,8 @@ console.log(JSON.stringify({
     static_domain: staticPage.status,
     static_cors: staticPage.headers["access-control-allow-origin"],
     private_archive: privateArchive.status,
-    secret_put_release: secretOperation.release_id,
-    secret_delete_release: deleteOperation.release_id,
+    secret_put_version: secretOperation.version_id,
+    secret_delete_version: deleteOperation.version_id,
     secret_value_exposed: false,
   },
 }, null, 2));

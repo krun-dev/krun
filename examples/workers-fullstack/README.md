@@ -9,7 +9,7 @@
 - 未命中的浏览器导航使用 `index.html` 做 SPA fallback；
 - `about.html` 用来验证 HTML 路径规范化；带 hash 的 CSS、JS、SVG 用来验证 immutable 缓存。
 - `/api/health` 只报告 `VERIFICATION_SECRET` 是否已注入，从不回显 Secret 值。
-- `/api/asset-check` 从 Hono 业务代码调用 release-scoped `env.ASSETS.fetch()`。
+- `/api/asset-check` 从 Hono 业务代码调用 version-scoped `env.ASSETS.fetch()`。
 
 前端和 API 始终同源，不需要 CORS，也不读取运行期后端地址。
 
@@ -39,13 +39,13 @@ npm --prefix examples/workers-fullstack run verify:local
 ## 平台验收
 
 `deploy/workers-kind/e2e.mjs` 会读取本目录的真实文件，上传源码包并经过 Kubernetes
-builder、MinIO、Release、配置分发、kgateway 和 workerd 发布。验收内容包括：
+builder、MinIO、Version、配置分发、kgateway 和 workerd 发布。验收内容包括：
 
 1. 首页、CSS、JS、SVG 和独立 HTML 都由静态资产 serving；
 2. `/api/health` 与 `POST /api/echo` 进入业务 Worker；
 3. `/dashboard` 的浏览器导航回落到 `index.html`；
 4. ETag/304、带 hash 资产的 immutable cache、HTML 307 规范化；
 5. 静态域可匿名读取 `pub/`，但不能匿名读取含业务代码的 `v1/` 归档。
-6. Secret 新增和删除各自自动发布新 Release，复用同一个 Artifact，且公开 API 不泄漏值。
+6. Secret 新增和删除各自自动发布新 Version，复用同一个 Artifact，且公开 API 不泄漏值。
 
 完整独立环境运行方式见 [`deploy/workers-kind/README.md`](../../deploy/workers-kind/README.md)。

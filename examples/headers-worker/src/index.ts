@@ -20,7 +20,7 @@ export default {
         environment: {
           KRUN_ENVIRONMENT: env.KRUN_ENVIRONMENT ?? null,
           KRUN_SERVICE_ID: env.KRUN_SERVICE_ID ?? null,
-          KRUN_RELEASE_ID: env.KRUN_RELEASE_ID ?? null,
+          KRUN_VERSION_ID: env.KRUN_VERSION_ID ?? null,
           GREETING: env.GREETING ?? null,
         },
         received_at: new Date().toISOString(),
