@@ -51,7 +51,7 @@ func (w *Controller) VersionAssets(ctx context.Context, versionID, pool string) 
 
 		cached = WorkerCachedAssets{Used: time.Now().UTC()}
 		if assets := manifest.Assets; assets != nil {
-			cached.Config = &domain.WorkerAssetsConfig{Directory: assets.Directory, Binding: assets.Binding, RunWorkerFirst: assets.RunWorkerFirst, NotFoundHandling: assets.NotFoundHandling, HTMLHandling: assets.HTMLHandling}
+			cached.Config = &domain.WorkerAssetsConfig{Directory: assets.Directory, BasePath: assets.BasePath, Headers: assets.Headers, Redirects: assets.Redirects, Binding: assets.Binding, RunWorkerFirst: assets.RunWorkerFirst, NotFoundHandling: assets.NotFoundHandling, HTMLHandling: assets.HTMLHandling}
 			cached.Files = assets.Files
 		}
 		sort.Slice(cached.Files, func(i, j int) bool { return cached.Files[i].Path < cached.Files[j].Path })

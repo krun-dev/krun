@@ -27,6 +27,7 @@ type WranglerConfig struct {
 
 // wranglerAssets mirrors the `assets` block of wrangler.toml / wrangler.jsonc.
 type WranglerAssets struct {
+	BasePath         string
 	Directory        string
 	Binding          string
 	RunWorkerFirst   json.RawMessage // boolean or []string, exactly as wrangler allows
@@ -37,6 +38,7 @@ type WranglerAssets struct {
 // wranglerJSONAssets is the decode form: run_worker_first is a union type in
 // wrangler, and encoding/json needs an interface to accept both shapes.
 type WranglerJSONAssets struct {
+	BasePath         string      `json:"base_path"`
 	Directory        string      `json:"directory"`
 	Binding          string      `json:"binding"`
 	RunWorkerFirst   interface{} `json:"run_worker_first"`
@@ -95,6 +97,7 @@ func ParseWranglerJSON(raw string) (*WranglerConfig, error) {
 	if doc.Assets != nil {
 		assets = &WranglerAssets{
 			Directory:        doc.Assets.Directory,
+			BasePath:         doc.Assets.BasePath,
 			Binding:          doc.Assets.Binding,
 			NotFoundHandling: doc.Assets.NotFoundHandling,
 			HTMLHandling:     doc.Assets.HTMLHandling,
@@ -157,6 +160,7 @@ func ParseWranglerTOML(raw string) (*WranglerConfig, error) {
 // wranglerTOMLAssets decodes run_worker_first as either a boolean or a string
 // array. TOML is statically typed, so the union needs an intermediate form.
 type WranglerTOMLAssets struct {
+	BasePath         string      `toml:"base_path"`
 	Directory        string      `toml:"directory"`
 	Binding          string      `toml:"binding"`
 	RunWorkerFirst   interface{} `toml:"run_worker_first"`
@@ -170,6 +174,7 @@ func (a *WranglerTOMLAssets) WranglerAssets() *WranglerAssets {
 	}
 	out := &WranglerAssets{
 		Directory:        a.Directory,
+		BasePath:         a.BasePath,
 		Binding:          a.Binding,
 		NotFoundHandling: a.NotFoundHandling,
 		HTMLHandling:     a.HTMLHandling,
@@ -274,6 +279,7 @@ func ResolveWranglerBuild(cfg *WranglerConfig) (domain.WorkerAssetsConfig, strin
 				out.Directory = strings.TrimPrefix(path.Clean(wa.Directory), "./")
 			}
 			out.Binding = wa.Binding
+			out.BasePath = wa.BasePath
 			if len(wa.RunWorkerFirst) > 0 {
 				var boolValue bool
 				if err := json.Unmarshal(wa.RunWorkerFirst, &boolValue); err == nil {

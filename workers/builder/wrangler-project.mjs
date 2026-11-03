@@ -306,7 +306,7 @@ function normalizeAssets(config,input,projectRoot,configPath){
  const assetRoot=path.resolve(input.assets?projectRoot:path.dirname(configPath),value.directory);if(!within(projectRoot,assetRoot)||assetRoot===projectRoot)throw new Error('Assets directory escapes project');
  const directory=path.relative(projectRoot,assetRoot).split(path.sep).join('/');if(!safeRelative(directory,240))throw new Error('Wrangler assets.directory must be a safe relative directory');
  let run=value.run_worker_first??[];if(run===true)run=['/*'];else if(run===false)run=[];if(!Array.isArray(run)||run.length>16||run.some(item=>typeof item!=='string'||item.length>128))throw new Error('Invalid assets.run_worker_first');
- return {directory,binding:typeof value.binding==='string'?value.binding:'',run_worker_first:run,not_found_handling:typeof value.not_found_handling==='string'?value.not_found_handling:'',html_handling:typeof value.html_handling==='string'?value.html_handling:''};
+ return {directory,base_path:typeof value.base_path==='string'?value.base_path:'',binding:typeof value.binding==='string'?value.binding:'',run_worker_first:run,not_found_handling:typeof value.not_found_handling==='string'?value.not_found_handling:'',html_handling:typeof value.html_handling==='string'?value.html_handling:''};
 }
 
 async function collectAssets(projectRoot,assets){
@@ -319,7 +319,8 @@ async function collectAssets(projectRoot,assets){
   let rules;try{rules=new TextDecoder('utf-8',{fatal:true}).decode(await readFile(ignoreFile.path));}catch{throw new Error('.assetsignore must be valid UTF-8');}
   try{matcher.add(rules);}catch(error){throw new Error('Invalid .assetsignore: '+error.message);}
  }
- const included=files.filter(file=>file.name!=='.assetsignore'&&!matcher.ignores(file.name));if(included.length===0)throw new Error('Assets directory is empty');
+ for(const name of ['_headers','_redirects']){const rule=files.find(file=>file.name===name);if(rule)assets[name]=new TextDecoder('utf-8',{fatal:true}).decode(await readFile(rule.path));}
+ const included=files.filter(file=>!['_headers','_redirects','.assetsignore'].includes(file.name)&&!matcher.ignores(file.name));if(included.length===0)throw new Error('Assets directory is empty');
  return Promise.all(included.map(async file=>{const type=contentType(file.name);if(!type)throw new Error('Unsupported asset type: '+file.name);const data=await readFile(file.path);return {...file,data,content_type:type};}));
 }
 

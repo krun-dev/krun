@@ -2,6 +2,7 @@
 // All generated projects, CLI logs and credentials stay under ignored .data/.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
+import {request as httpRequest} from 'node:http';
 import {mkdirSync,writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -69,7 +70,14 @@ await check('first Secret on a nonexistent Worker follows Wrangler placeholder d
 // Bindings must survive the complete official upload/deploy/rollback path.
 let bindingsVersion, bindingsConfig;
 async function invokePath(url, environment='production') {
- return api(native+'/environments/'+environment+'/invoke','POST',{path:url,method:'GET'});
+ if(!process.env.KRUN_CF_E2E_GATEWAY_ORIGIN)return api(native+'/environments/'+environment+'/invoke','POST',{path:url,method:'GET'});
+ const env=(await api(native+'/environments')).items.find(e=>e.name===environment);
+ const host=env.display_hosts?.internal||env.hosts?.[(env.domains||[]).indexOf('internal')];assert(host,'environment internal host');
+ return new Promise((resolve,reject)=>{
+  const req=httpRequest(new URL(url,process.env.KRUN_CF_E2E_GATEWAY_ORIGIN),{headers:{host}},response=>{
+   let body='';response.setEncoding('utf8');response.on('data',chunk=>body+=chunk);response.on('end',()=>resolve({status:response.statusCode,body,headers:response.headers}));
+  });req.on('error',reject);req.setTimeout(15000,()=>req.destroy(new Error('gateway timeout')));req.end();
+ });
 }
 await check('asset capabilities reject corrupt files, incomplete tokens and cross-Worker reuse',async()=>{
  const started=(await api(scriptPath+'/assets-upload-session','POST',{manifest:{'/fixture.txt':{hash:'0'.repeat(32),size:4}}})).result;
@@ -150,6 +158,63 @@ await check('official Wrangler deploy supports an assets-only Worker',async()=>{
  await api(cf+'/workers/scripts/'+other,'DELETE');
  writeFileSync(config,JSON.stringify({name:script,main:'index.js',compatibility_date:'2026-09-28',workers_dev:true,preview_urls:true}));code('second');
 });
+// Routing policies must survive official uploads, the serving runtime and rollback.
+await check('official --keep-vars retains omitted strings and JSON while incoming values win',async()=>{
+ const cfg={name:script,main:'index.js',compatibility_date:'2026-09-28',vars:{TEXT:'retained',JSON:{nested:[1,true,null]},NULL:null,CHANGED:'old'}};
+ writeFileSync(source,`export default {fetch(r,env){return Response.json(env)}}`);writeFileSync(config,JSON.stringify(cfg));await wrangler(['deploy']);
+ cfg.vars={CHANGED:'new'};writeFileSync(config,JSON.stringify(cfg));await wrangler(['deploy','--keep-vars']);
+ await assertEventually(async()=>{const r=JSON.parse((await invokePath('/api/vars')).body);assert.equal(r.TEXT,'retained');assert.deepEqual(r.JSON,{nested:[1,true,null]});assert.equal(r.NULL,null);assert.equal(r.CHANGED,'new')});
+ await wrangler(['deploy']);await assertEventually(async()=>{const r=JSON.parse((await invokePath('/api/vars')).body);assert.equal(r.TEXT,undefined);assert.equal(r.JSON,undefined);assert.equal(r.CHANGED,'new')});
+});
+let rulesConfig, rulesVersion;
+await check('official rule files and base_path deploy as immutable asset policy',async()=>{
+ assert(process.env.KRUN_CF_E2E_GATEWAY_ORIGIN,'Expose the private test gateway to verify raw response headers');
+ const dir=path.join(directory,'public');mkdirSync(path.join(dir,'folder'),{recursive:true});
+ for(const [file,text] of Object.entries({'file.html':'canonical-file','folder/index.html':'canonical-folder','404.html':'root-not-found','folder/404.html':'folder-not-found','_headers':'/*\n X-Shared: common\n/blog/*\n X-Shared: assets\n X-Path: :splat\n ! X-Content-Type-Options','_redirects':'/blog/old/* /blog/:splat 301\n/blog/item/:id /blog/file?item=:id 302\n/blog/rewrite /blog/file 200\n/blog/file /blog/readme.txt 200'}))writeFileSync(path.join(dir,file),text);
+ rulesConfig={name:script,main:'index.js',compatibility_date:'2026-09-28',assets:{directory:'public',binding:'ASSETS',base_path:'/blog',html_handling:'auto-trailing-slash',not_found_handling:'404-page',run_worker_first:['/api/*','/bound']}};
+ writeFileSync(source,`export default {fetch(request,env){const u=new URL(request.url);if(u.pathname==='/bound')return env.ASSETS.fetch(new Request('https://assets.invalid'+u.searchParams.get('path'),{redirect:'manual'}));return new Response('worker-response')}}`);
+ writeFileSync(config,JSON.stringify(rulesConfig));await wrangler(['deploy']);rulesVersion=(await api(scriptPath+'/versions')).result.items[0].id;
+ await assertEventually(async()=>assert.equal((await invokePath('/blog/')).headers['x-shared'],'common, assets'));
+ const outside=await invokePath('/file');assert.equal(outside.body,'worker-response');assert.equal(outside.headers['x-shared'],undefined);
+ const apiResponse=await invokePath('/api/anything');assert.equal(apiResponse.body,'worker-response');assert.equal(apiResponse.headers['x-shared'],undefined);
+});
+await check('redirect splats, placeholders, query strings and one-pass internal rewrites work',async()=>{
+ let r=await invokePath('/blog/old/file?original=1');assert.equal(r.status,301);assert.equal(r.headers.location,'/blog/file?original=1');assert.equal(r.headers['x-shared'],undefined);
+ r=await invokePath('/blog/item/42');assert.equal(r.status,302);assert.equal(r.headers.location,'/blog/file?item=42');
+ r=await invokePath('/blog/rewrite');assert.equal(r.status,200);assert.equal(r.body,'canonical-file');assert.equal(r.headers['x-path'],'rewrite');assert.equal(r.headers['x-content-type-options'],undefined);
+});
+await check('404-page finds the closest parent and private rule files are never served',async()=>{
+ let r=await invokePath('/blog/folder/deeper/no');assert.equal(r.status,404);assert.equal(r.body,'folder-not-found');assert.equal(r.headers['x-shared'],'common, assets');
+ r=await invokePath('/blog/no');assert.equal(r.status,404);assert.equal(r.body,'root-not-found');
+ for(const file of ['_headers','_redirects']){r=await invokePath('/blog/'+file);assert.equal(r.status,404);assert(!r.body.includes('X-Shared'))}
+});
+await check('ASSETS binding uses the public mount and the same redirect/header rules',async()=>{
+ let r=await invokePath('/bound?path='+encodeURIComponent('/blog/rewrite'));assert.equal(r.body,'canonical-file');assert.equal(r.headers['x-shared'],'common, assets');
+ r=await invokePath('/bound?path='+encodeURIComponent('/file'));assert.equal(r.status,404);
+ r=await invokePath('/bound?path='+encodeURIComponent('/blog/old/file'));assert.equal(r.status,301);assert.equal(r.headers.location,'/blog/file');
+});
+for(const mode of ['force-trailing-slash','drop-trailing-slash'])await check('official '+mode+' canonicalizes files and directory indexes',async()=>{
+ rulesConfig.assets.html_handling=mode;writeFileSync(config,JSON.stringify(rulesConfig));await wrangler(['deploy']);
+ const slash=mode==='force-trailing-slash'?'/':'';
+ await assertEventually(async()=>{const r=await invokePath('/blog/folder.html?q=1');assert.equal(r.status,307);assert.equal(r.headers.location,'/blog/folder'+slash+'?q=1')});
+ let r=await invokePath('/blog/folder'+slash);assert.equal(r.body,'canonical-folder');
+ r=await invokePath('/blog/file.html');assert.equal(r.status,307);assert.equal(r.headers.location,'/blog/file'+slash);
+ r=await invokePath('/blog/file'+slash);assert.equal(r.status,200);
+});
+await check('rollback restores asset rules, mount and HTML mode with its version',async()=>{
+ rulesConfig.assets.base_path='/next';writeFileSync(config,JSON.stringify(rulesConfig));
+ writeFileSync(path.join(directory,'public','_headers'),'/*\n X-Shared: changed');
+ writeFileSync(path.join(directory,'public','_redirects'),'/next/rewrite /next/readme.txt 200');
+ await wrangler(['deploy']);
+ await assertEventually(async()=>assert.equal((await invokePath('/next')).headers['x-shared'],'changed'));
+ assert.equal((await invokePath('/blog/rewrite')).body,'worker-response');
+ await wrangler(['versions','deploy',rulesVersion+'@100%','--yes']);
+ await assertEventually(async()=>{const r=await invokePath('/blog/folder');assert.equal(r.status,307);assert.equal(r.headers.location,'/blog/folder/')});
+ const restored=await invokePath('/blog/rewrite');assert.equal(restored.body,'canonical-file');assert.equal(restored.headers['x-shared'],'common, assets');
+ assert.equal((await invokePath('/next')).body,'worker-response');
+});
+// Identity lifecycle checks use a plain Worker after the asset-policy fixtures.
+writeFileSync(config,JSON.stringify({name:script,main:'index.js',compatibility_date:'2026-09-28',workers_dev:true,preview_urls:true}));
 await check('deleted Script names receive a fresh internal service identity',async()=>{const before=(await api(workerPath)).result.tag;await api(scriptPath,'DELETE');await api(workerPath,'GET',undefined,false,404);code('recreated');await wrangler(['deploy']);const after=(await api(workerPath)).result.tag;assert.notEqual(before,after);const secrets=(await api(scriptPath+'/secrets')).result;assert.equal(secrets.length,0)});
 await check('native service deletion cannot resurrect a previous Script identity',async()=>{const id=(await api(workerPath)).result.tag;await api('/api/v1/orgs/'+org.id+'/services/'+id,'DELETE',undefined,false,204);const response=await api(cf+'/workers/workers','POST',{name:script},false,409);assert.equal(response.success,false);await api('/api/v1/orgs/'+org.id+'/services/'+id,'GET',undefined,false,404)});
 console.log('CF WRANGLER E2E PASSED '+results.length+' cases');

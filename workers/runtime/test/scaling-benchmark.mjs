@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 const source =
-  readFileSync(new URL("../entry.js", import.meta.url), "utf8").replace(
+  readFileSync(new URL("../entry.js", import.meta.url), "utf8").replace("from './assets.js'",'from '+JSON.stringify(new URL('../assets.js',import.meta.url).href)).replace(
     "import {WorkerEntrypoint} from 'cloudflare:workers';",
     "class WorkerEntrypoint {}",
   ) + "\nexport {applySnapshot,applyBatch};";

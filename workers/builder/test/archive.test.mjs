@@ -39,6 +39,7 @@ function tarFile(name, bytes) {
   return Buffer.concat([h, bytes, Buffer.alloc((512 - bytes.length % 512) % 512)]);
 }
 
+const rules = {'_headers':'/*\n X-Fixture: builder','_redirects':'/old /about 301'};
 const assets = {
   'index.html': '<!doctype html><title>builder</title>',
   'about.html': '<!doctype html><h1>about</h1>',
@@ -86,7 +87,7 @@ const code = {
 };
 bundle = gzipSync(Buffer.concat([
   ...Object.entries(code).map(([n, t]) => tarFile('src/' + n, Buffer.from(t))),
-  ...Object.entries(assets).map(([n, t]) => tarFile('assets/' + n, Buffer.from(t))),
+  ...Object.entries({...assets,...rules}).map(([n, t]) => tarFile('assets/' + n, Buffer.from(t))),
   Buffer.alloc(1024),
 ]), {level: 6});
 
@@ -156,6 +157,8 @@ check('v2 profile and runtime compatibility are preserved', () => {
 });
 check('assets config preserved', () => {
   assert.equal(manifest.assets.directory, 'public');
+  assert.equal(manifest.assets._headers,rules._headers);assert.equal(manifest.assets._redirects,rules._redirects);
+  assert(!entries['assets/_headers']);assert(!entries['assets/_redirects']);
   assert.equal(manifest.assets.binding, 'ASSETS');
   assert.deepEqual(manifest.assets.run_worker_first, ['/api/*']);
   assert.equal(manifest.assets.not_found_handling, 'single-page-application');

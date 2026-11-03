@@ -156,9 +156,9 @@ func (s *Server) cfUploadedAssets(r *http.Request, meta cfUploadMetadata, in wor
 		if err := configfile.DecodeJSON(meta.Assets, &upload); err != nil {
 			return nil, nil, problem(422, "UNSUPPORTED_ASSETS", "Invalid or unsupported assets configuration")
 		}
-		if upload.Config.BasePath != "" && upload.Config.BasePath != "/" || upload.Config.Headers != "" || upload.Config.Redirects != "" {
-			return nil, nil, problem(422, "UNSUPPORTED_ASSETS", "Asset base_path, _headers and _redirects are not supported")
-		}
+		config.BasePath = upload.Config.BasePath
+		config.Headers = upload.Config.Headers
+		config.Redirects = upload.Config.Redirects
 		if upload.Config.HTML != "" {
 			config.HTMLHandling = upload.Config.HTML
 		}
@@ -215,7 +215,7 @@ func (s *Server) cfUploadedAssets(r *http.Request, meta cfUploadMetadata, in wor
 		if in.AssetsBinding != nil {
 			*in.AssetsBinding = config.Binding
 		}
-		manifest := &artifact.WorkerManifestAssets{Directory: config.Directory, Binding: config.Binding, HTMLHandling: config.HTMLHandling, NotFoundHandling: config.NotFoundHandling, RunWorkerFirst: config.RunWorkerFirst, Files: []artifact.WorkerManifestFile{}}
+		manifest := &artifact.WorkerManifestAssets{Directory: config.Directory, BasePath: config.BasePath, Headers: config.Headers, Redirects: config.Redirects, Binding: config.Binding, HTMLHandling: config.HTMLHandling, NotFoundHandling: config.NotFoundHandling, RunWorkerFirst: config.RunWorkerFirst, Files: []artifact.WorkerManifestFile{}}
 		names := make([]string, 0, len(code.AssetFiles))
 		for name := range code.AssetFiles {
 			names = append(names, name)

@@ -9,7 +9,7 @@ import {gzipSync} from 'node:zlib';
 import assert from 'node:assert/strict';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const source = readFileSync(join(here, '..', 'entry.js'), 'utf8');
+const source = readFileSync(join(here, '..', 'entry.js'), 'utf8').replace("from './assets.js'",'from '+JSON.stringify(new URL('../assets.js',import.meta.url).href));
 const patched = source.replace(
   "import {WorkerEntrypoint} from 'cloudflare:workers';",
   'class WorkerEntrypoint { constructor(env, ctx) { this.env = env; this.ctx = ctx; } }'

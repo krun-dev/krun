@@ -325,3 +325,34 @@ func TestWorkerAssetsRejectPrototypeBindingNames(t *testing.T) {
 		})
 	}
 }
+
+func TestAssetRoutingConfiguration(t *testing.T) {
+	for _, base := range []string{"", "/", "/blog", "/blog/"} {
+		cfg := domain.WorkerAssetsConfig{Directory: "public", BasePath: base, HTMLHandling: "force-trailing-slash", NotFoundHandling: "404-page", Headers: "/*\n X-Test: yes", Redirects: "/old /new 301"}
+		if err := workerartifact.ValidateWorkerAssets(&cfg); err != nil {
+			t.Fatalf("%s: %v", base, err)
+		}
+	}
+	for _, base := range []string{"blog", "//evil", "/../bad", "/foo//bar", "/bad?x=1", "/bad%2fpath"} {
+		if workerartifact.ValidateWorkerAssets(&domain.WorkerAssetsConfig{Directory: "public", BasePath: base}) == nil {
+			t.Fatalf("accepted %q", base)
+		}
+	}
+	for _, cfg := range []domain.WorkerAssetsConfig{
+		{Directory: "public", Headers: "/*\n X-Test: " + strings.Repeat("x", 2000)},
+		{Directory: "public", Headers: strings.Repeat("/path\n X-Test: yes\n", 101)},
+		{Directory: "public", Redirects: strings.Repeat("/a /b\n", 2101)},
+	} {
+		if workerartifact.ValidateWorkerAssets(&cfg) == nil {
+			t.Fatal("unbounded rules accepted")
+		}
+	}
+	cfg, _, err := workerartifact.ParseWranglerConfig(map[string]string{"wrangler.toml": "[assets]\ndirectory='public'\nbase_path='/docs/'\nhtml_handling='drop-trailing-slash'\nnot_found_handling='404-page'"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets, _, err := workerartifact.ResolveWranglerBuild(cfg)
+	if err != nil || assets.BasePath != "/docs/" || assets.HTMLHandling != "drop-trailing-slash" {
+		t.Fatal(assets, err)
+	}
+}

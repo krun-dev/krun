@@ -1,3 +1,4 @@
+import {compileRules, assetDecision, applyHeaders, assetResponse} from './assets.js';
 import {WorkerEntrypoint} from 'cloudflare:workers';
 // Edge configuration is an immutable in-memory view. There is no local DB:
 // bootstrap reads one snapshot, then a long-poll applies incremental ops.
@@ -69,7 +70,7 @@ async function loadArtifact(archive,descriptor){
  }
  if(!mainDigest||mainDigest!==descriptor.module_sha256)throw new Error('artifact main module mismatch');
  if(manifest.assets!==undefined){
-  const assets=manifest.assets;if(!exactKeys(assets,['directory','binding','run_worker_first','not_found_handling','html_handling','files'])||!Array.isArray(assets.files))throw new Error('artifact assets invalid');
+  const assets=manifest.assets;if(!exactKeys(assets,['directory','binding','run_worker_first','not_found_handling','html_handling','base_path','_headers','_redirects','files'])||!Array.isArray(assets.files))throw new Error('artifact assets invalid');
   for(const file of assets.files){
    if(!exactKeys(file,['path','sha256','size_bytes','content_type'])||!safeModuleName(file.path,240,'assets/')||typeof file.sha256!=='string'||typeof file.content_type!=='string'||!Number.isInteger(file.size_bytes))throw new Error('artifact asset metadata invalid');
    const archivePath='assets/'+file.path,bytes=files.get(archivePath);if(declared.has(archivePath)||!bytes||bytes.length!==file.size_bytes||await sha256(bytes)!==file.sha256)throw new Error('artifact asset mismatch');declared.add(archivePath);
@@ -252,6 +253,7 @@ async function assetManifest(env,version){
   const m=await platform(env,'/versions/'+encodeURIComponent(version.id)+'/assets');
   // Build the path index once per immutable manifest, including ASSETS binding.
   m.index=new Map((m.files||[]).map(file=>['/'+file.path,file.path]));
+  m.rules=compileRules(m.config||{});
   lruPut(manifests,version.id,m,512);return m;
  });
 }
@@ -281,48 +283,19 @@ async function assetBytes(env,version,path){
  return value;
  });
 }
-function normalizePath(input){
- try{input=decodeURIComponent(input);}catch{return null;}
- const out=[];for(const part of input.split('/')){if(part===''||part==='.')continue;if(part==='..')out.pop();else out.push(part);}
- return '/'+out.join('/');
-}
-// Negated patterns take precedence over positive ones (Cloudflare semantics).
-function patternHits(path,pattern){
- const base=pattern.replace(/\*$/,'');
- return pattern.endsWith('*')?path.startsWith(base):path===base;
-}
-function workerFirst(path,patterns){
- for(const pattern of patterns||[]){if(pattern[0]==='!'&&patternHits(path,pattern.slice(1)))return 'static';}
- for(const pattern of patterns||[]){if(pattern[0]!=='!'&&patternHits(path,pattern))return 'worker';}
- return null;
-}
-function lookupAsset(files,path,htmlHandling){
- if(htmlHandling!=='none'){
-  if(path==='/')return files.has('/index.html')?{file:'/index.html'}:{};
-  if(path.endsWith('/index.html'))return {redirect:path.slice(0,-10)};
-  if(path.endsWith('.html'))return {redirect:path.slice(0,-5)||'/'};
-  if(path.endsWith('/'))return files.has(path+'index.html')?{file:path+'index.html'}:{};
+async function staticAssetResponse(env,version,request,manifest,binding=false){
+ const hit=assetDecision(request,manifest.config,manifest.index,manifest.rules,binding);
+ if(hit.redirect!==undefined)return new Response(null,{status:hit.status||307,headers:{location:hit.redirect}});
+ if(hit.file){
+  const value=await assetBytes(env,version,manifest.index.get(hit.file));
+  return applyHeaders(assetResponse(request,hit.file,value,hit.status),request,manifest.rules);
  }
- if(files.has(path))return {file:path};
- if(htmlHandling!=='none'&&files.has(path+'.html'))return {file:path+'.html'};
- return {};
-}
-const hashedAsset=/[-.][0-9a-f]{8,}\.[a-z0-9]+$/i;
-function serveAsset(request,path,value){
- const etag='"'+value.digest+'"';
- const baseHeaders={etag,'x-content-type-options':'nosniff'};
- if(request.headers.get('if-none-match')===etag)return new Response(null,{status:304,headers:baseHeaders});
- return new Response(value.bytes,{status:200,headers:{...baseHeaders,'content-type':value.content_type,'cache-control':hashedAsset.test(path)?'public, max-age=31536000, immutable':'public, max-age=300'}});
+ if(hit.status)return new Response(null,{status:hit.status});
+ return null;
 }
 async function boundAssetResponse(env,version,request){
  const manifest=await assetManifest(env,version);if(!manifest.config)return json({error:'assets unavailable'},404);
- const path=normalizePath(new URL(request.url).pathname);if(path===null)return json({error:'invalid path'},400);
- const files=manifest.index;
- const hit=lookupAsset(files,path,manifest.config.html_handling||'auto-trailing-slash');
- if(hit.redirect!==undefined)return new Response(null,{status:307,headers:{location:hit.redirect}});
- if(hit.file)return serveAsset(request,hit.file,await assetBytes(env,version,files.get(hit.file)));
- if(manifest.config.not_found_handling==='single-page-application'&&files.has('/index.html'))return serveAsset(request,'/index.html',await assetBytes(env,version,files.get('/index.html')));
- return json({error:'asset not found'},404);
+ return await staticAssetResponse(env,version,request,manifest,true)||json({error:'asset not found'},404);
 }
 export class VersionAssets extends WorkerEntrypoint {
  async fetch(request){
@@ -384,22 +357,7 @@ export class Private extends WorkerEntrypoint {
    let response;
    const manifest=await assetManifest(this.env,d);
    if(!manifest.config){response=await forward();}
-   else{
-    const path=normalizePath(url.pathname);
-    if(path===null)response=json({error:'invalid path'},400);
-    else{
-     const decision=workerFirst(path,manifest.config.run_worker_first);
-     // Manifests store asset paths relative to assets.directory; the lookup table
-     // and the internal asset API both key off that relative form.
-     const files=manifest.index;
-     const hit=decision==='worker'?{worker:true}:lookupAsset(files,path,manifest.config.html_handling||'auto-trailing-slash');
-     if(hit.redirect!==undefined)response=new Response(null,{status:307,headers:{location:hit.redirect}});
-     else if(hit.worker)response=await forward();
-     else if(hit.file)response=serveAsset(request,hit.file,await assetBytes(this.env,d,files.get(hit.file)));
-     else if(request.headers.get('sec-fetch-mode')==='navigate'&&manifest.config.not_found_handling==='single-page-application'&&files.has('/index.html')){response=serveAsset(request,'/index.html',await assetBytes(this.env,d,files.get('/index.html')));}
-     else response=await forward();
-    }
-   }
+   else response=await staticAssetResponse(this.env,d,request,manifest)||await forward();
    const out=new Response(response.body,response);
    out.headers.set('x-krun-version',d.id);out.headers.set('x-krun-pod',this.env.POD_UID);
    return out;

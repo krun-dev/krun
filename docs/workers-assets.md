@@ -11,7 +11,7 @@ token：先上传资产，再将资产与代码打包为同一个不可变 Artif
 一小时；临时对象最长保留 24 小时，由现有 upload GC 清理，失败可以重试。
 
 源码上传或仓库构建可以配置 `assets.directory`、`binding`、`run_worker_first`、
-`not_found_handling` 和 `html_handling`。Wrangler/custom build 先生成产物，再由可信
+`not_found_handling`、`html_handling` 和 `base_path`。Wrangler/custom build 先生成产物，再由可信
 packer 收集资产。所有制品使用 `workerd-bundle-v2` profile、manifest schema 2；
 没有静态资产时省略 `assets` 字段。
 
@@ -27,12 +27,15 @@ finalize 生成独立的不可变 manifest 对象，按 Artifact 的 manifest di
 入口 Runtime 根据 Version 的资产配置决定先访问资产还是业务 Worker：
 
 1. 命中 `run_worker_first` 的路径先交给 Worker；否定模式按规则排除。
-2. 其他路径先按 HTML handling 和路径索引匹配资产。
-3. HTML 规范化可以返回重定向；导航请求可按配置回退到 SPA 入口。
-4. 未命中且没有回退时交给业务 Worker。
+2. 其他路径先应用 `_redirects`，再按挂载路径、HTML handling 和路径索引匹配资产。
+3. HTML handling 支持自动、强制、删除尾斜杠或关闭；`404-page` 就近查找父目录的
+   `404.html` 并返回 404；导航请求可按配置回退到 SPA 入口。
+4. 静态响应按 `_headers` 合并、覆盖或删除响应头；规则文件不会公开提供。
+5. 未命中且没有回退时交给业务 Worker。
 
 设置 `assets.binding` 后，业务通过例如 `env.ASSETS.fetch(request)` 访问本 Version
-资产。binding 不持平台 token；变量重名或平台保留名称会被拒绝。
+资产。`base_path` 同时作用于公开路由和 binding，规则及 `run_worker_first` 使用完整公开路径。
+binding 不持平台 token；变量重名或平台保留名称会被拒绝。
 
 manifest 使用 single-flight 和有界 LRU，路径索引只构建一次；资产字节按文件按需下载，
 校验 digest 后放入有界 LRU。发布只切换 Version，不清空其他站点的资产缓存。

@@ -145,7 +145,7 @@ func (w *Controller) UploadedAssets(ctx context.Context, ref ServiceRef, token s
 		return nil, nil, domain.Forbidden()
 	}
 	files := map[string][]byte{}
-	manifest := &artifact.WorkerManifestAssets{Directory: "public", Binding: config.Binding, RunWorkerFirst: config.RunWorkerFirst, HTMLHandling: config.HTMLHandling, NotFoundHandling: config.NotFoundHandling, Files: []artifact.WorkerManifestFile{}}
+	manifest := &artifact.WorkerManifestAssets{Directory: "public", BasePath: config.BasePath, Headers: config.Headers, Redirects: config.Redirects, Binding: config.Binding, RunWorkerFirst: config.RunWorkerFirst, HTMLHandling: config.HTMLHandling, NotFoundHandling: config.NotFoundHandling, Files: []artifact.WorkerManifestFile{}}
 	for _, f := range a.Files {
 		if !f.Uploaded {
 			return nil, nil, domain.Problem(409, "ASSETS_NOT_READY", "Asset upload is incomplete")

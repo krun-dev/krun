@@ -119,3 +119,45 @@ func TestAssetSessionCapabilitiesAndValidation(t *testing.T) {
 		t.Fatal("expired upload accepted")
 	}
 }
+
+func TestCloudflareKeepVariableTypes(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		keep []string
+		want map[string]any
+	}{
+		{"replace", nil, map[string]any{"CHANGED": "new"}},
+		{"text", []string{"plain_text"}, map[string]any{"CHANGED": "new", "TEXT": "old"}},
+		{"json", []string{"json"}, map[string]any{"CHANGED": "new", "JSON": map[string]any{"enabled": true}, "NULL": nil}},
+		{"keep-vars", []string{"plain_text", "json"}, map[string]any{"CHANGED": "new", "TEXT": "old", "JSON": map[string]any{"enabled": true}, "NULL": nil}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server, store, _ := cfTestServer(t)
+			input, err := cfBindingInput(cfUploadMetadata{Keep: test.keep, Bindings: []cfBinding{{Name: "CHANGED", Type: "plain_text", Text: "new"}}}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = store.Update(context.Background(), PartitionWorkers, func(st *State) error {
+				service := st.Workers.Services["svc-a"]
+				env := service.Environments["production"]
+				env.Variables = map[string]any{"TEXT": "old", "CHANGED": "old", "JSON": map[string]any{"enabled": true}, "NULL": nil}
+				service.Environments["production"] = env
+				st.Workers.Services["svc-a"] = service
+				app := server.workerApplication(nil)
+				app.Require = func(*domain.State, Principal, string, Target) error { return nil }
+				err := app.StageBindings(st, Principal{User: domain.User{ID: "admin", Source: "local", Status: "active"}, Kind: "cli_session"}, workerapp.ServiceRef{Organization: "org-a", Service: "svc-a", Environment: "production"}, input)
+				if err != nil {
+					return err
+				}
+				actual := st.Workers.Services["svc-a"].Environments["production"].Variables
+				if !reflect.DeepEqual(map[string]any(actual), test.want) {
+					t.Fatalf("got %#v, want %#v", actual, test.want)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

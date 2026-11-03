@@ -69,6 +69,8 @@ const source={
  'src/lang/en.mjs':Buffer.from(`export default 'en';`),
  'src/lang/fr.mjs':Buffer.from(`export default 'fr';`),
  'public/index.html':Buffer.from('<!doctype html><title>wrangler</title>'),
+ 'public/_headers':Buffer.from('/*\n X-Fixture: wrangler'),
+ 'public/_redirects':Buffer.from('/old / 302'),
  'public/LICENSE':Buffer.from('wrangler fixture license')
 };
 const sourceArchive=gzipSync(Buffer.concat([...Object.entries(source).map(([name,data])=>tarFile('src/'+name,data)),Buffer.alloc(1024)]));let servedSource=sourceArchive,uploaded=null,uploadRequests=0;
@@ -83,7 +85,7 @@ try{
  const entries=archiveEntries(uploaded),manifest=JSON.parse(entries['manifest.json'].toString('utf8')),types=new Map(manifest.modules.map(module=>[module.name,module.type]));
  assert.equal(manifest.profile,'workerd-bundle-v2');assert.equal(manifest.main_module,'index.js');assert.equal(types.get('index.js'),'esm');assert.equal(types.get('__krun_user_index.js'),'esm');assert.ok(entries['modules/index.js'].toString('utf8').includes('export * from "./__krun_user_index.js"'));
  assert.ok([...types.values()].includes('text'));assert.ok([...types.values()].includes('data'));assert.ok([...types.values()].includes('wasm'));assert.ok([...types.values()].includes('source-map'));assert.equal(types.get('lang/en.mjs'),'esm');assert.equal(types.get('lang/fr.mjs'),'esm');
- assert.equal(manifest.assets.binding,'ASSETS');assert.equal(entries['assets/index.html'].toString('utf8'),'<!doctype html><title>wrangler</title>');assert.equal(entries['assets/LICENSE'].toString('utf8'),'wrangler fixture license');assert.equal(manifest.assets.files.find(file=>file.path==='LICENSE')?.content_type,'application/octet-stream');assert.ok(!entries['modules/README.md']);
+ assert.equal(manifest.assets.binding,'ASSETS');assert.equal(entries['assets/index.html'].toString('utf8'),'<!doctype html><title>wrangler</title>');assert.equal(entries['assets/LICENSE'].toString('utf8'),'wrangler fixture license');assert.equal(manifest.assets.files.find(file=>file.path==='LICENSE')?.content_type,'application/octet-stream');assert.ok(!entries['modules/README.md']);assert.equal(manifest.assets._headers,'/*\n X-Fixture: wrangler');assert.equal(manifest.assets._redirects,'/old / 302');assert(!entries['assets/_headers']);assert(!entries['assets/_redirects']);
 
  const assetsWork=path.join(scratch,'assets-work'),assetsConfig=Buffer.from(`{"name":"assets-only","compatibility_date":"2026-09-28","assets":{"directory":"public"}}`);mkdirSync(assetsWork,{recursive:true});servedSource=gzipSync(Buffer.concat([tarFile('src/wrangler.jsonc',assetsConfig),tarFile('src/public/index.html',Buffer.from('assets only')),Buffer.alloc(1024)]));uploaded=null;
  const assetsBuild=path.join(inputDir,'assets-build.json'),assetsPack=path.join(inputDir,'assets-pack.json');writeFileSync(assetsBuild,JSON.stringify({build_mode:'wrangler',config_path:'wrangler.jsonc',source_url:`http://127.0.0.1:${port}/source`,compatibility_date:'2026-09-28',compatibility_flags:[]}));

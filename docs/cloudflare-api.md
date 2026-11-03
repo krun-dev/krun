@@ -75,6 +75,8 @@ Previews Base 只在创建 Preview 时复制；不会覆盖已存在 Preview 或
 和请求大小限制。错误采用 Cloudflare envelope 和数字 code，底层仍执行 krun 权限。
 
 JSON 变量保留对象、数组、数字、布尔及 null 类型，随 Version 冻结；原生控制台同样可以编辑。
+`keep_bindings: ["plain_text", "json"]` 支持 Wrangler `--keep-vars`，保留未提交的变量；
+同名新值仍覆盖，普通上传默认替换变量。
 `version_metadata` 将 `{id,tag,timestamp}` 注入指定 binding。上传 annotations 的
 `workers/tag`、`workers/message` 分别保存版本标签和说明，长度上限为 100、1000 bytes。
 
@@ -86,16 +88,18 @@ token 只能绑定到签发时的 Worker，且未传完或过期时不能部署�
 
 这不是完整 Cloudflare 平台实现。灰度比例、托管 URL 关闭、
 Cloudflare 自定义域名/Zone/Routes、定时任务、tail、KV/R2/D1/DO/Queue/Service bindings、
-Service Worker 格式不在当前支持范围内。资产路由沿用 krun 支持的 `run_worker_first`、
-`none` / `single-page-application` 和 `none` / `auto-trailing-slash`；非根 `base_path`、
-`_headers`、`_redirects` 会被拒绝。部署接口仍拒绝非空部署描述，版本标签/说明独立保存。
+Service Worker 格式不在当前支持范围内。资产路由支持 `run_worker_first`、`base_path`，
+`none` / `single-page-application` / `404-page`，以及 `none` / `auto-trailing-slash` /
+`force-trailing-slash` / `drop-trailing-slash`。`_headers` 支持路径、域名、占位符、
+合并和删除响应头；`_redirects` 支持 301/302/303/307/308 和站内 200 重写，
+不代理外部站点。规则仅作用于静态响应，随资产版本冻结。部署接口仍拒绝非空部署描述，版本标签/说明独立保存。
 缺失接口和不支持的绑定会返回错误。静态资产也可以继续走 krun 原有构建入口。
 
 协议验证使用仓库固定的 Wrangler 4.155.0。复现需先运行独立 kind 后端 E2E 完成初始化，
-再让控制台同源入口可从本机访问：
+再让控制台同源入口可从本机访问，并将独立测试环境的内部 Gateway 8080 端口转发到 4382：
 
 ```sh
-KRUN_UI_ORIGIN=http://127.0.0.1:4381 node deploy/workers-kind/cloudflare.e2e.mjs
+KRUN_UI_ORIGIN=http://127.0.0.1:4381 KRUN_CF_E2E_GATEWAY_ORIGIN=http://127.0.0.1:4382 node deploy/workers-kind/cloudflare.e2e.mjs
 ```
 
 脚本在 `.data/` 下生成项目和命令日志，覆盖 deploy、只上传/独立部署、Secret、首次

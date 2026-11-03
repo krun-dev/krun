@@ -113,7 +113,7 @@ try{
  const config=`using W = import "/workerd/workerd.capnp";
 const config :W.Config = (
  services = [
-  (name="entry",worker=(modules=[(name="entry.js",esModule=embed ${JSON.stringify(path.join(runtimeRoot,'entry.js'))})],compatibilityDate="2026-09-28",compatibilityFlags=["experimental","enable_ctx_exports"],bindings=[
+  (name="entry",worker=(modules=[(name="entry.js",esModule=embed ${JSON.stringify(path.join(runtimeRoot,'entry.js'))}),(name="assets.js",esModule=embed ${JSON.stringify(path.join(runtimeRoot,'assets.js'))})],compatibilityDate="2026-09-28",compatibilityFlags=["experimental","enable_ctx_exports"],bindings=[
    (name="LOADER",workerLoader=(id="krun-wrangler-artifact-smoke")),
    (name="PLATFORM",service="platform"),(name="POD_NAME",text="pod"),(name="POD_UID",text="uid"),(name="RUNTIME_TOKEN",text="runtime-token"),(name="MANAGEMENT_TOKEN",text="management-token"),(name="RUNTIME_POOL",text="default"),(name="ASSETS_CACHE_MAX",text="1048576")
   ],globalOutbound="storage")),

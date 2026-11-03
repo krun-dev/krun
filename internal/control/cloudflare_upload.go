@@ -111,6 +111,10 @@ func cfBindingInput(meta cfUploadMetadata, preview bool) (workerapp.BindingsInpu
 	for _, kind := range meta.Keep {
 		if kind == "secret_text" {
 			in.KeepSecrets = true
+		} else if kind == "plain_text" {
+			in.KeepPlainVariables = true
+		} else if kind == "json" {
+			in.KeepJSONVariables = true
 		} else if kind != "secret_key" {
 			return in, problem(422, "UNSUPPORTED_BINDING", "Unsupported keep_bindings type")
 		}

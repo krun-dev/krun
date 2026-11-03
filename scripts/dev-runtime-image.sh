@@ -19,7 +19,7 @@ CLUSTER="$KRUN_DEV_CLUSTER"
 IMAGE="${KRUN_DEV_RUNTIME_IMAGE:-krun-worker-runtime:dev}"
 
 ssh -o ConnectTimeout=8 "$REMOTE" "rm -rf /tmp/krun-runtime && mkdir -p /tmp/krun-runtime"
-scp workers/runtime/Dockerfile workers/runtime/entry.js workers/runtime/package.json workers/runtime/package-lock.json \
+scp workers/runtime/Dockerfile workers/runtime/entry.js workers/runtime/assets.js workers/runtime/package.json workers/runtime/package-lock.json \
   "$REMOTE:/tmp/krun-runtime/"
 ssh -o ConnectTimeout=8 "$REMOTE" "set -e
   cd /tmp/krun-runtime

@@ -7,7 +7,7 @@ const directory = mkdtempSync(join(tmpdir(), "krun-scaling-"));
 const source = readFileSync(
   new URL("../entry.js", import.meta.url),
   "utf8",
-).replace(
+).replace("from './assets.js'",'from '+JSON.stringify(new URL('../assets.js',import.meta.url).href)).replace(
   "import {WorkerEntrypoint} from 'cloudflare:workers';",
   "class WorkerEntrypoint {}",
 );

@@ -63,6 +63,10 @@ type WorkerManifestModule struct {
 }
 
 type WorkerManifestAssets struct {
+	BasePath  string `json:"base_path,omitempty"`
+	Headers   string `json:"_headers,omitempty"`
+	Redirects string `json:"_redirects,omitempty"`
+
 	Directory        string               `json:"directory"`
 	Binding          string               `json:"binding,omitempty"`
 	RunWorkerFirst   []string             `json:"run_worker_first"`
@@ -171,13 +175,13 @@ func ValidateWorkerAssets(c *domain.WorkerAssetsConfig) error {
 		}
 		seen[p] = true
 	}
-	if c.NotFoundHandling != "" && c.NotFoundHandling != "none" && c.NotFoundHandling != "single-page-application" {
-		return domain.Problem(422, "WORKER_ASSETS_INVALID", "not_found_handling must be none or single-page-application")
+	if c.NotFoundHandling != "" && c.NotFoundHandling != "none" && c.NotFoundHandling != "single-page-application" && c.NotFoundHandling != "404-page" {
+		return domain.Problem(422, "WORKER_ASSETS_INVALID", "not_found_handling must be none, single-page-application or 404-page")
 	}
-	if c.HTMLHandling != "" && c.HTMLHandling != "none" && c.HTMLHandling != "auto-trailing-slash" {
-		return domain.Problem(422, "WORKER_ASSETS_INVALID", "html_handling must be none or auto-trailing-slash")
+	if c.HTMLHandling != "" && c.HTMLHandling != "none" && c.HTMLHandling != "auto-trailing-slash" && c.HTMLHandling != "force-trailing-slash" && c.HTMLHandling != "drop-trailing-slash" {
+		return domain.Problem(422, "WORKER_ASSETS_INVALID", "html_handling must be none, auto-trailing-slash, force-trailing-slash or drop-trailing-slash")
 	}
-	return nil
+	return ValidateAssetRules(c)
 }
 
 func WorkerAssetPath(name string) (string, bool) {
@@ -355,7 +359,7 @@ func ParseWorkerArchive(raw []byte) (WorkerCode, string, error) {
 		}
 		return out, BytesDigest(files["manifest.json"]), nil
 	}
-	if e := ValidateWorkerAssets(&domain.WorkerAssetsConfig{Directory: m.Assets.Directory, Binding: m.Assets.Binding, RunWorkerFirst: m.Assets.RunWorkerFirst, NotFoundHandling: m.Assets.NotFoundHandling, HTMLHandling: m.Assets.HTMLHandling}); e != nil {
+	if e := ValidateWorkerAssets(&domain.WorkerAssetsConfig{Directory: m.Assets.Directory, BasePath: m.Assets.BasePath, Headers: m.Assets.Headers, Redirects: m.Assets.Redirects, Binding: m.Assets.Binding, RunWorkerFirst: m.Assets.RunWorkerFirst, NotFoundHandling: m.Assets.NotFoundHandling, HTMLHandling: m.Assets.HTMLHandling}); e != nil {
 		return out, "", e
 	}
 	if len(m.Assets.Files) > WorkerAssetsFilesMax {
@@ -367,7 +371,7 @@ func ParseWorkerArchive(raw []byte) (WorkerCode, string, error) {
 	assetBytes := map[string][]byte{}
 	for _, f := range m.Assets.Files {
 		name, ok := WorkerAssetPath(f.Path)
-		if !ok || seen[name] {
+		if !ok || seen[name] || name == "_headers" || name == "_redirects" {
 			return out, "", errors.New("invalid or duplicate asset path")
 		}
 		seen[name] = true
@@ -395,7 +399,7 @@ func ParseWorkerArchive(raw []byte) (WorkerCode, string, error) {
 	if m.Assets.NotFoundHandling == "single-page-application" && !seen["index.html"] {
 		return out, "", errors.New("single-page-application requires index.html")
 	}
-	out.Assets = &domain.WorkerAssetsConfig{Directory: m.Assets.Directory, Binding: m.Assets.Binding, RunWorkerFirst: m.Assets.RunWorkerFirst, NotFoundHandling: m.Assets.NotFoundHandling, HTMLHandling: m.Assets.HTMLHandling}
+	out.Assets = &domain.WorkerAssetsConfig{Directory: m.Assets.Directory, BasePath: m.Assets.BasePath, Headers: m.Assets.Headers, Redirects: m.Assets.Redirects, Binding: m.Assets.Binding, RunWorkerFirst: m.Assets.RunWorkerFirst, NotFoundHandling: m.Assets.NotFoundHandling, HTMLHandling: m.Assets.HTMLHandling}
 	out.AssetFiles = assetFiles
 	out.AssetBytes = assetBytes
 	return out, BytesDigest(files["manifest.json"]), nil

@@ -5,6 +5,10 @@ import (
 )
 
 type WorkerAssetsConfig struct {
+	BasePath  string `json:"base_path,omitempty"`
+	Headers   string `json:"_headers,omitempty"`
+	Redirects string `json:"_redirects,omitempty"`
+
 	Directory        string   `json:"directory"`
 	Binding          string   `json:"binding,omitempty"`
 	RunWorkerFirst   []string `json:"run_worker_first,omitempty"`

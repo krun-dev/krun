@@ -12,13 +12,15 @@ import (
 // StageBindings changes desired configuration; callers explicitly snapshot and
 // deploy afterward. A nil secret deletes it, while omitted secrets are retained.
 type BindingsInput struct {
-	VersionMetadata  *string
-	AssetsBinding    *string
-	Variables        map[string]any
-	Secrets          map[string]*string
-	ReplaceVariables bool
-	KeepSecrets      bool
-	Inherit          []string
+	VersionMetadata    *string
+	AssetsBinding      *string
+	Variables          map[string]any
+	Secrets            map[string]*string
+	ReplaceVariables   bool
+	KeepPlainVariables bool
+	KeepJSONVariables  bool
+	KeepSecrets        bool
+	Inherit            []string
 }
 
 func (s *Service) StageBindings(st *domain.State, p authorization.Principal, ref ServiceRef, in BindingsInput) error {
@@ -67,7 +69,12 @@ func (s *Service) StageBindings(st *domain.State, p authorization.Principal, ref
 	}
 	vars := domain.CloneWorkerVariables(current.Variables)
 	if in.ReplaceVariables {
-		vars = map[string]any{}
+		for name, value := range vars {
+			_, plain := value.(string)
+			if plain && !in.KeepPlainVariables || !plain && !in.KeepJSONVariables {
+				delete(vars, name)
+			}
+		}
 	}
 	for _, name := range in.Inherit {
 		if value, ok := current.Variables[name]; ok {
