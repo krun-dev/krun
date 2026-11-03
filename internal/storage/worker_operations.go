@@ -191,16 +191,6 @@ func (s *Store) SetOperationEdgeRevision(ctx context.Context, id string, revisio
 	return stored, nil
 }
 
-func (s *Store) setOperationState(ctx context.Context, id, from, to, message string) error {
-	if s.pool == nil {
-		return nil
-	}
-	_, err := s.pool.Exec(ctx, `UPDATE krun_worker_operations
-		SET state=$3, error=$4, finished_at=CASE WHEN $3 IN ('failed','superseded') THEN now() ELSE finished_at END
-		WHERE operation_id=$1 AND state=$2`, id, from, to, message)
-	return err
-}
-
 func (s *Store) NoteOperationMessage(ctx context.Context, id, message string) error {
 	if s.pool == nil {
 		return nil

@@ -11,12 +11,6 @@ import (
 type workerInvokeRequest = invocation.Request
 type workerInvokeResponse = invocation.Response
 
-const workerInvokePathLimit = invocation.InvokePathLimit
-const workerInvokeBodyLimit = invocation.InvokeBodyLimit
-const workerInvokeResponseLimit = invocation.InvokeResponseLimit
-const workerInvokeTimeout = invocation.InvokeTimeout
-const workerInvokeInvalidMessage = invocation.InvokeInvalidMessage
-
 var newWorkerInvokeClient = invocation.NewHTTPClient
 
 // Console invocation returns business responses as JSON data. It never serves

@@ -97,15 +97,3 @@ func (s *Server) workerRepositoryDisconnect(st *State, p Principal, r *http.Requ
 	err = s.repositoryApplication().Disconnect(r.Context(), st, p, target.ID, r.PathValue("provider"), r.Header.Get("X-Krun-Request-ID"))
 	return nil, 204, err
 }
-
-func (s *Server) repositoryAudit(p Principal, r *http.Request, action, provider, organization string, allowed bool) Audit {
-	return repositories.AuditEntry(p, r.Header.Get("X-Krun-Request-ID"), action, provider, organization, allowed)
-}
-
-func (s *Server) recordRepositoryAudit(r *http.Request, pending WorkerRepositoryConnectState, action string, allowed bool) {
-	s.repositoryApplication().RecordAudit(r.Context(), pending, r.Header.Get("X-Krun-Request-ID"), action, allowed)
-}
-
-func (s *Server) visibleRepositoryProviders(organization string, connected map[string]bool) []repositories.RepositoryConnectionInfo {
-	return s.repositoryApplication().VisibleRepositoryProviders(organization, connected)
-}

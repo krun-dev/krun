@@ -3,21 +3,12 @@ package control
 import (
 	"net/http"
 
-	appconfig "github.com/krun-dev/krun/internal/config"
 	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
 func (s *Server) workerNetworkProfiles(st *State, p Principal, r *http.Request) (any, int, error) {
 	out, outcome, err := s.workerApplication(r).WorkerNetworkProfiles(r.Context(), st, p, workerRef(r))
 	return out, workerHTTPStatus(outcome), err
-}
-
-func (s *Server) domainCatalog() []workerapp.WorkerDomainView {
-	return s.workerApplication(nil).DomainCatalog()
-}
-
-func (s *Server) domainCatalogForProfile(profile appconfig.WorkerNetworkProfile) []workerapp.WorkerDomainView {
-	return s.workerApplication(nil).DomainCatalogForProfile(profile)
 }
 
 // workerDomains lists the domain catalog so the console can offer choices.

@@ -352,17 +352,7 @@ func (s *Store) ReserveBuildArtifact(ctx context.Context, id, replica string, ar
 	return tx.Commit(ctx)
 }
 
-// finishBuildWithArtifact finalizes a previously reserved artifact and the
-// build in one transaction.
-func (s *Store) finishBuildWithArtifact(ctx context.Context, id, state, message string, artifact domain.WorkerArtifact, log string) error {
-	return s.finishBuildWithArtifactOwned(ctx, id, "", state, message, artifact, log)
-}
-
 func (s *Store) FinishClaimedBuildWithArtifact(ctx context.Context, id, replica, state, message string, artifact domain.WorkerArtifact, log string) error {
-	return s.finishBuildWithArtifactOwned(ctx, id, replica, state, message, artifact, log)
-}
-
-func (s *Store) finishBuildWithArtifactOwned(ctx context.Context, id, replica, state, message string, artifact domain.WorkerArtifact, log string) error {
 	if !workerBuildTerminal(state) {
 		return errors.New("finishBuildWithArtifact requires a terminal state")
 	}
@@ -438,13 +428,4 @@ func (s *Store) finishBuildWithArtifactOwned(ctx context.Context, id, replica, s
 		return err
 	}
 	return tx.Commit(ctx)
-}
-
-// setBuildState applies a non-terminal transition, e.g. queued → fetching.
-func (s *Store) setBuildState(ctx context.Context, id, from, to string) error {
-	if s.pool == nil {
-		return nil
-	}
-	_, err := s.pool.Exec(ctx, `UPDATE krun_worker_builds SET state=$3 WHERE build_id=$1 AND state=$2`, id, from, to)
-	return err
 }

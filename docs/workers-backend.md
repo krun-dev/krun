@@ -1,13 +1,12 @@
 # Workers 构建与发布后端
 
-实现位置：`internal/control/workers_*.go`、`workers/builder`、`workers/runtime`。复用现有 Go 控制服务的登录、API Key、Cedar 权限和 PostgreSQL 状态存储。界面集成在 React 控制台，体验入口与验证见 [Workers 控制台](workers-console.md)。kind 部署与验收入口见 [部署说明](../deploy/workers-kind/README.md)。
+业务实现在 `internal/workers`，HTTP 入口在 `internal/control/workers_*.go`，构建器和运行时分别在 `workers/builder`、`workers/runtime`。复用现有 Go 控制服务的登录、API Key、Cedar 权限和 PostgreSQL 状态存储。界面集成在 React 控制台，体验入口与验证见 [Workers 控制台](workers-console.md)。kind 部署与验收入口见 [部署说明](../deploy/workers-kind/README.md)。
 
 Workers 与认证配置在同一个 YAML 文件，完整示例见 [config/example.yaml](../config/example.yaml) 的 `workers:` 段。配置该段即启用 Workers；省略时控制面仍正常启动，所有 Workers 接口返回 `503 WORKERS_NOT_CONFIGURED`，`/api/auth/me` 的 `workers_configured` 为 `false`，控制台显示“Workers 未配置”。
 
-对象存储可按网络视角配置三个地址：`s3_endpoint` 供控制面读写，
-`s3_builder_endpoint` 供构建器上传，`s3_runtime_endpoint` 供 runtime 冷加载制品和资产。
-三者必须指向同一个桶；完整集群部署通常相同，local-first 的 runtime 地址则应使用集群
-可达的开发机 MinIO 地址。后两项省略时使用主 endpoint，属于同一配置的地址默认值。
+控制面、builder 和 runtime 可以使用不同的 S3 endpoint，但必须指向同一个桶和
+前缀。配置与访问模式见 [对象存储](object-storage.md)，开发拓扑见
+[本地开发](local-dev.md)。
 
 ## 实际流程
 
@@ -39,13 +38,16 @@ sequenceDiagram
     A->>A: 当前所有 serving 成员已 ack -> Operation available（可观测性）
 ```
 
-构建和发布都异步处理。Build、源码、Operation、Version、历史、幂等记录和执行者身份都按实体持久化在 PostgreSQL 的 `krun_worker_*` 表中。边缘配置的当前发布头按 route / version 分行保存在 `worker_config_routes` 与 `worker_config_versions`，`worker_config_revisions` 只保存 revision 元数据，增量则是一条 op 一行的 `worker_config_ops`。runtime ack 存在独立的 `worker_runtime_acks`（每个 Pod 一行）。未完成的 Build / Operation 行就是持久化工作队列；控制服务重启后扫描恢复。多个控制服务通过行级 CAS 与超时租约竞争不同工作，配置发布通过 `worker_config_head` CAS 线性推进，不做 advisory-lock 选主。此版没有引入 Redis 或外部消息队列。
+构建和发布都异步处理。Build、源码、Operation、Version、历史、幂等记录和执行者身份都按实体持久化在 PostgreSQL 的 `krun_worker_*` 表中。边缘配置的当前发布头按 route / version 分行保存在 `worker_config_routes` 与 `worker_config_versions`，`worker_config_revisions` 只保存 revision 元数据，增量则是一条 op 一行的 `worker_config_ops`。runtime ack 存在独立的 `worker_runtime_acks`（每个 Pod 一行）。未完成的 Build / Operation 行就是持久化工作队列；控制服务重启后扫描恢复。多个控制服务通过行级 CAS 与超时租约竞争不同工作，配置发布通过 `worker_config_head` CAS 线性推进，不做 advisory-lock 选主。
 
 Kubernetes、S3 和 runtime HTTP 请求均在 IAM 状态事务外进行。执行者的用户状态、AuthVersion、API Key 和当前权限会在执行及提交前重新检查。
 
 ## 构建和制品
 
-内联小 Worker 继续使用固定 `esbuild` profile；仓库构建则要求项目根目录包含 `wrangler.jsonc`、`wrangler.json` 或 `wrangler.toml`，不启用 Wrangler 的框架自动改造。控制面把完整且经过边界检查的项目目录交给 builder，固定版本 Wrangler 以 `deploy --dry-run` 完成 JS / TS、`rules`、`find_additional_modules`、`no_bundle`、Text / Data / Wasm 和已配置 Vite/adapter 项目的构建。Python、Rust、legacy Service Worker 语法以及 Cloudflare 登录、资源管理和真实 deploy 不在当前范围。详细构建边界见 [Cloudflare Workers 构建兼容](workers-build-compatibility.md)。krun 对外使用自身 API，不提供 Cloudflare deploy API。
+内联源码使用固定的 `esbuild` profile；仓库构建使用项目中的 Wrangler 配置和固定
+版本的 `deploy --dry-run`，产出统一制品。构建输入、模块类型与隔离边界见
+[构建兼容](workers-build-compatibility.md)，对外 Wrangler 部署与登录接口见
+[Cloudflare 协议适配](cloudflare-api.md)。
 
 项目必须提交且只提交一种受支持的锁文件；builder 使用镜像内固定版本的 npm、pnpm、Yarn 或 Bun 执行 frozen install，不通过 Corepack 在线下载任意工具版本。仓库模式会安装构建所需的 devDependencies，并可能执行 lifecycle/custom build，所以它本质上是租户代码执行；内联 direct 模式仍走更窄的依赖和 esbuild 路径。
 
@@ -75,8 +77,6 @@ Manifest profile 固定为 `workerd-bundle-v2`：统一使用 schema 2，静态�
 Artifact 记录包含 `storage_location_id`、`bucket`、`object_key`、归档 / manifest / 模块的 SHA-256、归档大小、组织和创建时间。当前仅配置一个 storage location；其 ID 必须稳定指向同一个存储位置。已有 location ID 不能直接改为另一个桶或 endpoint，需要显式迁移。
 
 正式对象用条件 PUT 防止覆盖，已存在对象必须与本次内容完全一致。相同组织、相同归档复用 Artifact。Job 成功并不直接代表 Build 成功：只有平台完成验证和正式对象登记才标记 `succeeded`。成功 finalize 后删除临时对象。每次冷加载再次核验完整归档及元数据。
-
-kind 使用 MinIO 验证真实 S3 协议；尚未验证阿里云 OSS 专用 API / 签名。
 
 ## 环境、发布和回滚
 
@@ -236,16 +236,6 @@ header 与该 pool 独立 token，不能只信任 header：
 
 内联源码最多 512 文件 / 合计 2 MiB；仓库项目最多 4096 文件 / 合计 24 MiB / 单文件 8 MiB。静态资产最多 500 文件 / 合计 20 MiB / 单文件 5 MiB，含资产时归档上限 32 MiB；模块最多 512 个、单个 2 MiB、合计 8 MiB；日志最多 32 KiB；每服务保留至多 100 个 Build。配置最多 32 个普通变量 / 合计 16 KiB；Secret 最多 32 个、单值最多 16 KiB。变量与 Secret 使用大写 binding 名并禁止平台预留 `KRUN_` 前缀；资产 binding 允许标准 JS 标识符式名称，但不得覆盖变量、Secret 或平台保留 binding。
 
-尚无跨构建依赖缓存、构建取消、运行日志 API 或独立消息队列。已有数据库租约队列轮转、有界并行协调、增量配置发布和共享网关路由，见 [百万站点改造](performance-scaling.md)。完成 Job 30 分钟后由 TTL 清理，控制器按保留策略清理源码上传、日志、操作和无引用制品。实验部署采用开发登录和单节点 kind，不能直接视作生产部署模板。
+尚无跨构建依赖缓存、构建取消、运行日志 API 或独立消息队列。已有数据库租约队列轮转、有界并行协调、增量配置发布和共享网关路由，见 [规模边界与验证](performance-scaling.md)。完成 Job 30 分钟后由 TTL 清理，控制器按保留策略清理源码上传、日志、操作和无引用制品。实验部署采用开发登录和单节点 kind，不能直接视作生产部署模板。
 
 仓库来源构建、服务列表与管理员来源配置见 [仓库构建说明](workers-repositories.md)。内联源码 API 仍可用于小 Worker；新控制台从仓库发起构建。
-
-## 外部私有对象存储
-
-`workers.s3_region`、`s3_addressing_style` 和 `s3_prefix` 控制签名 Region、寻址方式
-和物理对象隔离。`s3_bucket_mode: external` 使用既有桶，不进行桶或策略管理；
-`s3_access_mode: signed` 独立控制私有读取，也可用于自动建桶的 `managed` 模式。
-配置分发由可信 entry worker 使用 SigV4 读取；制品和单文件资产使用短期预签名 URL。
-签名模式的共享静态域名转到 serving runtime，通过内部鉴权的 asset metadata 接口
-取得签名下载地址，校验内容并使用有界缓存；WorkerLoader 子环境没有存储凭据或
-外网能力。开发环境的配置渲染和复现步骤见 [local-first](local-dev.md)。

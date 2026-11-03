@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"encoding/json"
-	"errors"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/krun-dev/krun/internal/domain"
@@ -376,5 +375,3 @@ func readWorkerIdempotency(results pgx.BatchResults, st *domain.State) error {
 	}
 	return rows.Err()
 }
-
-var errNoState = errors.New("state is not initialized")

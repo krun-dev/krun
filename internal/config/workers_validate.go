@@ -21,9 +21,6 @@ func (c *WorkersConfig) Validate() error {
 		return fmt.Errorf("reconcile_concurrency must be between 1 and 64")
 	}
 
-	if c == nil {
-		return nil
-	}
 	if err := c.ValidateRepositoryProviders(); err != nil {
 		return err
 	}

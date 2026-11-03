@@ -22,7 +22,7 @@ Bun 只在存储层使用，连接适配复用现有 pgx 连接池；原生批�
 - revision 校验、唯一键冲突和影响行数仍显式处理。没有通用 `Save`、自动关联保存、级联删除、自动建表或迁移。
 - 有范围的批量读取、Workers 条件状态迁移、刷新租约、队列认领、配置增量和清理继续使用专用 PostgreSQL 语句。ORM 与这些语句的边界集中在存储层，不扩散到业务包。
 
-ORM 的映射测试对照真实数据库列集，并验证后续 CAS 失败会回滚前面的写入、零值和空值不会被忽略、连接被及时归还。数据库 DDL 与 fingerprint 没有因引入 ORM 改变。
+ORM 的映射测试对照真实数据库列集，并验证后续 CAS 失败会回滚前面的写入、零值和空值不会被忽略、连接被及时归还。
 
 ## 分区
 
@@ -74,9 +74,9 @@ UPDATE krun_worker_environments SET version_id=$4, deployment_revision=deploymen
 
 ## 边缘收敛
 
-站点变更进入有界 dirty 队列，发布者只读取变更站点并写入 normalized delta；对象存储保存 compact head 与 host-hash shard checkpoint。Runtime 通过增量 feed 收敛，冷 host 按需读取，ACK 仍用于观察收敛。细节及保留/清理机制见 [百万站点改造](performance-scaling.md)。
+站点变更进入有界 dirty 队列，发布者只读取变更站点并写入 normalized delta；对象存储保存 compact head 与 host-hash shard checkpoint。Runtime 通过增量 feed 收敛，冷 host 按需读取，ACK 仍用于观察收敛。细节及保留/清理机制见 [规模边界与验证](performance-scaling.md)。
 
-**Hosts 不再持久化。** 环境的主机名由域名目录 + 服务的域名选择现算，`normalizeService`、`reconcile` 的 HTTPRoute 生成、边缘增量投影共用同一套推导，因此三者不会漂移。
+**Hosts 不再持久化。** 环境的主机名由域名目录 + 服务的域名选择现算，`workers.Service.NormalizeService`、`reconcile` 的 HTTPRoute 生成、边缘增量投影共用同一套推导，因此三者不会漂移。
 
 ## 认证数据
 

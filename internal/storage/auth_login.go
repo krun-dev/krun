@@ -4,9 +4,10 @@ import (
 	"context"
 	sql "database/sql"
 	"errors"
-	models "github.com/krun-dev/krun/internal/storage/models"
 	"sort"
 	"time"
+
+	models "github.com/krun-dev/krun/internal/storage/models"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/krun-dev/krun/internal/domain"
@@ -179,18 +180,6 @@ func (s *Store) LoginState(ctx context.Context, hash string) (domain.Login, bool
 	return domain.Login{Provider: row.Provider, Browser: row.BrowserHash, Fingerprint: row.Fingerprint, Verifier: row.Verifier, Nonce: row.Nonce, ReturnTo: row.ReturnTo, Generation: row.Generation, Expires: row.ExpiresAt, Consumed: row.Consumed}, true, nil
 }
 
-func (s *Store) insertLoginState(ctx context.Context, hash string, login domain.Login) error {
-	if s.pool == nil {
-		if st := s.memState(); st != nil {
-			st.Logins[hash] = login
-		}
-		return nil
-	}
-	row := models.LoginState{StateHash: hash, Provider: login.Provider, BrowserHash: login.Browser, Fingerprint: login.Fingerprint, Verifier: login.Verifier, Nonce: login.Nonce, ReturnTo: login.ReturnTo, Generation: login.Generation, ExpiresAt: login.Expires, Consumed: login.Consumed}
-	_, err := s.orm.NewInsert().Model(&row).Returning("NULL").Exec(ctx)
-	return err
-}
-
 // consumeLoginState marks a login transaction used. The conditional update is
 // what makes a replayed callback lose: rows affected is 0 when it was taken.
 func (s *Store) ConsumeLoginState(ctx context.Context, hash string) (bool, error) {
@@ -211,20 +200,6 @@ func (s *Store) ConsumeLoginState(ctx context.Context, hash string) (bool, error
 	return tag.RowsAffected() == 1, nil
 }
 
-func (s *Store) deleteLoginState(ctx context.Context, hash string) error {
-	if hash == "" {
-		return nil
-	}
-	if s.pool == nil {
-		if st := s.memState(); st != nil {
-			delete(st.Logins, hash)
-		}
-		return nil
-	}
-	_, err := s.pool.Exec(ctx, `DELETE FROM krun_login_states WHERE state_hash=$1`, hash)
-	return err
-}
-
 func (s *Store) EmailLogin(ctx context.Context, hash string) (domain.EmailLogin, bool, error) {
 	if s.pool == nil {
 		login, ok := s.memState().EmailLogins[hash]
@@ -239,18 +214,6 @@ func (s *Store) EmailLogin(ctx context.Context, hash string) (domain.EmailLogin,
 		return domain.EmailLogin{}, false, err
 	}
 	return domain.EmailLogin{Provider: row.Provider, Browser: row.BrowserHash, Fingerprint: row.Fingerprint, Email: row.Email, CodeHash: row.CodeHash, ReturnTo: row.ReturnTo, IP: row.IP, Generation: row.Generation, Attempts: row.Attempts, Sent: row.SentAt, Expires: row.ExpiresAt, Consumed: row.Consumed}, true, nil
-}
-
-func (s *Store) insertEmailLogin(ctx context.Context, hash string, login domain.EmailLogin) error {
-	if s.pool == nil {
-		if st := s.memState(); st != nil {
-			st.EmailLogins[hash] = login
-		}
-		return nil
-	}
-	row := models.EmailLogin{ChallengeHash: hash, Provider: login.Provider, BrowserHash: login.Browser, Fingerprint: login.Fingerprint, Email: login.Email, CodeHash: login.CodeHash, ReturnTo: login.ReturnTo, IP: login.IP, Generation: login.Generation, Attempts: login.Attempts, SentAt: login.Sent, ExpiresAt: login.Expires, Consumed: login.Consumed}
-	_, err := s.orm.NewInsert().Model(&row).Returning("NULL").Exec(ctx)
-	return err
 }
 
 // invalidateEmailLogin makes a challenge unusable while retaining it for the
@@ -289,57 +252,4 @@ func (s *Store) FailEmailLogin(ctx context.Context, hash string) (bool, error) {
 		return false, err
 	}
 	return tag.RowsAffected() == 1, nil
-}
-
-// consumeEmailLogin atomically wins a verification challenge. A second
-// correct request observes zero affected rows and cannot issue another
-// session, even when it validated an earlier snapshot concurrently.
-func (s *Store) consumeEmailLogin(ctx context.Context, hash string) (bool, error) {
-	if s.pool == nil {
-		st := s.memState()
-		login, ok := st.EmailLogins[hash]
-		if !ok || login.Consumed || login.Attempts >= 5 || !now().Before(login.Expires) {
-			return false, nil
-		}
-		login.Attempts++
-		login.Consumed = true
-		st.EmailLogins[hash] = login
-		return true, nil
-	}
-	tag, err := s.pool.Exec(ctx, `UPDATE krun_email_logins SET attempts=attempts+1, consumed=true WHERE challenge_hash=$1 AND consumed=false AND attempts < 5 AND expires_at > now()`, hash)
-	if err != nil {
-		return false, err
-	}
-	return tag.RowsAffected() == 1, nil
-}
-
-// emailSendBudget reports how many codes this browser and IP requested inside
-// the cooldown window. Counting in SQL replaces the full-table scan the
-// in-memory version performed on every send.
-func (s *Store) emailSendBudget(ctx context.Context, ip, email, browserHash string, window time.Duration) (byIP int, recent bool, err error) {
-	if s.pool == nil {
-		st := s.memState()
-		since := now().Add(-window)
-		for _, v := range st.EmailLogins {
-			if now().Sub(v.Sent) >= window {
-				continue
-			}
-			if v.IP == ip && v.Sent.After(since) {
-				byIP++
-			}
-			if v.Sent.After(since) && (v.Email == email || v.Browser == browserHash) {
-				recent = true
-			}
-		}
-		return byIP, recent, nil
-	}
-	since := now().Add(-window)
-	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM krun_email_logins WHERE ip=$1 AND sent_at >= $2`, ip, since).Scan(&byIP); err != nil {
-		return 0, false, err
-	}
-	var found bool
-	if err = s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM krun_email_logins WHERE sent_at >= $1 AND (email=$2 OR browser_hash=$3))`, since, email, browserHash).Scan(&found); err != nil {
-		return 0, false, err
-	}
-	return byIP, found, nil
 }

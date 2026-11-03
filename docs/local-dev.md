@@ -38,60 +38,33 @@
 - 网关的 `base`（如 `http://127.0.0.1:38080`）：控制台 invoke 经 SSH 隧道打到对应的集群网关实例。
 - `runtime_pools[].validator_service: runtime-validator-default`：候选只在独立 validator 中加载，不进入 serving runtime。
 - `runtime_pools[].validator_management_base: http://127.0.0.1:38084`：local-first 控制面通过隧道访问 validator；生产集群内通常留空，直接访问 Pod IP。
-- `s3_endpoint` 和 `s3_builder_endpoint` 指向开发机上的 MinIO（通常是 `http://127.0.0.1:9000`）；本地 builder 使用同一地址。
-- `s3_runtime_endpoint` 是 runtime 下载制品和静态文件所见的地址。local-first 应设为
+- 使用本地 MinIO 时，`s3_endpoint` 和 `s3_builder_endpoint` 指向开发机（通常是 `http://127.0.0.1:9000`）；本地 builder 使用同一地址。
+- `s3_runtime_endpoint` 是 runtime 下载制品和静态文件所见的地址。本地 MinIO 使用
   `http://<minio-host>:9000`；该开发机地址由 `dev-runtime-config.sh` 同时加入 workerd
   `restrictPeers` allowlist 和 NetworkPolicy。不能使用 runtime 自己的 `127.0.0.1`，也
   不能使用 `static-assets` Service DNS（workerd 会在 kube-proxy 转发前拒绝其 ClusterIP）。
-- `config_base_url` 使用集群可达的开发机地址（`http://<minio-host>:9000/<bucket>/config`）；runtime 不使用控制面的 loopback 地址。桶名从同一份主 YAML 读取。
+- `config_base_url` 可省略，由 runtime endpoint、寻址方式、桶和前缀生成；不能指向控制面的 loopback 地址。
 
 ## S3 兼容对象存储
 
-在同一份 `.data/dev.yaml` 的 `workers:` 中设置：
+对象存储配置统一放在 `.data/dev.yaml` 的 `workers:` 段，字段、寻址与访问模式
+见 [对象存储](object-storage.md)。本地 MinIO 可以使用 `managed + direct`，已有私有桶
+使用 `external + signed`；两项配置与厂商无关。
 
-```yaml
-s3_endpoint: https://s3.example.com
-s3_builder_endpoint: https://s3.example.com
-s3_runtime_endpoint: https://s3.example.com
-s3_region: us-east-1
-s3_addressing_style: path
-s3_bucket: replace-me
-s3_prefix: dev/run
-s3_bucket_mode: external
-s3_access_mode: signed
-s3_location_id: external-dev
-s3_access_key: replace-me
-s3_secret_key: replace-me
-```
+local-first 渲染器对网络地址有以下约束：
 
-省略 `config_base_url`，由 runtime endpoint、寻址方式、桶及前缀自动生成。
-桶管理和读取方式独立：`external` 不创建桶、不读取或改写桶策略；`managed` 可以自动建桶。
-`signed` 保持私有并签名读取；`direct` 使用静态源站直接读取，仅 `managed + direct`
-会写入匿名读取策略。所有对象、预签名 URL、列表及删除都经过
-统一前缀适配器。storage location id 对应固定的桶和前缀，更换存储位置时使用新的 id。
+- `direct` 的静态源站使用集群可达的 HTTP IPv4 地址。
+- `signed` 支持公网 HTTPS，或显式 IPv4 地址的私有 HTTP/HTTPS 源站；端口来自 endpoint。
+- 公网域名允许 DNS 和对应 HTTPS 端口；私有存储只放行指定 IP 和端口，不放行私有 DNS 网段。
 
-Runtime 从挂载的 Kubernetes Secret 获取配置读取凭据，以 SigV4 读取私有配置；
-代码和资产使用短期预签名 URL。业务 Worker 不接收存储凭据，也不获得 runtime 的
-出站网络能力。静态域名经 serving runtime 校验资产路径、SHA-256 和大小，使用
-签名 URL 读取私有对象，并保留有界缓存；不需要把共享桶改成公开访问。
-
-`dev-runtime-config.sh` 通过 `LoadConfig` 渲染 workerd 配置、Secret 和 NetworkPolicy；
-不再从 shell 变量维护第二套桶地址。签名模式支持公网 HTTPS，或显式 IPv4 地址的私有 HTTP/HTTPS 源站，端口从 endpoint
-读取；公网域名允许 DNS 和对应 HTTPS 端口，私有 IP 仅放行指定 IP 和端口。
-local-first 的私有 DNS 源站应配置成集群可达 IP；当前渲染器不放行私有 DNS 网段。
-workerd 镜像包含系统 CA 证书并启用 TLS 验证。应用新 runtime 镜像及配置后，重跑 `dev-up.sh`
-刷新指向旧 validator Pod 的隧道：
+`dev-runtime-config.sh` 从主配置生成 workerd 配置、Secret 和 NetworkPolicy。更新
+Runtime 镜像或配置后，刷新指向旧 validator Pod 的隧道：
 
 ```sh
 ./scripts/dev-runtime-image.sh --build-only
 ./scripts/dev-runtime-config.sh
 ./scripts/dev-up.sh --refresh-tunnels
 ```
-
-本地 MinIO 可选 `managed + direct`，由控制面管理专用桶及公开资产策略，静态源站
-使用集群可达的 HTTP IPv4 地址；也可以选 `external + signed` 使用已存在的私有桶。
-AWS S3、TOS 和其他兼容服务使用相同适配器，按服务能力选择 `path` 或 `virtual`。
-完整配置及支持范围见 [对象存储](object-storage.md)。
 
 ## 本地变量（gitignored）
 

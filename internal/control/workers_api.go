@@ -77,28 +77,8 @@ func (s *Server) workerTarget(st *State, r *http.Request, env, action string, p 
 	return s.workerApplication(r).WorkerTarget(st, workerRef(r), env, action, p)
 }
 
-func (s *Server) workerCollectionTarget(st *State, r *http.Request, action string, p Principal) (Target, error) {
-	return s.workerApplication(r).WorkerCollectionTarget(st, workerRef(r), action, p)
-}
-
 func (s *Server) workerService(st *State, t Target) WorkerService {
 	return s.workerApplication(nil).WorkerService(st, t)
-}
-
-func (s *Server) ensureWorkerPlacement(st *State, ws WorkerService) WorkerPlacement {
-	return s.workerApplication(nil).EnsureWorkerPlacement(st, ws)
-}
-
-func (s *Server) replaceWorkerPlacement(st *State, ws WorkerService, pool string) WorkerPlacement {
-	return s.workerApplication(nil).ReplaceWorkerPlacement(st, ws, pool)
-}
-
-func (s *Server) workerServiceView(st *State, t Target) WorkerService {
-	return s.workerApplication(nil).WorkerServiceView(st, t)
-}
-
-func (s *Server) normalizeService(ws WorkerService, states ...*State) WorkerService {
-	return s.workerApplication(nil).NormalizeService(ws, states...)
 }
 
 func (s *Server) workerBuildCreate(st *State, p Principal, r *http.Request) (any, int, error) {
@@ -121,10 +101,6 @@ func (s *Server) workerSourceUploadCreate(st *State, p Principal, r *http.Reques
 func (s *Server) workerBuildList(st *State, p Principal, r *http.Request) (any, int, error) {
 	out, outcome, err := s.workerApplication(r).WorkerBuildList(r.Context(), st, p, workerRef(r))
 	return out, workerHTTPStatus(outcome), err
-}
-
-func (s *Server) workerGetBuild(st *State, p Principal, r *http.Request, action string) (WorkerBuild, error) {
-	return s.workerApplication(r).WorkerGetBuild(st, p, workerRef(r), action)
 }
 
 func (s *Server) workerBuildGet(st *State, p Principal, r *http.Request) (any, int, error) {

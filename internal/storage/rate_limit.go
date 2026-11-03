@@ -61,20 +61,3 @@ func (s *Store) RateLimitExceeded(ctx context.Context, scope, key string, window
 	}
 	return s.memoryRateLimits[bucket] > limit, nil
 }
-
-// deleteRateLimitsBefore is called by the retention loop. Keeping the helper
-// here lets retention wiring remain independent from the request path.
-func (s *Store) deleteRateLimitsBefore(ctx context.Context, cutoff time.Time) error {
-	if s.pool != nil {
-		_, err := s.pool.Exec(ctx, `DELETE FROM krun_rate_limits WHERE window_start < $1`, cutoff)
-		return err
-	}
-	s.rateMu.Lock()
-	defer s.rateMu.Unlock()
-	for bucket := range s.memoryRateLimits {
-		if bucket.windowStart.Before(cutoff) {
-			delete(s.memoryRateLimits, bucket)
-		}
-	}
-	return nil
-}

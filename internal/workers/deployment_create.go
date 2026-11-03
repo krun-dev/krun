@@ -152,26 +152,6 @@ func (s *Service) WorkerVersionHistory(ctx context.Context, st *domain.State, p 
 
 }
 
-func WorkerFailOperation(st *domain.State, id, message string) {
-	op, ok := st.Workers.Operations[id]
-	if !ok || appconfig.WorkerTerminal(op.State) {
-		return
-	}
-	op.State = "failed"
-	op.Error = message
-	at := time.Now().UTC()
-	op.Finished = &at
-	for i := range op.Steps {
-		if op.Steps[i].State == "running" {
-			op.Steps[i].State = "failed"
-			op.Steps[i].Detail = message
-		}
-	}
-	st.Workers.Operations[id] = op
-}
-
-func WorkerCloneTime(t time.Time) *time.Time { return &t }
-
 func (s *Service) WorkerOperationList(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
 	t, e := s.WorkerCollectionTarget(st, ref, "service.version.read", p)
 	if e != nil {

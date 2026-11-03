@@ -38,8 +38,6 @@ type Audit = domain.Audit
 
 type State = domain.State
 
-type pendingLoginCommit = domain.LoginCommit
-
 type WorkerAssetsConfig = domain.WorkerAssetsConfig
 
 type WorkerActor = domain.WorkerActor
@@ -90,8 +88,6 @@ type workerConfigProjection = domain.WorkerConfigProjection
 
 type workerConfigOp = domain.WorkerConfigOp
 
-type workerConfigRevision = domain.WorkerConfigRevision
-
 type APIError = domain.APIError
 
 var newState = domain.NewState
@@ -103,12 +99,6 @@ var memberKey = domain.MemberKey
 var workerPlacementKey = domain.WorkerPlacementKey
 
 var activeWorkerPlacement = domain.ActiveWorkerPlacement
-
-var workerServiceAvailableInPool = domain.WorkerServiceAvailableInPool
-
-var cloneStringsMap = domain.CloneStringsMap
-
-var workerSecretNames = domain.WorkerSecretNames
 
 var sameWorkerSecretVersion = domain.SameWorkerSecretVersion
 

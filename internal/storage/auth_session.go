@@ -5,8 +5,9 @@ import (
 	"crypto/subtle"
 	sql "database/sql"
 	"errors"
-	models "github.com/krun-dev/krun/internal/storage/models"
 	"time"
+
+	models "github.com/krun-dev/krun/internal/storage/models"
 
 	"github.com/krun-dev/krun/internal/domain"
 )
@@ -140,21 +141,6 @@ func (s *Store) UpsertBrowser(ctx context.Context, hash string, browser domain.B
 	}
 	row := models.Browser{BrowserHash: hash, CSRF: browser.CSRF, Generation: browser.Generation, ExpiresAt: browser.Expires}
 	_, err := s.orm.NewInsert().Model(&row).On("CONFLICT (browser_hash) DO UPDATE").Set("csrf = EXCLUDED.csrf").Set("generation = EXCLUDED.generation").Set("expires_at = EXCLUDED.expires_at").Returning("NULL").Exec(ctx)
-	return err
-}
-
-func (s *Store) deleteBrowser(ctx context.Context, hash string) error {
-	if hash == "" {
-		return nil
-	}
-	if s.pool == nil {
-		if st := s.memState(); st != nil {
-			delete(st.Browsers, hash)
-		}
-		return nil
-	}
-	row := models.Browser{BrowserHash: hash}
-	_, err := s.orm.NewDelete().Model(&row).WherePK().Exec(ctx)
 	return err
 }
 

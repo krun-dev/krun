@@ -1,19 +1,7 @@
 # Workers 控制台
 
-Workers 页面属于主 React/Vite 控制台，不是独立应用。日常开发使用 local-first
-拓扑：控制面、PostgreSQL、MinIO、local builder 和 Vite 在开发机，集群只保留
-serving runtime、独立 validator（均为 workerd）与 kgateway。
-
-```bash
-cp config/development.example.yaml .data/dev.yaml
-# 把 config/example.yaml 的 workers: 段合并进去，并填写本机实际值
-npm ci
-make dev
-```
-
-入口是 `http://127.0.0.1:5173/?page=workers`。Vite 只在开发期把同源
-`/api/*` 代理到 Go；页面不保存 API Key，也不读取后端地址。配置、隧道和启动细节见
-[本地开发环境](local-dev.md)。
+Workers 页面属于主 React/Vite 静态控制台，入口是 `/?page=workers`。开发启动与
+同源代理配置见 [本地开发](local-dev.md)；生产静态托管见 [部署](deployment.md)。
 
 ## 页面流程
 
@@ -43,16 +31,4 @@ ack 最终收敛。
 验证夹具：同一个 Version 同时包含 Worker API 和纯静态前端，并由 kind E2E 实际构建、
 发布和调用，不是只靠 mock 或单元测试证明。
 
-## 完整 kind E2E
-
-`deploy/workers-kind` 是独立的完整验收环境，会在集群内部署 backend、PostgreSQL、
-MinIO、builder/runtime 相关组件，并执行故障恢复测试。它不能与 local-first 环境同时
-运行。使用方法见 [kind E2E README](../deploy/workers-kind/README.md)。
-
-提交前至少运行：
-
-```bash
-make test
-npm run build
-make check-static-build
-```
+自动化测试与浏览器验收入口见 [验证说明](verification.md)。

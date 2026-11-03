@@ -338,13 +338,6 @@ func (s *Server) protected(sessionOnly bool, fn endpoint) http.HandlerFunc {
 	return s.protectedWith(sessionOnly, PartitionIAM, PartitionIAM, apiJSONBodyMax, fn)
 }
 
-// protectedWorkers serves the Workers API. Authorization reads IAM, the handler
-// reads and writes Workers rows, and only Workers rows are persisted — IAM and
-// Workers never share a transaction.
-func (s *Server) protectedWorkers(sessionOnly bool, fn endpoint) http.HandlerFunc {
-	return s.protectedWorkersWithBodyLimit(sessionOnly, apiJSONBodyMax, fn)
-}
-
 func (s *Server) protectedWorkersWithBodyLimit(sessionOnly bool, bodyLimit int64, fn endpoint) http.HandlerFunc {
 	return s.protectedWith(sessionOnly, PartitionAll, PartitionWorkers, bodyLimit, fn)
 }

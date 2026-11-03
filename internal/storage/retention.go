@@ -157,29 +157,6 @@ func (s *Store) BlockGarbageArtifact(ctx context.Context, id, replica string, ex
 	return tag.RowsAffected() == 1, nil
 }
 
-// retainedWorkerSourceKeys is the object-side reachability set. Source bundles
-// stay available exactly while their retained build-private row exists;
-// abandoned presigned uploads have no row and remain eligible for age-based GC.
-func (s *Store) retainedWorkerSourceKeys(ctx context.Context) (map[string]struct{}, error) {
-	out := map[string]struct{}{}
-	if s.pool == nil {
-		return out, nil
-	}
-	rows, err := s.pool.Query(ctx, `SELECT source_key FROM krun_worker_build_private WHERE source_key <> ''`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
-			return nil, err
-		}
-		out[key] = struct{}{}
-	}
-	return out, rows.Err()
-}
-
 // RunRetention bounds each cleanup cycle independently; callers choose logging.
 func (s *Store) RunRetention(ctx context.Context, interval time.Duration, onError func(error)) {
 	ticker := time.NewTicker(interval)

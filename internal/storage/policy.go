@@ -13,14 +13,6 @@ const WorkerConfigOpsRetain = 512
 func now() time.Time                { return time.Now().UTC() }
 func digest(value string) string    { return bytesDigest([]byte(value)) }
 func bytesDigest(raw []byte) string { sum := sha256.Sum256(raw); return hex.EncodeToString(sum[:]) }
-func contains(xs []string, x string) bool {
-	for _, value := range xs {
-		if value == x {
-			return true
-		}
-	}
-	return false
-}
 
 const workerBaseline = "production"
 
