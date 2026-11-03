@@ -100,6 +100,7 @@ test("all literal translation keys are cataloged", async () => {
     "../App.tsx",
     "../components/common.tsx",
     "../components/login.tsx",
+    "../components/oauth-consent.tsx",
     "../components/email-login.tsx",
     "../components/management.tsx",
     "../components/keys.tsx",

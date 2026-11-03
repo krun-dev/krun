@@ -46,24 +46,31 @@ func (s *Store) SessionByHash(ctx context.Context, hash string) (domain.Session,
 		return domain.Session{}, false, nil
 	}
 	if s.pool == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
 		session, ok := s.memState().Sessions[hash]
+		if ok && session.OAuthGrant != "" && !s.oauthGrantActive(session.OAuthGrant) {
+			return domain.Session{}, false, nil
+		}
 		return session, ok, nil
 	}
 	var row models.Session
-	err := s.orm.NewSelect().Model(&row).Where("session_hash = ?", hash).Scan(ctx)
+	err := s.orm.NewSelect().Model(&row).Where("session_hash = ?", hash).Where("oauth_grant_id = '' OR EXISTS(SELECT 1 FROM krun_oauth_grants g WHERE g.grant_id=krun_sessions.oauth_grant_id AND g.revoked=false AND g.expires_at>now())").Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Session{}, false, nil
 	}
 	if err != nil {
 		return domain.Session{}, false, err
 	}
-	return domain.Session{Hash: row.SessionHash, User: row.UserID, CSRF: row.CSRF, AuthVersion: row.AuthVersion, CLI: row.CLI, Created: row.CreatedAt, Seen: row.SeenAt, Absolute: row.AbsoluteAt}, true, nil
+	return domain.Session{Hash: row.SessionHash, OAuthGrant: row.OauthGrantID, OAuthScope: row.OauthScope, User: row.UserID, CSRF: row.CSRF, AuthVersion: row.AuthVersion, CLI: row.CLI, Created: row.CreatedAt, Seen: row.SeenAt, Absolute: row.AbsoluteAt}, true, nil
 }
 
 // touchSession refreshes seen_at only when the stored value is older than the
 // throttle. It deliberately does not fail the request when it loses a race.
 func (s *Store) TouchSession(ctx context.Context, hash string) error {
 	if s.pool == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
 		if st := s.memState(); st != nil {
 			if session, ok := st.Sessions[hash]; ok && now().Sub(session.Seen) >= seenThrottle {
 				session.Seen = now()

@@ -94,7 +94,9 @@ KRUN_UI_ORIGIN=http://127.0.0.1:4380 npm run test:ui
 使用对应的 `KRUN_UI_ORIGIN`。这些变量只属于测试工具，最终地址仍显式写入唯一的主 YAML。
 
 UI 覆盖登录/语言/退出、106 站点跨页、页外深链接、仓库绑定、真实构建/发布/调用、
-配置发布/回滚、创建 Worker/preview 和移动端导航。默认 `HEAD` 使用仓库实际默认分支，并有真实 Git 仓库回归。
+配置发布/回滚、创建 Worker/preview 和移动端导航；授权测试还覆盖 krun CLI 和官方 Wrangler
+的浏览器登录、设备码、自动刷新及退出撤销。测试自动编译本机 CLI；也可用 `KRUN_CLI_BINARY`
+指定已编译的路径。默认 `HEAD` 使用仓库实际默认分支，并有真实 Git 仓库回归。
 
 生产容量还需按活跃比例、站点资产大小、总 QPS、发布突发和可用性目标压测 Gateway、
 控制面、PostgreSQL、对象存储/CDN 及 runtime 工作集。保留全局 revision CAS 是当前明确的边界；

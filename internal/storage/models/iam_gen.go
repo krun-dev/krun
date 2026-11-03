@@ -146,3 +146,42 @@ type EmailSendLock struct {
 	KeyHash       string    `bun:"key_hash,pk"`
 	TouchedAt     time.Time `bun:"touched_at"`
 }
+
+type OauthAuthorization struct {
+	bun.BaseModel `bun:"table:krun_oauth_authorizations,alias:krun_oauth_authorizations"`
+	AuthHash      string    `bun:"auth_hash,pk"`
+	ClientID      string    `bun:"client_id"`
+	RedirectUri   string    `bun:"redirect_uri"`
+	Challenge     string    `bun:"challenge"`
+	State         string    `bun:"state"`
+	Scope         string    `bun:"scope"`
+	UserCode      *string   `bun:"user_code"`
+	Decision      string    `bun:"decision"`
+	UserID        string    `bun:"user_id"`
+	AuthVersion   int       `bun:"auth_version"`
+	CodeHash      *string   `bun:"code_hash"`
+	CreatedAt     time.Time `bun:"created_at"`
+	ExpiresAt     time.Time `bun:"expires_at"`
+	Consumed      bool      `bun:"consumed"`
+}
+
+type OauthGrant struct {
+	bun.BaseModel `bun:"table:krun_oauth_grants,alias:krun_oauth_grants"`
+	GrantID       string    `bun:"grant_id,pk"`
+	UserID        string    `bun:"user_id"`
+	ClientID      string    `bun:"client_id"`
+	Scope         string    `bun:"scope"`
+	AuthVersion   int       `bun:"auth_version"`
+	CreatedAt     time.Time `bun:"created_at"`
+	ExpiresAt     time.Time `bun:"expires_at"`
+	Revoked       bool      `bun:"revoked"`
+}
+
+type OauthRefreshToken struct {
+	bun.BaseModel `bun:"table:krun_oauth_refresh_tokens,alias:krun_oauth_refresh_tokens"`
+	TokenHash     string    `bun:"token_hash,pk"`
+	GrantID       string    `bun:"grant_id"`
+	CreatedAt     time.Time `bun:"created_at"`
+	ExpiresAt     time.Time `bun:"expires_at"`
+	Consumed      bool      `bun:"consumed"`
+}

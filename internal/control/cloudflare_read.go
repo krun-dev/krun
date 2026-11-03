@@ -2,6 +2,7 @@ package control
 
 import (
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 
@@ -11,6 +12,9 @@ import (
 )
 
 func (s *Server) cfAccounts(st *State, p Principal, r *http.Request) (any, int, error) {
+	if p.OAuthActions != nil && !slices.Contains(p.OAuthActions, "organization.read") {
+		return nil, 0, forbidden()
+	}
 	out, _, err := s.orgList(st, p, r)
 	if err != nil {
 		return nil, 0, err
@@ -295,4 +299,23 @@ func (s *Server) cfDeploymentURLs(st *State, d domain.WorkerDeployment) []string
 		urls = append(urls, scheme+host)
 	}
 	return urls
+}
+
+func (s *Server) cfUser(st *State, p Principal, r *http.Request) (any, int, error) {
+	if p.OAuthScope != "" && !strings.Contains(" "+p.OAuthScope+" ", " krun:control ") && !slices.Contains(strings.Fields(p.OAuthScope), "user:read") {
+		return nil, 0, forbidden()
+	}
+	return map[string]any{"id": p.User.ID, "email": p.User.Email, "first_name": p.User.Name, "last_name": "", "suspended": false}, 200, nil
+}
+
+func (s *Server) cfMemberships(st *State, p Principal, r *http.Request) (any, int, error) {
+	out, _, err := s.cfAccounts(st, p, r)
+	if err != nil {
+		return nil, 0, err
+	}
+	memberships := []any{}
+	for _, org := range out.([]Organization) {
+		memberships = append(memberships, map[string]any{"id": p.User.ID + "/" + org.ID, "status": "accepted", "account": map[string]string{"id": org.ID, "name": org.Name}, "roles": s.iam().MembershipRoles(st, p, org.ID)})
+	}
+	return memberships, 200, nil
 }

@@ -34,8 +34,6 @@ type Login = domain.Login
 
 type EmailLogin = domain.EmailLogin
 
-type Device = domain.Device
-
 type Audit = domain.Audit
 
 type State = domain.State

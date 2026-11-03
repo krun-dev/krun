@@ -11,9 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -22,8 +20,10 @@ import (
 )
 
 type Profile struct {
-	Server string `json:"server"`
-	Token  string `json:"token"`
+	Server       string    `json:"server"`
+	Token        string    `json:"token"`
+	RefreshToken string    `json:"refresh_token,omitempty"`
+	Expires      time.Time `json:"expires_at,omitempty"`
 }
 type Client struct {
 	Profile  Profile
@@ -48,7 +48,7 @@ func validateServer(server string) error {
 	}
 	return nil
 }
-func (c *Client) request(ctx context.Context, method, path string, input any, output any, anonymous bool) error {
+func (c *Client) requestOnce(ctx context.Context, method, path string, input any, output any, anonymous bool) error {
 	if e := validateServer(c.Profile.Server); e != nil {
 		return e
 	}
@@ -187,13 +187,14 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 	}
 	c.Profile = profile
 	if server != "" && strings.TrimRight(server, "/") != strings.TrimRight(c.Profile.Server, "/") {
-		c.Profile.Token = ""
+		c.clearCredentials()
 		c.Profile.Server = server
 	}
 	if c.Profile.Server == "" {
 		c.Profile.Server = "http://127.0.0.1:8080"
 	}
 	if token := os.Getenv("KRUN_TOKEN"); token != "" {
+		c.clearCredentials()
 		c.Profile.Token = token
 	}
 	if len(filtered) == 0 || filtered[0] == "help" || filtered[0] == "--help" {
@@ -214,7 +215,11 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 	case "whoami", "status":
 		return c.call(ctx, "GET", "/api/v1/me", nil)
 	case "logout":
-		if c.Profile.Token != "" && !strings.HasPrefix(c.Profile.Token, "krun_key_") {
+		if c.Profile.RefreshToken != "" {
+			if e = c.oauthForm(ctx, "/revoke", url.Values{"client_id": {cliOAuthClient}, "token": {c.Profile.RefreshToken}}, nil); e != nil {
+				return e
+			}
+		} else if c.Profile.Token != "" && !strings.HasPrefix(c.Profile.Token, "krun_key_") {
 			if e = c.request(ctx, "POST", "/api/auth/logout", map[string]any{}, nil, false); e != nil {
 				var apiErr *responseError
 				if !errors.As(e, &apiErr) || apiErr.Status != 401 {
@@ -222,7 +227,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 				}
 			}
 		}
-		c.Profile.Token = ""
+		c.clearCredentials()
 		if e = c.save(); e != nil {
 			return e
 		}
@@ -292,9 +297,26 @@ func (c *Client) login(ctx context.Context, args []string) error {
 	f := flags("login", c.Err)
 	stdin := f.Bool("token-stdin", false, "Read API Key from stdin")
 	noBrowser := f.Bool("no-browser", false, "Print URL without opening browser")
+	browser := f.Bool("browser", true, "Open the sign-in page in a browser")
+	device := f.Bool("device", false, "Use a device code instead of a loopback callback")
+	port := f.Int("callback-port", 8976, "Loopback callback port; 0 chooses a free port")
+	scope := f.String("scopes", "krun:control offline_access", "OAuth scopes")
 	if e := f.Parse(args); e != nil {
 		return e
 	}
+	if f.NArg() != 0 {
+		return errors.New("login does not accept positional arguments")
+	}
+	callbackConfigured := false
+	f.Visit(func(flag *flag.Flag) {
+		if flag.Name == "callback-port" {
+			callbackConfigured = true
+		}
+	})
+	if *device && (*stdin || callbackConfigured) {
+		return errors.New("--device cannot be combined with --token-stdin or --callback-port")
+	}
+
 	if *stdin {
 		raw, e := io.ReadAll(io.LimitReader(c.In, 4096))
 		if e != nil {
@@ -304,6 +326,7 @@ func (c *Client) login(ctx context.Context, args []string) error {
 		if !strings.HasPrefix(token, "krun_key_") {
 			return errors.New("krun API Key required")
 		}
+		c.clearCredentials()
 		c.Profile.Token = token
 		var me any
 		if e = c.request(ctx, "GET", "/api/v1/me", nil, &me, false); e != nil {
@@ -315,76 +338,16 @@ func (c *Client) login(ctx context.Context, args []string) error {
 		fmt.Fprintln(c.Out, "API Key saved.")
 		return nil
 	}
-	var device struct {
-		Code     string `json:"device_code"`
-		UserCode string `json:"user_code"`
-		URL      string `json:"verification_uri"`
-		Expires  int    `json:"expires_in"`
-		Interval int    `json:"interval"`
+	requested := *scope
+	if !strings.Contains(" "+requested+" ", " offline_access ") {
+		requested += " offline_access"
 	}
-	if e := c.request(ctx, "POST", "/api/auth/cli/start", map[string]any{}, &device, true); e != nil {
-		return e
+	if *device {
+		return c.deviceLogin(ctx, *browser && !*noBrowser, requested)
 	}
-	base, _ := url.Parse(c.Profile.Server)
-	verify, e := url.Parse(device.URL)
-	if e != nil || verify.Scheme != base.Scheme || verify.Host != base.Host {
-		return errors.New("invalid verification URL")
-	}
-	fmt.Fprintf(c.Err, "Open %s\nConfirm code: %s\n", device.URL, device.UserCode)
-	if !*noBrowser {
-		var cmd *exec.Cmd
-		switch runtime.GOOS {
-		case "darwin":
-			cmd = exec.Command("open", device.URL)
-		case "linux":
-			cmd = exec.Command("xdg-open", device.URL)
-		case "windows":
-			cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", device.URL)
-		}
-		if cmd != nil {
-			_ = cmd.Run()
-		}
-	}
-	timeout := time.Duration(device.Expires) * time.Second
-	if timeout <= 0 || timeout > 5*time.Minute {
-		timeout = 5 * time.Minute
-	}
-	loginCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	interval := time.Duration(device.Interval) * time.Second
-	if interval < 3*time.Second {
-		interval = 3 * time.Second
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-loginCtx.Done():
-			return errors.New("browser login cancelled or expired")
-		case <-ticker.C:
-			var result struct {
-				Token string `json:"token"`
-			}
-			e = c.request(loginCtx, "POST", "/api/auth/cli/poll", map[string]string{"device_code": device.Code}, &result, true)
-			if e != nil {
-				var pending *responseError
-				if errors.As(e, &pending) && pending.Code == "AUTHORIZATION_PENDING" {
-					continue
-				}
-				return e
-			}
-			if !strings.HasPrefix(result.Token, "krun_cli_") {
-				return errors.New("invalid CLI credential")
-			}
-			c.Profile.Token = result.Token
-			if e = c.save(); e != nil {
-				return e
-			}
-			fmt.Fprintln(c.Out, "Logged in. CLI session expires in one hour.")
-			return nil
-		}
-	}
+	return c.browserLogin(ctx, *browser && !*noBrowser, *port, requested)
 }
+
 func loadProfile(path string) (Profile, error) {
 	var profile Profile
 	if err := configfile.ValidatePath(path); err != nil {
@@ -593,7 +556,7 @@ func (c *Client) manage(ctx context.Context, command string, args []string) erro
 
 const help = `krun — control-plane CLI
 
-  krun login [--server URL] [--no-browser | --token-stdin]
+  krun login [--server URL] [--browser=false] [--device | --token-stdin] [--callback-port PORT]
   krun whoami | logout
   krun org list | create --name NAME
   krun members list | add | remove --org ID [--user ID]

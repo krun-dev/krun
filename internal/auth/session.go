@@ -27,7 +27,7 @@ func (s *Service) Authenticate(st *domain.State, c Credentials) (authorization.P
 	} else if c.HasSession {
 		session := c.Session
 
-		if session.CLI == (c.Bearer) && time.Now().UTC().Before(session.Absolute) && time.Now().UTC().Sub(session.Seen) < 30*time.Minute {
+		if session.CLI == (c.Bearer) && time.Now().UTC().Before(session.Absolute) && (session.OAuthGrant != "" || time.Now().UTC().Sub(session.Seen) < 30*time.Minute) {
 			u, exists := st.Users[session.User]
 			if exists && u.AuthVersion == session.AuthVersion {
 				p.User = u
@@ -35,6 +35,10 @@ func (s *Service) Authenticate(st *domain.State, c Credentials) (authorization.P
 				p.SessionHash = session.Hash
 				if session.CLI {
 					p.Kind = "cli_session"
+					if session.OAuthGrant != "" {
+						p.OAuthScope = session.OAuthScope
+						p.OAuthActions = OAuthActions(session.OAuthScope)
+					}
 				}
 			}
 		}

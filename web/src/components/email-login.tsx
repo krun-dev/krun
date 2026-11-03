@@ -36,7 +36,7 @@ export function EmailLogin({ provider, busy, onBusy }: {
     onBusy(true);
     setFailed("");
     try {
-      const returnTo = `/${window.location.search.includes("cli=") ? window.location.search : ""}`;
+      const returnTo = `/${window.location.search}`;
       const result = await api<Challenge>(`${endpoint}/code`, "POST", { email, return_to: returnTo });
       setChallenge(result);
       setCode("");

@@ -107,7 +107,7 @@ func truncateControlTables(t *testing.T, store *Store) {
 		"worker_retention_scopes", "worker_asset_objects", "worker_config_dirty", "worker_config_checkpoints", "worker_config_ops", "worker_config_revisions", "worker_config_routes", "worker_config_versions", "worker_runtime_acks",
 		"krun_rate_limits", "krun_audits",
 		"krun_sessions", "krun_browsers", "krun_login_states", "krun_email_logins",
-		"krun_device_codes", "krun_invitations", "krun_repository_connect_states",
+		"krun_oauth_refresh_tokens", "krun_oauth_grants", "krun_oauth_authorizations", "krun_invitations", "krun_repository_connect_states",
 		"krun_repository_connections", "krun_api_key_hashes", "krun_api_keys",
 		"krun_assignments", "krun_group_members", "krun_groups", "krun_members",
 		"krun_org_sources", "krun_organizations", "krun_resources", "krun_users",

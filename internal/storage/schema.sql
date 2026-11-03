@@ -146,7 +146,9 @@ CREATE TABLE IF NOT EXISTS krun_sessions (
 	cli          boolean NOT NULL DEFAULT false,
 	created_at   timestamptz NOT NULL,
 	seen_at      timestamptz NOT NULL,
-	absolute_at  timestamptz NOT NULL
+	absolute_at  timestamptz NOT NULL,
+ oauth_grant_id text NOT NULL DEFAULT '',
+ oauth_scope text NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS krun_sessions_user ON krun_sessions (user_id);
 CREATE INDEX IF NOT EXISTS krun_sessions_expiry ON krun_sessions (absolute_at);
@@ -208,16 +210,6 @@ CREATE TABLE IF NOT EXISTS krun_rate_limits (
 );
 CREATE INDEX IF NOT EXISTS krun_rate_limits_window ON krun_rate_limits (window_start);
 
-CREATE TABLE IF NOT EXISTS krun_device_codes (
-	code_hash  text PRIMARY KEY,
-	user_code  text NOT NULL,
-	token      text NOT NULL DEFAULT '',
-	expires_at timestamptz NOT NULL,
-	approved   boolean NOT NULL DEFAULT false,
-	consumed   boolean NOT NULL DEFAULT false
-);
-CREATE UNIQUE INDEX IF NOT EXISTS krun_device_codes_user_code_unique ON krun_device_codes (user_code);
-CREATE INDEX IF NOT EXISTS krun_device_codes_expiry ON krun_device_codes (expires_at);
 
 CREATE TABLE IF NOT EXISTS krun_repository_connections (
 	user_id            text NOT NULL,
@@ -603,3 +595,45 @@ CREATE TABLE IF NOT EXISTS krun_worker_scripts (
  created_at timestamptz NOT NULL DEFAULT now(),
  PRIMARY KEY(org_id,script_name)
 );
+
+CREATE TABLE IF NOT EXISTS krun_oauth_authorizations (
+ auth_hash text PRIMARY KEY,
+ client_id text NOT NULL,
+ redirect_uri text NOT NULL DEFAULT '',
+ challenge text NOT NULL DEFAULT '',
+ state text NOT NULL DEFAULT '',
+ scope text NOT NULL,
+ user_code text UNIQUE,
+ decision text NOT NULL DEFAULT 'pending' CHECK(decision IN('pending','approved','denied')),
+ user_id text NOT NULL DEFAULT '',
+ auth_version integer NOT NULL DEFAULT 0,
+ code_hash text UNIQUE,
+ created_at timestamptz NOT NULL,
+ expires_at timestamptz NOT NULL,
+ consumed boolean NOT NULL DEFAULT false,
+ CHECK(expires_at > created_at)
+);
+CREATE INDEX IF NOT EXISTS krun_oauth_authorizations_expiry ON krun_oauth_authorizations(expires_at);
+CREATE TABLE IF NOT EXISTS krun_oauth_grants (
+ grant_id text PRIMARY KEY,
+ user_id text NOT NULL,
+ client_id text NOT NULL,
+ scope text NOT NULL,
+ auth_version integer NOT NULL,
+ created_at timestamptz NOT NULL,
+ expires_at timestamptz NOT NULL,
+ revoked boolean NOT NULL DEFAULT false,
+ CHECK(expires_at > created_at)
+);
+CREATE INDEX IF NOT EXISTS krun_oauth_grants_user ON krun_oauth_grants(user_id);
+CREATE INDEX IF NOT EXISTS krun_oauth_grants_expiry ON krun_oauth_grants(expires_at);
+CREATE TABLE IF NOT EXISTS krun_oauth_refresh_tokens (
+ token_hash text PRIMARY KEY,
+ grant_id text NOT NULL,
+ created_at timestamptz NOT NULL,
+ expires_at timestamptz NOT NULL,
+ consumed boolean NOT NULL DEFAULT false,
+ CHECK(expires_at > created_at)
+);
+CREATE INDEX IF NOT EXISTS krun_oauth_refresh_tokens_grant ON krun_oauth_refresh_tokens(grant_id);
+CREATE INDEX IF NOT EXISTS krun_oauth_refresh_tokens_expiry ON krun_oauth_refresh_tokens(expires_at);

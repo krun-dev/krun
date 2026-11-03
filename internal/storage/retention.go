@@ -22,14 +22,16 @@ func (s *Store) RetainExpired(ctx context.Context) error {
 		args []any
 	}{
 		{`DELETE FROM krun_worker_scripts WHERE service_id IN(SELECT s.service_id FROM krun_worker_scripts s WHERE s.created_at < now()-interval '10 minutes' AND NOT EXISTS(SELECT 1 FROM krun_resources r WHERE r.resource_id=s.service_id AND r.org_id=s.org_id AND r.kind='service') LIMIT 1000)`, nil},
+		{`DELETE FROM krun_oauth_authorizations WHERE expires_at <= $1`, []any{at}},
+		{`DELETE FROM krun_oauth_refresh_tokens WHERE expires_at <= $1 OR NOT EXISTS(SELECT 1 FROM krun_oauth_grants g WHERE g.grant_id=krun_oauth_refresh_tokens.grant_id)`, []any{at}},
+		{`DELETE FROM krun_oauth_grants WHERE expires_at <= $1`, []any{at}},
 		{`DELETE FROM krun_rate_limits WHERE window_start < $1`, []any{at.Add(-rateLimitRetention)}},
 		{`DELETE FROM krun_audits WHERE time < $1`, []any{at.Add(-AuditRetention)}},
-		{`DELETE FROM krun_sessions WHERE absolute_at <= $1 OR seen_at <= $2`, []any{at, sessionCutoff}},
+		{`DELETE FROM krun_sessions WHERE absolute_at <= $1 OR (oauth_grant_id='' AND seen_at <= $2)`, []any{at, sessionCutoff}},
 		{`DELETE FROM krun_browsers WHERE expires_at <= $1`, []any{at}},
 		{`DELETE FROM krun_login_states WHERE expires_at <= $1`, []any{at}},
 		{`DELETE FROM krun_email_logins WHERE expires_at <= $1`, []any{at}},
 		{`DELETE FROM krun_email_send_locks WHERE touched_at < $1`, []any{at.Add(-24 * time.Hour)}},
-		{`DELETE FROM krun_device_codes WHERE expires_at <= $1`, []any{at}},
 		{`DELETE FROM krun_repository_connect_states WHERE expires_at <= $1`, []any{at}},
 		{`DELETE FROM krun_invitations WHERE expires_at <= $1`, []any{at}},
 		{`DELETE FROM krun_worker_idempotency WHERE created_at <= $1`, []any{at.Add(-workerIdempotencyRetain)}},

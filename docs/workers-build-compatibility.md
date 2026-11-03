@@ -3,8 +3,8 @@
 This document defines the build compatibility boundary for krun. The platform
 accepts projects that are already configured for Cloudflare Workers, builds
 them in an isolated job, and converts the result into krun's
-`workerd-bundle-v2` artifact. Wrangler is an implementation detail of the
-builder; it is not a public krun CLI or deployment API.
+`workerd-bundle-v2` artifact. This document covers Wrangler inside the builder. The separate public Workers
+protocol adapter and browser sign-in are described in [Cloudflare API](cloudflare-api.md).
 
 ## Scope
 
@@ -30,8 +30,8 @@ The first implementation deliberately does not support:
 - Wrangler's automatic conversion of an ordinary framework repository into a
   Workers project;
 - legacy Service Worker syntax;
-- Cloudflare deployment, login, resource provisioning or resource-management
-  commands.
+- executing Cloudflare deployment, login, or resource provisioning commands
+  inside a project build. Public CLI protocol support has its own boundary.
 
 A repository without a Worker entry point or a Worker configuration generated
 by its checked-in build tooling fails with an explicit unsupported-project

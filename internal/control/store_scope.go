@@ -14,7 +14,7 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 	// loading contract. Resource and Workers endpoints only need their target.
 	isResource := strings.Contains(r.Pattern, "/services") || strings.Contains(r.Pattern, "/models")
 	cloudflare := strings.HasPrefix(r.URL.Path, cfPrefix)
-	simpleIAM := r.URL.Path == "/api/auth/me" || r.URL.Path == "/api/auth/logout" || r.URL.Path == "/api/v1/me" || r.URL.Path == "/api/v1/roles" || r.URL.Path == "/api/v1/orgs" || r.Pattern == "GET /api/v1/orgs/{org}" || r.Pattern == "PATCH /api/v1/orgs/{org}" || strings.HasSuffix(r.Pattern, "/audit")
+	simpleIAM := strings.HasPrefix(r.URL.Path, oauthPrefix+"/") || r.URL.Path == "/api/auth/me" || r.URL.Path == "/api/auth/logout" || r.URL.Path == "/api/v1/me" || r.URL.Path == "/api/v1/roles" || r.URL.Path == "/api/v1/orgs" || r.Pattern == "GET /api/v1/orgs/{org}" || r.Pattern == "PATCH /api/v1/orgs/{org}" || strings.HasSuffix(r.Pattern, "/audit")
 	if !isResource && !strings.Contains(r.Pattern, "/workers/") && !simpleIAM && !cloudflare {
 		return r, nil
 	}

@@ -3,7 +3,6 @@ package control
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -249,98 +248,6 @@ func TestSessionCSRFAndAmbiguousCredential(t *testing.T) {
 	s.ServeHTTP(w, r)
 	if w.Code != 400 {
 		t.Fatal("ambiguous credentials accepted")
-	}
-}
-
-func TestDeviceApprovalAndSingleConsumption(t *testing.T) {
-	s, store := testServer(t)
-	w := request(s, "POST", "/api/auth/cli/start", "", `{}`)
-	var device struct {
-		DeviceCode string `json:"device_code"`
-		UserCode   string `json:"user_code"`
-	}
-	_ = json.Unmarshal(w.Body.Bytes(), &device)
-	if len(device.UserCode) != 15 || device.UserCode[7] != '-' {
-		t.Fatalf("device user code does not carry the required 56-bit format: %q", device.UserCode)
-	}
-	raw := fmt.Sprintf(`{"device_code":%q}`, device.DeviceCode)
-	if request(s, "POST", "/api/auth/cli/poll", "", raw).Code != 409 {
-		t.Fatal("unapproved device issued token")
-	}
-	if request(s, "POST", "/api/auth/cli/approve", "krun_cli_admin", fmt.Sprintf(`{"user_code":%q}`, device.UserCode)).Code != 403 {
-		t.Fatal("CLI may not approve another CLI")
-	}
-	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
-		d := st.Devices[digest(device.DeviceCode)]
-		d.Approved = true
-		d.Token = "krun_cli_test"
-		st.Devices[d.CodeHash] = d
-		return nil
-	})
-	polled := request(s, "POST", "/api/auth/cli/poll", "", raw)
-	if polled.Code != 200 {
-		t.Fatal("approved device cannot poll")
-	}
-	var credential struct {
-		Token string `json:"token"`
-	}
-	if err := json.Unmarshal(polled.Body.Bytes(), &credential); err != nil || credential.Token != "krun_cli_test" {
-		t.Fatal("device poll did not return the approved token", err, polled.Body.String())
-	}
-	if request(s, "POST", "/api/auth/cli/poll", "", raw).Code != 400 {
-		t.Fatal("device token issued twice")
-	}
-}
-
-func TestDeviceApprovalIsRateLimitedPerSessionUser(t *testing.T) {
-	s, store := testServer(t)
-	const sessionToken = "browser-rate-limit"
-	const csrf = "browser-rate-csrf"
-	if err := store.Update(context.Background(), PartitionIAM, func(st *State) error {
-		at := now()
-		st.Sessions[digest(sessionToken)] = Session{User: "admin", Hash: digest(sessionToken), CSRF: csrf, AuthVersion: 1, Created: at, Seen: at, Absolute: at.Add(time.Hour)}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	for attempt := 1; attempt <= 11; attempt++ {
-		r := httptest.NewRequest(http.MethodPost, "/api/auth/cli/approve", strings.NewReader(`{"user_code":"NOT-A-REAL-CODE"}`))
-		r.Header.Set("Content-Type", "application/json")
-		r.Header.Set("Origin", s.Config.PublicURL)
-		r.Header.Set("X-CSRF-Token", csrf)
-		r.AddCookie(&http.Cookie{Name: s.cookieName("session"), Value: sessionToken})
-		w := httptest.NewRecorder()
-		s.ServeHTTP(w, r)
-		if attempt <= 10 && w.Code != http.StatusNotFound {
-			t.Fatalf("attempt %d status=%d body=%s", attempt, w.Code, w.Body.String())
-		}
-		if attempt == 11 && w.Code != http.StatusTooManyRequests {
-			t.Fatalf("rate limit status=%d body=%s", w.Code, w.Body.String())
-		}
-	}
-}
-
-func TestDeviceApprovalDoesNotCreateOrphanSession(t *testing.T) {
-	store := memoryStore()
-	device := Device{CodeHash: digest("device"), UserCode: "USERCODE", Expires: now().Add(time.Minute)}
-	if err := store.InsertDevice(context.Background(), device); err != nil {
-		t.Fatal(err)
-	}
-	at := now()
-	first := Session{User: "first", Hash: digest("krun_cli_first"), AuthVersion: 1, Created: at, Seen: at, Absolute: at.Add(time.Hour), CLI: true}
-	approved, err := store.ApproveDevice(context.Background(), device.CodeHash, "krun_cli_first", first)
-	if err != nil || !approved {
-		t.Fatal("first approval failed", approved, err)
-	}
-	second := first
-	second.User = "second"
-	second.Hash = digest("krun_cli_second")
-	approved, err = store.ApproveDevice(context.Background(), device.CodeHash, "krun_cli_second", second)
-	if err != nil || approved {
-		t.Fatal("duplicate approval won", approved, err)
-	}
-	if _, exists := memorySnapshot(t, store).Sessions[digest("krun_cli_second")]; exists {
-		t.Fatal("losing approval created an orphan session")
 	}
 }
 

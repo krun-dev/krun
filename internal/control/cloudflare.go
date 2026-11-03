@@ -248,6 +248,8 @@ func (s *Server) cfEnsureScript(r *http.Request, name string) (domain.WorkerScri
 }
 func (s *Server) cloudflareRoutes(m *http.ServeMux) {
 	base := cfPrefix + "/accounts/{account}"
+	m.HandleFunc("GET "+cfPrefix+"/memberships", s.cfProtected(s.cfMemberships))
+	m.HandleFunc("GET "+cfPrefix+"/user", s.cfProtected(s.cfUser))
 	m.HandleFunc("GET "+cfPrefix+"/accounts", s.cfProtected(s.cfAccounts))
 	m.HandleFunc("GET "+cfPrefix+"/user/tokens/verify", s.cfProtected(s.cfVerifyToken))
 	m.HandleFunc("GET "+base+"/workers/subdomain", s.cfProtected(s.cfAccountSubdomain))

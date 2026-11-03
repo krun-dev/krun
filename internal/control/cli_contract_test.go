@@ -4,13 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -18,128 +17,140 @@ import (
 	"github.com/krun-dev/krun/internal/configfile"
 )
 
-// This is a package-level contract test: the real CLI talks over HTTP to the
-// real control handler. It catches path drift between the two packages as well
-// as regressions where polling succeeds but returns an empty credential.
-func TestCLIControlDeviceLoginAndLogoutContract(t *testing.T) {
-	s, store := testServer(t)
-	started := make(chan struct{})
-	var startedOnce sync.Once
-	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		s.ServeHTTP(w, r)
-		if r.URL.Path == "/api/auth/cli/start" {
-			startedOnce.Do(func() { close(started) })
+type loginURLWriter struct{ target chan string }
+
+func (w loginURLWriter) Write(p []byte) (int, error) {
+	if s := string(p); strings.HasPrefix(s, "Open ") {
+		select {
+		case w.target <- strings.Split(strings.TrimPrefix(s, "Open "), "\n")[0]:
+		default:
 		}
-	}))
-	defer httpServer.Close()
-	s.Config.PublicURL = httpServer.URL
-
-	browserToken := "browser-admin"
-	const browserCSRF = "browser-csrf"
-	if err := store.Update(context.Background(), PartitionIAM, func(st *State) error {
-		at := now()
-		st.Sessions[digest(browserToken)] = Session{User: "admin", Hash: digest(browserToken), CSRF: browserCSRF, AuthVersion: 1, Created: at, Seen: at, Absolute: at.Add(time.Hour)}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
 	}
-
-	profilePath := filepath.Join(t.TempDir(), "profile.yaml")
-	var out, errOut bytes.Buffer
-	loginDone := make(chan error, 1)
-	loginContext, cancelLogin := context.WithCancel(context.Background())
-	defer cancelLogin()
-	go func() {
-		loginDone <- kruncli.Run(loginContext, []string{"login", "--no-browser", "--server", httpServer.URL, "--config", profilePath}, strings.NewReader(""), &out, &errOut)
-	}()
-
-	select {
-	case <-started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("CLI did not call /api/auth/cli/start")
-	}
-	var userCode string
-	if err := store.View(context.Background(), PartitionIAM, func(st *State) error {
-		for _, device := range st.Devices {
-			userCode = device.UserCode
-			break
+	return len(p), nil
+}
+func TestCLIControlOAuthLoginRefreshAndLogoutContract(t *testing.T) {
+	for _, device := range []bool{false, true} {
+		name := "PKCE"
+		if device {
+			name = "Device"
 		}
-		return nil
-	}); err != nil || userCode == "" {
-		t.Fatal("device code was not stored", err)
-	}
-
-	approveBody := fmt.Sprintf(`{"user_code":%q}`, userCode)
-	approve, err := http.NewRequest(http.MethodPost, httpServer.URL+"/api/auth/cli/approve", strings.NewReader(approveBody))
-	if err != nil {
-		t.Fatal(err)
-	}
-	approve.Header.Set("Content-Type", "application/json")
-	approve.Header.Set("Origin", httpServer.URL)
-	approve.Header.Set("X-CSRF-Token", browserCSRF)
-	approve.AddCookie(&http.Cookie{Name: s.cookieName("session"), Value: browserToken})
-	response, err := http.DefaultClient.Do(approve)
-	if err != nil {
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatal("browser approval failed", response.StatusCode)
-	}
-
-	select {
-	case err = <-loginDone:
-		if err != nil {
-			t.Fatal("CLI device login failed", err, errOut.String())
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("CLI did not poll /api/auth/cli/poll")
-	}
-
-	raw, err := os.ReadFile(profilePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var profile kruncli.Profile
-	if err = configfile.Decode(profilePath, raw, &profile); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(profile.Token, "krun_cli_") {
-		t.Fatal("CLI saved an empty or invalid device token")
-	}
-	issuedToken := profile.Token
-	me, err := http.NewRequest(http.MethodGet, httpServer.URL+"/api/auth/me", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	me.Header.Set("Authorization", "Bearer "+issuedToken)
-	meResponse, err := http.DefaultClient.Do(me)
-	if err != nil {
-		t.Fatal(err)
-	}
-	meResponse.Body.Close()
-	if meResponse.StatusCode != http.StatusOK {
-		t.Fatalf("polled CLI token is not an authenticated session: status=%d", meResponse.StatusCode)
-	}
-
-	out.Reset()
-	errOut.Reset()
-	if err = kruncli.Run(context.Background(), []string{"logout", "--config", profilePath}, strings.NewReader(""), &out, &errOut); err != nil {
-		t.Fatal("CLI logout failed", err, errOut.String())
-	}
-	me, err = http.NewRequest(http.MethodGet, httpServer.URL+"/api/auth/me", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	me.Header.Set("Authorization", "Bearer "+issuedToken)
-	meResponse, err = http.DefaultClient.Do(me)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer meResponse.Body.Close()
-	if meResponse.StatusCode != http.StatusUnauthorized {
-		var body map[string]any
-		_ = json.NewDecoder(meResponse.Body).Decode(&body)
-		t.Fatalf("/api/auth/logout did not revoke the CLI session: status=%d body=%v", meResponse.StatusCode, body)
+		t.Run(name, func(t *testing.T) {
+			s, store := testServer(t)
+			oauthBrowser(t, s, store)
+			httpServer := httptest.NewServer(s)
+			defer httpServer.Close()
+			s.Config.PublicURL = httpServer.URL
+			target := make(chan string, 1)
+			var out bytes.Buffer
+			profilePath := filepath.Join(t.TempDir(), "profile.yaml")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			args := []string{"login", "--browser=false", "--server", httpServer.URL, "--config", profilePath}
+			if device {
+				args = append(args, "--device")
+			} else {
+				args = append(args, "--callback-port", "0")
+			}
+			go func() { done <- kruncli.Run(ctx, args, strings.NewReader(""), &out, loginURLWriter{target}) }()
+			var login string
+			select {
+			case login = <-target:
+			case <-time.After(3 * time.Second):
+				t.Fatal("login did not print its browser URL")
+			}
+			id := ""
+			client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+			if device {
+				u, _ := url.Parse(login)
+				id = u.Query().Get("oauth")
+			} else {
+				r, err := client.Get(login)
+				if err != nil {
+					t.Fatal(err)
+				}
+				r.Body.Close()
+				u, _ := url.Parse(r.Header.Get("Location"))
+				id = u.Query().Get("oauth")
+			}
+			approved := oauthApproval(s, id, true)
+			if approved.Code != 200 {
+				t.Fatalf("approval %d %s", approved.Code, approved.Body.String())
+			}
+			if !device {
+				var redirect struct {
+					URL string `json:"redirect_url"`
+				}
+				_ = json.Unmarshal(approved.Body.Bytes(), &redirect)
+				tampered, _ := url.Parse(redirect.URL)
+				query := tampered.Query()
+				query.Set("state", "tampered-state")
+				tampered.RawQuery = query.Encode()
+				invalid, e := client.Get(tampered.String())
+				if e != nil {
+					t.Fatal(e)
+				}
+				invalid.Body.Close()
+				if invalid.StatusCode != 403 {
+					t.Fatal("CLI accepted a callback with wrong state")
+				}
+				r, err := client.Get(redirect.URL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				r.Body.Close()
+				if r.StatusCode != 200 {
+					t.Fatal("loopback callback failed")
+				}
+			}
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(6 * time.Second):
+				t.Fatal("CLI did not finish OAuth login")
+			}
+			load := func() kruncli.Profile {
+				raw, err := os.ReadFile(profilePath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var profile kruncli.Profile
+				if err = configfile.Decode(profilePath, raw, &profile); err != nil {
+					t.Fatal(err)
+				}
+				return profile
+			}
+			initial := load()
+			if initial.Token == "" || initial.RefreshToken == "" {
+				t.Fatal("CLI did not save rotating credentials")
+			}
+			if err := store.Update(context.Background(), PartitionIAM, func(st *State) error {
+				session := st.Sessions[digest(initial.Token)]
+				session.Absolute = now().Add(-time.Minute)
+				st.Sessions[digest(initial.Token)] = session
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var status bytes.Buffer
+			if err := kruncli.Run(context.Background(), []string{"whoami", "--config", profilePath}, strings.NewReader(""), &status, &status); err != nil {
+				t.Fatal("automatic refresh failed", err)
+			}
+			current := load()
+			if current.Token == initial.Token || current.RefreshToken == initial.RefreshToken {
+				t.Fatal("CLI refresh did not rotate and save")
+			}
+			if err := kruncli.Run(context.Background(), []string{"logout", "--config", profilePath}, strings.NewReader(""), &status, &status); err != nil {
+				t.Fatal(err)
+			}
+			if profile := load(); profile.Token != "" || profile.RefreshToken != "" {
+				t.Fatal("logout kept local credentials")
+			}
+			if w := request(s, "GET", "/api/auth/me", current.Token, ""); w.Code != 401 {
+				t.Fatal("logout kept access valid")
+			}
+		})
 	}
 }

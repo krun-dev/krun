@@ -31,7 +31,6 @@ func NewState() *State {
 		Browsers:                map[string]Browser{},
 		Logins:                  map[string]Login{},
 		EmailLogins:             map[string]EmailLogin{},
-		Devices:                 map[string]Device{},
 		Invitations:             map[string]time.Time{},
 		RepositoryConnections:   map[string]WorkerRepositoryConnection{},
 		RepositoryConnectStates: map[string]WorkerRepositoryConnectState{},

@@ -21,10 +21,12 @@ export function Login({
   providers,
   development,
   error,
+  application,
 }: {
   providers: Provider[];
   development: boolean;
   error?: string;
+  application?: string;
 }) {
   useTranslation();
   const [failed, setFailed] = useState("");
@@ -118,7 +120,7 @@ export function Login({
             {t("Welcome to krun")}
           </p>
           <h2 className="text-3xl font-semibold tracking-tight">
-            {t("登录组织")}
+            {application ? t("登录以连接 {{application}}", { application }) : t("登录组织")}
           </h2>
           <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
             {t("使用团队的身份来源继续。首次登录后，")}

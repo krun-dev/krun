@@ -122,9 +122,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/auth/{provider}/callback", s.callbackHandler)
 	m.HandleFunc("GET /api/auth/me", s.protected(false, s.me))
 	m.HandleFunc("POST /api/auth/logout", s.protected(true, s.logout))
-	m.HandleFunc("POST /api/auth/cli/start", s.deviceStart)
-	m.HandleFunc("POST /api/auth/cli/poll", s.devicePoll)
-	m.HandleFunc("POST /api/auth/cli/approve", s.protected(true, s.deviceApprove))
+	s.oauthRoutes(m)
 	s.apiRoutes(m)
 	s.workersRoutes(m)
 	s.cloudflareRoutes(m)
@@ -320,6 +318,9 @@ func (s *Server) protectedPrincipal(st *State, c authCredentials, r *http.Reques
 	principal, err := s.authenticate(st, c, r)
 	if err != nil {
 		return Principal{}, err
+	}
+	if c.session.OAuthGrant != "" && !strings.Contains(" "+c.session.OAuthScope+" ", " krun:control ") && !strings.HasPrefix(r.URL.Path, cfPrefix+"/") && r.URL.Path != "/api/auth/me" && r.URL.Path != "/api/v1/me" && r.URL.Path != "/api/auth/logout" {
+		return Principal{}, forbidden()
 	}
 	if sessionOnly && principal.Kind == "api_key" {
 		return Principal{}, forbidden()

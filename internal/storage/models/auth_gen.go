@@ -17,6 +17,8 @@ type Session struct {
 	CreatedAt     time.Time `bun:"created_at"`
 	SeenAt        time.Time `bun:"seen_at"`
 	AbsoluteAt    time.Time `bun:"absolute_at"`
+	OauthGrantID  string    `bun:"oauth_grant_id"`
+	OauthScope    string    `bun:"oauth_scope"`
 }
 
 type Browser struct {
@@ -64,14 +66,4 @@ type RateLimit struct {
 	KeyHash       string    `bun:"key_hash,pk"`
 	WindowStart   time.Time `bun:"window_start,pk"`
 	Count         int       `bun:"count"`
-}
-
-type DeviceCode struct {
-	bun.BaseModel `bun:"table:krun_device_codes,alias:krun_device_codes"`
-	CodeHash      string    `bun:"code_hash,pk"`
-	UserCode      string    `bun:"user_code"`
-	Token         string    `bun:"token"`
-	ExpiresAt     time.Time `bun:"expires_at"`
-	Approved      bool      `bun:"approved"`
-	Consumed      bool      `bun:"consumed"`
 }

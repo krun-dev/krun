@@ -32,7 +32,7 @@ IAM 与 Workers 是两套独立分区，**不共享事务**：
 | --- | --- |
 | IAM | `krun_users`、`krun_organizations`、`krun_org_sources`、`krun_members`、`krun_groups`、`krun_group_members`、`krun_assignments`、`krun_resources`、`krun_api_keys`、`krun_api_key_hashes`、`krun_invitations`、`krun_identity_sources`、`krun_identity_providers`、`krun_meta` |
 | Workers | `krun_worker_services`、`krun_worker_service_domains`、`krun_worker_environments`、`krun_worker_secret_versions`、`krun_worker_environment_secrets`、`krun_worker_builds`、`krun_worker_build_private`、`krun_worker_artifacts`、`krun_worker_versions`、`krun_worker_deployments`、`krun_worker_version_secrets`、`krun_worker_operations`、`krun_worker_history`、`krun_worker_idempotency`、`krun_repository_connections`、`krun_repository_connect_states` |
-| 会话（不属于任何分区） | `krun_sessions`、`krun_browsers`、`krun_login_states`、`krun_email_logins`、`krun_device_codes` |
+| 会话（不属于任何分区） | `krun_sessions`、`krun_browsers`、`krun_login_states`、`krun_email_logins`、`krun_oauth_authorizations`、`krun_oauth_grants`、`krun_oauth_refresh_tokens` |
 | 旁路 | `krun_audits`、`worker_config_revisions`、`worker_config_routes`、`worker_config_versions`、`worker_config_ops`、`worker_config_dirty`、`worker_config_checkpoints`、`worker_asset_objects`、`worker_retention_scopes`、`worker_runtime_acks` |
 
 完整 DDL 在 `internal/storage/schema.sql`，由同目录 `schema.go` 通过 `go:embed` 原样嵌入。新库直接初始化；已有库校验 `schema_baseline` fingerprint，匹配时不重复执行 DDL。
@@ -89,7 +89,7 @@ UPDATE krun_worker_environments SET version_id=$4, deployment_revision=deploymen
 | 表 | 保留 |
 | --- | --- |
 | `krun_sessions` | 30 分钟未活动或超过 8 小时绝对上限 |
-| `krun_browsers` / `krun_login_states` / `krun_email_logins` / `krun_device_codes` / `krun_repository_connect_states` / `krun_invitations` | 过期即删 |
+| `krun_browsers` / `krun_login_states` / `krun_email_logins` / `krun_oauth_authorizations`、`krun_oauth_grants`、`krun_oauth_refresh_tokens` / `krun_repository_connect_states` / `krun_invitations` | 过期即删 |
 | `krun_audits` | 7 天 |
 | `krun_worker_builds` | 每服务最近 100 条终态；日志 7 天后清空 |
 | `krun_worker_operations` | 终态保留 30 天 |
@@ -113,3 +113,6 @@ UPDATE krun_worker_environments SET version_id=$4, deployment_revision=deploymen
 - 数据库集成测试需要 `KRUN_TEST_POSTGRES_URL`，未提供时跳过。存储包的数据库测试使用独立 schema，控制层集成测试通过独立测试连接布置数据，不开放生产连接池。
 
 部署专属地址保留 30 天；部署记录到期或目标环境删除后由后台有界清理，删除同时入队路由撤销。保留中的 Deployment 会保护其 Version，Version 继续保护 Artifact 与 Secret。地址携带到期时间，Runtime 即使暂未收到清理增量也会拒绝过期部署请求。
+
+OAuth 请求保留 5 分钟；access Session 最长 1 小时；授权与旋转 refresh 记录最长 30 天。
+授权码与刷新令牌仅保存摘要，单次兑换使用条件更新；过期及孤儿行接入统一后台清理。

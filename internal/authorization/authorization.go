@@ -14,11 +14,13 @@ import (
 )
 
 type Principal struct {
-	User        domain.User
-	Kind        string
-	Key         *domain.APIKey
-	SessionHash string
-	cache       *requestCache
+	OAuthScope   string
+	OAuthActions []string
+	User         domain.User
+	Kind         string
+	Key          *domain.APIKey
+	SessionHash  string
+	cache        *requestCache
 }
 type Target struct{ Kind, ID, Organization, Owner, Environment string }
 type Decision struct {
@@ -266,6 +268,9 @@ func Authorize(st *domain.State, p Principal, action string, t Target) (Decision
 	cache := p.cache
 	if cache != nil && (cache.state != st || cache.revision != st.Revision) {
 		cache = nil
+	}
+	if p.OAuthActions != nil && !slices.Contains(p.OAuthActions, action) {
+		return Decision{Revision: st.Revision, Reason: "OAUTH_SCOPE"}, nil
 	}
 	d := Decision{Revision: st.Revision, KeyAllowed: p.Key == nil, Reason: "PERMISSION_DENIED"}
 	if !slices.Contains(actions[action], t.Kind) || !EnvironmentValid(t.Environment) || p.User.Status != "active" || !SourceAllowed(st, p.User, t.Organization) {

@@ -14,7 +14,7 @@ HTTP 与业务入口调用本包，所有层共享 `domain`。本包不依赖 HT
 | 会话 / 仓库的 ORM 映射与查询 | `orm_rows.go` / `orm_repository.go` |
 | Session、Browser、API Key 摘要查找 | `auth_session.go` |
 | OAuth 登录与邮件挑战 | `auth_login.go` |
-| CLI 设备授权 | `auth_device.go` |
+| CLI 设备授权 | `oauth.go` |
 | 仓库 OAuth 凭据与刷新租约 | `repository_connections.go` |
 | Workers 行读取 / 差异写入 | `workers_read.go` / `workers.go` |
 | Cloudflare Script 名称映射 / 已打包模块入库 | `scripts.go` / `uploaded_build.go` |

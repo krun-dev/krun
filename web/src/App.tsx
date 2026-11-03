@@ -61,6 +61,7 @@ import {
   QuickLink,
   SelectField,
 } from "@/components/common";
+const OAuthConsent = lazy(() => import("@/components/oauth-consent").then(m => ({ default: m.OAuthConsent })));
 const Login = lazy(() =>
   import("@/components/login").then((module) => ({ default: module.Login })),
 );
@@ -190,9 +191,7 @@ export default function App() {
     [orgName, setOrgName] = useState(""),
     [saving, setSaving] = useState(false),
     [copied, setCopied] = useState(false);
-  const [device, setDevice] = useState(
-    new URLSearchParams(window.location.search).get("cli") ?? "",
-  );
+  const oauthLogin = new URLSearchParams(window.location.search).has("oauth") || new URLSearchParams(window.location.search).has("oauth_device");
   const notify = useCallback((message: string) => setNotice(message), []);
   const reload = useCallback(() => setRefresh((x) => x + 1), []);
   useEffect(() => {
@@ -209,7 +208,7 @@ export default function App() {
     return () => window.removeEventListener(AUTH_REQUIRED_EVENT, requireLogin);
   }, []);
   useEffect(() => {
-    if (!me) return;
+    if (!me || oauthLogin) return;
     const url = new URL(location.href);
     if (!url.searchParams.has("repository_status")) return;
     url.searchParams.delete("repository_status");
@@ -222,6 +221,7 @@ export default function App() {
   // previous page's parameters behind, so refreshing or sharing a link reopened
   // the wrong page.
   useEffect(() => {
+    if (oauthLogin) return;
     const url = new URL(location.href);
     if (section === "overview") url.searchParams.delete("page");
     else url.searchParams.set("page", section);
@@ -266,7 +266,7 @@ export default function App() {
     };
   }, []);
   useEffect(() => {
-    if (!me) return;
+    if (!me || oauthLogin) return;
     let active = true;
     api<List<Organization>>("/api/v1/orgs")
       .then((data) => {
@@ -330,6 +330,7 @@ export default function App() {
         </Button>
       </div>
     );
+  if (oauthLogin) return <Suspense fallback={<Loading />}><OAuthConsent me={me} providers={providers} development={development} onLogout={() => setMe(null)} /></Suspense>;
   if (!me)
     return (
       <Suspense fallback={<Loading />}>
@@ -589,52 +590,6 @@ export default function App() {
       </header>
       <main className="mx-auto max-w-[1440px] px-5 py-7 md:px-9 md:py-8">
         {notice && <Notice message={notice} close={() => setNotice("")} />}
-        {device && (
-          <Card className="mb-6 border-primary/20 bg-primary/5 py-0 shadow-none">
-            <CardContent className="flex flex-wrap items-center justify-between gap-4 p-5">
-              <div>
-                <p className="flex items-center gap-2 font-medium">
-                  <Terminal size={18} />
-                  {t("确认终端登录")}
-                </p>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  {t("请核对终端显示的代码：")}
-                  <code className="ml-2 font-semibold text-foreground">
-                    {device}
-                  </code>
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {t("确认后签发 1 小时凭据，权限随你的当前角色变化。")}
-                </p>
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setDevice("");
-                    window.history.replaceState(null, "", "/");
-                  }}
-                >
-                  {t("取消")}
-                </Button>
-                <Button
-                  disabled={saving}
-                  onClick={() =>
-                    mutate(async () => {
-                      await api("/api/auth/cli/approve", "POST", {
-                        user_code: device,
-                      });
-                      setDevice("");
-                      window.history.replaceState(null, "", "/");
-                    }, t("已批准 CLI 登录，可返回终端。"))
-                  }
-                >
-                  {t("确认登录")}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
         <Suspense fallback={<Loading />}>
         {orgs.length === 0 && !system ? (
           <NoOrganization

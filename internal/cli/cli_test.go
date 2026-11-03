@@ -209,3 +209,13 @@ func TestCLIRejectsJSONProfiles(t *testing.T) {
 		t.Fatal("default config is not YAML")
 	}
 }
+
+func TestLoginRejectsAmbiguousFlowFlags(t *testing.T) {
+	for _, args := range [][]string{{"login", "--device", "--token-stdin"}, {"login", "--device", "--callback-port", "8976"}, {"login", "unexpected"}} {
+		var out bytes.Buffer
+		err := Run(context.Background(), append(args, "--config", filepath.Join(t.TempDir(), "profile.yaml")), strings.NewReader(""), &out, &out)
+		if err == nil {
+			t.Fatal("ambiguous login accepted", args)
+		}
+	}
+}

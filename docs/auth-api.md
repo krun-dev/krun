@@ -1,6 +1,6 @@
 # 认证、授权与 CLI 接口
 
-所有错误为 `{error:{code,message},request_id}`。机器端返回 JSON，不自动转向第三方登录。认证与 API 响应 `Cache-Control: no-store`；回调错误只返回固定公共码，不回显上游正文。
+业务接口错误为 `{error:{code,message},request_id}`；OAuth form 端点使用标准 `{error,error_description}`。机器端返回 JSON，不自动转向第三方登录。认证与 API 响应 `Cache-Control: no-store`；回调错误只返回固定公共码，不回显上游正文。
 
 错误 `message` 默认中文，`Accept-Language: en` 可请求英文，支持语言质量权重和 en-US / zh-CN 等语言标签；未知语言使用中文。响应返回 `Content-Language: zh-CN` 或 `en`，并设置 `Vary: Accept-Language`。错误 `code`、请求 ID、所有 JSON 字段和业务数据不会因语言改变。控制台自动发送所选语言，CLI 固定请求英文，程序应始终根据 `code` 判断错误。
 
@@ -16,11 +16,43 @@
 | POST | /api/auth/:provider/email/verify | JSON `{challenge_id,code}`，Origin + 浏览器 CSRF，原子消费验证码并建立浏览器 Session，返回 redirect_url |
 | GET | /api/auth/me | 当前主体、凭据类型、系统管理员状态及权限修订 |
 | POST | /api/auth/logout | 浏览器或 CLI Session 撤销；清浏览器 Cookie |
-| POST | /api/auth/cli/start | 公共接口，返回 5 分钟 device_code/user_code、浏览器确认 URL |
-| POST | /api/auth/cli/approve | 仅浏览器 Session + CSRF；核对 user_code 后签发 1 小时 CLI Session |
-| POST | /api/auth/cli/poll | 凭 256 bit device_code 领取一次 CLI Session；未批准 409，过期/重放 400 |
+| GET | /api/auth/oauth/authorize | 授权码流程；注册客户端、loopback 回调、state、PKCE S256 校验，转向静态授权页 |
+| POST | /api/auth/oauth/device/auth | OAuth 设备码流程；5 分钟有效，返回确认码和浏览器地址 |
+| GET | /api/auth/oauth/requests/:request | 授权页面所需的应用名称、实际 scopes、状态及到期时间；不返回凭据 |
+| POST | /api/auth/oauth/requests/:request | 仅浏览器 Session + CSRF；允许或拒绝，授权码模式返回回调地址 |
+| POST | /api/auth/oauth/token | form 编码；authorization_code、refresh_token、device_code 三种 grant |
+| POST | /api/auth/oauth/revoke | form 编码；撤销 access 或 refresh 所属的整次授权；未知 token 也返回成功 |
 
-CLI Session audience 只限 krun Control API，凭据前缀 `krun_cli_`，作为短期人类会话使用；它不是 API Key，不能批准其他终端登录。浏览器 Session 的绝对期限 8 小时，CLI 1 小时，闲置期限均 30 分钟；无 refresh token。客户端必须明确核对终端显示的确认码。
+krun CLI 和 Wrangler 共用 OAuth 授权与凭据存储。Access Token 有效 1 小时；携带
+`offline_access` 时签发最长 30 天的刷新授权。刷新令牌每次使用后轮换，旧令牌重放会
+撤销整次授权；主动退出也会立即使该授权的全部 access/refresh 失效。浏览器 Session
+绝对期限 8 小时、闲置期限 30 分钟。OAuth access 只检查自己的绝对期限，不因闲置
+30 分钟提前失效。用户禁用、来源禁用和 auth_version 变化仍即时生效。
+
+授权码、设备码和 refresh token 在数据库中只保存摘要；授权码/设备码只能兑换一次。
+请求记录保留至 5 分钟过期，access Session 保留至 1 小时到期，授权及 refresh 记录保留
+至最长 30 天到期，由统一后台清理。刷新与撤销在同一授权行上 CAS 协调；不使用全局锁。
+
+注册的公共客户端为 `krun-cli` 和 `krun-wrangler`。krun CLI 请求 `krun:control`，仍受
+用户当前角色限制；Wrangler 请求的 scopes 只签发当前支持的 account/user/Workers
+子集，不能访问 krun 的 IAM 管理入口，不授予未实现的 CF 存储或其他产品权限。
+回调仅允许 `http://localhost:PORT/oauth/callback`、IPv4/IPv6 loopback 对应地址；不接受
+外部回调、隐式 grant 或 plain PKCE。
+
+CLI 使用：
+
+```sh
+krun login --server https://console.example.com
+krun login --device --browser=false --server https://console.example.com
+krun whoami
+krun logout
+```
+
+默认启动本机 8976 端口接收回调，可用 `--callback-port 0` 选择空闲端口。SSH 等不便
+接收本机回调的场景使用 `--device`。`--browser=false` / `--no-browser` 打印链接。
+已有 API Key 仍可通过 `--token-stdin` 保存；不参与 OAuth 刷新。
+CLI 配置文件权限为 0600，包含 access/refresh 和到期时间；请求前自动续期，认证返回
+401 时最多刷新一次重试。切换 server 或使用显式 KRUN_TOKEN 时不会携带旧刷新凭据。
 
 Session Cookie：生产 `__Host-krun_session`，Secure/HttpOnly/SameSite=Lax/Path=/、无 Domain；开发使用独立 `krun_dev_session`。Cookie 写操作要求固定 Origin 和 CSRF header，预登录 form 可用 csrf_token 字段。Bearer 不要求 CSRF，仍检查凭据、用户状态、auth_version 与启用来源。
 

@@ -57,3 +57,23 @@ func (s Service) UpdateOrganization(st *domain.State, t authorization.Target, in
 	st.Revision++
 	return org, nil
 }
+
+// MembershipRoles reports the current user's own effective assignment names;
+// it does not translate them into Cloudflare roles or grant new permissions.
+func (s Service) MembershipRoles(st *domain.State, p authorization.Principal, org string) []string {
+	names := map[string]bool{}
+	for _, a := range st.Assignments {
+		if !authorization.RoleMatches(st, a, p.User) {
+			continue
+		}
+		if a.ScopeKind == "system" && a.Role == "system_admin" || a.ScopeKind == "organization" && a.ScopeID == org {
+			names[a.Role] = true
+		}
+	}
+	out := []string{}
+	for name := range names {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}

@@ -39,8 +39,6 @@ type workerQueueReplicaKey = storage.WorkerQueueReplicaKey
 
 var withStateScope = storage.WithReadScope
 
-var errDeviceCodeCollision = storage.ErrDeviceCodeCollision
-
 var errArtifactBeingCollected = storage.ErrArtifactBeingCollected
 
 var errBuildClaimLost = storage.ErrBuildClaimLost

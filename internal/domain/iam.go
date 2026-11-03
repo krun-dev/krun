@@ -93,6 +93,7 @@ type APIKey struct {
 
 // Secret hashes are stored separately from public metadata to prevent accidental disclosure.
 type Session struct {
+	OAuthGrant, OAuthScope  string
 	User                    string
 	Hash                    string
 	CSRF                    string
@@ -119,12 +120,6 @@ type EmailLogin struct {
 	Generation, Attempts                                          int
 	Sent, Expires                                                 time.Time
 	Consumed                                                      bool
-}
-
-type Device struct {
-	CodeHash, UserCode, Token string
-	Expires                   time.Time
-	Approved, Consumed        bool
 }
 
 type Audit struct {
@@ -158,7 +153,6 @@ type State struct {
 	Browsers      map[string]Browser
 	Logins        map[string]Login
 	EmailLogins   map[string]EmailLogin
-	Devices       map[string]Device
 	Invitations   map[string]time.Time
 	// Per-user OAuth connections for repository access, keyed by user ID + provider ID.
 	RepositoryConnections map[string]WorkerRepositoryConnection

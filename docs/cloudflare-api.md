@@ -1,6 +1,6 @@
 # Cloudflare Workers 协议适配
 
-入口为同源 `/api/v1/cloudflare/client/v4`。使用 krun API Key；`account_id` 是 krun
+入口为同源 `/api/v1/cloudflare/client/v4`。使用 krun API Key 或 OAuth Token；`account_id` 是 krun
 组织 ID。Script 名称在组织内稳定映射到服务 ID，不拆解环境后缀。Wrangler 的普通
 `deploy` 和 `--env` 生成的不同 Script 名称对应不同服务；`wrangler preview --name`
 对应该服务下的 Preview。地址使用 krun 已配置域名，不占用 `workers.dev`。
@@ -14,15 +14,36 @@ npx wrangler@4.155.0 versions upload
 npx wrangler@4.155.0 versions deploy VERSION_ID@100% --yes
 ```
 
+浏览器登录使用与 krun CLI 相同的 OAuth issuer。Wrangler 固定版本 4.155.0 配置：
+
+```sh
+export WRANGLER_CLIENT_ID=krun-wrangler
+export WRANGLER_AUTH_DOMAIN=console.example.com
+export WRANGLER_AUTH_URL=https://console.example.com/api/auth/oauth/authorize
+export WRANGLER_TOKEN_URL=https://console.example.com/api/auth/oauth/token
+export WRANGLER_REVOKE_URL=https://console.example.com/api/auth/oauth/revoke
+# 同时沿用上面的 CLOUDFLARE_API_BASE_URL；OAuth 登录时不要设置 API Token。
+npx wrangler@4.155.0 login
+npx wrangler@4.155.0 whoami
+npx wrangler@4.155.0 deploy
+npx wrangler@4.155.0 logout
+```
+
+使用现有 krun 登录页和独立授权确认页；同意后回到 Wrangler 的 localhost 回调。
+Token 自动刷新、退出撤销、scope 和用户当前权限取交集。Wrangler 默认申请其全部产品
+scopes，krun 只签发已支持的子集；`whoami` 对未签发的其他产品权限可能显示提示。Wrangler 的 `login --device`
+将授权端点固定在根级 `/oauth2/device/auth`，当前没有绕过 `/api/` 路由契约提供该路径；
+krun CLI 自身的 `login --device` 使用同一 issuer 的规范 `/api/auth/` 接口。
+
 适配层复用原有权限、Cookie/CSRF、审计、不可变 Version、部署 CAS、独立 validator、
-Runtime 配置分发和保留期。会话需要原有 CSRF 校验；CLI 使用 Bearer API Key。
+Runtime 配置分发和保留期。浏览器会话需要原有 CSRF 校验；CLI 使用 Bearer API Key 或 OAuth Token。
 同步上传的制品读写和等待部署都在数据库事务之外。首次创建中断或通过原生接口删除
 服务后，悬空的 Script 身份由后台清理（保留创建后 10 分钟的重试窗口）；清理前重新
 创建返回冲突，不会复活旧服务身份、版本和密钥。
 
 | 接口（相对于入口） | 行为 |
 | --- | --- |
-| `GET /accounts`、`GET /user/tokens/verify` | 可见组织、当前凭据状态 |
+| `GET /accounts`、`GET /memberships`、`GET /user`、`GET /user/tokens/verify` | 可见组织、当前凭据状态 |
 | `GET /accounts/{account}/workers/subdomain` | Wrangler 所需的账户子域元数据 |
 | `GET /accounts/{account}/workers/scripts` | 已登记且有权读取的 Script |
 | `PUT /accounts/{account}/workers/scripts/{script}` | 上传已打包 ES modules，创建 Version 并部署 |
