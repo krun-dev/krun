@@ -12,8 +12,8 @@ Service 或凭据。每个池对应部署侧维护的 workerd 运行环境。
 
 组织用户选择 `network_profiles` 中公开且获准使用的产品配置。Profile 通过
 `pool_selector`、`domain_selector` 与入口/出口 requirements 筛选基础设施；名称和 ID
-不代表网络能力。池选择使用稳定散列，结果持久化为 service placement；新增池不会
-重新分配已有服务。
+不代表网络能力。每个 domain 经 Profile 必须只匹配一个运行池，否则配置加载失败。
+服务 placement 仍持久化；扩容通过增加同一池的副本实现。
 
 一个服务的 production 与所有 preview 环境共用一个 active primary placement。
 Version 固定代码和配置，不携带 pool；路由和内部制品访问根据有效 placement 限定池。
@@ -21,13 +21,13 @@ Version 固定代码和配置，不携带 pool；路由和内部制品访问根�
 
 ## 入口与域名
 
-业务 host 为 `w-<service-hash>-<environment>.p-<pool-hash>.<domain>`。
+业务 host 为 `w-<service-hash>-<environment>.<domain>`。
 控制面按 `(pool, domain)` 协调共享通配 HTTPRoute，后端是该池 serving Service，
 因此网关资源数量由基础设施目录决定。静态资产按 domain 单独协调。
 
 每个 domain 显式绑定 Gateway。不同入口的隔离来自独立 Gateway 实例及其路由集合；
 在一个 Gateway 上伪造另一个 domain 的 Host 不会匹配路由。DNS、TLS 和部署侧代理
-必须覆盖带 pool 标签的完整域名。细节见 [域名与路由](workers-domains.md)。
+必须覆盖 `*.<domain>`。细节见 [域名与路由](workers-domains.md)。
 
 ## 配置分发与权限
 

@@ -23,13 +23,9 @@ func RememberDeployment(st *domain.State, op domain.WorkerOperation) {
 }
 func DeploymentID(operation string) string   { return "dep_" + strings.TrimPrefix(operation, "op_") }
 func DeploymentEnvironment(id string) string { return "d-" + securetoken.Digest(id)[:20] }
-func DeploymentHosts(config *appconfig.WorkersConfig, service domain.WorkerService, pool, id string) []string {
-	domains := append([]appconfig.WorkerDomain(nil), config.Domains...)
-	for i := range domains {
-		domains[i].Domain = config.PoolHostSuffix(pool, domains[i].Domain)
-	}
+func DeploymentHosts(config *appconfig.WorkersConfig, service domain.WorkerService, id string) []string {
 	hosts := []string{}
-	for _, pattern := range ServiceHostPatterns(service, domains) {
+	for _, pattern := range ServiceHostPatterns(service, config.Domains) {
 		if host := EnvHostName(pattern, DeploymentEnvironment(id)); host != "" {
 			hosts = append(hosts, host)
 		}
@@ -56,14 +52,13 @@ func (s *Service) WorkerDeployments(ctx context.Context, st *domain.State, p aut
 			continue
 		}
 		service := s.WorkerServiceView(st, authorization.Target{ID: ref.Service, Organization: ref.Organization})
-		pool := s.Config.Workers.ServicePool(st.Workers, service)
 		state := st.Workers.Operations[d.Operation].State
 		if state == "" {
 			state = "available"
 		}
 		hosts := []string{}
 		if d.Committed != nil && d.Expires.After(time.Now()) {
-			hosts = DeploymentHosts(s.Config.Workers, service, pool, d.ID)
+			hosts = DeploymentHosts(s.Config.Workers, service, d.ID)
 		}
 		view := DeploymentView{WorkerDeployment: d, State: state, Hosts: hosts}
 		if ref.Item != "" {

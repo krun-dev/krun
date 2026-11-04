@@ -238,12 +238,11 @@ func (k *Client) EnsureStaticRoute(ctx context.Context, c *appconfig.WorkersConf
 	host := d.StaticDomain
 	backend, port := c.StaticService, c.StaticServicePort
 	if c.S3UsesSignedAccess() {
-		for _, pool := range c.RuntimePools {
-			if appconfig.RuntimePoolHasAccess(pool, d.Access) {
-				backend, port = pool.RuntimeService, 8081
-				break
-			}
+		pool, err := c.DomainRuntimePool(d.ID)
+		if err != nil {
+			return err
 		}
+		backend, port = pool.RuntimeService, 8081
 	}
 	// One route per domain: they carry different hostnames and may sit on
 	// different Gateway instances.

@@ -1,5 +1,9 @@
 # 部署
 
+已有 Kubernetes + Gateway API/kgateway 的公司环境，使用
+[公司部署包](../deploy/production/README.md)：包含镜像构建、主配置示例、离线资源渲染、
+Gateway 预检和显式 apply 脚本。它与下面的静态控制台同源契约一致。
+
 生产控制台是纯静态站点：`npm run build` 只生成 `dist/console/index.html` 和
 `dist/console/assets/`。把 **`dist/console/` 的内容** 上传到 OSS bucket 根目录；生产
 环境不运行 Node，也不要把仓库、`dist/` 的其他内容或配置文件一起上传。

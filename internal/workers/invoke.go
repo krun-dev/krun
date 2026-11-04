@@ -29,11 +29,7 @@ func (s *Service) ResolveInvocation(st *domain.State, principal authorization.Pr
 		if !ok {
 			continue
 		}
-		suffix := d.Domain
-		if pool := s.Config.Workers.ServicePool(st.Workers, service); pool != "" {
-			suffix = s.Config.Workers.PoolHostSuffix(pool, d.Domain)
-		}
-		if candidate := appconfig.HostFor(slug, env, suffix); candidate != "" {
+		if candidate := appconfig.HostFor(slug, env, d.Domain); candidate != "" {
 			return candidate, d.Gateway, nil
 		}
 	}

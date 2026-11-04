@@ -23,13 +23,13 @@ const config :W.Config = (
           (name = "R2_BINDING_SOURCE", text = embed "/app/storage/binding.js"),
           (name = "R2_METADATA_SOURCE", text = embed "/app/storage/metadata.js"),
           (name = "R2_XML_SOURCE", text = embed "/app/storage/xml.js"),
-          (name = "LOADER", workerLoader = (id = "workers-mvp-validator-default")),
+          (name = "LOADER", workerLoader = (id = __LOADER_ID__)),
           (name = "PLATFORM", service = "platform"),
           (name = "POD_NAME", text = embed "/pod/name"),
           (name = "POD_UID", text = embed "/pod/uid"),
           (name = "RUNTIME_TOKEN", text = embed "/secrets/KRUN_RUNTIME_TOKEN"),
           (name = "MANAGEMENT_TOKEN", text = embed "/secrets/KRUN_MANAGEMENT_TOKEN"),
-          (name = "RUNTIME_POOL", text = "default"),
+          (name = "RUNTIME_POOL", text = __POOL__),
           (name = "VALIDATOR_ONLY", text = "true"),
           (name = "ASSETS_CACHE_MAX", text = "16777216")
         ],
@@ -38,7 +38,7 @@ const config :W.Config = (
     ),
     (
       name = "platform",
-      external = (address = "__CONTROL_HOST__:__CONTROL_PORT__", http = ())
+      external = (address = __CONTROL_ADDRESS__, http = ())
     ),
     (
       name = "storage",

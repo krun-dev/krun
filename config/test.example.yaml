@@ -1,0 +1,231 @@
+# 集群测试主配置模板；真实值保存在用户指定的私有 test.yaml。
+# 三个现有 selfManaged Gateway 均为 http:80，无 hostNetwork；Service/入口由部署侧另行准备。
+listen: 0.0.0.0:8080
+internal_listen: 0.0.0.0:8081
+public_url: ${KRUN_PUBLIC_URL:-https://krun.example.com}
+development: false
+static_dir: ""
+organization_self_service: false
+db: ${KRUN_DATABASE_URL:-postgres://krun:replace-me@postgres.example.com:5432/krun}
+trusted_proxy_cidrs:
+  - ${KRUN_GATEWAY_POD_CIDR:-192.0.2.0/24}
+providers:
+  - id: company
+    source_id: company-oidc-main
+    type: oidc
+    name: 公司 SSO
+    issuer: ${KRUN_OIDC_ISSUER:-https://identity.example.com}
+    client_id: ${KRUN_OIDC_CLIENT_ID:-replace-me}
+    client_secret: ${KRUN_OIDC_SECRET:-replace-me}
+    registration: jit
+workers:
+  namespace: ${KRUN_NAMESPACE:-krun-test}
+  builder_mode: kubernetes
+  builder_image: ${KRUN_BUILDER_IMAGE:-registry.example.com/krun/krun-builder:replace-me}
+  builder_pull_policy: IfNotPresent
+  builder_runtime_class: ${KRUN_BUILDER_RUNTIME_CLASS:-}
+  builder_timeout_seconds: 600
+  clone_directory: /workdir
+  reconcile_concurrency: 8
+  npm_registry: ${KRUN_NPM_REGISTRY:-https://npm.example.com/}
+  gateways:
+    - id: internal
+      name: krun-internal
+      namespace: kgateway-system
+      section: http
+      base: http://krun-internal.kgateway-system.svc:80
+    - id: office
+      name: krun-office
+      namespace: kgateway-system
+      section: http
+      base: http://krun-office.kgateway-system.svc:80
+    - id: public
+      name: krun-public
+      namespace: kgateway-system
+      section: http
+      base: http://krun-public.kgateway-system.svc:80
+  domains:
+    - id: internal
+      domain: ${KRUN_INTERNAL_WORKER_DOMAIN:-internal.workers.example.com}
+      static_domain: ${KRUN_INTERNAL_STATIC_DOMAIN:-static.internal.workers.example.com}
+      label: 内网
+      access: private
+      gateway: internal
+      labels:
+        exposure: internal
+      default: true
+    - id: office
+      domain: ${KRUN_OFFICE_WORKER_DOMAIN:-office.workers.example.com}
+      static_domain: ${KRUN_OFFICE_STATIC_DOMAIN:-static.office.workers.example.com}
+      label: Office
+      access: private
+      gateway: office
+      labels:
+        exposure: office
+      default: false
+    - id: public
+      domain: ${KRUN_PUBLIC_WORKER_DOMAIN:-public.workers.example.com}
+      static_domain: ${KRUN_PUBLIC_STATIC_DOMAIN:-static.public.workers.example.com}
+      label: 公网
+      access: public
+      gateway: public
+      labels:
+        exposure: public
+      default: false
+  runtime_pools:
+    - id: internal-a
+      access:
+        - private
+      labels:
+        exposure: internal
+      private_egress: deny
+      public_egress: deny
+      runtime_service: runtime-internal
+      validator_service: validator-internal
+      runtime_token: ${KRUN_INTERNAL_RUNTIME_TOKEN:-replace-with-internal-runtime-token}
+      management_token: ${KRUN_INTERNAL_MANAGEMENT_TOKEN:-replace-with-internal-management-token}
+      default: true
+    - id: office-a
+      access:
+        - private
+      labels:
+        exposure: office
+      private_egress: deny
+      public_egress: deny
+      runtime_service: runtime-office
+      validator_service: validator-office
+      runtime_token: ${KRUN_OFFICE_RUNTIME_TOKEN:-replace-with-office-runtime-token}
+      management_token: ${KRUN_OFFICE_MANAGEMENT_TOKEN:-replace-with-office-management-token}
+      default: false
+    - id: public-a
+      access:
+        - public
+      labels:
+        exposure: public
+      private_egress: deny
+      public_egress: deny
+      runtime_service: runtime-public
+      validator_service: validator-public
+      runtime_token: ${KRUN_PUBLIC_RUNTIME_TOKEN:-replace-with-public-runtime-token}
+      management_token: ${KRUN_PUBLIC_MANAGEMENT_TOKEN:-replace-with-public-management-token}
+      default: false
+  network_profiles:
+    - id: internal
+      name: 内网服务
+      description: 通过内网网关访问。
+      domain_selector:
+        exposure: internal
+      pool_selector:
+        exposure: internal
+      requirements:
+        ingress:
+          - private
+        private_egress: deny
+        public_egress: deny
+      approval: none
+      visibility: public
+      default: true
+    - id: office
+      name: Office服务
+      description: 通过Office网关访问。
+      domain_selector:
+        exposure: office
+      pool_selector:
+        exposure: office
+      requirements:
+        ingress:
+          - private
+        private_egress: deny
+        public_egress: deny
+      approval: none
+      visibility: public
+      default: false
+    - id: public
+      name: 公网服务
+      description: 通过公网网关访问。
+      domain_selector:
+        exposure: public
+      pool_selector:
+        exposure: public
+      requirements:
+        ingress:
+          - public
+        private_egress: deny
+        public_egress: deny
+      approval: none
+      visibility: public
+      default: false
+  secrets_active_key: v1
+  secrets_keys:
+    v1: ${KRUN_WORKERS_SECRETS_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+  s3_endpoint: ${KRUN_ARTIFACT_ENDPOINT:-https://tos-s3-cn-beijing.volces.com}
+  s3_region: ${KRUN_ARTIFACT_REGION:-cn-beijing}
+  s3_addressing_style: virtual
+  s3_bucket_mode: external
+  s3_access_mode: signed
+  s3_bucket: ${KRUN_ARTIFACT_BUCKET:-example-krun-artifacts}
+  s3_prefix: krun/test/artifacts
+  s3_location_id: krun-test-v1
+  s3_access_key: ${KRUN_ARTIFACT_ACCESS:-replace-me}
+  s3_secret_key: ${KRUN_ARTIFACT_SECRET:-replace-me}
+  object_storage:
+    default_store: primary
+    cursor_key: ${KRUN_OBJECT_STORAGE_CURSOR_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA}
+    stores:
+      - id: primary
+        endpoint: https://tos-s3-cn-beijing.volces.com
+        region: cn-beijing
+        bucket: ${KRUN_OBJECT_BUCKET:-example-krun-data}
+        root_prefix: krun/test/data
+        addressing_style: virtual
+        credentials:
+          type: tos_assume_role
+          access_key_id: ${KRUN_OBJECT_STORAGE_ACCESS:-replace-me}
+          secret_access_key: ${KRUN_OBJECT_STORAGE_SECRET:-replace-me}
+          role_trn: ${KRUN_OBJECT_STORAGE_ROLE:-trn:iam::1000000000:role/example}
+  repository_providers:
+    - id: company-gitlab
+      type: gitlab
+      name: 公司 GitLab
+      enabled: true
+      base_url: ${KRUN_GITLAB_ORIGIN:-https://gitlab.example.com}
+      allow_private_network: true
+deployment:
+  console_prefix: test/krun/console
+  control_image: ${KRUN_CONTROL_IMAGE:-registry.example.com/krun/krun-control:replace-me}
+  runtime_image: ${KRUN_RUNTIME_IMAGE:-registry.example.com/krun/krun-runtime:replace-me}
+  console_image: ${KRUN_CONSOLE_IMAGE:-registry.example.com/base/nginx:approved-tag}
+  console_origin: ${KRUN_CONSOLE_ORIGIN:-https://example-console.tos-cn-beijing.volces.com}
+  dns_resolver: ${KRUN_CLUSTER_DNS:-192.0.2.53}
+  control_replicas: 1
+  runtime_replicas: 1
+  validator_replicas: 1
+  runtime_class: ${KRUN_RUNTIME_CLASS:-}
+  image_pull_secrets: []
+  network:
+    control:
+      - cidrs:
+          - ${KRUN_DATABASE_CIDR:-192.0.2.0/24}
+        ports:
+          - 5432
+      - cidrs:
+          - ${KRUN_KUBERNETES_API_CIDR:-198.51.100.0/24}
+        ports:
+          - 443
+          - 6443
+      - cidrs:
+          - ${KRUN_IDENTITY_GIT_CIDR:-203.0.113.0/24}
+        ports:
+          - 443
+      - public_https: true
+    runtime:
+      - public_https: true
+    builder:
+      - cidrs:
+          - ${KRUN_NPM_PROXY_CIDR:-203.0.113.0/24}
+        ports:
+          - 443
+      - public_https: true
+    console:
+      - public_https: true
+  console_gateway: office

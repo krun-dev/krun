@@ -291,7 +291,13 @@ func (w *Controller) ReconcileRoutes(ctx context.Context) (map[string]bool, erro
 	for _, pool := range w.Config.ConfiguredRuntimePools() {
 		ready := true
 		for _, domain := range w.Config.Domains {
-			if !appconfig.RuntimePoolHasAccess(pool, domain.Access) {
+			owner, err := w.Config.DomainRuntimePool(domain.ID)
+			if err != nil {
+				failures = append(failures, err)
+				ready = false
+				continue
+			}
+			if owner.ID != pool.ID {
 				continue
 			}
 			gateway, ok := w.Config.Gateway(domain.Gateway)
@@ -300,7 +306,7 @@ func (w *Controller) ReconcileRoutes(ctx context.Context) (map[string]bool, erro
 			}
 			name := "workers-shared-" + securetoken.Digest(pool.ID + "/" + domain.ID)[:24]
 			desiredRoutes[name] = true
-			adopted, err := w.Kube.EnsureRoute(ctx, name, pool.RuntimeService, gateway, []string{"*." + w.Config.PoolHostSuffix(pool.ID, domain.Domain)})
+			adopted, err := w.Kube.EnsureRoute(ctx, name, pool.RuntimeService, gateway, []string{"*." + domain.Domain})
 			ready = ready && adopted && err == nil
 			if err != nil {
 				failures = append(failures, err)

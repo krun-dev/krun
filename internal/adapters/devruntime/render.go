@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"net/url"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/krun-dev/krun/internal/adapters/objectstore"
+	"github.com/krun-dev/krun/internal/adapters/runtimebundle"
 	"github.com/krun-dev/krun/internal/config"
 )
 
@@ -49,8 +49,18 @@ func Render(c config.Config, controlHost, outputDirectory string) error {
 	}
 
 	replacements := options.templateReplacements()
+	networks := []string{options.controlHost + "/32"}
+	if net.ParseIP(options.storageHost) == nil {
+		networks = append(networks, "public")
+	} else {
+		networks = append(networks, options.storageHost+"/32")
+	}
 	for _, name := range []string{"runtime", "validator"} {
-		if err := renderTemplate(outputDirectory, name+".capnp", replacements); err != nil {
+		text, renderErr := runtimebundle.Render(c.Workers, options.pool, net.JoinHostPort(options.controlHost, options.controlPort), networks, name == "validator")
+		if renderErr != nil {
+			return renderErr
+		}
+		if err := writeResource(outputDirectory, name+".capnp", text); err != nil {
 			return err
 		}
 	}
@@ -129,44 +139,12 @@ func (o renderOptions) templateReplacements() *strings.Replacer {
 	}
 
 	return strings.NewReplacer(
-		"__OBJECT_STORAGE_BINDINGS__", o.objectStorageBindings(),
-		"__OBJECT_STORAGE_SERVICES__", o.objectStorageServices(),
 		"__CONTROL_HOST__", o.controlHost,
 		"__CONTROL_PORT__", o.controlPort,
 		"__MINIO_HOST__", o.storageHost,
 		"__MINIO_PORT__", o.storagePort,
 		"__STORAGE_ALLOW__", allowedNetworks,
 		"__CONFIG_BASE__", quote(o.workers.ConfigBaseURL+"/pools/default"),
-		"__STORAGE_BINDINGS__", o.storageBindings(),
-	)
-}
-
-func (o renderOptions) storageBindings() string {
-	if !o.signed {
-		return ""
-	}
-
-	domains := make(map[string]string)
-	for _, domain := range o.workers.Domains {
-		if !config.RuntimePoolHasAccess(o.pool, domain.Access) {
-			continue
-		}
-
-		prefix := "int"
-		if domain.Access == "public" {
-			prefix = "pub"
-		}
-		domains[domain.StaticDomain] = prefix
-	}
-
-	encodedDomains, _ := json.Marshal(domains)
-	return fmt.Sprintf(`
-      (name = "STORAGE_ACCESS_KEY", text = embed "/storage/access"),
-      (name = "STORAGE_SECRET_KEY", text = embed "/storage/secret"),
-      (name = "STORAGE_REGION", text = %s),
-      (name = "STATIC_DOMAINS", text = %s),`,
-		quote(o.workers.S3Region),
-		quote(string(encodedDomains)),
 	)
 }
 

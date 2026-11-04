@@ -10,6 +10,7 @@
 | 代码分层与模块边界 | [架构](architecture.md) |
 | 开发拓扑与启动 | [local-first](local-dev.md) |
 | 静态控制台、同源 API 与部署 | [部署](deployment.md) |
+| 公司 Kubernetes / kgateway 部署包 | [公司内网部署](../deploy/production/README.md) |
 | 认证、授权与 CLI | [认证 API](auth-api.md) |
 | 身份提供商本地联调 | [SSO](sso-local-testing.md) |
 | 存储、CAS、保留期与初始化 | [存储](storage.md) |

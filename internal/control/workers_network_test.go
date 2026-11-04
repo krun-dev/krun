@@ -149,16 +149,11 @@ func TestRuntimePoolsExposeOnlyProductNetworkProfiles(t *testing.T) {
 	}
 }
 
-func TestRuntimePoolsAllowMultiplePlacementsPerProfile(t *testing.T) {
+func TestRuntimePoolsRejectAmbiguousDomainBackend(t *testing.T) {
 	c := multiPoolCatalogConfig()
 	c.RuntimePools = append(c.RuntimePools, appconfig.WorkerRuntimePool{ID: "public-c", Access: []string{"public"}, Labels: map[string]string{"zone": "external"}, RuntimeService: "runtime-public-2", ValidatorService: "validator-public-2", RuntimeToken: strings.Repeat("x", 24), ManagementToken: strings.Repeat("y", 24)})
-	if err := c.Validate(); err != nil {
-		t.Fatalf("multiple compatible runtime pools rejected: %v", err)
-	}
-	first, ok := c.SelectPoolForService("external-service", "service-a")
-	second, okAgain := c.SelectPoolForService("external-service", "service-a")
-	if !ok || !okAgain || first.ID != second.ID || (first.ID != "public-b" && first.ID != "public-c") {
-		t.Fatalf("unstable profile placement: first=%+v second=%+v", first, second)
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "exactly one runtime pool") {
+		t.Fatalf("ambiguous flat wildcard backend accepted: %v", err)
 	}
 }
 
@@ -479,13 +474,13 @@ func TestSyncEnvironmentHostsDerivesOneHostPerDomain(t *testing.T) {
 	env := WorkerEnvironment{Name: "production"}
 	s.syncEnvironmentHosts(&env, "org-a", "svc-a", []string{"internal", "external"})
 	slug := appconfig.WorkerSlug("org-a", "svc-a")
-	want := []string{slug + "-production." + c.PoolHostSuffix("default", "workers.test"), slug + "-production." + c.PoolHostSuffix("default", "workers-out.example.test")}
+	want := []string{slug + "-production.workers.test", slug + "-production.workers-out.example.test"}
 	sort.Strings(env.Hosts)
 	sort.Strings(want)
 	if strings.Join(env.Hosts, ",") != strings.Join(want, ",") {
 		t.Fatalf("hosts: %v", env.Hosts)
 	}
-	if env.DisplayHosts["external"] != slug+"-production."+c.PoolHostSuffix("default", "workers-out.example.test") {
+	if env.DisplayHosts["external"] != slug+"-production.workers-out.example.test" {
 		t.Fatalf("per-domain host: %q", env.DisplayHosts["external"])
 	}
 
@@ -633,12 +628,12 @@ func TestWorkerConfigProjectionCoversEveryDomain(t *testing.T) {
 	slug := appconfig.WorkerSlug("org-a", "svc-a")
 	// Every selected domain yields one host per environment, in host order.
 	want := []string{
-		appconfig.HostFor(slug, "empty", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers-out.example.test")),
-		appconfig.HostFor(slug, "empty", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers.test")),
-		appconfig.HostFor(slug, "preview", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers-out.example.test")),
-		appconfig.HostFor(slug, "preview", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers.test")),
-		appconfig.HostFor(slug, "production", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers-out.example.test")),
-		appconfig.HostFor(slug, "production", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers.test")),
+		appconfig.HostFor(slug, "empty", "workers-out.example.test"),
+		appconfig.HostFor(slug, "empty", "workers.test"),
+		appconfig.HostFor(slug, "preview", "workers-out.example.test"),
+		appconfig.HostFor(slug, "preview", "workers.test"),
+		appconfig.HostFor(slug, "production", "workers-out.example.test"),
+		appconfig.HostFor(slug, "production", "workers.test"),
 	}
 	if strings.Join(hosts, ",") != strings.Join(want, ",") {
 		t.Fatalf("projection hosts: %v", hosts)

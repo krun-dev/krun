@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fail if local dev secrets or internal hosts appear in tracked files.
-# Values come from the gitignored .data/dev.yaml and .data/dev.env.
+# Values come from the gitignored main configurations and .data/dev.env.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -28,35 +28,36 @@ if [[ -f .data/dev.env ]]; then
   done
 fi
 
-if [[ -f .data/dev.yaml ]]; then
-  for key in runtime_token management_token s3_secret_key external_domain; do
-    value="$(sed -n "s/^[[:space:]]*${key}:[[:space:]]*//p" .data/dev.yaml | head -1 | sed 's/^"//; s/"$//')"
+for config_file in .data/dev.yaml .data/test.yaml; do
+  [[ -f "$config_file" ]] || continue
+  for key in external_domain; do
+    value="$(sed -n "s/^[[:space:]]*${key}:[[:space:]]*//p" "$config_file" | head -1 | sed 's/^"//; s/"$//')"
     check_value "$key" "$value"
   done
   # Credential providers may have several keys in the same main YAML.
   # Scan every actual value, including AK identifiers, without printing it.
-  for key in s3_access_key access_key_id secret_access_key validator_token cursor_key signing_key; do
+  for key in runtime_token management_token s3_secret_key s3_access_key access_key_id secret_access_key validator_token cursor_key signing_key client_id client_secret; do
     while IFS= read -r value; do
       case "$value" in
         ""|replace-me|\$\{*) continue ;;
       esac
       check_value "$key" "$value"
-    done < <(sed -n "s/^[[:space:]]*${key}:[[:space:]]*//p" .data/dev.yaml | sed 's/^"//; s/"$//')
+    done < <(sed -n "s/^[[:space:]]*${key}:[[:space:]]*//p" "$config_file" | sed 's/^"//; s/"$//')
   done
-  secrets_active_key="$(sed -n 's/^[[:space:]]*secrets_active_key:[[:space:]]*//p' .data/dev.yaml | head -1 | sed 's/^"//; s/"$//')"
+  secrets_active_key="$(sed -n 's/^[[:space:]]*secrets_active_key:[[:space:]]*//p' "$config_file" | head -1 | sed 's/^"//; s/"$//')"
   if [[ -n "$secrets_active_key" ]]; then
-    worker_secrets_key="$(sed -n "s/^[[:space:]]*${secrets_active_key}:[[:space:]]*//p" .data/dev.yaml | head -1 | sed 's/^"//; s/"$//')"
+    worker_secrets_key="$(sed -n "s/^[[:space:]]*${secrets_active_key}:[[:space:]]*//p" "$config_file" | head -1 | sed 's/^"//; s/"$//')"
     check_value "worker secrets encryption key" "$worker_secrets_key"
   fi
-  db="$(sed -n 's/^db:[[:space:]]*//p' .data/dev.yaml | head -1 | sed 's/^"//; s/"$//')"
+  db="$(sed -n 's/^db:[[:space:]]*//p' "$config_file" | head -1 | sed 's/^"//; s/"$//')"
   password="$(printf '%s' "$db" | sed -n 's#.*://[^:]*:\([^@]*\)@.*#\1#p')"
   check_value "database password" "$password"
-  minio="$(sed -n 's/^[[:space:]]*s3_endpoint:[[:space:]]*//p' .data/dev.yaml | head -1 | sed 's/^"//; s/"$//; s#^[a-z]*://##; s#/.*##; s#:.*##')"
+  minio="$(sed -n 's/^[[:space:]]*s3_endpoint:[[:space:]]*//p' "$config_file" | head -1 | sed 's/^"//; s/"$//; s#^[a-z]*://##; s#/.*##; s#:.*##')"
   case "$minio" in
     ""|127.0.0.1|localhost|::1|tos-s3-*.volces.com) ;;
     *) check_value "minio host" "$minio" ;;
   esac
-fi
+done
 
 for file in "${files[@]}"; do
   if grep -E -I -q -- "-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}" "$file" 2>/dev/null; then

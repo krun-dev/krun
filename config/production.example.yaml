@@ -1,0 +1,138 @@
+# 公司内网首版：这是完整主配置；不要与其他 Workers YAML 合并加载。
+# 所有实际地址、凭据、镜像仓库和网络范围由环境变量或密钥平台填充。
+listen: 0.0.0.0:8080
+internal_listen: 0.0.0.0:8081
+public_url: ${KRUN_PUBLIC_URL:-https://krun.example.com}
+development: false
+static_dir: ""
+organization_self_service: false
+db: ${KRUN_DATABASE_URL:-postgres://krun:replace-me@postgres.example.com:5432/krun}
+trusted_proxy_cidrs:
+  - ${KRUN_GATEWAY_POD_CIDR:-192.0.2.0/24}
+providers:
+  - id: company
+    source_id: company-oidc-main
+    type: oidc
+    name: 公司 SSO
+    issuer: ${KRUN_OIDC_ISSUER:-https://identity.example.com}
+    client_id: ${KRUN_OIDC_CLIENT_ID:-replace-me}
+    client_secret: ${KRUN_OIDC_SECRET:-replace-me}
+    registration: jit
+workers:
+  namespace: ${KRUN_NAMESPACE:-krun}
+  builder_mode: kubernetes
+  builder_image: ${KRUN_BUILDER_IMAGE:-registry.example.com/krun/krun-builder:replace-me}
+  builder_pull_policy: IfNotPresent
+  builder_runtime_class: ${KRUN_BUILDER_RUNTIME_CLASS:-}
+  builder_timeout_seconds: 600
+  clone_directory: /workdir
+  reconcile_concurrency: 8
+  npm_registry: ${KRUN_NPM_REGISTRY:-https://npm.example.com/}
+  gateways:
+    - id: internal
+      name: ${KRUN_GATEWAY_NAME:-krun-internal}
+      namespace: ${KRUN_GATEWAY_NAMESPACE:-kgateway-system}
+      section: ${KRUN_GATEWAY_LISTENER:-internal}
+  domains:
+    - id: internal
+      domain: ${KRUN_WORKER_DOMAIN:-workers.example.com}
+      static_domain: ${KRUN_STATIC_DOMAIN:-static.workers.example.com}
+      label: 公司内网
+      access: private
+      gateway: internal
+      labels:
+        exposure: internal
+      default: true
+  runtime_pools:
+    - id: internal-a
+      access: [private]
+      private_egress: deny
+      public_egress: deny
+      runtime_service: runtime-internal
+      validator_service: validator-internal
+      runtime_token: ${KRUN_RUNTIME_TOKEN:-replace-with-serving-runtime-token}
+      management_token: ${KRUN_MANAGEMENT_TOKEN:-replace-with-management-token}
+      default: true
+  network_profiles:
+    - id: internal
+      name: 内网服务
+      description: 经公司内网入口访问。
+      domain_selector:
+        exposure: internal
+      requirements:
+        ingress: [private]
+        private_egress: deny
+        public_egress: deny
+      approval: none
+      visibility: public
+      default: true
+  secrets_active_key: v1
+  secrets_keys:
+    v1: ${KRUN_WORKERS_SECRETS_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+  s3_endpoint: ${KRUN_ARTIFACT_ENDPOINT:-https://tos-s3-cn-beijing.volces.com}
+  s3_region: ${KRUN_ARTIFACT_REGION:-cn-beijing}
+  s3_addressing_style: virtual
+  s3_bucket_mode: external
+  s3_access_mode: signed
+  s3_bucket: ${KRUN_ARTIFACT_BUCKET:-example-krun-artifacts}
+  s3_prefix: ${KRUN_ARTIFACT_PREFIX:-company/pilot-v1}
+  s3_location_id: company-pilot-v1
+  s3_access_key: ${KRUN_ARTIFACT_ACCESS:-replace-me}
+  s3_secret_key: ${KRUN_ARTIFACT_SECRET:-replace-me}
+  object_storage:
+    default_store: primary
+    cursor_key: ${KRUN_OBJECT_STORAGE_CURSOR_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA}
+    stores:
+      - id: primary
+        endpoint: https://tos-s3-cn-beijing.volces.com
+        region: cn-beijing
+        bucket: ${KRUN_OBJECT_BUCKET:-example-krun-data}
+        root_prefix: company/pilot-v1
+        addressing_style: virtual
+        credentials:
+          type: tos_assume_role
+          access_key_id: ${KRUN_OBJECT_STORAGE_ACCESS:-replace-me}
+          secret_access_key: ${KRUN_OBJECT_STORAGE_SECRET:-replace-me}
+          role_trn: ${KRUN_OBJECT_STORAGE_ROLE:-trn:iam::1000000000:role/example}
+  repository_providers:
+    - id: company-gitlab
+      type: gitlab
+      name: 公司 GitLab
+      enabled: true
+      base_url: ${KRUN_GITLAB_ORIGIN:-https://gitlab.example.com}
+      allow_private_network: true
+      client_id: ${KRUN_GITLAB_CLIENT_ID:-replace-me}
+      client_secret: ${KRUN_GITLAB_CLIENT_SECRET:-replace-me}
+# deployment 是同一主配置中的渲染输入；应用启动不自动 apply 任何资源。
+deployment:
+  console_gateway: internal
+  console_prefix: ""
+  control_image: ${KRUN_CONTROL_IMAGE:-registry.example.com/krun/krun-control:replace-me}
+  runtime_image: ${KRUN_RUNTIME_IMAGE:-registry.example.com/krun/krun-runtime:replace-me}
+  console_image: ${KRUN_CONSOLE_IMAGE:-registry.example.com/base/nginx:approved-tag}
+  console_origin: ${KRUN_CONSOLE_ORIGIN:-https://example-console.tos-cn-beijing.volces.com}
+  dns_resolver: ${KRUN_CLUSTER_DNS:-192.0.2.53}
+  control_replicas: 1
+  runtime_replicas: 2
+  validator_replicas: 1
+  runtime_class: ${KRUN_RUNTIME_CLASS:-}
+  image_pull_secrets: [] # 填已在目标 namespace 创建的公司镜像拉取 Secret 名。
+  network:
+    control:
+      # PostgreSQL 所在网段、Kubernetes API、公司 SSO/Git 的真实范围必须显式填写。
+      - cidrs: ["${KRUN_DATABASE_CIDR:-192.0.2.0/24}"]
+        ports: [5432]
+      - cidrs: ["${KRUN_KUBERNETES_API_CIDR:-198.51.100.0/24}"]
+        ports: [443, 6443]
+      - cidrs: ["${KRUN_IDENTITY_GIT_CIDR:-203.0.113.0/24}"]
+        ports: [443]
+      # 显式允许云存储和 STS 公网 HTTPS，排除常见私有、loopback 和 link-local 段。
+      - public_https: true
+    runtime:
+      - public_https: true
+    builder:
+      - cidrs: ["${KRUN_NPM_PROXY_CIDR:-203.0.113.0/24}"]
+        ports: [443]
+      - public_https: true
+    console:
+      - public_https: true

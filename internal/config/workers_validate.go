@@ -197,5 +197,10 @@ func (c *WorkersConfig) Validate() error {
 	if err := c.ValidateNetworkProfiles(); err != nil {
 		return err
 	}
+	for _, domain := range c.Domains {
+		if _, err := c.DomainRuntimePool(domain.ID); err != nil {
+			return err
+		}
+	}
 	return nil
 }

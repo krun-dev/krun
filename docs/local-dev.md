@@ -2,6 +2,10 @@
 
 只有一套开发环境。目标是把能跑在开发机上的组件都跑在开发机上，集群只保留无法本地替代的 serving runtime、候选 validator（均为 workerd）和 kgateway。
 
+公司集群部署使用 [production 部署包](../deploy/production/README.md)，不要用本文的
+SSH 隧道或 `dev-*.sh` 启动生产。两者共用 `internal/adapters/runtimebundle` 的 workerd
+配置模板，生产配置仍由同一份主 YAML 加载。
+
 ## 拓扑
 
 ```text
@@ -21,9 +25,9 @@
 - 控制面、Postgres、builder、前端都在开发机；对象存储可使用本地 MinIO 或外部 S3/TOS；改后端或 builder 不需要构建镜像。
 - 本地 MinIO 模式通过 selectorless `static-assets` Service/EndpointSlice 访问开发机；外部 S3/TOS 模式由 runtime 直接访问 HTTPS，不固定云存储 IP。两种模式都不需要集群内 MinIO Pod。
 - 集群里只保留 `runtime-default`、不接业务 Gateway 的 `runtime-validator-default` 和 kgateway；旧的 backend/postgres/minio/tester deployment 已 scale 到 0。
-- 业务 Worker 的 host 仍然是 `w-xxx-<env>.p-<pool-hash>.workers.test`；nginx 把外网域名改写成它。
+- 业务 Worker 的 host 仍然是 `w-xxx-<env>.workers.test`；nginx 把外网域名改写成它。
 
-业务入口统一使用共享路由，DNS / nginx / TLS 必须覆盖 pool 标签。规则见 [域名与路由](workers-domains.md)。
+业务入口统一使用共享路由，DNS / nginx / TLS 必须覆盖业务域名单层通配符。规则见 [域名与路由](workers-domains.md)。
 
 ## 唯一配置
 
@@ -150,13 +154,13 @@ validator 或 Gateway rollout 会让本地 38084/38080/38081 的 port-forward �
 Worker 的外网访问：
 
 ```text
-https://w-<hash>-<env>.p-<pool-hash>.<external-domain>/
+https://w-<hash>-<env>.<external-domain>/
 ```
 
 内网入口：
 
 ```text
-https://w-<hash>-<env>.p-<pool-hash>.<internal-domain>/
+https://w-<hash>-<env>.<internal-domain>/
 ```
 
 nginx 保留完整 Host，分别转发到域名绑定的 Gateway。
@@ -175,8 +179,8 @@ nginx 保留完整 Host，分别转发到域名绑定的 Gateway。
 在 kind 宿主机上验证（NodePort 32284 = 公网，30739 = 内网）：
 
 ```bash
-curl -o /dev/null -w '%{http_code}\n' -H 'Host: w-x-production.p-<pool-hash>.workers.test'        http://<node>:32284/  # 404
-curl -o /dev/null -w '%{http_code}\n' -H 'Host: w-x-production.p-<pool-hash>.public.workers.test' http://<node>:32284/  # 200
+curl -o /dev/null -w '%{http_code}\n' -H 'Host: w-x-production.workers.test'        http://<node>:32284/  # 404
+curl -o /dev/null -w '%{http_code}\n' -H 'Host: w-x-production.public.workers.test' http://<node>:32284/  # 200
 ```
 
 ## 远端 runtime 的前置条件

@@ -1,1 +1,10 @@
-node_modules
+**
+!Dockerfile
+!package.json
+!package-lock.json
+!entry.js
+!assets.js
+!cache.js
+!storage.js
+!storage/
+!storage/**

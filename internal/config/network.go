@@ -270,3 +270,26 @@ func (c *WorkersConfig) PoolAllowedForProfile(profileID, poolID string) bool {
 	}
 	return false
 }
+
+// DomainRuntimePool resolves the sole backend of a domain wildcard. A flat
+// hostname cannot choose between independent pools behind the same wildcard.
+func (c *WorkersConfig) DomainRuntimePool(domainID string) (WorkerRuntimePool, error) {
+	owners := map[string]WorkerRuntimePool{}
+	for _, profile := range c.NetworkProfiles {
+		for _, d := range c.DomainsForProfile(profile) {
+			if d.ID != domainID {
+				continue
+			}
+			for _, pool := range c.PoolsForProfile(profile.ID) {
+				owners[pool.ID] = pool
+			}
+		}
+	}
+	if len(owners) != 1 {
+		return WorkerRuntimePool{}, fmt.Errorf("domain %s must select exactly one runtime pool through network profiles; scale replicas within that pool", domainID)
+	}
+	for _, pool := range owners {
+		return pool, nil
+	}
+	return WorkerRuntimePool{}, fmt.Errorf("domain %s has no runtime pool", domainID)
+}

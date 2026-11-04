@@ -78,7 +78,62 @@ func TestSharedGatewayRouteCountIndependentOfSites(t *testing.T) {
 		t.Fatalf("shared routing produced %d routes and %d namespace lists", len(posts), lists)
 	}
 	hosts := posts[0]["spec"].(map[string]any)["hostnames"].([]any)
-	if hosts[0] != "*."+config.PoolHostSuffix("default", "workers.test") {
-		t.Fatalf("unpartitioned shared hostname: %v", hosts)
+	if hosts[0] != "*.workers.test" {
+		t.Fatalf("unexpected shared hostname: %v", hosts)
+	}
+}
+
+func TestFlatDomainRoutesUseTheirOwnPoolAndGateway(t *testing.T) {
+	c, err := appconfig.LoadConfig("../../config/test.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	posts := []map[string]any{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/httproutes"):
+			_, _ = w.Write([]byte(`{"items":[]}`))
+		case r.Method == http.MethodPost:
+			var route map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&route); err != nil {
+				t.Error(err)
+			}
+			posts = append(posts, route)
+			w.WriteHeader(http.StatusCreated)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	controller := &workerapp.Controller{Config: c.Workers, Kube: &kubernetes.Client{Base: server.URL, Client: server.Client(), Namespace: c.Workers.Namespace}}
+	if _, err := controller.ReconcileRoutes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 6 {
+		t.Fatalf("want one wildcard and one static route per domain, got %d", len(posts))
+	}
+	hosts := map[string]bool{}
+	for _, route := range posts {
+		spec := route["spec"].(map[string]any)
+		host := spec["hostnames"].([]any)[0].(string)
+		if hosts[host] {
+			t.Fatalf("duplicate wildcard host %s", host)
+		}
+		hosts[host] = true
+		var zone string
+		for _, d := range c.Workers.Domains {
+			if host == "*."+d.Domain || host == d.StaticDomain {
+				zone = d.ID
+			}
+		}
+		if zone == "" {
+			t.Fatalf("unexpected layered host: %s", host)
+		}
+		parent := spec["parentRefs"].([]any)[0].(map[string]any)
+		rule := spec["rules"].([]any)[0].(map[string]any)
+		backend := rule["backendRefs"].([]any)[0].(map[string]any)
+		if parent["name"] != "krun-"+zone || backend["name"] != "runtime-"+zone {
+			t.Fatalf("domain %s routed to incorrect gateway or pool", host)
+		}
 	}
 }

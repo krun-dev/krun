@@ -66,11 +66,7 @@ func WorkerConfigFromState(st *domain.State, config *appconfig.WorkersConfig) do
 			continue
 		}
 		pool := placement.Pool
-		domains := append([]appconfig.WorkerDomain(nil), config.Domains...)
-		for i := range domains {
-			domains[i].Domain = config.PoolHostSuffix(pool, domains[i].Domain)
-		}
-		hosts := ServiceHostPatterns(ws, domains)
+		hosts := ServiceHostPatterns(ws, config.Domains)
 		for name, env := range ws.Environments {
 			// The map key is authoritative: Environment.Name is a denormalised
 			// copy; the key defines the environment identity.
@@ -113,7 +109,7 @@ func WorkerConfigFromState(st *domain.State, config *appconfig.WorkersConfig) do
 		if !ok || version.Service != service.Service || version.Organization != service.Organization {
 			continue
 		}
-		for _, host := range DeploymentHosts(config, service, placement.Pool, deployment.ID) {
+		for _, host := range DeploymentHosts(config, service, deployment.ID) {
 			out.Routes = append(out.Routes, domain.WorkerConfigRoute{Service: service.Service, Host: host, Path: "/", Expires: &deployment.Expires, Enabled: env.Enabled, Version: version.ID, Pool: placement.Pool})
 		}
 		out.Versions[version.ID] = version

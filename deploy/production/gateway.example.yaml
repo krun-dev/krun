@@ -1,0 +1,35 @@
+# 可选：由公司网关管理员审查后创建。部署脚本不会自动 apply 这个文件。
+# 需要已安装 kgateway、Gateway API 与 GatewayParameters CRD。
+# ClusterIP 不自动分配公网 LB；公司 HTTPS 入口转发到此 Service:8080 并保留 Host。
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: GatewayParameters
+metadata:
+  name: krun-internal
+  namespace: kgateway-system
+spec:
+  kube:
+    service:
+      type: ClusterIP
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: krun-internal
+  namespace: kgateway-system
+spec:
+  gatewayClassName: kgateway
+  infrastructure:
+    parametersRef:
+      group: gateway.kgateway.dev
+      kind: GatewayParameters
+      name: krun-internal
+  listeners:
+    - name: internal
+      protocol: HTTP
+      port: 8080
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              app.kubernetes.io/part-of: krun

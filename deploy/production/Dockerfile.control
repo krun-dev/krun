@@ -1,0 +1,23 @@
+# syntax=docker/dockerfile:1
+ARG GO_IMAGE=golang:1.26-bookworm
+ARG BASE_IMAGE=debian:bookworm-slim
+FROM ${GO_IMAGE} AS build
+ARG TARGETOS=linux
+ARG TARGETARCH
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY internal ./internal
+COPY cmd/krun-server ./cmd/krun-server
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -buildvcs=false -trimpath -o /out/krun-server ./cmd/krun-server
+
+FROM ${BASE_IMAGE}
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=build /out/krun-server /app/krun-server
+USER 1000:1000
+ENTRYPOINT ["/app/krun-server"]
+CMD ["serve", "--config", "/config/control.yaml"]

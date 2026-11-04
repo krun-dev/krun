@@ -314,10 +314,9 @@ func (s *Server) cfDeploymentURLs(st *State, d domain.WorkerDeployment) []string
 	if !ok {
 		return []string{}
 	}
-	service = s.workerApplication(nil).NormalizeService(service, st)
-	pool := s.Config.Workers.ServicePool(st.Workers, service)
+	service = s.workerApplication(nil).NormalizeService(service)
 	urls := []string{}
-	for _, host := range workerapp.DeploymentHosts(s.Config.Workers, service, pool, d.ID) {
+	for _, host := range workerapp.DeploymentHosts(s.Config.Workers, service, d.ID) {
 		scheme := "https://"
 		if s.Config.Development {
 			scheme = "http://"

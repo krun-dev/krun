@@ -1,1 +1,9 @@
-node_modules
+**
+!Dockerfile
+!package.json
+!package-lock.json
+!build-worker.mjs
+!proxy.mjs
+!wrangler-project.mjs
+!test/
+!test/manager-smoke.mjs

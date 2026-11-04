@@ -1,4 +1,4 @@
-package devruntime
+package runtimebundle
 
 import (
 	"encoding/json"
@@ -6,15 +6,17 @@ import (
 	"net"
 	"net/url"
 	"strings"
+
+	"github.com/krun-dev/krun/internal/config"
 )
 
-func (o renderOptions) objectStorageBindings() string {
-	if o.workers.ObjectStorage == nil {
+func objectStorageBindings(workers *config.WorkersConfig) string {
+	if workers.ObjectStorage == nil {
 		return ""
 	}
 	targets := map[string]map[string]string{}
 	var bindings strings.Builder
-	for index, store := range o.workers.ObjectStorage.Stores {
+	for index, store := range workers.ObjectStorage.Stores {
 		name := fmt.Sprintf("OBJECT_STORE_%d", index)
 		targets[store.ID] = map[string]string{"binding": name}
 		fmt.Fprintf(&bindings, "(name = %s, service = %s),\n", quote(name), quote("object-store-"+store.ID))
@@ -24,12 +26,12 @@ func (o renderOptions) objectStorageBindings() string {
 	return bindings.String()
 }
 
-func (o renderOptions) objectStorageServices() string {
-	if o.workers.ObjectStorage == nil {
+func objectStorageServices(workers *config.WorkersConfig) string {
+	if workers.ObjectStorage == nil {
 		return ""
 	}
 	var services strings.Builder
-	for _, store := range o.workers.ObjectStorage.Stores {
+	for _, store := range workers.ObjectStorage.Stores {
 		u, _ := url.Parse(store.Endpoint)
 		host := strings.ToLower(u.Hostname())
 		if store.AddressingStyle == "virtual" {

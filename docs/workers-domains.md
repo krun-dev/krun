@@ -8,16 +8,15 @@
 每个服务、环境和选中域名生成一个地址：
 
 ```text
-w-<service-hash>-<environment>.p-<pool-hash>.<domain-suffix>
+w-<service-hash>-<environment>.<domain-suffix>
 ```
 
-service hash 来自组织与服务 ID；pool hash 来自 durable placement 的池 ID。
+service hash 来自组织与服务 ID；域名不包含运行池 ID。
 production 和 preview 使用相同的服务 placement。主机名由一套公共推导函数产生，
 不会持久化在环境行中；控制台、invoke 和边缘配置均复用这个结果。
 
-部署侧需要为 `*.p-<pool-hash>.<domain-suffix>` 配置 DNS 和 TLS。单层
-`*.example.com` 证书不覆盖多层标签。代理必须保留推导出的完整 Host；如需从展示域
-改写到集群测试域，只替换 domain suffix，保留服务、环境和 pool 标签。
+部署侧为 `*.<domain-suffix>` 配置 DNS 和 TLS。代理必须保留完整 Host；如需从展示域
+改写到集群测试域，只替换 domain suffix，保留服务和环境标签。
 
 ## 路由与隔离
 
@@ -25,10 +24,11 @@ production 和 preview 使用相同的服务 placement。主机名由一套公�
 
 | 类型 | 数量 | 目标 |
 | --- | --- | --- |
-| 业务共享路由 | 每个兼容的 `(pool, domain)` 一条 | pool 的 serving Runtime Service |
+| 业务共享路由 | 每个 domain 一条 | pool 的 serving Runtime Service |
 | 静态资产路由 | 每个 domain 一条 | 对象存储静态 Service 与对应 `pub/` 或 `int/` 前缀 |
 
-domain 显式绑定一个 Gateway 实例与 listener。不同访问边界使用独立 Gateway 实例，
+每个 domain 经 Network Profile 唯一选择一个运行池；配置拒绝多个池争用同一通配域名。
+同一池可以有多个副本。domain 显式绑定一个 Gateway 实例与 listener。不同访问边界使用独立 Gateway 实例，
 每个实例只接收自己的域名；跨实例伪造 Host 返回 404。静态域默认 `static.<domain>`，
 可通过 `static_domain` 显式配置。
 

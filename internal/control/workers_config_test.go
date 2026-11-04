@@ -73,7 +73,7 @@ func TestWorkerConfigProjection(t *testing.T) {
 		t.Fatalf("routes: %+v", p.Routes)
 	}
 	slug := appconfig.WorkerSlug("org-a", "svc-a")
-	wantHosts := []string{appconfig.HostFor(slug, "empty", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers.test")), appconfig.HostFor(slug, "preview", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers.test")), appconfig.HostFor(slug, "production", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers.test"))}
+	wantHosts := []string{appconfig.HostFor(slug, "empty", "workers.test"), appconfig.HostFor(slug, "preview", "workers.test"), appconfig.HostFor(slug, "production", "workers.test")}
 	sort.Strings(wantHosts)
 	for i, want := range wantHosts {
 		if p.Routes[i].Host != want {
@@ -114,7 +114,7 @@ func TestWorkerConfigDiffOrdering(t *testing.T) {
 	next := first
 	next.Routes = append([]workerConfigRoute(nil), first.Routes...)
 	next.Versions = map[string]WorkerVersion{"rel-1": first.Versions["rel-1"]}
-	prodHost := appconfig.HostFor(appconfig.WorkerSlug("org-a", "svc-a"), "production", (&appconfig.WorkersConfig{}).PoolHostSuffix("default", "workers.test"))
+	prodHost := appconfig.HostFor(appconfig.WorkerSlug("org-a", "svc-a"), "production", "workers.test")
 	for i := range next.Routes {
 		if next.Routes[i].Host == prodHost {
 			next.Routes[i].Version = "rel-2"

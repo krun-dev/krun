@@ -34,7 +34,7 @@ func (s *Service) WorkerService(st *domain.State, t authorization.Target) domain
 		ws = domain.WorkerService{Service: t.ID, Organization: t.Organization, Domains: []string{}, Environments: map[string]domain.WorkerEnvironment{}}
 	}
 	ws.Organization = t.Organization
-	ws = s.NormalizeService(ws, st)
+	ws = s.NormalizeService(ws)
 	st.Workers.Services[t.ID] = ws
 	s.EnsureWorkerPlacement(st, ws)
 	return ws
@@ -89,19 +89,14 @@ func (s *Service) WorkerServiceView(st *domain.State, t authorization.Target) do
 		environments[name] = env
 	}
 	ws.Environments = environments
-	return s.NormalizeService(ws, st)
+	return s.NormalizeService(ws)
 }
 
 // normalizeService applies catalog defaults and derives hosts. Hosts are never
 // persisted: routing, the edge projection and API responses all compute them
 // here, so they cannot drift apart.
-func (s *Service) NormalizeService(ws domain.WorkerService, states ...*domain.State) domain.WorkerService {
-	var state *domain.WorkerState
-	if len(states) > 0 {
-		state = states[0].Workers
-	}
+func (s *Service) NormalizeService(ws domain.WorkerService) domain.WorkerService {
 	ws = s.Config.Workers.NormalizeServiceNetwork(ws)
-	pool := s.Config.Workers.ServicePool(state, ws)
 	if ws.Environments == nil {
 		ws.Environments = map[string]domain.WorkerEnvironment{}
 	}
@@ -128,7 +123,7 @@ func (s *Service) NormalizeService(ws domain.WorkerService, states ...*domain.St
 			env.SecretVersions = map[string]string{}
 		}
 		env.SecretNames = domain.WorkerSecretNames(env.SecretVersions)
-		s.SyncEnvironmentHosts(&env, ws.Organization, ws.Service, ws.Domains, ws.NetworkProfile, pool)
+		s.SyncEnvironmentHosts(&env, ws.Organization, ws.Service, ws.Domains)
 		ws.Environments[name] = env
 	}
 	return ws
@@ -174,7 +169,7 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 			continue
 		}
 		env := ws.Environments[name]
-		s.SyncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains, ws.NetworkProfile, s.Config.Workers.ServicePool(st.Workers, ws))
+		s.SyncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains)
 		entry := WorkerOverviewEnvironment{Environment: env, History: []domain.WorkerHistory{}}
 		versions, authErr := authorization.Authorize(st, p, "service.version.read", target)
 		if authErr != nil {
@@ -333,7 +328,7 @@ func (s *Service) WorkerServiceNetworkProfileUpdate(ctx context.Context, st *dom
 // domain selection. Every write path funnels through it so persisted hosts, the
 // edge projection and the HTTPRoutes cannot drift apart. Domains that no longer
 // exist in the catalog are dropped.
-func (s *Service) SyncEnvironmentHosts(env *domain.WorkerEnvironment, organization, service string, serviceDomains []string, profiles ...string) {
+func (s *Service) SyncEnvironmentHosts(env *domain.WorkerEnvironment, organization, service string, serviceDomains []string) {
 	if s.Config.Workers == nil || env == nil {
 		return
 	}
@@ -351,21 +346,7 @@ func (s *Service) SyncEnvironmentHosts(env *domain.WorkerEnvironment, organizati
 		if !selected[d.ID] {
 			continue
 		}
-		suffix := d.Domain
-		{
-			profile := c.DefaultNetworkProfile().ID
-			if len(profiles) > 0 {
-				profile = profiles[0]
-			}
-			if len(profiles) > 1 && profiles[1] != "" {
-				suffix = c.PoolHostSuffix(profiles[1], d.Domain)
-			} else if pool, ok := c.SelectPoolForService(profile, service); ok {
-				suffix = c.PoolHostSuffix(pool.ID, d.Domain)
-			} else {
-				continue
-			}
-		}
-		host := appconfig.HostFor(slug, env.Name, suffix)
+		host := appconfig.HostFor(slug, env.Name, d.Domain)
 		if host == "" {
 			continue
 		}
@@ -383,7 +364,7 @@ func (s *Service) SyncServiceHosts(ws *domain.WorkerService) []string {
 	}
 	ws.Domains = s.SyncServiceDomains(*ws)
 	for name, env := range ws.Environments {
-		s.SyncEnvironmentHosts(&env, ws.Organization, ws.Service, ws.Domains, ws.NetworkProfile)
+		s.SyncEnvironmentHosts(&env, ws.Organization, ws.Service, ws.Domains)
 		ws.Environments[name] = env
 	}
 	return ws.Domains
@@ -551,7 +532,7 @@ func (s *Service) WorkerServiceList(ctx context.Context, st *domain.State, p aut
 			if current, exists := service.Environments[env]; exists {
 				// Hosts are derived for display; the persisted row is not rewritten
 				// from a read path.
-				s.SyncEnvironmentHosts(&current, resource.Organization, resource.ID, s.SyncServiceDomains(service), service.NetworkProfile, s.Config.Workers.ServicePool(st.Workers, service))
+				s.SyncEnvironmentHosts(&current, resource.Organization, resource.ID, s.SyncServiceDomains(service))
 				summary.Environments = append(summary.Environments, WorkerEnvironmentSummary{Name: env, Domains: current.Domains, Hosts: current.Hosts, Enabled: current.Enabled, Version: current.Version, Confirmed: current.Confirmed})
 			}
 		}

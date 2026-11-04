@@ -51,7 +51,7 @@ func (s *Service) WorkerEnvironments(ctx context.Context, st *domain.State, p au
 			env := ws.Environments[name]
 			// Recompute rather than trusting persisted hosts: the configured
 			// domain catalog may have changed since the row was written.
-			s.SyncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains, ws.NetworkProfile, s.Config.Workers.ServicePool(st.Workers, ws))
+			s.SyncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains)
 			out = append(out, env)
 		}
 	}
@@ -92,7 +92,7 @@ func (s *Service) WorkerEnvironmentCreate(ctx context.Context, st *domain.State,
 		env.SecretVersions = domain.CloneStringsMap(ws.PreviewBase.SecretVersions)
 		env.SecretNames = domain.WorkerSecretNames(env.SecretVersions)
 	}
-	s.SyncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains, ws.NetworkProfile, s.Config.Workers.ServicePool(st.Workers, ws))
+	s.SyncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains)
 	ws.Environments[in.Name] = env
 	ws.PreviewRevision++
 	st.Workers.Services[t.ID] = ws
@@ -156,7 +156,7 @@ func (s *Service) WorkerEnvironmentUpdate(ctx context.Context, st *domain.State,
 	if in.Variables != nil {
 		current.Variables = in.Variables
 	}
-	s.SyncEnvironmentHosts(&current, t.Organization, t.ID, ws.Domains, ws.NetworkProfile, s.Config.Workers.ServicePool(st.Workers, ws))
+	s.SyncEnvironmentHosts(&current, t.Organization, t.ID, ws.Domains)
 	if in.VersionMetadata != nil {
 		current.VersionMetadata = *in.VersionMetadata
 	}

@@ -33,15 +33,14 @@ workers:
 共享路由下，业务 host 格式为：
 
 ```text
-w-<service-hash>-<environment>.p-<pool-hash>.<domain-suffix>
+w-<service-hash>-<environment>.<domain-suffix>
 ```
 
-每个 pool/domain 只需一条 `*.p-<pool-hash>.<domain-suffix>` 路由。主机名从已有 durable
-placement 推导，增加 pool 不会重新散列已有服务的地址。Hash 标签不表达权限或网络能力；
+每个 domain 只需一条 `*.<domain-suffix>` 路由，且必须经 Profile 唯一选中一个池。
+服务主机名与 pool 无关；同池增加副本不改变地址。Hash 标签不表达权限或网络能力；
 Profile、domain 选择、placement 和 Runtime pool 认证仍共同约束可访问对象。
 
-部署侧必须为这些后缀配置 DNS 和 TLS；一个
-`*.example.com` TLS 证书不能直接覆盖多一层标签的 host。
+部署侧为每个 `*.<domain-suffix>` 配置 DNS 和 TLS，即可覆盖单层业务主机名。
 
 控制台是 `/` 静态 SPA，全部控制面接口仍在 `/api/*`；冷路由接口位于内部 listener 的
 `/api/internal/workers/config/routes/{host}`。生产 OSS + 同域 `/api/*` 分发契约不变。

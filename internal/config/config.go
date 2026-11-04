@@ -64,14 +64,15 @@ type SMTPConfig struct {
 }
 
 type Config struct {
-	Workers        *WorkersConfig `json:"workers,omitempty"`
-	SMTP           SMTPConfig     `json:"smtp"`
-	Listen         string         `json:"listen"`
-	InternalListen string         `json:"internal_listen"`
-	PublicURL      string         `json:"public_url"`
-	DB             string         `json:"db"`
-	Development    bool           `json:"development"`
-	StaticDir      string         `json:"static_dir"`
+	Deployment     *DeploymentConfig `json:"deployment,omitempty"`
+	Workers        *WorkersConfig    `json:"workers,omitempty"`
+	SMTP           SMTPConfig        `json:"smtp"`
+	Listen         string            `json:"listen"`
+	InternalListen string            `json:"internal_listen"`
+	PublicURL      string            `json:"public_url"`
+	DB             string            `json:"db"`
+	Development    bool              `json:"development"`
+	StaticDir      string            `json:"static_dir"`
 	// TrustedProxyCIDRs is the explicit set of reverse-proxy source networks
 	// allowed to supply X-Forwarded-For. The header is ignored for every other
 	// peer so clients cannot choose their own rate-limit identity.
@@ -100,6 +101,9 @@ func LoadConfig(path string) (Config, error) {
 var Slug = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
 func (c *Config) Validate() error {
+	if err := c.Deployment.validate(); err != nil {
+		return err
+	}
 	if err := c.Workers.Validate(); err != nil {
 		return err
 	}

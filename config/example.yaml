@@ -279,3 +279,31 @@ workers:
       allow_private_network: false
       client_id: ${KRUN_REPO_GITLAB_CLIENT_ID:-}
       client_secret: ${KRUN_REPO_GITLAB_CLIENT_SECRET:-}
+
+# 公司集群部署的可选渲染输入仍放在同一主配置；完整内网示例见 production.example.yaml。
+# deployment:
+#   console_gateway: internal # 多网关时必须显式选择控制台入口；三入口模板见 test.example.yaml。
+#   control_image: registry.example.com/krun/krun-control:release-tag
+#   runtime_image: registry.example.com/krun/krun-runtime:release-tag
+#   console_image: registry.example.com/base/nginx:approved-tag
+#   console_origin: https://console-static.example.com
+#   console_prefix: "" # 对象 key 前缀，不带首尾斜杠；浏览器路径仍为 /。
+#   dns_resolver: ${KRUN_CLUSTER_DNS:-192.0.2.53}
+#   control_replicas: 1
+#   runtime_replicas: 2
+#   validator_replicas: 1
+#   runtime_class: ""
+#   image_pull_secrets: []
+#   network:
+#     control:
+#       - cidrs: ["${KRUN_DATABASE_CIDR:-192.0.2.0/24}"]
+#         ports: [5432]
+#       - cidrs: ["${KRUN_KUBERNETES_API_CIDR:-198.51.100.0/24}"]
+#         ports: [443, 6443]
+#       - public_https: true
+#     runtime:
+#       - public_https: true
+#     builder:
+#       - public_https: true
+#     console:
+#       - public_https: true

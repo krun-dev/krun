@@ -246,10 +246,6 @@ func WorkerVariablesValid(vars map[string]any) bool {
 	return size <= 16<<10
 }
 
-func (c *WorkersConfig) PoolHostSuffix(pool, domain string) string {
-	return "p-" + securetoken.Digest(pool)[:10] + "." + domain
-}
-
 func (c *WorkersConfig) ServicePool(state *domain.WorkerState, service domain.WorkerService) string {
 	if p, ok := domain.ActiveWorkerPlacement(state, service.Service); ok && p.NetworkProfile == service.NetworkProfile {
 		return p.Pool
