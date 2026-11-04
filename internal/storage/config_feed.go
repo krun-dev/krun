@@ -8,8 +8,8 @@ import (
 )
 
 // ConfigRevisionsSince returns the contiguous batch after since and the oldest
-// retained revision. A caller whose since is below the floor must resync.
-func (s *Store) ConfigRevisionsSince(ctx context.Context, since int64, limit int) ([]domain.WorkerConfigRevision, int64, error) {
+// retained and latest revisions. Cursors outside that window must resync.
+func (s *Store) ConfigRevisionsSince(ctx context.Context, since int64, limit int) ([]domain.WorkerConfigRevision, int64, int64, error) {
 	if limit < 1 {
 		limit = 1
 	}
@@ -26,7 +26,7 @@ func (s *Store) ConfigRevisionsSince(ctx context.Context, since int64, limit int
 			FROM worker_config_revisions revision
 			WHERE revision.config_revision > $1 ORDER BY revision.config_revision LIMIT $2`, since, limit, pool)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, 0, err
 		}
 		defer rows.Close()
 		out := []domain.WorkerConfigRevision{}
@@ -34,19 +34,20 @@ func (s *Store) ConfigRevisionsSince(ctx context.Context, since int64, limit int
 			var item domain.WorkerConfigRevision
 			var ops []byte
 			if err := rows.Scan(&item.Revision, &item.Digest, &ops, &item.Created); err != nil {
-				return nil, 0, err
+				return nil, 0, 0, err
 			}
 			item.Ops = ops
 			out = append(out, item)
 		}
 		if err := rows.Err(); err != nil {
-			return nil, 0, err
+			return nil, 0, 0, err
 		}
 		var floor int64
-		if err := s.pool.QueryRow(ctx, `SELECT COALESCE(MIN(config_revision),0) FROM worker_config_revisions`).Scan(&floor); err != nil {
-			return nil, 0, err
+		var latest int64
+		if err := s.pool.QueryRow(ctx, `SELECT COALESCE(MIN(config_revision),0), COALESCE(MAX(config_revision),0) FROM worker_config_revisions`).Scan(&floor, &latest); err != nil {
+			return nil, 0, 0, err
 		}
-		return out, floor, nil
+		return out, floor, latest, nil
 	}
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
@@ -57,10 +58,12 @@ func (s *Store) ConfigRevisionsSince(ctx context.Context, since int64, limit int
 		}
 	}
 	var floor int64
+	var latest int64
 	if len(s.configRevs) > 0 {
 		floor = s.configRevs[0].Revision
+		latest = s.configRevs[len(s.configRevs)-1].Revision
 	}
-	return out, floor, nil
+	return out, floor, latest, nil
 }
 
 // ConfigState returns the latest and oldest retained revision for resync hints.

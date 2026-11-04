@@ -20,7 +20,7 @@ func TestPostgresRuntimeDeltaPreservesJSONNullValues(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO worker_config_ops(config_revision,ordinal,pool,op_type,version_id,payload) VALUES(1,0,'default','version_put','fixture','{"id":"fixture","variables":{"EMPTY":null,"CONFIG":{"nullable":null,"array":[null,false,1]}}}'::jsonb)`); err != nil {
 		t.Fatal(err)
 	}
-	revisions, _, err := store.ConfigRevisionsSince(ctx, 0, 10)
+	revisions, _, _, err := store.ConfigRevisionsSince(ctx, 0, 10)
 	if err != nil || len(revisions) != 1 {
 		t.Fatal(revisions, err)
 	}

@@ -101,6 +101,20 @@ gitignored 配置中漂移。
 
 MinIO 由开发者在本机独立启动，凭据只放 `.data/dev.yaml`；`dev-up.sh` 只探测健康状态，不会把凭据复制到 `.data/dev.env`。脚本会构建一次后端二进制；之后改后端代码只需重新启动 `./scripts/dev-server.sh`（或再跑一次 `dev-up.sh`）。改 builder 代码直接生效，下一次构建就会用新脚本。
 
+## 显式重建开发库之后
+
+重建库必须先停止后端，并由开发者明确确认清空范围。初始化只创建当前 schema，
+不会导入旧数据。重新登录后，对该本地用户重新执行一次 bootstrap。
+
+若继续复用原来的制品存储 prefix，需要显式清理该 namespace 中高于当前数据库 head
+的旧 `config/pools/<pool>/latest.json` 和 `config/pools/<pool>/shards/<shard>/latest.json`
+指针，再由控制面重新发布；保留不可变制品和业务对象。也可为这次开发环境使用新的
+`s3_prefix` 与 `s3_location_id`，并重新渲染 runtime 配置。不要清空整个对象桶。
+
+Runtime 的旧 revision 高于当前控制面 head 时，增量接口会返回 409，促使它从控制面
+重新 bootstrap。配置指针的单调 CAS 不会自动覆盖更高 revision，因此这一步不替代
+开发者对旧存储 namespace 的显式处理。
+
 ## Runtime 镜像与集群配置
 
 serving runtime 与 validator 共用同一个 runtime 镜像。修改 `workers/runtime/` 后执行：

@@ -157,11 +157,11 @@ func TestConfigRevisionStoreAndAcks(t *testing.T) {
 			t.Fatalf("floor for %d: got %d want %d", i, floor, wantFloor)
 		}
 	}
-	items, floor, err := store.ConfigRevisionsSince(ctx, 1, 10)
+	items, floor, head, err := store.ConfigRevisionsSince(ctx, 1, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if floor != 3 || len(items) != 3 || items[0].Revision != 3 || items[2].Revision != 5 {
+	if head != 5 || floor != 3 || len(items) != 3 || items[0].Revision != 3 || items[2].Revision != 5 {
 		t.Fatalf("since: floor=%d items=%+v", floor, items)
 	}
 	latest, ok, err := store.LatestConfigRevision(ctx)
@@ -188,7 +188,7 @@ func TestConfigRevisionCASRejectsStalePublisher(t *testing.T) {
 	if err != nil || appended || revision != 1 {
 		t.Fatalf("stale CAS: revision=%d appended=%v err=%v", revision, appended, err)
 	}
-	items, _, err := store.ConfigRevisionsSince(ctx, 0, 10)
+	items, _, _, err := store.ConfigRevisionsSince(ctx, 0, 10)
 	if err != nil || len(items) != 1 || items[0].Digest != "first" {
 		t.Fatalf("stale publisher created a duplicate revision: %+v err=%v", items, err)
 	}
@@ -213,6 +213,9 @@ func TestWorkerRuntimeConfigChanges(t *testing.T) {
 	}()
 	s.routes()
 	ctx := context.Background()
+	if response := runtimeConfigRequest(s, token, "/changes?since=117&wait=1s"); response.Code != 409 || !strings.Contains(response.Body.String(), `"config_revision":0`) {
+		t.Fatalf("runtime ahead of an empty control-plane history must resync: %d %s", response.Code, response.Body.String())
+	}
 	payload, _ := json.Marshal(workerConfigProjection{Routes: []workerConfigRoute{{Host: "w.workers.test", Enabled: true, Version: "rel-1", Pool: "default"}}, Versions: map[string]WorkerVersion{}})
 	ops, _ := json.Marshal([]workerConfigOp{{Type: "route_upsert", Pool: "default", Host: "w.workers.test"}})
 	if _, _, err := store.AppendConfigRevision(ctx, "d1", payload, ops, 512); err != nil {
@@ -220,6 +223,9 @@ func TestWorkerRuntimeConfigChanges(t *testing.T) {
 	}
 	if r := runtimeConfigRequest(s, token, "/changes?since=0&wait=1s"); r.Code != 409 || !strings.Contains(r.Body.String(), "RESYNC") {
 		t.Fatalf("since=0 must resync: %d %s", r.Code, r.Body.String())
+	}
+	if response := runtimeConfigRequest(s, token, "/changes?since=117&wait=1s"); response.Code != 409 || !strings.Contains(response.Body.String(), `"config_revision":1`) {
+		t.Fatalf("runtime ahead of published history must resync: %d %s", response.Code, response.Body.String())
 	}
 	r := runtimeConfigRequest(s, token, "/changes?since=1&wait=1s")
 	if r.Code != 204 {

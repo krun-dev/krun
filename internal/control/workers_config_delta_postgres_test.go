@@ -88,7 +88,7 @@ func TestPostgresConfigDeltaMovesAndDeletesRoutes(t *testing.T) {
 			t.Fatalf("checkpoint %s/%s revision=%d published=%d err=%v", location.pool, shard, revision, published, err)
 		}
 	}
-	revisions, _, err := store.ConfigRevisionsSince(ctx, 1, 1)
+	revisions, _, _, err := store.ConfigRevisionsSince(ctx, 1, 1)
 	if err != nil || len(revisions) != 1 {
 		t.Fatalf("feed=%+v err=%v", revisions, err)
 	}

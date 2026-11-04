@@ -39,7 +39,7 @@ func TestPostgresConfigDeltaStoresNormalizedEntitiesAndShards(t *testing.T) {
 	if err = postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM worker_config_checkpoints WHERE revision=published_revision`).Scan(&checkpoints); err != nil || checkpoints < 1 {
 		t.Fatalf("checkpoints=%d err=%v", checkpoints, err)
 	}
-	revisions, _, err := store.ConfigRevisionsSince(ctx, 0, 10)
+	revisions, _, _, err := store.ConfigRevisionsSince(ctx, 0, 10)
 	if err != nil || len(revisions) != 1 {
 		t.Fatalf("feed=%+v err=%v", revisions, err)
 	}

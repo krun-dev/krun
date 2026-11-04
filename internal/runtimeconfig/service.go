@@ -38,11 +38,11 @@ type Changes struct {
 }
 
 func (s *Service) ReadChanges(ctx context.Context, pool string, since int64) (Changes, error) {
-	revisions, floor, err := s.Store.ConfigRevisionsSince(context.WithValue(ctx, storage.WorkerRuntimeFeedPoolKey{}, pool), since, 100)
+	revisions, floor, head, err := s.Store.ConfigRevisionsSince(context.WithValue(ctx, storage.WorkerRuntimeFeedPoolKey{}, pool), since, 100)
 	if err != nil {
 		return Changes{}, err
 	}
-	if since > 0 && since < floor {
+	if since > head || since > 0 && since < floor {
 		return Changes{Resync: true}, nil
 	}
 	if len(revisions) == 0 {
