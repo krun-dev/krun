@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import base64,json,pathlib,secrets,os,ipaddress,socket,re
+import base64,json,pathlib,secrets,os,ipaddress,socket,re,hmac,hashlib
 root=pathlib.Path(__file__).resolve().parent
 out=root/'generated';out.mkdir(exist_ok=True)
 credential_file=out/'credentials.json'
@@ -22,7 +22,8 @@ if not re.fullmatch(r'[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]',bucket): raise SystemExi
 def resource(kind,name,**fields):
  return {'apiVersion':fields.pop('apiVersion','v1'),'kind':kind,'metadata':{'name':name,'namespace':ns},**fields}
 items.append({'apiVersion':'v1','kind':'Namespace','metadata':{'name':ns,'labels':{'lab':'krun-workers-mvp'}}})
-items.append(resource('Secret','workers-credentials',stringData={'KRUN_DATABASE_URL':f'postgres://postgres:{credentials["db_password"]}@postgres:5432/{database}?sslmode=disable','POSTGRES_PASSWORD':credentials['db_password'],'KRUN_S3_ACCESS':credentials['s3_access'],'KRUN_S3_SECRET':credentials['s3_secret'],'KRUN_RUNTIME_TOKEN':credentials['runtime_token'],'KRUN_MANAGEMENT_TOKEN':credentials['management_token'],'KRUN_WORKERS_SECRETS_KEY':credentials['worker_secrets_key'],'MINIO_ROOT_USER':credentials['s3_access'],'MINIO_ROOT_PASSWORD':credentials['s3_secret']}))
+validator_token=base64.urlsafe_b64encode(hmac.new(credentials['runtime_token'].encode(),b'krun/validator/default',hashlib.sha256).digest()).decode().rstrip('=')
+items.append(resource('Secret','workers-credentials',stringData={'KRUN_DATABASE_URL':f'postgres://postgres:{credentials["db_password"]}@postgres:5432/{database}?sslmode=disable','POSTGRES_PASSWORD':credentials['db_password'],'KRUN_S3_ACCESS':credentials['s3_access'],'KRUN_S3_SECRET':credentials['s3_secret'],'KRUN_RUNTIME_TOKEN':credentials['runtime_token'],'KRUN_VALIDATOR_TOKEN':validator_token,'KRUN_MANAGEMENT_TOKEN':credentials['management_token'],'KRUN_WORKERS_SECRETS_KEY':credentials['worker_secrets_key'],'MINIO_ROOT_USER':credentials['s3_access'],'MINIO_ROOT_PASSWORD':credentials['s3_secret']}))
 items.append(resource('Secret','git-mock-tls',type='kubernetes.io/tls',stringData={'tls.crt':git_mock_certificate,'tls.key':git_mock_private_key,'ca.crt':git_mock_ca}))
 def claim(name,size):items.append(resource('PersistentVolumeClaim',name,spec={'accessModes':['ReadWriteOnce'],'resources':{'requests':{'storage':size}}}))
 claim('postgres-data','1Gi');claim('minio-data','1Gi')
@@ -174,8 +175,18 @@ const config :W.Config = (
   (name="entry",worker=(modules=[
    (name="entry.js",esModule=embed "/app/entry.js"),
    (name="assets.js",esModule=embed "/app/assets.js"),
-   (name="storage.js",esModule=embed "/app/storage.js")
-  ],compatibilityDate="2026-09-28",compatibilityFlags=["experimental", "enable_ctx_exports"],bindings=[
+   (name="cache.js",esModule=embed "/app/cache.js"),
+   (name="storage.js",esModule=embed "/app/storage.js"),
+   (name="storage/signature.js",esModule=embed "/app/storage/signature.js"),
+   (name="storage/signer.js",esModule=embed "/app/storage/signer.js"),
+   (name="storage/metadata.js",esModule=embed "/app/storage/metadata.js"),
+   (name="storage/xml.js",esModule=embed "/app/storage/xml.js"),
+   (name="storage/binding.js",esModule=embed "/app/storage/binding.js")
+  ],compatibilityDate="2026-09-28",compatibilityFlags=["experimental", "enable_ctx_exports", "enable_request_signal"],bindings=[
+   (name="CACHE_SOURCE",text=embed "/app/cache.js"),
+   (name="R2_BINDING_SOURCE",text=embed "/app/storage/binding.js"),
+   (name="R2_METADATA_SOURCE",text=embed "/app/storage/metadata.js"),
+   (name="R2_XML_SOURCE",text=embed "/app/storage/xml.js"),
    (name="LOADER",workerLoader=(id="workers-mvp-default")),
    (name="PLATFORM",service="platform"),
    (name="POD_NAME",text=embed "/pod/name"),
@@ -200,8 +211,18 @@ const config :W.Config = (
   (name="entry",worker=(modules=[
    (name="entry.js",esModule=embed "/app/entry.js"),
    (name="assets.js",esModule=embed "/app/assets.js"),
-   (name="storage.js",esModule=embed "/app/storage.js")
-  ],compatibilityDate="2026-09-28",compatibilityFlags=["experimental", "enable_ctx_exports"],bindings=[
+   (name="cache.js",esModule=embed "/app/cache.js"),
+   (name="storage.js",esModule=embed "/app/storage.js"),
+   (name="storage/signature.js",esModule=embed "/app/storage/signature.js"),
+   (name="storage/signer.js",esModule=embed "/app/storage/signer.js"),
+   (name="storage/metadata.js",esModule=embed "/app/storage/metadata.js"),
+   (name="storage/xml.js",esModule=embed "/app/storage/xml.js"),
+   (name="storage/binding.js",esModule=embed "/app/storage/binding.js")
+  ],compatibilityDate="2026-09-28",compatibilityFlags=["experimental", "enable_ctx_exports", "enable_request_signal"],bindings=[
+   (name="CACHE_SOURCE",text=embed "/app/cache.js"),
+   (name="R2_BINDING_SOURCE",text=embed "/app/storage/binding.js"),
+   (name="R2_METADATA_SOURCE",text=embed "/app/storage/metadata.js"),
+   (name="R2_XML_SOURCE",text=embed "/app/storage/xml.js"),
    (name="LOADER",workerLoader=(id="workers-mvp-validator-default")),
    (name="PLATFORM",service="platform"),
    (name="POD_NAME",text=embed "/pod/name"),
@@ -222,7 +243,7 @@ capnp=capnp.replace('krun-artifacts',bucket)
 items.append(resource('ConfigMap','runtime-config',data={'runtime.capnp':capnp}))
 items.append(resource('ConfigMap','validator-config',data={'runtime.capnp':validator_capnp}))
 deployment('runtime-default',[{'name':'workerd','image':f'krun-worker-runtime:{tag}','imagePullPolicy':'Never','securityContext':secure(),'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},{'name':'pod','mountPath':'/pod','readOnly':True},{'name':'secrets','mountPath':'/secrets','readOnly':True}],'readinessProbe':{'httpGet':{'path':'/ready','port':8083},'periodSeconds':1,'timeoutSeconds':5,'failureThreshold':2},'resources':limits('1Gi')}],replicas=2,labels={'role':'krun-runtime','pool':'default'},volumes=[{'name':'config','configMap':{'name':'runtime-config'}},{'name':'pod','downwardAPI':{'items':[{'path':'name','fieldRef':{'fieldPath':'metadata.name'}},{'path':'uid','fieldRef':{'fieldPath':'metadata.uid'}}]}},{'name':'secrets','secret':{'secretName':'workers-credentials','items':[{'key':n,'path':n} for n in ['KRUN_RUNTIME_TOKEN','KRUN_MANAGEMENT_TOKEN']]}}],terminationGracePeriodSeconds=10);service('runtime-default',[8081,8083])
-deployment('runtime-validator-default',[{'name':'workerd','image':f'krun-worker-runtime:{tag}','imagePullPolicy':'Never','securityContext':secure(),'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},{'name':'pod','mountPath':'/pod','readOnly':True},{'name':'secrets','mountPath':'/secrets','readOnly':True}],'readinessProbe':{'httpGet':{'path':'/ready','port':8083},'periodSeconds':1,'timeoutSeconds':5,'failureThreshold':2},'livenessProbe':{'httpGet':{'path':'/ready','port':8083},'periodSeconds':2,'timeoutSeconds':1,'failureThreshold':3},'resources':limits('512Mi')}],labels={'role':'krun-validator','pool':'default'},volumes=[{'name':'config','configMap':{'name':'validator-config'}},{'name':'pod','downwardAPI':{'items':[{'path':'name','fieldRef':{'fieldPath':'metadata.name'}},{'path':'uid','fieldRef':{'fieldPath':'metadata.uid'}}]}},{'name':'secrets','secret':{'secretName':'workers-credentials','items':[{'key':n,'path':n} for n in ['KRUN_RUNTIME_TOKEN','KRUN_MANAGEMENT_TOKEN']]}}],terminationGracePeriodSeconds=5);service('runtime-validator-default',[8083])
+deployment('runtime-validator-default',[{'name':'workerd','image':f'krun-worker-runtime:{tag}','imagePullPolicy':'Never','securityContext':secure(),'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},{'name':'pod','mountPath':'/pod','readOnly':True},{'name':'secrets','mountPath':'/secrets','readOnly':True}],'readinessProbe':{'httpGet':{'path':'/ready','port':8083},'periodSeconds':1,'timeoutSeconds':5,'failureThreshold':2},'livenessProbe':{'httpGet':{'path':'/ready','port':8083},'periodSeconds':2,'timeoutSeconds':1,'failureThreshold':3},'resources':limits('512Mi')}],labels={'role':'krun-validator','pool':'default'},volumes=[{'name':'config','configMap':{'name':'validator-config'}},{'name':'pod','downwardAPI':{'items':[{'path':'name','fieldRef':{'fieldPath':'metadata.name'}},{'path':'uid','fieldRef':{'fieldPath':'metadata.uid'}}]}},{'name':'secrets','secret':{'secretName':'workers-credentials','items':[{'key':'KRUN_VALIDATOR_TOKEN','path':'KRUN_RUNTIME_TOKEN'},{'key':'KRUN_MANAGEMENT_TOKEN','path':'KRUN_MANAGEMENT_TOKEN'}]}}],terminationGracePeriodSeconds=5);service('runtime-validator-default',[8083])
 deployment('tester',[{'name':'tester','image':f'krun-worker-builder:{tag}','imagePullPolicy':'Never','command':['node','-e','setInterval(()=>{},100000)'],'resources':limits('128Mi')}])
 def selector(app):return {'podSelector':{'matchLabels':{'app':app}}}
 def tcp(port):return {'protocol':'TCP','port':port}

@@ -340,7 +340,7 @@ test("UI configures Previews Base without changing production", async ({
     .locator("textarea")
     .fill(JSON.stringify({ GREETING: "base-from-ui", CONFIG: { nested: [1, true, null] } }));
   await page
-    .getByRole("button", { name: "保存预览基础变量", exact: true })
+    .getByRole("button", { name: "保存预览基础配置", exact: true })
     .click();
   await expect(
     page.getByText("预览基础配置已保存，仅影响新建 Preview。", { exact: true }),

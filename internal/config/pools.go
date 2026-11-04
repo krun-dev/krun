@@ -1,6 +1,9 @@
 package config
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -13,6 +16,7 @@ func (c *WorkersConfig) ValidateRuntimePools(dns *regexp.Regexp) error {
 	}
 	seenIDs, seenServices := map[string]bool{}, map[string]bool{}
 	seenRuntimeTokens, seenManagementTokens := map[string]bool{}, map[string]bool{}
+	seenCredentials := map[string]bool{}
 	domainAccess := map[string]bool{}
 	for _, domain := range c.Domains {
 		domainAccess[domain.Access] = true
@@ -20,6 +24,11 @@ func (c *WorkersConfig) ValidateRuntimePools(dns *regexp.Regexp) error {
 	defaults := 0
 	for i := range c.RuntimePools {
 		pool := &c.RuntimePools[i]
+		if pool.ValidatorToken == "" {
+			mac := hmac.New(sha256.New, []byte(pool.RuntimeToken))
+			mac.Write([]byte("krun/validator/" + pool.ID))
+			pool.ValidatorToken = base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+		}
 		if !Slug.MatchString(pool.ID) || !dns.MatchString(pool.RuntimeService) || !dns.MatchString(pool.ValidatorService) {
 			return fmt.Errorf("invalid Workers runtime pool")
 		}
@@ -48,6 +57,15 @@ func (c *WorkersConfig) ValidateRuntimePools(dns *regexp.Regexp) error {
 		}
 		if len(pool.RuntimeToken) < 24 || len(pool.ManagementToken) < 24 || seenRuntimeTokens[pool.RuntimeToken] || seenManagementTokens[pool.ManagementToken] {
 			return fmt.Errorf("Workers runtime pools require distinct credentials")
+		}
+		if len(pool.ValidatorToken) < 24 || pool.ValidatorToken == pool.RuntimeToken || pool.ManagementToken == pool.RuntimeToken || pool.ValidatorToken == pool.ManagementToken {
+			return fmt.Errorf("Workers validator and serving credentials must be distinct")
+		}
+		for _, credential := range []string{pool.RuntimeToken, pool.ValidatorToken, pool.ManagementToken} {
+			if seenCredentials[credential] {
+				return fmt.Errorf("Workers runtime, validator and management credentials must not be shared across pools")
+			}
+			seenCredentials[credential] = true
 		}
 		seenRuntimeTokens[pool.RuntimeToken] = true
 		seenManagementTokens[pool.ManagementToken] = true

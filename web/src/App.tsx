@@ -9,6 +9,7 @@ import {
   Check,
   CircleHelp,
   Clipboard,
+  Database,
   KeyRound,
   LayoutDashboard,
   Layers3,
@@ -93,6 +94,7 @@ const AuditPage = lazy(() =>
 const WorkersPage = lazy(() =>
   import("@/components/workers").then((m) => ({ default: m.WorkersPage })),
 );
+const BucketsPage = lazy(() => import("@/components/buckets").then((module) => ({ default: module.BucketsPage })));
 const KeysPage = lazy(() =>
   import("@/components/keys").then((module) => ({ default: module.KeysPage })),
 );
@@ -108,10 +110,12 @@ type Section =
   | "audit"
   | "users"
   | "resources"
-  | "workers";
+  | "workers"
+  | "buckets";
 const navigation: { id: Section; name: string; icon: typeof Users; group: string }[] = [
   { id: "overview", name: "概览", icon: LayoutDashboard, group: "" },
   { id: "workers", name: "Workers", icon: Layers3, group: "计算服务" },
+  { id: "buckets", name: "对象存储", icon: Database, group: "存储服务" },
   { id: "members", name: "组织成员", icon: Users, group: "组织管理" },
   { id: "groups", name: "用户组", icon: UsersRound, group: "组织管理" },
   { id: "roles", name: "角色授权", icon: ShieldCheck, group: "组织管理" },
@@ -178,6 +182,7 @@ export default function App() {
         "users",
         "resources",
         "workers",
+        "buckets",
       ];
       return known.includes(page as Section) ? (page as Section) : "overview";
     }),
@@ -423,6 +428,7 @@ export default function App() {
           {[
             ...navigation.filter((n) => n.group === ""),
             ...navigation.filter((n) => n.group === "计算服务"),
+            ...navigation.filter((n) => n.group === "存储服务"),
             ...navigation.filter((n) => n.group === "组织管理"),
             ...navigation.filter((n) => n.group === "系统"),
           ]
@@ -778,6 +784,8 @@ export default function App() {
               notify={notify}
             />
           )
+        ) : section === "buckets" ? (
+          <BucketsPage key={scope} base={base} system={system} notify={notify}/>
         ) : section === "resources" ? (
           <ResourcesPage
             key={scope}

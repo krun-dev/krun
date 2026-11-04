@@ -1,12 +1,7 @@
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { errorMessage, t } from "@/lib/i18n";
-import {
-  shortID,
-  type Environment,
-  type WorkerData,
-  type WorkerDomain,
-} from "@/lib/workers";
+import { shortID, type Environment, type WorkerData, type WorkerDomain } from "@/lib/workers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,9 +9,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
 import { Field, SelectField } from "@/components/common";
 import { workerURL } from "./shared";
+import { R2BindingsEditor } from "./r2-bindings";
+import { bindingRows, bindingInput } from "@/lib/object-storage";
 
 export function EnvironmentSettings({
   base,
+  organizationBase,
   env,
   active,
   data,
@@ -25,6 +23,7 @@ export function EnvironmentSettings({
   notify,
 }: {
   base: string;
+  organizationBase: string;
   env: Environment;
   active: boolean;
   data: WorkerData;
@@ -32,28 +31,21 @@ export function EnvironmentSettings({
   reload: () => void;
   notify: (s: string) => void;
 }) {
-  const [variables, setVariables] = useState(
-    JSON.stringify(env.variables, null, 2),
-  );
+  const [variables, setVariables] = useState(JSON.stringify(env.variables, null, 2));
   const [versionMetadata, setVersionMetadata] = useState(env.version_metadata || "");
+  const [r2Bindings, setR2Bindings] = useState(() => bindingRows(env.r2_buckets));
   const [revision, setRevision] = useState(env.configuration_revision);
   const [secretName, setSecretName] = useState("");
   const [secretValue, setSecretValue] = useState("");
   const [busy, setBusy] = useState(false);
   const domainLabel = (id: string) =>
-    domains.find((d) => d.id === id)?.label ||
-    domains.find((d) => d.id === id)?.domain ||
-    id;
+    domains.find((d) => d.id === id)?.label || domains.find((d) => d.id === id)?.domain || id;
   const current = env.version_id ? data.versions[env.version_id] : undefined;
   const stale = revision !== env.configuration_revision;
   async function save(input: unknown) {
     setBusy(true);
     try {
-      const result = await api<Environment>(
-        base + "/environments/" + env.name,
-        "PATCH",
-        input,
-      );
+      const result = await api<Environment>(base + "/environments/" + env.name, "PATCH", input);
       setRevision(result.configuration_revision);
       reload();
       notify(t("环境配置已保存，下次发布时生效。"));
@@ -64,19 +56,11 @@ export function EnvironmentSettings({
       setBusy(false);
     }
   }
-  async function changeSecret(
-    method: "PUT" | "DELETE",
-    name: string,
-    value?: string,
-  ) {
+  async function changeSecret(method: "PUT" | "DELETE", name: string, value?: string) {
     setBusy(true);
     try {
       await api(
-        base +
-          "/environments/" +
-          env.name +
-          "/secrets/" +
-          encodeURIComponent(name),
+        base + "/environments/" + env.name + "/secrets/" + encodeURIComponent(name),
         method,
         {
           ...(method === "PUT" ? { value } : {}),
@@ -128,16 +112,12 @@ export function EnvironmentSettings({
             </a>
           ))}
           <p className="text-xs text-muted-foreground">
-            {t(
-              "域名由服务的“路由与域名”页统一选择，此处只展示当前环境的地址。",
-            )}
+            {t("域名由服务的“路由与域名”页统一选择，此处只展示当前环境的地址。")}
           </p>
         </div>
         <Field
           label={t("下一次发布使用的变量")}
-          hint={t(
-            "普通变量以 JSON 对象填写，保存配置不会修改正在运行的版本。请勿填入 Secret。",
-          )}
+          hint={t("普通变量以 JSON 对象填写，保存配置不会修改正在运行的版本。请勿填入 Secret。")}
         >
           <Textarea
             aria-label={t("环境变量 JSON")}
@@ -146,9 +126,23 @@ export function EnvironmentSettings({
             onChange={(e) => setVariables(e.target.value)}
           />
         </Field>
-        <Field label={t("版本元数据绑定")} hint={t("将版本 ID、标签和创建时间注入此变量；留空关闭。") }>
-          <Input aria-label={t("版本元数据绑定")} value={versionMetadata} placeholder="CF_VERSION_METADATA" onChange={(e) => setVersionMetadata(e.target.value)} />
+        <Field
+          label={t("版本元数据绑定")}
+          hint={t("将版本 ID、标签和创建时间注入此变量；留空关闭。")}
+        >
+          <Input
+            aria-label={t("版本元数据绑定")}
+            value={versionMetadata}
+            placeholder="CF_VERSION_METADATA"
+            onChange={(e) => setVersionMetadata(e.target.value)}
+          />
         </Field>
+        <R2BindingsEditor
+          organizationBase={organizationBase}
+          rows={r2Bindings}
+          onChange={setR2Bindings}
+          disabled={busy || active || stale}
+        />
         {stale ? (
           <p role="alert" className="text-sm text-destructive">
             {t("配置已被更新，请先加载最新配置。")}
@@ -160,13 +154,20 @@ export function EnvironmentSettings({
             onClick={() => {
               try {
                 const parsed: unknown = JSON.parse(variables);
-                if (
-                  !parsed ||
-                  typeof parsed !== "object" ||
-                  Array.isArray(parsed)
-                )
+                if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
                   throw new Error(t("变量必须是 JSON 对象。"));
-                void save({ expected_revision: revision, variables: parsed, version_metadata: versionMetadata });
+                const r2_buckets = bindingInput(
+                  r2Bindings,
+                  parsed,
+                  env.secret_names || [],
+                  versionMetadata,
+                );
+                void save({
+                  expected_revision: revision,
+                  variables: parsed,
+                  version_metadata: versionMetadata,
+                  r2_buckets,
+                });
               } catch (e) {
                 notify(errorMessage(e));
               }
@@ -179,6 +180,7 @@ export function EnvironmentSettings({
             onClick={() => {
               setVariables(JSON.stringify(env.variables, null, 2));
               setVersionMetadata(env.version_metadata || "");
+              setR2Bindings(bindingRows(env.r2_buckets));
               setRevision(env.configuration_revision);
             }}
           >
@@ -207,9 +209,7 @@ export function EnvironmentSettings({
                     variant="outline"
                     disabled={busy || active}
                     onClick={() => {
-                      if (
-                        window.confirm(t("确定删除这个 Secret 并立即发布吗？"))
-                      )
+                      if (window.confirm(t("确定删除这个 Secret 并立即发布吗？")))
                         void changeSecret("DELETE", name);
                     }}
                   >
@@ -219,9 +219,7 @@ export function EnvironmentSettings({
               ))}
             </div>
           ) : (
-            <p className="text-xs text-muted-foreground">
-              {t("当前环境还没有 Secret。")}
-            </p>
+            <p className="text-xs text-muted-foreground">{t("当前环境还没有 Secret。")}</p>
           )}
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label={t("Secret 名称")}>
@@ -256,6 +254,19 @@ export function EnvironmentSettings({
           </div>
         </div>
         <div className="border-t pt-4">
+          <p className="mb-2 text-sm text-muted-foreground">{t("当前 Version 使用的 R2 绑定")}</p>
+          <pre className="mb-4 overflow-auto rounded-md bg-secondary p-3 text-xs">
+            {JSON.stringify(
+              Object.fromEntries(
+                Object.entries(current?.r2_buckets || {}).map(([name, bucket]) => [
+                  name,
+                  bucket.bucket_name,
+                ]),
+              ),
+              null,
+              2,
+            )}
+          </pre>
           <p className="mb-2 text-sm text-muted-foreground">
             {t("当前 Version 使用的变量")} · {shortID(current?.id)}
           </p>
@@ -315,15 +326,11 @@ export function Invocation({ base, env }: { base: string; env: Environment }) {
             setError("");
             try {
               setResult(
-                await api(
-                  base + "/environments/" + env.name + "/invoke",
-                  "POST",
-                  {
-                    path,
-                    method,
-                    body: method === "GET" || method === "HEAD" ? "" : body,
-                  },
-                ),
+                await api(base + "/environments/" + env.name + "/invoke", "POST", {
+                  path,
+                  method,
+                  body: method === "GET" || method === "HEAD" ? "" : body,
+                }),
               );
             } catch (e) {
               setError(errorMessage(e));
@@ -334,20 +341,8 @@ export function Invocation({ base, env }: { base: string; env: Environment }) {
         >
           <div className="flex gap-3">
             <div className="w-28">
-              <SelectField
-                label={t("请求方法")}
-                value={method}
-                onChange={setMethod}
-              >
-                {[
-                  "GET",
-                  "POST",
-                  "PUT",
-                  "PATCH",
-                  "DELETE",
-                  "HEAD",
-                  "OPTIONS",
-                ].map((m) => (
+              <SelectField label={t("请求方法")} value={method} onChange={setMethod}>
+                {["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((m) => (
                   <option key={m}>{m}</option>
                 ))}
               </SelectField>
@@ -378,9 +373,7 @@ export function Invocation({ base, env }: { base: string; env: Environment }) {
           </Button>
         </form>
         {!env.version_id ? (
-          <p className="text-sm text-muted-foreground">
-            {t("先发布到此环境，再发送请求。")}
-          </p>
+          <p className="text-sm text-muted-foreground">{t("先发布到此环境，再发送请求。")}</p>
         ) : null}
         {error ? (
           <p role="alert" className="text-sm text-destructive">

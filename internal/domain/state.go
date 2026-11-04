@@ -63,6 +63,7 @@ func WorkerServiceAvailableInPool(state *WorkerState, service, pool string) bool
 
 func NewWorkerState() *WorkerState {
 	return &WorkerState{
+		Buckets:          map[string]WorkerBucket{},
 		Revision:         1,
 		Services:         map[string]WorkerService{},
 		Placements:       map[string]WorkerPlacement{},
@@ -130,6 +131,11 @@ func CloneState(src *State) (*State, error) {
 		return nil, err
 	}
 	// Secret version references are internal and therefore excluded from JSON.
+	for id, source := range src.Workers.Buckets {
+		target := dst.Workers.Buckets[id]
+		target.Store = source.Store
+		dst.Workers.Buckets[id] = target
+	}
 	// Preserve only the identifiers; ciphertext is never part of State.
 	for service, source := range src.Workers.Services {
 		target, ok := dst.Workers.Services[service]

@@ -14,7 +14,12 @@ func (s *Server) workerRuntimePool(r *http.Request) (appconfig.WorkerRuntimePool
 		return appconfig.WorkerRuntimePool{}, false
 	}
 	pool, ok := s.Config.Workers.RuntimePool(r.Header.Get("X-Runtime-Pool"))
-	if !ok || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+pool.RuntimeToken)) != 1 {
+	serving := subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+pool.RuntimeToken))
+	validator := 0
+	if pool.ValidatorToken != "" {
+		validator = subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+pool.ValidatorToken))
+	}
+	if !ok || serving|validator != 1 {
 		return appconfig.WorkerRuntimePool{}, false
 	}
 	return pool, true

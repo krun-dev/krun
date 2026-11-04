@@ -99,6 +99,9 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 				return state, err
 			}
 			rows.Close()
+			if err := loadVersionStorage(ctx, s.pool, state.Versions); err != nil {
+				return state, err
+			}
 			serviceIDs := []string{}
 			for _, version := range state.Versions {
 				serviceIDs = append(serviceIDs, version.Service)

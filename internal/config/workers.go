@@ -2,6 +2,7 @@ package config
 
 // Workers is opt-in: existing authentication deployments keep their current behavior.
 type WorkersConfig struct {
+	ObjectStorage        *WorkerObjectStorageConfig `json:"object_storage,omitempty"`
 	ReconcileConcurrency int                        `json:"reconcile_concurrency"`
 	RepositoryProviders  []WorkerRepositoryProvider `json:"repository_providers"`
 	Namespace            string                     `json:"namespace"`
@@ -80,6 +81,7 @@ type WorkerRuntimePool struct {
 	ValidatorService        string `json:"validator_service"`
 	ValidatorManagementBase string `json:"validator_management_base"`
 	RuntimeToken            string `json:"runtime_token"`
+	ValidatorToken          string `json:"validator_token"`
 	ManagementToken         string `json:"management_token"`
 	Default                 bool   `json:"default"`
 }

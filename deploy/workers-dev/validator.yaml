@@ -78,7 +78,7 @@ spec:
           secret:
             secretName: workers-runtime
             items:
-              - key: KRUN_RUNTIME_TOKEN
+              - key: KRUN_VALIDATOR_TOKEN
                 path: KRUN_RUNTIME_TOKEN
               - key: KRUN_MANAGEMENT_TOKEN
                 path: KRUN_MANAGEMENT_TOKEN

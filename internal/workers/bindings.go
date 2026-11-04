@@ -12,6 +12,8 @@ import (
 // StageBindings changes desired configuration; callers explicitly snapshot and
 // deploy afterward. A nil secret deletes it, while omitted secrets are retained.
 type BindingsInput struct {
+	R2Buckets          *map[string]string
+	KeepR2Buckets      bool
 	VersionMetadata    *string
 	AssetsBinding      *string
 	Variables          map[string]any
@@ -51,6 +53,14 @@ func (s *Service) StageBindings(st *domain.State, p authorization.Principal, ref
 		return domain.Problem(409, "DEPLOYMENT_BUSY", "Wait for the active deployment")
 	}
 	for _, name := range in.Inherit {
+		if binding, exists := current.R2Bindings[name]; exists {
+			if in.R2Buckets == nil {
+				values := map[string]string{}
+				in.R2Buckets = &values
+			}
+			(*in.R2Buckets)[name] = binding.BucketName
+			continue
+		}
 		if name == current.VersionMetadata {
 			value := name
 			in.VersionMetadata = &value
@@ -123,6 +133,23 @@ func (s *Service) StageBindings(st *domain.State, p authorization.Principal, ref
 	}
 	current.Variables = vars
 	current.SecretVersions = secrets
+	if in.R2Buckets != nil {
+		if in.KeepR2Buckets {
+			for name, binding := range current.R2Bindings {
+				if _, exists := (*in.R2Buckets)[name]; !exists {
+					(*in.R2Buckets)[name] = binding.BucketName
+				}
+			}
+		}
+		if len(*in.R2Buckets) > 0 && (s.Config.Workers == nil || s.Config.Workers.ObjectStorage == nil || s.Config.Workers.ObjectStorage.CursorKey == "") {
+			return domain.Problem(503, "OBJECT_STORAGE_NOT_CONFIGURED", "R2 storage and its cursor key must be configured")
+		}
+		resolved, err := resolveR2Bindings(st, target.Organization, *in.R2Buckets)
+		if err != nil {
+			return err
+		}
+		current.R2Bindings = resolved
+	}
 	if in.VersionMetadata != nil {
 		current.VersionMetadata = *in.VersionMetadata
 	}
@@ -161,6 +188,12 @@ func ValidateWorkerBindings(env domain.WorkerEnvironment) error {
 		}
 		if !workerartifact.WorkerAssetBindingName.MatchString(name) || strings.HasPrefix(name, "KRUN_") || workerartifact.WorkerReservedBindings[name] || seen[name] {
 			return domain.Problem(422, "WORKER_BINDING_CONFLICT", "Invalid or duplicate binding name")
+		}
+		seen[name] = true
+	}
+	for name, binding := range env.R2Bindings {
+		if !workerartifact.WorkerAssetBindingName.MatchString(name) || strings.HasPrefix(name, "KRUN_") || workerartifact.WorkerReservedBindings[name] || seen[name] || binding.BucketID == "" || binding.BucketName == "" {
+			return domain.Problem(422, "WORKER_BINDING_CONFLICT", "Invalid or duplicate R2 binding")
 		}
 		seen[name] = true
 	}

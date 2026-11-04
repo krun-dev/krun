@@ -40,6 +40,9 @@ func (s *Store) RuntimeVersion(ctx context.Context, id, pool string) (domain.Wor
 	if err != nil {
 		return domain.WorkerVersion{}, domain.WorkerArtifact{}, err
 	}
+	if err := loadVersionStorage(ctx, s.pool, state.Versions); err != nil {
+		return domain.WorkerVersion{}, domain.WorkerArtifact{}, err
+	}
 	rel, ok := state.Versions[id]
 	if !ok {
 		return rel, domain.WorkerArtifact{}, domain.NotFound()

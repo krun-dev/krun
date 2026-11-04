@@ -87,7 +87,7 @@ token 只能绑定到签发时的 Worker，且未传完或过期时不能部署�
 会话和文件元数据保留一小时，临时对象登记到现有 upload 清理任务，最长保留 24 小时。
 
 这不是完整 Cloudflare 平台实现。灰度比例、托管 URL 关闭、
-Cloudflare 自定义域名/Zone/Routes、定时任务、tail、KV/R2/D1/DO/Queue/Service bindings、
+Cloudflare 自定义域名/Zone/Routes、定时任务、tail、KV/D1/DO/Queue/Service bindings、
 Service Worker 格式不在当前支持范围内。资产路由支持 `run_worker_first`、`base_path`，
 `none` / `single-page-application` / `404-page`，以及 `none` / `auto-trailing-slash` /
 `force-trailing-slash` / `drop-trailing-slash`。`_headers` 支持路径、域名、占位符、
@@ -105,3 +105,16 @@ KRUN_UI_ORIGIN=http://127.0.0.1:4381 KRUN_CF_E2E_GATEWAY_ORIGIN=http://127.0.0.1
 脚本在 `.data/` 下生成项目和命令日志，覆盖 deploy、只上传/独立部署、Secret、首次
 Secret、Previews Base、Preview 部署/Secret/删除、流量比例拒绝、删除重建身份隔离
 以及原生删除后的身份保护。
+
+
+## R2 bucket bindings
+
+支持标准上传 metadata `r2_bucket` 的 `name`、`bucket_name`，以及 `keep_bindings`
+中的 `r2_bucket` 和按名称 `inherit`。binding 按组织解析并随 Version 冻结。
+`default` 以外的 jurisdiction 会明确拒绝，不把它映射成另一个区域。
+
+桶元数据接口为 `/accounts/{account}/r2/buckets` 的 GET/POST 和
+`/accounts/{account}/r2/buckets/{bucket}` 的 GET，均位于本文开头的适配前缀下。
+创建桶需要 `organization.update`，读取需要 `organization.read`；部署 binding 使用
+既有 `service.publish` 权限，不要求发布者额外持有对象访问凭据。
+支持范围及现有限制见 [R2 binding](workers-r2.md)。

@@ -88,7 +88,24 @@ func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, 
 		if !ok || a.State != "finalized" {
 			return nil, Read, domain.Problem(409, "ARTIFACT_UNAVAILABLE", "Artifact unavailable")
 		}
-		version = domain.WorkerVersion{VersionMetadata: current.VersionMetadata, AssetsBinding: current.AssetsBinding, Service: t.ID, Organization: t.Organization, Environment: env, Artifact: a.ID, Profile: a.Profile, ArchiveDigest: a.ArchiveDigest, ModuleDigest: a.ModuleDigest, CompatibilityDate: a.CompatibilityDate, CompatibilityFlags: append([]string(nil), a.CompatibilityFlags...), ConfigRevision: current.ConfigRevision, Variables: domain.CloneWorkerVariables(current.Variables), SecretDigest: WorkerSecretsDigest(current.SecretVersions), SecretVersions: domain.CloneStringsMap(current.SecretVersions)}
+		version = domain.WorkerVersion{
+			R2Bindings:         domain.CloneR2Bindings(current.R2Bindings),
+			VersionMetadata:    current.VersionMetadata,
+			AssetsBinding:      current.AssetsBinding,
+			Service:            t.ID,
+			Organization:       t.Organization,
+			Environment:        env,
+			Artifact:           a.ID,
+			Profile:            a.Profile,
+			ArchiveDigest:      a.ArchiveDigest,
+			ModuleDigest:       a.ModuleDigest,
+			CompatibilityDate:  a.CompatibilityDate,
+			CompatibilityFlags: append([]string(nil), a.CompatibilityFlags...),
+			ConfigRevision:     current.ConfigRevision,
+			Variables:          domain.CloneWorkerVariables(current.Variables),
+			SecretDigest:       WorkerSecretsDigest(current.SecretVersions),
+			SecretVersions:     domain.CloneStringsMap(current.SecretVersions),
+		}
 		raw, _ := json.Marshal(version)
 		version.ID = "rel_" + workerartifact.BytesDigest(raw)
 		version.Created = time.Now().UTC()
@@ -116,7 +133,20 @@ func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, 
 		version = d
 	}
 	id = securetoken.NewID("op")
-	op := domain.WorkerOperation{ID: id, Kind: kind, Organization: t.Organization, Service: t.ID, Environment: env, State: "queued", Build: in.Build, Version: version.ID, ExpectedRevision: current.Revision, ConfigRevision: current.ConfigRevision, Steps: []domain.WorkerStep{{Name: "artifact", State: "pending"}, {Name: "candidate", State: "pending"}, {Name: "commit", State: "pending"}, {Name: "synchronize", State: "pending"}}, Created: time.Now().UTC()}
+	op := domain.WorkerOperation{
+		ID:               id,
+		Kind:             kind,
+		Organization:     t.Organization,
+		Service:          t.ID,
+		Environment:      env,
+		State:            "queued",
+		Build:            in.Build,
+		Version:          version.ID,
+		ExpectedRevision: current.Revision,
+		ConfigRevision:   current.ConfigRevision,
+		Steps:            []domain.WorkerStep{{Name: "artifact", State: "pending"}, {Name: "candidate", State: "pending"}, {Name: "commit", State: "pending"}, {Name: "synchronize", State: "pending"}},
+		Created:          time.Now().UTC(),
+	}
 	st.Workers.Operations[id] = op
 	RememberDeployment(st, op)
 	st.Workers.OperationPrivate[id] = domain.WorkerOperationPrivate{Actor: WorkerActor(p)}

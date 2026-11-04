@@ -962,7 +962,7 @@ function WorkerDetail({
             </Card>
           </TabsContent>
           <TabsContent value="preview-base" className="mt-5">
-            <PreviewBasePanel base={base} notify={notify} />
+            <PreviewBasePanel base={base} organizationBase={organizationBase} notify={notify} />
           </TabsContent>
           <TabsContent value="versions" className="mt-5">
             <VersionsPanel
@@ -1003,6 +1003,7 @@ function WorkerDetail({
             <EnvironmentSettings
               key={env.name}
               base={base}
+              organizationBase={organizationBase}
               env={env}
               active={active}
               data={data}

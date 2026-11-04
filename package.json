@@ -11,8 +11,8 @@
     "test:permissions": "node --experimental-strip-types --test web/src/lib/permissions.test.mjs",
     "test:i18n": "node --experimental-strip-types --test web/src/lib/i18n.test.mjs",
     "test:ui": "playwright test",
-    "format:workers": "prettier --write \"workers/runtime/*.js\" \"workers/runtime/test/*.mjs\" deploy/workers-dev/storage.e2e.mjs deploy/workers-kind/cloudflare.e2e.mjs workers/runtime/package.json \"deploy/workers-dev/fixtures/*.{js,ts}\"",
-    "check:workers-format": "prettier --check \"workers/runtime/*.js\" \"workers/runtime/test/*.mjs\" deploy/workers-dev/storage.e2e.mjs deploy/workers-kind/cloudflare.e2e.mjs workers/runtime/package.json \"deploy/workers-dev/fixtures/*.{js,ts}\""
+    "format:workers": "prettier --write \"workers/runtime/**/*.js\" \"workers/runtime/test/*.mjs\" deploy/workers-dev/storage.e2e.mjs deploy/workers-kind/cloudflare.e2e.mjs workers/runtime/package.json \"deploy/workers-dev/fixtures/*.{js,ts}\"",
+    "check:workers-format": "prettier --check \"workers/runtime/**/*.js\" \"workers/runtime/test/*.mjs\" deploy/workers-dev/storage.e2e.mjs deploy/workers-kind/cloudflare.e2e.mjs workers/runtime/package.json \"deploy/workers-dev/fixtures/*.{js,ts}\""
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

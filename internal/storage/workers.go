@@ -20,7 +20,13 @@ func (s *Store) persistWorkers(ctx context.Context, before, after *domain.State,
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = s.writeWorkerBuckets(ctx, tx, before.Workers, after.Workers); err != nil {
+		return err
+	}
 	if err = writeWorkersDiff(ctx, tx, before, after); err != nil {
+		return err
+	}
+	if err = s.writeWorkerR2Bindings(ctx, tx, before.Workers, after.Workers); err != nil {
 		return err
 	}
 	if err = insertAudits(ctx, tx, audits); err != nil {
@@ -314,7 +320,7 @@ func sameWorkerPlacement(a, b domain.WorkerPlacement) bool {
 func defaultWorkerBaseline(name string, env domain.WorkerEnvironment) bool {
 	return name == workerBaseline && env.Name == workerBaseline && env.Enabled &&
 		env.ConfigRevision == 1 && env.Revision == 0 && env.Version == "" && env.Confirmed == "" &&
-		len(env.Variables) == 0 && len(env.SecretVersions) == 0 && env.VersionMetadata == "" && env.AssetsBinding == ""
+		len(env.Variables) == 0 && len(env.SecretVersions) == 0 && len(env.R2Bindings) == 0 && env.VersionMetadata == "" && env.AssetsBinding == ""
 }
 
 func PreviewCount(environments map[string]domain.WorkerEnvironment) int {
@@ -355,6 +361,9 @@ func replaceServiceDomains(ctx context.Context, tx pgx.Tx, service string, domai
 }
 
 func sameEnvironment(a, b domain.WorkerEnvironment) bool {
+	if !reflect.DeepEqual(a.R2Bindings, b.R2Bindings) {
+		return false
+	}
 	return a.VersionMetadata == b.VersionMetadata && a.AssetsBinding == b.AssetsBinding && a.Name == b.Name && a.Enabled == b.Enabled && a.ConfigRevision == b.ConfigRevision &&
 		a.Revision == b.Revision && a.Version == b.Version && a.Confirmed == b.Confirmed &&
 		reflect.DeepEqual(a.Variables, b.Variables) && reflect.DeepEqual(a.SecretVersions, b.SecretVersions)
@@ -580,6 +589,9 @@ func sameArtifactContent(a, b domain.WorkerArtifact) bool {
 }
 
 func sameVersion(a, b domain.WorkerVersion) bool {
+	if !reflect.DeepEqual(a.R2Bindings, b.R2Bindings) {
+		return false
+	}
 	return a.VersionMetadata == b.VersionMetadata && a.AssetsBinding == b.AssetsBinding && a.Tag == b.Tag && a.Message == b.Message && a.ID == b.ID && a.Service == b.Service && a.Organization == b.Organization &&
 		a.Environment == b.Environment && a.Artifact == b.Artifact && a.Profile == b.Profile && a.ArchiveDigest == b.ArchiveDigest &&
 		a.ModuleDigest == b.ModuleDigest && a.CompatibilityDate == b.CompatibilityDate &&

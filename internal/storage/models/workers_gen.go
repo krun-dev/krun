@@ -267,3 +267,29 @@ type Script struct {
 	PreviewsEnabled bool      `bun:"previews_enabled"`
 	CreatedAt       time.Time `bun:"created_at"`
 }
+
+type Bucket struct {
+	bun.BaseModel `bun:"table:krun_worker_buckets,alias:krun_worker_buckets"`
+	BucketID      string    `bun:"bucket_id,pk"`
+	OrgID         string    `bun:"org_id"`
+	Name          string    `bun:"name"`
+	StoreID       string    `bun:"store_id"`
+	Enabled       bool      `bun:"enabled"`
+	Revision      int64     `bun:"revision"`
+	CreatedAt     time.Time `bun:"created_at"`
+}
+
+type EnvironmentR2 struct {
+	bun.BaseModel `bun:"table:krun_worker_environment_r2,alias:krun_worker_environment_r2"`
+	ServiceID     string `bun:"service_id,pk"`
+	EnvName       string `bun:"env_name,pk"`
+	Name          string `bun:"name,pk"`
+	BucketID      string `bun:"bucket_id"`
+}
+
+type VersionR2 struct {
+	bun.BaseModel `bun:"table:krun_worker_version_r2,alias:krun_worker_version_r2"`
+	VersionID     string `bun:"version_id,pk"`
+	Name          string `bun:"name,pk"`
+	BucketID      string `bun:"bucket_id"`
+}

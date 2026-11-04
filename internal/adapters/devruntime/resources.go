@@ -29,6 +29,7 @@ func (o renderOptions) secretResources() map[string]any {
 			"type": "Opaque",
 			"stringData": map[string]string{
 				"KRUN_RUNTIME_TOKEN":    o.pool.RuntimeToken,
+				"KRUN_VALIDATOR_TOKEN":  o.pool.ValidatorToken,
 				"KRUN_MANAGEMENT_TOKEN": o.pool.ManagementToken,
 			},
 		}),

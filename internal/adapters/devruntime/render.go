@@ -129,6 +129,8 @@ func (o renderOptions) templateReplacements() *strings.Replacer {
 	}
 
 	return strings.NewReplacer(
+		"__OBJECT_STORAGE_BINDINGS__", o.objectStorageBindings(),
+		"__OBJECT_STORAGE_SERVICES__", o.objectStorageServices(),
 		"__CONTROL_HOST__", o.controlHost,
 		"__CONTROL_PORT__", o.controlPort,
 		"__MINIO_HOST__", o.storageHost,

@@ -14,6 +14,9 @@ func (c *WorkersConfig) Validate() error {
 	if c == nil {
 		return nil
 	}
+	if err := c.ObjectStorage.Validate(); err != nil {
+		return err
+	}
 	if c.ReconcileConcurrency == 0 {
 		c.ReconcileConcurrency = 8
 	}

@@ -16,9 +16,10 @@ import (
 )
 
 type Service struct {
-	Config     *appconfig.WorkersConfig
-	Store      *storage.Store
-	Controller *workerapp.Controller
+	Credentials CredentialSource
+	Config      *appconfig.WorkersConfig
+	Store       *storage.Store
+	Controller  *workerapp.Controller
 }
 
 func (s *Service) Head(ctx context.Context) (int64, error) {

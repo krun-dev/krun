@@ -8,11 +8,21 @@ const config :W.Config = (
         modules = [
           (name = "entry.js", esModule = embed "/app/entry.js"),
           (name = "assets.js", esModule = embed "/app/assets.js"),
-          (name = "storage.js", esModule = embed "/app/storage.js")
+          (name = "cache.js", esModule = embed "/app/cache.js"),
+          (name = "storage.js", esModule = embed "/app/storage.js"),
+          (name = "storage/signature.js", esModule = embed "/app/storage/signature.js"),
+          (name = "storage/signer.js", esModule = embed "/app/storage/signer.js"),
+          (name = "storage/metadata.js", esModule = embed "/app/storage/metadata.js"),
+          (name = "storage/xml.js", esModule = embed "/app/storage/xml.js"),
+          (name = "storage/binding.js", esModule = embed "/app/storage/binding.js")
         ],
         compatibilityDate = "2026-09-28",
-        compatibilityFlags = ["experimental", "enable_ctx_exports"],
+        compatibilityFlags = ["experimental", "enable_ctx_exports", "enable_request_signal", "request_signal_passthrough"],
         bindings = [
+          (name = "CACHE_SOURCE", text = embed "/app/cache.js"),
+          (name = "R2_BINDING_SOURCE", text = embed "/app/storage/binding.js"),
+          (name = "R2_METADATA_SOURCE", text = embed "/app/storage/metadata.js"),
+          (name = "R2_XML_SOURCE", text = embed "/app/storage/xml.js"),
           (name = "LOADER", workerLoader = (id = "workers-mvp-validator-default")),
           (name = "PLATFORM", service = "platform"),
           (name = "POD_NAME", text = embed "/pod/name"),

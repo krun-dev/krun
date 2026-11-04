@@ -41,6 +41,16 @@ func (s *Service) PreviewBase(ctx context.Context, st *domain.State, p authoriza
 	if in.VersionMetadata != nil {
 		base.VersionMetadata = *in.VersionMetadata
 	}
+	if in.R2Buckets != nil {
+		if s.Config.Workers == nil || s.Config.Workers.ObjectStorage == nil || s.Config.Workers.ObjectStorage.CursorKey == "" {
+			return nil, Read, domain.Problem(503, "OBJECT_STORAGE_NOT_CONFIGURED", "R2 storage must be configured")
+		}
+		resolved, err := resolveR2Bindings(st, ref.Organization, *in.R2Buckets)
+		if err != nil {
+			return nil, Read, err
+		}
+		base.R2Bindings = resolved
+	}
 	if err := ValidateWorkerBindings(base); err != nil {
 		return nil, Read, err
 	}

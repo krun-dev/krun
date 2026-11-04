@@ -65,7 +65,7 @@ func (s *Store) retainWorkerScopes(ctx context.Context) error {
 		if !live {
 			queries := []string{
 				`WITH victims AS MATERIALIZED(SELECT build_id FROM krun_worker_builds WHERE service_id=$1 LIMIT 1000), private AS(DELETE FROM krun_worker_build_private WHERE build_id IN(SELECT build_id FROM victims)) DELETE FROM krun_worker_builds WHERE build_id IN(SELECT build_id FROM victims)`,
-				`WITH victims AS MATERIALIZED(SELECT version_id FROM krun_worker_versions WHERE service_id=$1 LIMIT 1000), bindings AS(DELETE FROM krun_worker_version_secrets WHERE version_id IN(SELECT version_id FROM victims)) DELETE FROM krun_worker_versions WHERE version_id IN(SELECT version_id FROM victims)`,
+				`WITH victims AS MATERIALIZED(SELECT version_id FROM krun_worker_versions WHERE service_id=$1 LIMIT 1000), bindings AS(DELETE FROM krun_worker_version_secrets WHERE version_id IN(SELECT version_id FROM victims)), r2 AS(DELETE FROM krun_worker_version_r2 WHERE version_id IN(SELECT version_id FROM victims)) DELETE FROM krun_worker_versions WHERE version_id IN(SELECT version_id FROM victims)`,
 			}
 			for _, query := range queries {
 				tag, e = s.pool.Exec(ctx, query, v.id)
@@ -74,7 +74,7 @@ func (s *Store) retainWorkerScopes(ctx context.Context) error {
 				}
 				more = more || tag.RowsAffected() == 1000
 			}
-			for _, table := range []string{"krun_worker_deployments", "krun_worker_history", "krun_worker_operations", "krun_worker_environment_secrets", "krun_worker_environments", "krun_worker_service_domains", "krun_worker_service_placements", "krun_worker_services"} {
+			for _, table := range []string{"krun_worker_deployments", "krun_worker_history", "krun_worker_operations", "krun_worker_environment_secrets", "krun_worker_environment_r2", "krun_worker_environments", "krun_worker_service_domains", "krun_worker_service_placements", "krun_worker_services"} {
 				tag, e = s.pool.Exec(ctx, `DELETE FROM `+table+` WHERE ctid IN(SELECT ctid FROM `+table+` WHERE service_id=$1 LIMIT 1000)`, v.id)
 				if e != nil {
 					return e

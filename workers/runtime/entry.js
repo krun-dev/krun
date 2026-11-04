@@ -7,6 +7,179 @@ import {
   assetResponse,
 } from "./assets.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { prepareStorageRequest, createCursor, createMultipartToken } from "./storage/signer.js";
+import { cacheRequest } from "./cache.js";
+
+// Only completed plain data is cached across workerd requests. Each signing call gets
+// its own request context; no request-owned I/O object or promise is retained.
+const storageGrants = new Map();
+async function storageGrant(env, props) {
+  if (env.VALIDATOR_ONLY === "true") {
+    throw new Error("Storage access is unavailable during validation");
+  }
+  if (Date.now() - lastSync > 60000) {
+    throw new Error("Storage authorization feed is stale");
+  }
+  const key = props.version_id + "\0" + props.binding + "\0" + props.bucket_id;
+  const cached = storageGrants.get(key);
+  if (
+    cached &&
+    cached.bucket_id === props.bucket_id &&
+    Date.parse(cached.lease_until) > Date.now() + 5000 &&
+    (!cached.expires_at || Date.parse(cached.expires_at) > Date.now() + 120000)
+  ) {
+    return cached;
+  }
+  storageGrants.delete(key);
+  const grant = await platform(
+    env,
+    "/versions/" +
+      encodeURIComponent(props.version_id) +
+      "/bindings/" +
+      encodeURIComponent(props.binding) +
+      "/credentials",
+    { method: "POST" },
+  );
+  if (
+    grant.version_id !== props.version_id ||
+    grant.binding !== props.binding ||
+    grant.bucket_id !== props.bucket_id ||
+    !grant.secret_access_key ||
+    Date.parse(grant.lease_until) <= Date.now()
+  ) {
+    throw new Error("Storage grant mismatch");
+  }
+  lruPut(storageGrants, key, grant, 1024);
+  return grant;
+}
+export class VersionStorage extends WorkerEntrypoint {
+  async fetch(request) {
+    if (request.method !== "POST" || !request.body) {
+      return json({ error: "Invalid signing request" }, 400);
+    }
+    const reader = request.body.getReader();
+    const chunks = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        size += value.byteLength;
+        if (size > 32768) {
+          await reader.cancel();
+          return json({ error: "Signing request is too large" }, 413);
+        }
+        chunks.push(value);
+      }
+      const bytes = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      const args = JSON.parse(new TextDecoder().decode(bytes));
+      const action = new URL(request.url).pathname;
+      if (action === "/sign") {
+        return json(await this.sign(args.operation, args.key, args.options));
+      }
+      if (action === "/cursor") {
+        return json(await this.cursor(args.token, args.options));
+      }
+      if (action === "/multipart-token") {
+        return json(
+          await createMultipartToken(
+            await storageGrant(this.env, this.ctx.props),
+            args.key,
+            args.uploadId,
+            args.version,
+          ),
+        );
+      }
+      return json({ error: "Unknown signing operation" }, 400);
+    } catch (error) {
+      const invalid = error instanceof TypeError || error instanceof SyntaxError;
+      return json(
+        {
+          type: invalid ? "TypeError" : "Error",
+          error: invalid ? "Invalid storage signing options" : "Storage signer unavailable",
+        },
+        invalid ? 400 : 503,
+      );
+    } finally {
+      reader.releaseLock();
+    }
+  }
+  async sign(operation, key, options) {
+    return prepareStorageRequest(
+      await storageGrant(this.env, this.ctx.props),
+      operation,
+      key,
+      options,
+    );
+  }
+  async cursor(token, options) {
+    return createCursor(await storageGrant(this.env, this.ctx.props), token, options);
+  }
+}
+export class StorageDisabled extends WorkerEntrypoint {
+  fetch() {
+    throw new Error("Storage access is unavailable during validation");
+  }
+}
+
+export class VersionCache extends WorkerEntrypoint {
+  fetch(request) {
+    const scope = this.ctx.props.namespace;
+    if (typeof scope !== "string" || !scope || scope.length > 1024) {
+      return new Response(null, { status: 400 });
+    }
+    return cacheRequest(scope, request);
+  }
+}
+
+// workerd's HTTP disconnect does not reliably invoke a JS stream's cancel
+// callback. The trusted entrypoint observes its incoming signal explicitly and
+// cancels the RPC body reader, which aborts the child's storage request.
+function storageResponse(request, response) {
+  if (!response.body) {
+    return new Response(null, response);
+  }
+  const reader = response.body.getReader();
+  let stopped = false;
+  const stop = () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    request.signal.removeEventListener("abort", stop);
+    reader.cancel().catch(() => {});
+  };
+  request.signal.addEventListener("abort", stop, { once: true });
+  if (request.signal.aborted) {
+    stop();
+  }
+  const stream = new ReadableStream({
+    async pull(controller) {
+      try {
+        const result = await reader.read();
+        if (result.done) {
+          request.signal.removeEventListener("abort", stop);
+          controller.close();
+        } else {
+          controller.enqueue(result.value);
+        }
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    cancel() {
+      stop();
+    },
+  });
+  return new Response(stream, response);
+}
 
 // Edge configuration is an immutable in-memory view. There is no local DB:
 // bootstrap reads one snapshot, then a long-poll applies incremental ops.
@@ -738,6 +911,7 @@ async function follow(env) {
       );
 
       if (response.status === 204) {
+        lastSync = Date.now();
         await sleep(250);
         backoff = 1000;
         continue;
@@ -1029,6 +1203,91 @@ async function worker(env, ctx, d, artifact) {
         KRUN_VERSION_ID: d.id,
       };
 
+      let mainModule = manifest.main_module;
+      if (typeof env.CACHE_SOURCE === "string" && ctx?.exports?.VersionCache) {
+        const reserved = [
+          "__krun_cache_entry__.mjs",
+          "__krun_cache__/cache.js",
+          "__krun_cache__/prelude.js",
+        ];
+        if (reserved.some((name) => Object.hasOwn(loaded.modules, name))) {
+          throw new Error("Reserved cache module name");
+        }
+        childEnv.KRUN_CACHE = ctx.exports.VersionCache({
+          props: {
+            namespace: JSON.stringify([
+              d.organization_id,
+              d.service_id,
+              d.environment,
+              env.VALIDATOR_ONLY === "true" ? d.id : "serving",
+            ]),
+          },
+        });
+        loaded.modules["__krun_cache__/cache.js"] = { js: env.CACHE_SOURCE };
+        loaded.modules["__krun_cache__/prelude.js"] = {
+          js: `import {env} from 'cloudflare:workers';
+import {createCacheStorage} from './cache.js';
+Object.defineProperty(globalThis,'caches',{value:createCacheStorage(env.KRUN_CACHE),configurable:false,writable:false});`,
+        };
+        loaded.modules["__krun_cache_entry__.mjs"] = {
+          js: `import './__krun_cache__/prelude.js'; export {default} from ${JSON.stringify("./" + mainModule)}; export * from ${JSON.stringify("./" + mainModule)};`,
+        };
+        mainModule = "__krun_cache_entry__.mjs";
+      }
+      if (Object.keys(d.r2_buckets || {}).length) {
+        const targets = JSON.parse(env.OBJECT_STORES || "{}");
+        for (const [name, binding] of Object.entries(d.r2_buckets)) {
+          if (
+            !bindingName.test(name) ||
+            name.startsWith("KRUN_") ||
+            reservedBindings.has(name) ||
+            magicBindings.has(name) ||
+            Object.hasOwn(childEnv, name) ||
+            !ctx?.exports?.VersionStorage
+          ) {
+            throw new Error("Invalid R2 binding");
+          }
+          const target = targets[binding.store_id];
+          if (env.VALIDATOR_ONLY !== "true" && (!target || !env[target.binding])) {
+            throw new Error("R2 storage transport is unavailable");
+          }
+          childEnv[name] = {
+            signer: ctx.exports.VersionStorage({
+              props: { version_id: d.id, binding: name, bucket_id: binding.bucket_id },
+            }),
+            transport:
+              env.VALIDATOR_ONLY === "true"
+                ? ctx.exports.StorageDisabled({ props: {} })
+                : env[target.binding],
+          };
+        }
+        const reserved = [
+          "__krun_r2_entry__.mjs",
+          "__krun_r2__/binding.js",
+          "__krun_r2__/metadata.js",
+          "__krun_r2__/xml.js",
+          "__krun_r2__/prelude.js",
+        ];
+        if (reserved.some((name) => Object.hasOwn(loaded.modules, name))) {
+          throw new Error("Reserved storage module name");
+        }
+        loaded.modules["__krun_r2__/binding.js"] = { js: env.R2_BINDING_SOURCE };
+        loaded.modules["__krun_r2__/metadata.js"] = { js: env.R2_METADATA_SOURCE };
+        loaded.modules["__krun_r2__/xml.js"] = { js: env.R2_XML_SOURCE };
+        loaded.modules["__krun_r2__/prelude.js"] = {
+          js: `import {env} from 'cloudflare:workers';
+import {createR2Bucket,createStorageSigner} from './binding.js';
+for(const name of ${JSON.stringify(Object.keys(d.r2_buckets))}) {
+ const capability=env[name];
+ Object.defineProperty(env,name,{value:createR2Bucket(createStorageSigner(capability.signer),capability.transport,{legacyListInclude:${JSON.stringify(manifest.compatibility_date < "2022-08-04" && !manifest.compatibility_flags.includes("r2_list_honor_include"))}}),enumerable:true});
+}`,
+        };
+        loaded.modules["__krun_r2_entry__.mjs"] = {
+          js: `import './__krun_r2__/prelude.js'; export {default} from ${JSON.stringify("./" + mainModule)}; export * from ${JSON.stringify("./" + mainModule)};`,
+        };
+        mainModule = "__krun_r2_entry__.mjs";
+      }
+
       if (d.version_metadata) {
         const name = d.version_metadata;
 
@@ -1078,7 +1337,7 @@ async function worker(env, ctx, d, artifact) {
       return {
         compatibilityDate: manifest.compatibility_date,
         compatibilityFlags: manifest.compatibility_flags,
-        mainModule: manifest.main_module,
+        mainModule,
         modules: loaded.modules,
         env: childEnv,
         globalOutbound: null,
@@ -1210,7 +1469,9 @@ export class Private extends WorkerEntrypoint {
       const forward = async () => {
         const stub = await worker(this.env, this.ctx, d);
 
-        return await stub.getEntrypoint().fetch(new Request(request, { headers }));
+        return await stub
+          .getEntrypoint()
+          .fetch(new Request(request, { headers, signal: request.signal }));
       };
       let response;
       const manifest = await assetManifest(this.env, d);
@@ -1221,7 +1482,9 @@ export class Private extends WorkerEntrypoint {
         response = (await staticAssetResponse(this.env, d, request, manifest)) || (await forward());
       }
 
-      const out = new Response(response.body, response);
+      const out = Object.keys(d.r2_buckets || {}).length
+        ? storageResponse(request, response)
+        : new Response(response.body, response);
       out.headers.set("x-krun-version", d.id);
       out.headers.set("x-krun-pod", this.env.POD_UID);
 

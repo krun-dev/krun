@@ -23,11 +23,13 @@ runtime_files=(
   workers/runtime/Dockerfile
   workers/runtime/entry.js
   workers/runtime/assets.js
+  workers/runtime/cache.js
   workers/runtime/storage.js
   workers/runtime/package.json
   workers/runtime/package-lock.json
 )
 scp "${runtime_files[@]}" "$REMOTE:/tmp/krun-runtime/"
+scp -r workers/runtime/storage "$REMOTE:/tmp/krun-runtime/storage"
 ssh -o ConnectTimeout=8 "$REMOTE" "set -e
   cd /tmp/krun-runtime
   docker build -t '$IMAGE' .

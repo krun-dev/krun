@@ -25,6 +25,23 @@ providers:
   # npm_registry 必须是无内嵌凭据的 HTTPS registry / 公司 npm proxy；默认 https://registry.npmjs.org/。
   # Secrets 还需在同一 workers: 段配置 secrets_active_key 与 secrets_keys；
   # 真实 key 只放 .data/dev.yaml 或由其中的环境变量占位符展开。
+  # 业务存储凭据同样放 workers.object_storage，与制品的 s3_* 配置分开。
+  # object_storage:
+  #   default_store: local
+  #   cursor_key: ${KRUN_OBJECT_STORAGE_CURSOR_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA}
+  #   request_timeout_seconds: 600
+  #   stores:
+  #     - id: local
+  #       endpoint: http://127.0.0.1:9000
+  #       region: us-east-1
+  #       bucket: example-worker-data
+  #       root_prefix: worker-data/v1
+  #       addressing_style: path
+  #       credentials:
+  #         type: static
+  #         access_key_id: ${KRUN_OBJECT_STORAGE_ACCESS:-replace-me}
+  #         secret_access_key: ${KRUN_OBJECT_STORAGE_SECRET:-replace-me}
+  # 真实 TOS 改用主示例中的 tos_assume_role；没有 STS 权限时不会自动降级。
   # 省略 workers: 段时服务仍可启动，Workers 接口返回 WORKERS_NOT_CONFIGURED，控制台显示“Workers 未配置”。
 
 # 完整 workers: 配置启用 reconcile_concurrency: 8。

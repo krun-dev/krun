@@ -88,7 +88,26 @@ func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p a
 	return version, Created, nil
 }
 func SnapshotVersion(org, service, environment string, artifact domain.WorkerArtifact, config domain.WorkerEnvironment) domain.WorkerVersion {
-	return domain.WorkerVersion{ID: securetoken.UUID(), VersionMetadata: config.VersionMetadata, AssetsBinding: config.AssetsBinding, Organization: org, Service: service, Environment: environment, Artifact: artifact.ID, Profile: artifact.Profile, ArchiveDigest: artifact.ArchiveDigest, ModuleDigest: artifact.ModuleDigest, CompatibilityDate: artifact.CompatibilityDate, CompatibilityFlags: append([]string(nil), artifact.CompatibilityFlags...), ConfigRevision: config.ConfigRevision, Variables: domain.CloneWorkerVariables(config.Variables), SecretVersions: domain.CloneStringsMap(config.SecretVersions), SecretDigest: WorkerSecretsDigest(config.SecretVersions), Created: time.Now().UTC()}
+	return domain.WorkerVersion{
+		R2Bindings:         domain.CloneR2Bindings(config.R2Bindings),
+		ID:                 securetoken.UUID(),
+		VersionMetadata:    config.VersionMetadata,
+		AssetsBinding:      config.AssetsBinding,
+		Organization:       org,
+		Service:            service,
+		Environment:        environment,
+		Artifact:           artifact.ID,
+		Profile:            artifact.Profile,
+		ArchiveDigest:      artifact.ArchiveDigest,
+		ModuleDigest:       artifact.ModuleDigest,
+		CompatibilityDate:  artifact.CompatibilityDate,
+		CompatibilityFlags: append([]string(nil), artifact.CompatibilityFlags...),
+		ConfigRevision:     config.ConfigRevision,
+		Variables:          domain.CloneWorkerVariables(config.Variables),
+		SecretVersions:     domain.CloneStringsMap(config.SecretVersions),
+		SecretDigest:       WorkerSecretsDigest(config.SecretVersions),
+		Created:            time.Now().UTC(),
+	}
 }
 func (s *Service) WorkerVersionList(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
 	if _, err := s.WorkerCollectionTarget(st, ref, "service.version.read", p); err != nil {

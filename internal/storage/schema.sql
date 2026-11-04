@@ -667,3 +667,32 @@ CREATE TABLE IF NOT EXISTS krun_oauth_refresh_tokens (
 );
 CREATE INDEX IF NOT EXISTS krun_oauth_refresh_tokens_grant ON krun_oauth_refresh_tokens(grant_id);
 CREATE INDEX IF NOT EXISTS krun_oauth_refresh_tokens_expiry ON krun_oauth_refresh_tokens(expires_at);
+
+-- Logical buckets are durable resources, not per-request journals. Objects are
+-- stored remotely; dropping a Worker or binding never deletes this resource.
+CREATE TABLE IF NOT EXISTS krun_worker_buckets (
+ bucket_id text PRIMARY KEY,
+ org_id text NOT NULL,
+ name text NOT NULL,
+ store_id text NOT NULL,
+ enabled boolean NOT NULL DEFAULT true,
+ revision bigint NOT NULL DEFAULT 1 CHECK (revision > 0),
+ created_at timestamptz NOT NULL,
+ UNIQUE (org_id, name)
+);
+CREATE INDEX IF NOT EXISTS krun_worker_buckets_org ON krun_worker_buckets(org_id, bucket_id);
+CREATE TABLE IF NOT EXISTS krun_worker_environment_r2 (
+ service_id text NOT NULL,
+ env_name text NOT NULL,
+ name text NOT NULL,
+ bucket_id text NOT NULL,
+ PRIMARY KEY (service_id, env_name, name)
+);
+CREATE INDEX IF NOT EXISTS krun_worker_environment_r2_bucket ON krun_worker_environment_r2(bucket_id);
+CREATE TABLE IF NOT EXISTS krun_worker_version_r2 (
+ version_id text NOT NULL,
+ name text NOT NULL,
+ bucket_id text NOT NULL,
+ PRIMARY KEY (version_id, name)
+);
+CREATE INDEX IF NOT EXISTS krun_worker_version_r2_bucket ON krun_worker_version_r2(bucket_id);

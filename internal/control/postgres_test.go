@@ -114,7 +114,7 @@ func truncateControlTables(t *testing.T, store *Store) {
 		"krun_identity_providers", "krun_identity_sources",
 		"krun_worker_scripts", "krun_worker_deployments", "krun_worker_history", "krun_worker_idempotency", "krun_worker_operations",
 		"krun_worker_service_placements",
-		"krun_worker_version_secrets", "krun_worker_versions", "krun_worker_environment_secrets",
+		"krun_worker_version_r2", "krun_worker_environment_r2", "krun_worker_buckets", "krun_worker_version_secrets", "krun_worker_versions", "krun_worker_environment_secrets",
 		"krun_worker_secret_versions", "krun_worker_artifacts", "krun_worker_build_private",
 		"krun_worker_source_uploads",
 		"krun_worker_builds", "krun_worker_environments", "krun_worker_service_domains",

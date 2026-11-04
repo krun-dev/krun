@@ -156,6 +156,9 @@ func (s *Store) WorkerConfigState(ctx context.Context, ids []string) (*domain.St
 		return nil, err
 	}
 	rows.Close()
+	if err := loadVersionStorage(ctx, tx, st.Workers.Versions); err != nil {
+		return nil, err
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}

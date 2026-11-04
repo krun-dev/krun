@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, type Resource } from "./api";
 import { errorMessage } from "./i18n";
 import { nextWorkerPollDelay } from "./worker-polling";
+import type { R2Binding } from "./object-storage";
 
 export type RepositoryBinding = {
   source: RepositorySource | null;
@@ -42,6 +43,7 @@ export type Build = {
   job: string;
 };
 export type Environment = {
+  r2_buckets?: Record<string, R2Binding>;
   name: string;
   enabled: boolean;
   /** Selected domain ids from the platform catalog. */
@@ -78,6 +80,7 @@ export type WorkerRouting = {
   network_profile: WorkerNetworkProfile;
 };
 export type Version = {
+  r2_buckets?: Record<string, R2Binding>;
   id: string;
   artifact_id: string;
   environment: string;

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 
@@ -38,7 +39,25 @@ func (o renderOptions) renderNetworkPolicies(outputDirectory string, replacement
 
 		storageRule := o.storageEgressRule()
 		spec["egress"] = []any{controlRule, storageRule}
-		if net.ParseIP(o.storageHost) == nil {
+		needsDNS := net.ParseIP(o.storageHost) == nil
+		labels := spec["podSelector"].(map[string]any)["matchLabels"].(map[string]any)
+		if labels["role"] == "krun-runtime" && o.workers.ObjectStorage != nil {
+			for _, store := range o.workers.ObjectStorage.Stores {
+				u, _ := url.Parse(store.Endpoint)
+				target := o
+				target.storageHost = u.Hostname()
+				target.storagePort = u.Port()
+				if target.storagePort == "" {
+					target.storagePort = "80"
+					if u.Scheme == "https" {
+						target.storagePort = "443"
+					}
+				}
+				spec["egress"] = append(spec["egress"].([]any), target.storageEgressRule())
+				needsDNS = needsDNS || net.ParseIP(target.storageHost) == nil
+			}
+		}
+		if needsDNS {
 			spec["egress"] = append(spec["egress"].([]any), dnsEgressRule())
 		}
 
@@ -73,6 +92,9 @@ func dnsEgressRule() map[string]any {
 
 func (o renderOptions) storageEgressRule() map[string]any {
 	cidr := o.storageHost + "/32"
+	if ip := net.ParseIP(o.storageHost); ip != nil && ip.To4() == nil {
+		cidr = o.storageHost + "/128"
+	}
 	ipBlock := map[string]any{"cidr": cidr}
 	if net.ParseIP(o.storageHost) == nil {
 		// Public S3 endpoints can change addresses. Private storage uses an

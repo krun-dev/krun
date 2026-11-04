@@ -16,6 +16,7 @@ func (s *Store) loadWorkers(ctx context.Context, st *domain.State) error {
 		st.Workers = domain.NewWorkerState()
 	}
 	batch := &pgx.Batch{}
+	queueStateRead(ctx, batch, `SELECT bucket_id, org_id, name, store_id, enabled, revision, created_at FROM krun_worker_buckets`)
 	queueStateRead(ctx, batch, `SELECT service_id, org_id, network_profile, repository, repository_revision, domains_revision, preview_revision FROM krun_worker_services`)
 	queueStateRead(ctx, batch, `SELECT service_id, pool_id, org_id, network_profile, role, state, revision, created_at, updated_at FROM krun_worker_service_placements`)
 	queueStateRead(ctx, batch, `SELECT service_id, domain_id FROM krun_worker_service_domains ORDER BY service_id, ordinal`)
@@ -30,16 +31,20 @@ func (s *Store) loadWorkers(ctx context.Context, st *domain.State) error {
 	queueStateRead(ctx, batch, `SELECT operation_id, kind, org_id, service_id, env_name, state, build_id, version_id, expected_revision, config_revision, edge_revision, deployment_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at FROM krun_worker_operations`)
 	queueStateRead(ctx, batch, `SELECT service_id, env_name, revision, version_id, operation_id, kind, created_at FROM krun_worker_history ORDER BY created_at DESC`)
 	queueStateRead(ctx, batch, `SELECT idem_key, digest, target_id FROM krun_worker_idempotency`)
+	queueStateRead(ctx, batch, `SELECT service_id, env_name, name, bucket_id FROM krun_worker_environment_r2`)
+	queueStateRead(ctx, batch, `SELECT version_id, name, bucket_id FROM krun_worker_version_r2`)
 
 	results := s.pool.SendBatch(ctx, batch)
 	defer results.Close()
 
 	for _, read := range []func(pgx.BatchResults, *domain.State) error{
+		readWorkerBuckets,
 		readWorkerServices, readWorkerPlacements, readWorkerDomains, readWorkerEnvironments,
 		readWorkerSecretVersions, readWorkerEnvironmentSecrets,
 		readWorkerBuilds, readWorkerArtifacts,
 		readWorkerVersions, readWorkerVersionSecrets, readWorkerDeployments, readWorkerOperations, readWorkerHistory,
 		readWorkerIdempotency,
+		readWorkerEnvironmentR2, readWorkerVersionR2,
 	} {
 		if err := read(results, st); err != nil {
 			return err

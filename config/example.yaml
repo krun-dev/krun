@@ -186,8 +186,9 @@ workers:
       runtime_service: runtime-default
       # 专用候选验证 workerd；不得与 runtime_service 相同，也不接业务 Gateway。
       validator_service: runtime-validator-default
-      runtime_token: ${KRUN_RUNTIME_TOKEN:-replace-with-a-24-plus-character-token}
-      management_token: ${KRUN_MANAGEMENT_TOKEN:-replace-with-a-24-plus-character-token}
+      runtime_token: ${KRUN_RUNTIME_TOKEN:-replace-with-serving-runtime-token}
+      # 省略 validator_token 时从 runtime_token 按 pool 派生，validator 只挂载派生凭据。
+      management_token: ${KRUN_MANAGEMENT_TOKEN:-replace-with-runtime-management-token}
       default: true
   # 组织用户只看到这里配置的产品档案名称和描述，不会看到 pool、access、selector
   # 或 Gateway。单一档案时控制台不显示选择器。
@@ -226,6 +227,30 @@ workers:
   s3_location_id: primary
   s3_access_key: ${KRUN_S3_ACCESS:-replace-me}
   s3_secret_key: ${KRUN_S3_SECRET:-replace-me}
+  # 可选业务存储凭据；与上面的制品/配置存储分开。真实密钥只放主配置或环境变量。
+  # object_storage:
+  #   default_store: primary
+  #   cursor_key: ${KRUN_OBJECT_STORAGE_CURSOR_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA}
+  #   credential_ttl_seconds: 3600
+  #   refresh_before_seconds: 300
+  #   credential_cache_entries: 1024
+  #   credential_concurrency: 8
+  #   credential_timeout_seconds: 20
+  #   request_timeout_seconds: 600
+  #   stores:
+  #     - id: primary
+  #       endpoint: https://tos-s3-cn-beijing.volces.com
+  #       region: cn-beijing
+  #       bucket: example-worker-data
+  #       root_prefix: worker-data/v1
+  #       addressing_style: virtual
+  #       credentials:
+  #         type: tos_assume_role
+  #         access_key_id: ${KRUN_OBJECT_STORAGE_ACCESS:-replace-me}
+  #         secret_access_key: ${KRUN_OBJECT_STORAGE_SECRET:-replace-me}
+  #         role_trn: ${KRUN_OBJECT_STORAGE_ROLE:-trn:iam::1000000000:role/example}
+  #         sts_endpoint: https://sts.volcengineapi.com
+  # static 模式只填 type/access_key_id/secret_access_key，不具备云端会话限权。
   config_base_url: https://s3.internal.example.com/krun-artifacts/config
   # 仓库构建会把代码 checkout 到这个目录。只读根文件系统时必须指向可写卷。
   clone_directory: /workdir

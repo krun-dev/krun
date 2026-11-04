@@ -67,6 +67,9 @@ func (s *Server) cfTransport(fn http.HandlerFunc) http.HandlerFunc {
 			if b.status == 404 {
 				code = 10007
 			}
+			if payload.Error.Code == "STORAGE_BUCKET_NOT_FOUND" {
+				code = 10006
+			}
 			if payload.Error.Code == "PREVIEW_NOT_FOUND" {
 				code = 10025
 			}
@@ -248,6 +251,9 @@ func (s *Server) cfEnsureScript(r *http.Request, name string) (domain.WorkerScri
 }
 func (s *Server) cloudflareRoutes(m *http.ServeMux) {
 	base := cfPrefix + "/accounts/{account}"
+	m.HandleFunc("GET "+base+"/r2/buckets", s.cfProtected(s.cfBucketList))
+	m.HandleFunc("POST "+base+"/r2/buckets", s.cfProtected(s.cfBucketCreate))
+	m.HandleFunc("GET "+base+"/r2/buckets/{bucket}", s.cfProtected(s.cfBucketList))
 	m.HandleFunc("GET "+cfPrefix+"/memberships", s.cfProtected(s.cfMemberships))
 	m.HandleFunc("GET "+cfPrefix+"/user", s.cfProtected(s.cfUser))
 	m.HandleFunc("GET "+cfPrefix+"/accounts", s.cfProtected(s.cfAccounts))

@@ -20,6 +20,7 @@ import (
 
 	identityprovider "github.com/krun-dev/krun/internal/adapters/identity"
 	mailer "github.com/krun-dev/krun/internal/adapters/mail"
+	"github.com/krun-dev/krun/internal/adapters/storagecredentials"
 	"github.com/krun-dev/krun/internal/audit"
 	authapp "github.com/krun-dev/krun/internal/auth"
 	"github.com/krun-dev/krun/internal/authorization"
@@ -50,6 +51,7 @@ func bodyWithLimit(r *http.Request, value any, limit int64) error {
 }
 
 type Server struct {
+	storageCredentials *storagecredentials.Registry
 	workers            *workerapp.Controller
 	workerInvokeClient *http.Client
 	Config             appconfig.Config
@@ -91,6 +93,11 @@ func NewServer(ctx context.Context, c appconfig.Config, store *Store) (*Server, 
 		return nil, err
 	}
 	if c.Workers != nil {
+		var credentialErr error
+		s.storageCredentials, credentialErr = storagecredentials.NewRegistry(c.Workers.ObjectStorage)
+		if credentialErr != nil {
+			return nil, credentialErr
+		}
 		if err := workerapp.EnsureWorkerConfigCatalogue(ctx, store, c.Workers); err != nil {
 			return nil, err
 		}
@@ -136,6 +143,7 @@ func (s *Server) routes() {
 		s.internalMux.HandleFunc("GET /api/internal/workers/versions/{version}/assets", s.workerRuntimeVersionAssets)
 		s.internalMux.HandleFunc("GET /api/internal/workers/versions/{version}/assets/{path...}", s.workerRuntimeVersionAssetURL)
 		s.internalMux.HandleFunc("GET /api/internal/workers/versions/{version}/secrets", s.workerRuntimeVersionSecrets)
+		s.internalMux.HandleFunc("POST /api/internal/workers/versions/{version}/bindings/{binding}/credentials", s.workerRuntimeStorageCredentials)
 		s.internalMux.HandleFunc("GET /api/internal/workers/artifacts/{artifact}", s.workerRuntimeArtifact)
 		s.internalMux.HandleFunc("POST /api/internal/workers/ack", s.workerRuntimeAck)
 	}

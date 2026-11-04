@@ -15,10 +15,12 @@ import (
 )
 
 type cfBinding struct {
-	Name string          `json:"name"`
-	Type string          `json:"type"`
-	Text string          `json:"text"`
-	JSON json.RawMessage `json:"json"`
+	BucketName   string          `json:"bucket_name,omitempty"`
+	Jurisdiction string          `json:"jurisdiction,omitempty"`
+	Name         string          `json:"name"`
+	Type         string          `json:"type"`
+	Text         string          `json:"text"`
+	JSON         json.RawMessage `json:"json"`
 }
 type cfUploadMetadata struct {
 	Main        string                `json:"main_module"`
@@ -105,6 +107,8 @@ func cfReadUpload(r *http.Request) (cfUploadMetadata, []workerartifact.UploadedM
 func cfBindingInput(meta cfUploadMetadata, preview bool) (workerapp.BindingsInput, error) {
 	in := workerapp.BindingsInput{Variables: map[string]any{}, Secrets: map[string]*string{}, ReplaceVariables: !preview, KeepSecrets: preview}
 	if !preview {
+		values := map[string]string{}
+		in.R2Buckets = &values
 		in.VersionMetadata = new(string)
 		in.AssetsBinding = new(string)
 	}
@@ -115,6 +119,8 @@ func cfBindingInput(meta cfUploadMetadata, preview bool) (workerapp.BindingsInpu
 			in.KeepPlainVariables = true
 		} else if kind == "json" {
 			in.KeepJSONVariables = true
+		} else if kind == "r2_bucket" {
+			in.KeepR2Buckets = true
 		} else if kind != "secret_key" {
 			return in, problem(422, "UNSUPPORTED_BINDING", "Unsupported keep_bindings type")
 		}
@@ -130,6 +136,15 @@ func cfBindingInput(meta cfUploadMetadata, preview bool) (workerapp.BindingsInpu
 			return nil
 		}
 		switch b.Type {
+		case "r2_bucket":
+			if b.BucketName == "" || b.Jurisdiction != "" && b.Jurisdiction != "default" {
+				return problem(422, "UNSUPPORTED_BINDING", "Invalid R2 bucket binding or unsupported jurisdiction")
+			}
+			if in.R2Buckets == nil {
+				values := map[string]string{}
+				in.R2Buckets = &values
+			}
+			(*in.R2Buckets)[name] = b.BucketName
 		case "plain_text":
 			in.Variables[name] = b.Text
 		case "json":

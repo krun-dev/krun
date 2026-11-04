@@ -28,6 +28,9 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	protect := func(sessionOnly bool, fn endpoint) http.HandlerFunc {
 		return protectWithBodyLimit(sessionOnly, apiJSONBodyMax, fn)
 	}
+	m.HandleFunc("GET /api/v1/orgs/{org}/workers/buckets", protect(false, s.workerBucketList))
+	m.HandleFunc("POST /api/v1/orgs/{org}/workers/buckets", protect(false, s.workerBucketCreate))
+	m.HandleFunc("PATCH /api/v1/orgs/{org}/workers/buckets/{bucket}", protect(false, s.workerBucketUpdate))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/services", protect(false, s.workerServiceList))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/domains", protect(false, s.workerDomains))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/network-profiles", protect(false, s.workerNetworkProfiles))

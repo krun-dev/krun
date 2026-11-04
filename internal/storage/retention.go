@@ -52,7 +52,7 @@ func (s *Store) RetainExpired(ctx context.Context) error {
  AND NOT EXISTS(SELECT 1 FROM krun_worker_deployments d WHERE d.version_id=rel.version_id)
  AND NOT EXISTS(SELECT 1 FROM krun_worker_history h WHERE h.version_id=rel.version_id)
  AND NOT EXISTS(SELECT 1 FROM krun_worker_operations o WHERE o.version_id=rel.version_id)
- ORDER BY rel.created_at LIMIT 1000), bindings AS(DELETE FROM krun_worker_version_secrets WHERE version_id IN(SELECT version_id FROM victims))
+ ORDER BY rel.created_at LIMIT 1000), bindings AS(DELETE FROM krun_worker_version_secrets WHERE version_id IN(SELECT version_id FROM victims)), r2 AS(DELETE FROM krun_worker_version_r2 WHERE version_id IN(SELECT version_id FROM victims))
  DELETE FROM krun_worker_versions WHERE version_id IN(SELECT version_id FROM victims)`, []any{at.Add(-WorkerArtifactRetain)}},
 		{`DELETE FROM krun_worker_secret_versions WHERE secret_version_id IN (SELECT secret.secret_version_id FROM krun_worker_secret_versions secret WHERE secret.created_at<=$1
  AND NOT EXISTS(SELECT 1 FROM krun_worker_environment_secrets b WHERE b.secret_version_id=secret.secret_version_id)

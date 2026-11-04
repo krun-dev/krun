@@ -15,10 +15,11 @@ type WorkerEnvironmentCreateInput struct {
 }
 
 type WorkerEnvironmentUpdateInput struct {
-	VersionMetadata *string        `json:"version_metadata,omitempty"`
-	Revision        int            `json:"expected_revision"`
-	Enabled         *bool          `json:"enabled"`
-	Variables       map[string]any `json:"variables"`
+	R2Buckets       *map[string]string `json:"r2_buckets,omitempty"`
+	VersionMetadata *string            `json:"version_metadata,omitempty"`
+	Revision        int                `json:"expected_revision"`
+	Enabled         *bool              `json:"enabled"`
+	Variables       map[string]any     `json:"variables"`
 }
 
 func (s *Service) WorkerEnvironments(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
@@ -86,6 +87,7 @@ func (s *Service) WorkerEnvironmentCreate(ctx context.Context, st *domain.State,
 	env := domain.WorkerEnvironment{Name: in.Name, Enabled: true, ConfigRevision: 1, Variables: map[string]any{}, SecretVersions: map[string]string{}}
 	if ws.PreviewBase != nil && !in.IgnoreBase {
 		env.Variables = domain.CloneWorkerVariables(ws.PreviewBase.Variables)
+		env.R2Bindings = domain.CloneR2Bindings(ws.PreviewBase.R2Bindings)
 		env.VersionMetadata = ws.PreviewBase.VersionMetadata
 		env.SecretVersions = domain.CloneStringsMap(ws.PreviewBase.SecretVersions)
 		env.SecretNames = domain.WorkerSecretNames(env.SecretVersions)
@@ -157,6 +159,16 @@ func (s *Service) WorkerEnvironmentUpdate(ctx context.Context, st *domain.State,
 	s.SyncEnvironmentHosts(&current, t.Organization, t.ID, ws.Domains, ws.NetworkProfile, s.Config.Workers.ServicePool(st.Workers, ws))
 	if in.VersionMetadata != nil {
 		current.VersionMetadata = *in.VersionMetadata
+	}
+	if in.R2Buckets != nil {
+		if s.Config.Workers == nil || s.Config.Workers.ObjectStorage == nil || s.Config.Workers.ObjectStorage.CursorKey == "" {
+			return nil, Read, domain.Problem(503, "OBJECT_STORAGE_NOT_CONFIGURED", "R2 storage must be configured")
+		}
+		resolved, err := resolveR2Bindings(st, t.Organization, *in.R2Buckets)
+		if err != nil {
+			return nil, Read, err
+		}
+		current.R2Bindings = resolved
 	}
 	if err := ValidateWorkerBindings(current); err != nil {
 		return nil, Read, err

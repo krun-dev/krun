@@ -41,6 +41,16 @@ func queueStateRead(ctx context.Context, b *pgx.Batch, query string) {
 	services := `service_id IN (` + resources + `)`
 	pred := "false"
 	switch table {
+	case "krun_worker_buckets":
+		pred = `org_id=$2`
+	case "krun_worker_environment_r2":
+		if !scope.Summary {
+			pred = services
+		}
+	case "krun_worker_version_r2":
+		if !scope.Summary {
+			pred = `version_id IN (SELECT version_id FROM krun_worker_versions WHERE ` + services + `)`
+		}
 	case "krun_users":
 		pred = `user_id=$1`
 	case "krun_organizations", "krun_org_sources":
