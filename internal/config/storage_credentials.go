@@ -29,6 +29,32 @@ type WorkerObjectStore struct {
 	RootPrefix      string                        `json:"root_prefix"`
 	AddressingStyle string                        `json:"addressing_style"`
 	Credentials     WorkerStorageCredentialConfig `json:"credentials"`
+	Delivery        *WorkerObjectDeliveryConfig   `json:"delivery,omitempty"`
+}
+
+// CDN configuration must match the independently configured private origin,
+// Type A SHA256 signing rule and its validity period.
+type WorkerObjectDeliveryConfig struct {
+	Type       string `json:"type"`
+	BaseURL    string `json:"base_url"`
+	SigningKey string `json:"signing_key"`
+	TTLSeconds int    `json:"ttl_seconds"`
+}
+
+func (c *WorkerObjectDeliveryConfig) validate() error {
+	if c == nil {
+		return nil
+	}
+	u, err := url.Parse(c.BaseURL)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil ||
+		u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return fmt.Errorf("object_storage delivery requires an HTTPS domain without a path")
+	}
+	if c.Type != "volc_cdn_a" || len(c.SigningKey) < 32 || len(c.SigningKey) > 256 ||
+		strings.ContainsAny(c.SigningKey, "\r\n") || c.TTLSeconds < 60 || c.TTLSeconds > 3600 {
+		return fmt.Errorf("invalid object_storage delivery provider, signing key or TTL")
+	}
+	return nil
 }
 
 type WorkerStorageCredentialConfig struct {
@@ -98,6 +124,9 @@ func (c *WorkerObjectStorageConfig) Validate() error {
 }
 
 func (s *WorkerObjectStore) validate() error {
+	if err := s.Delivery.validate(); err != nil {
+		return err
+	}
 	u, err := url.Parse(s.Endpoint)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" ||
 		(u.Scheme != "https" && u.Scheme != "http") {

@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/krun-dev/krun/internal/adapters/bucketobjects"
 	identityprovider "github.com/krun-dev/krun/internal/adapters/identity"
 	mailer "github.com/krun-dev/krun/internal/adapters/mail"
 	"github.com/krun-dev/krun/internal/adapters/storagecredentials"
@@ -51,6 +52,7 @@ func bodyWithLimit(r *http.Request, value any, limit int64) error {
 }
 
 type Server struct {
+	bucketObjects      *bucketobjects.Client
 	storageCredentials *storagecredentials.Registry
 	workers            *workerapp.Controller
 	workerInvokeClient *http.Client
@@ -98,6 +100,7 @@ func NewServer(ctx context.Context, c appconfig.Config, store *Store) (*Server, 
 		if credentialErr != nil {
 			return nil, credentialErr
 		}
+		s.bucketObjects = bucketobjects.New(c.Workers.ObjectStorage, s.storageCredentials)
 		if err := workerapp.EnsureWorkerConfigCatalogue(ctx, store, c.Workers); err != nil {
 			return nil, err
 		}
@@ -190,7 +193,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Request-ID", r.Header.Get("X-Krun-Request-ID"))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+	w.Header().Set("Content-Security-Policy", s.consoleContentSecurityPolicy())
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		w.Header().Set("Cache-Control", "no-store")
 	}
@@ -407,6 +410,9 @@ func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, b
 		if err != nil {
 			appErr = err
 		}
+		if deferred, ok := out.(deferredResponse); ok && appErr == nil {
+			out, status, appErr = deferred.run(r.Context())
+		}
 		if appErr != nil {
 			s.writeError(w, r, appErr)
 			return
@@ -420,6 +426,12 @@ func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, b
 		}
 		if r.URL.Path == "/api/auth/logout" {
 			s.setCookie(w, "session", "", -1)
+		}
+		if redirect, ok := out.(objectRedirect); ok {
+			w.Header().Set("Cache-Control", "private, no-store")
+			w.Header().Set("Referrer-Policy", "no-referrer")
+			http.Redirect(w, r, string(redirect), http.StatusFound)
+			return
 		}
 		s.json(w, status, out)
 	}

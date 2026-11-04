@@ -1,6 +1,10 @@
 # S3 兼容对象存储
 
-krun 使用一个 S3 适配器，不按厂商切换代码。控制面、builder 和 runtime 可以使用
+本页描述 `workers.s3_*` 的制品、配置与静态资产存储。业务逻辑桶、R2 binding 与文件
+浏览器使用独立的 `workers.object_storage`，见 [R2 binding](workers-r2.md) 和
+[文件与分发](bucket-objects.md)。
+
+制品存储使用通用 S3 适配器，不按厂商切换代码。控制面、builder 和 runtime 可以使用
 不同 endpoint，但必须指向同一个桶和前缀。全部配置放在主 YAML 的 `workers:` 下。
 
 ## 寻址
@@ -60,6 +64,6 @@ s3_secret_key: ${KRUN_S3_SECRET}
 首尾斜杠。列表、单个/批量删除及预签名 URL 都经过统一前缀适配器。更换桶或前缀
 时使用新的 storage location id，避免把已有逻辑 key 解释为另一个存储位置。
 
-当前鉴权支持显式 Access Key / Secret Key 和 SigV4，不含 IAM Role 自动发现、STS
+这里的 `workers.s3_*` 鉴权支持显式 Access Key / Secret Key 和 SigV4，不含 IAM Role 自动发现、STS
 临时凭据自动刷新或厂商私有对象存储 API。local-first 网络渲染的地址限制与操作步骤
 见 [本地开发](local-dev.md#s3-兼容对象存储)。

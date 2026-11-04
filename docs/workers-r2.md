@@ -49,7 +49,8 @@ Preview Base 的相同字段会复制到新 Preview；需要隔离时明确使�
 组织侧导航的「对象存储」对应 `/?page=buckets&workspace=<organization_id>`，提供逻辑桶
 列表、创建、启用和停用。启停带 revision 并发校验；出现冲突后刷新当前状态，不覆盖
 其他管理员的修改。创建和启停需要 `organization.update`，列表需要 `organization.read`，
-最终权限由后端校验。此页面不提供对象浏览、下载、桶删除或数据清空。
+最终权限由后端校验。点击已启用的桶可浏览对象、上传下载、查看详情和删除文件；对象权限
+独立，见 [文件与分发](bucket-objects.md)。不提供桶删除或批量数据清空。
 
 在 Worker 的「环境配置 → R2 存储绑定」添加绑定名称并选择本组织已启用的桶。
 保存修改 desired 配置，下一次发布才进入不可变 Version；下方同时显示当前 Version
@@ -58,7 +59,8 @@ Preview Base 的相同字段会复制到新 Preview；需要隔离时明确使�
 
 「预览基础配置」也支持相同的 R2 绑定编辑器，新建 Preview 继承此配置。
 配置和桶名称符合 Cloudflare R2 binding 模型；控制台使用原生管理接口获取启停状态，
-Cloudflare 兼容接口访问同一逻辑桶目录。浏览器不会收到 provider 凭据、物理桶或 prefix。
+Cloudflare 兼容接口访问同一逻辑桶目录。管理响应使用逻辑桶；文件直传链接短期暴露物理
+桶与 prefix，浏览器不接收 SecretAccessKey。需要隐藏底层地址时使用自有 CDN 域名。
 
 页面为 Vite 静态产物，API 都使用同源 `/api/*`。生产部署仍需要 OSS 前的同源路径转发，
 符合 [部署约束](local-dev.md)，不依赖运行期 Node。

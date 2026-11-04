@@ -234,6 +234,10 @@ export default function App() {
       url.searchParams.delete("worker");
       url.searchParams.delete("environment");
     }
+    if (section !== "buckets") {
+      url.searchParams.delete("bucket");
+      url.searchParams.delete("prefix");
+    }
     if (scope) url.searchParams.set("workspace", scope);
     else url.searchParams.delete("workspace");
     if (url.toString() !== location.href) history.replaceState(null, "", url);

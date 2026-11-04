@@ -30,17 +30,12 @@ export function presetActions(actions: string[], preset: Preset) {
     (action) =>
       isRead(action) ||
       (preset === "readwrite" &&
-        /\.(create|update|delete|manage|grant|revoke|attach|detach|configure)$/.test(
-          action,
-        )),
+        /\.(create|write|update|delete|manage|grant|revoke|attach|detach|configure)$/.test(action)),
   );
 }
 export function initialSelections(): Selections {
   return Object.fromEntries(
-    resourceKinds.map(({ kind }) => [
-      kind,
-      { actions: [], all: true, ids: "", organization: "" },
-    ]),
+    resourceKinds.map(({ kind }) => [kind, { actions: [], all: true, ids: "", organization: "" }]),
   );
 }
 export function buildPolicy(
@@ -84,8 +79,7 @@ export function parseSelections(
   scope: string,
   system: boolean,
 ): { selections: Selections; envs: string[] } | null {
-  if (policy.schema_version !== 1 || !Array.isArray(policy.statements))
-    return null;
+  if (policy.schema_version !== 1 || !Array.isArray(policy.statements)) return null;
   const selections = initialSelections();
   const seen = new Set<string>();
   let envs: string[] | undefined;
@@ -106,19 +100,12 @@ export function parseSelections(
       ) ||
       Object.keys(resource).some(
         (key) =>
-          ![
-            "kind",
-            "organization_id",
-            "ids",
-            "all_in_organization",
-            "all_in_system",
-          ].includes(key),
+          !["kind", "organization_id", "ids", "all_in_organization", "all_in_system"].includes(key),
       )
     )
       return null;
     const conditions = statement.conditions ?? {};
-    if (Object.keys(conditions).some((key) => key !== "environments"))
-      return null;
+    if (Object.keys(conditions).some((key) => key !== "environments")) return null;
     const environments = conditions.environments ?? [];
     if (
       !Array.isArray(environments) ||
@@ -127,17 +114,12 @@ export function parseSelections(
       )
     )
       return null;
-    if (envs && [...envs].sort().join() !== [...environments].sort().join())
-      return null;
+    if (envs && [...envs].sort().join() !== [...environments].sort().join()) return null;
     envs = environments;
     const choices = Object.entries(registry)
       .filter(([, kinds]) => kinds.includes(resource.kind))
       .map(([action]) => action);
-    if (
-      statement.actions.some(
-        (action) => action !== "*" && !choices.includes(action),
-      )
-    )
+    if (statement.actions.some((action) => action !== "*" && !choices.includes(action)))
       return null;
     const hasIDs =
       Array.isArray(resource.ids) &&
@@ -169,6 +151,8 @@ export function parseSelections(
 }
 
 const names: Record<string, string> = {
+  storage: "存储",
+  object: "对象",
   organization: "组织",
   member: "成员",
   iam: "角色",
@@ -186,6 +170,7 @@ const names: Record<string, string> = {
   version: "版本",
 };
 const verbs: Record<string, string> = {
+  write: "写入",
   read: "读取",
   list: "列出",
   create: "创建",
@@ -209,15 +194,10 @@ export function actionLabel(action: string) {
   return (
     t(verbs[verb] ?? verb) +
     (locale() === "en" ? " " : "") +
-    parts
-      .map((part) => t(names[part] ?? part))
-      .join(locale() === "en" ? " " : "")
+    parts.map((part) => t(names[part] ?? part)).join(locale() === "en" ? " " : "")
   );
 }
-export function keyState(
-  key: { revoked: boolean; expires_at: string | null },
-  time = Date.now(),
-) {
+export function keyState(key: { revoked: boolean; expires_at: string | null }, time = Date.now()) {
   return key.revoked
     ? "revoked"
     : key.expires_at && Date.parse(key.expires_at) <= time

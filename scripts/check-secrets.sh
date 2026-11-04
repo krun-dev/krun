@@ -35,7 +35,7 @@ if [[ -f .data/dev.yaml ]]; then
   done
   # Credential providers may have several keys in the same main YAML.
   # Scan every actual value, including AK identifiers, without printing it.
-  for key in s3_access_key access_key_id secret_access_key validator_token cursor_key; do
+  for key in s3_access_key access_key_id secret_access_key validator_token cursor_key signing_key; do
     while IFS= read -r value; do
       case "$value" in
         ""|replace-me|\$\{*) continue ;;

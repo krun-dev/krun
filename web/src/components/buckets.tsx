@@ -23,6 +23,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Empty, Field, Loading, PageHeader } from "@/components/common";
+import { BucketObjects } from "@/components/bucket-objects";
 
 export function BucketsPage({
   base,
@@ -41,6 +42,20 @@ export function BucketsPage({
   const [target, setTarget] = useState<WorkerBucket | null>(null);
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  const [selected, setSelected] = useState(
+    () => new URLSearchParams(location.search).get("bucket") || "",
+  );
+  function selectBucket(id: string) {
+    setSelected(id);
+    const url = new URL(location.href);
+    url.searchParams.delete("prefix");
+    if (id) {
+      url.searchParams.set("bucket", id);
+    } else {
+      url.searchParams.delete("bucket");
+    }
+    history.replaceState(null, "", url);
+  }
   const reload = useCallback(() => setRefresh((value) => value + 1), []);
   useEffect(() => {
     if (system) {
@@ -100,6 +115,18 @@ export function BucketsPage({
       <Empty title={t("请选择组织")} description={t("对象存储按组织管理，请先进入一个组织。")} />
     );
   }
+  const opened = buckets?.find((bucket) => bucket.id === selected);
+  if (opened?.enabled) {
+    return (
+      <BucketObjects
+        key={base + opened.id}
+        base={base}
+        bucket={opened}
+        back={() => selectBucket("")}
+        notify={notify}
+      />
+    );
+  }
   return (
     <>
       <PageHeader
@@ -146,7 +173,14 @@ export function BucketsPage({
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <Database size={16} className="text-muted-foreground" />
-                        <span className="font-medium">{bucket.name}</span>
+                        <Button
+                          variant="link"
+                          className="h-auto p-0 font-medium"
+                          disabled={!bucket.enabled}
+                          onClick={() => selectBucket(bucket.id)}
+                        >
+                          {bucket.name}
+                        </Button>
                       </div>
                       <code className="text-xs text-muted-foreground">{bucket.id}</code>
                     </TableCell>

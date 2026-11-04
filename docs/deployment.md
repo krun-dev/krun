@@ -4,7 +4,7 @@
 `dist/console/assets/`。把 **`dist/console/` 的内容** 上传到 OSS bucket 根目录；生产
 环境不运行 Node，也不要把仓库、`dist/` 的其他内容或配置文件一起上传。
 
-浏览器只访问一个公开 origin。这个 origin 前的 CDN / 反向代理必须实现且只实现：
+控制台与控制面 API 共用一个公开 origin。这个 origin 前的 CDN / 反向代理必须实现且只实现：
 
 | 外部路径 | 上游 |
 | --- | --- |
@@ -55,6 +55,10 @@ Set-Cookie；`/api/*` 不得缓存。每一层代理都应把自己的直接下�
 `index.html` 必须 `no-store`（或至少每次重新验证），带内容哈希的 `/assets/*` 才能
 长期 immutable 缓存。静态入口还应下发 CSP、`nosniff`、点击劫持和 Referrer-Policy
 等浏览器安全头；Nginx 模板给出了与当前纯静态前端兼容的基线。
+
+启用文件浏览器时，文件字节使用后端授权的短期链接直连对象存储。物理桶必须允许控制台
+origin 的 CORS，静态 HTML 的 CSP `connect-src` 必须增加精确的对象存储 origin；Go API
+仍只走同源 `/api/*`。操作步骤与自有 CDN 域名见 [文件与分发](bucket-objects.md)。
 
 健康检查访问 `/api/healthz`。它执行轻量数据库连通性检查，不加载完整 IAM 或
 Workers 状态。启用 `workers:` 时必须配置 `internal_listen`，并通过内部 Service 与

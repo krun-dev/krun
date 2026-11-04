@@ -244,6 +244,12 @@ workers:
   #       bucket: example-worker-data
   #       root_prefix: worker-data/v1
   #       addressing_style: virtual
+  #       # 可选：独立配置的私有回源 CDN；域名、SHA256 Type A 与有效期须在 CDN 侧一致。
+  #       # delivery:
+  #       #   type: volc_cdn_a
+  #       #   base_url: https://files.example.com
+  #       #   signing_key: ${KRUN_OBJECT_CDN_SIGNING_KEY:-replace-me}
+  #       #   ttl_seconds: 300
   #       credentials:
   #         type: tos_assume_role
   #         access_key_id: ${KRUN_OBJECT_STORAGE_ACCESS:-replace-me}

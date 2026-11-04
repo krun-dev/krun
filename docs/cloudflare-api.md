@@ -118,3 +118,10 @@ Secret、Previews Base、Preview 部署/Secret/删除、流量比例拒绝、删
 创建桶需要 `organization.update`，读取需要 `organization.read`；部署 binding 使用
 既有 `service.publish` 权限，不要求发布者额外持有对象访问凭据。
 支持范围及现有限制见 [R2 binding](workers-r2.md)。
+
+`GET /accounts/{account}/r2/buckets/{bucket}/objects` 还支持 `prefix`、`delimiter`（空或 `/`）、
+`cursor`、`start_after`、`per_page`（1–1000），需要独立 `storage.object.read`。
+返回逻辑 key、size、etag、last_modified，以及 result_info 中的 cursor、delimited 和
+is_truncated、per_page；列表不逐项 HEAD，不包含对象 version 或 HTTP/custom metadata。
+对象内容上传下载使用 [原生直传接口](bucket-objects.md)，不实现经控制面传输对象内容的
+Cloudflare REST GET/PUT 代理。

@@ -37,6 +37,18 @@ func TestObjectStorageValidation(t *testing.T) {
 		{"bad refresh", func(c *WorkerObjectStorageConfig) { c.RefreshBeforeSeconds = 3600 }},
 		{"unbounded concurrency", func(c *WorkerObjectStorageConfig) { c.CredentialConcurrency = 129 }},
 		{"missing key", func(c *WorkerObjectStorageConfig) { c.Stores[0].Credentials.SecretAccessKey = "" }},
+		{"unknown CDN", func(c *WorkerObjectStorageConfig) {
+			c.Stores[0].Delivery = &WorkerObjectDeliveryConfig{Type: "unknown"}
+		}},
+		{"unsafe CDN domain", func(c *WorkerObjectStorageConfig) {
+			c.Stores[0].Delivery = &WorkerObjectDeliveryConfig{Type: "volc_cdn_a", BaseURL: "https://files.example.com/path", SigningKey: strings.Repeat("x", 32), TTLSeconds: 300}
+		}},
+		{"short CDN key", func(c *WorkerObjectStorageConfig) {
+			c.Stores[0].Delivery = &WorkerObjectDeliveryConfig{Type: "volc_cdn_a", BaseURL: "https://files.example.com", SigningKey: "short", TTLSeconds: 300}
+		}},
+		{"unbounded CDN URL", func(c *WorkerObjectStorageConfig) {
+			c.Stores[0].Delivery = &WorkerObjectDeliveryConfig{Type: "volc_cdn_a", BaseURL: "https://files.example.com", SigningKey: strings.Repeat("x", 32), TTLSeconds: 0}
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			c := objectStorageExample()
@@ -52,6 +64,10 @@ func TestObjectStorageValidation(t *testing.T) {
 	}
 	if c.CredentialTTLSeconds != 3600 || c.RefreshBeforeSeconds != 300 || c.CredentialCacheEntries != 1024 {
 		t.Fatal("incorrect defaults")
+	}
+	c.Stores[0].Delivery = &WorkerObjectDeliveryConfig{Type: "volc_cdn_a", BaseURL: "https://files.example.com", SigningKey: strings.Repeat("x", 32), TTLSeconds: 300}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -94,6 +110,9 @@ func TestObjectStorageExamplesLoadThroughMainConfig(t *testing.T) {
 			}
 			// Append beneath the main workers mapping, before its repository list.
 			content = strings.Replace(content, "  repository_providers:", strings.Join(section, "\n")+"\n  repository_providers:", 1)
+			// Exercise the optional delivery provider through the single main
+			// YAML loader as well, rather than only validating Go structs.
+			content = strings.Replace(content, "        credentials:\n", "        delivery:\n          type: volc_cdn_a\n          base_url: https://files.example.com\n          signing_key: fixture-key-for-cdn-signing-32-bytes\n          ttl_seconds: 300\n        credentials:\n", 1)
 			filename := filepath.Join(t.TempDir(), "config.yaml")
 			if err := os.WriteFile(filename, []byte(content), 0600); err != nil {
 				t.Fatal(err)
@@ -104,6 +123,10 @@ func TestObjectStorageExamplesLoadThroughMainConfig(t *testing.T) {
 			}
 			if loaded.Workers.ObjectStorage == nil || len(loaded.Workers.ObjectStorage.Stores) != 1 {
 				t.Fatal("object_storage not loaded")
+			}
+			delivery := loaded.Workers.ObjectStorage.Stores[0].Delivery
+			if delivery == nil || delivery.Type != "volc_cdn_a" || delivery.TTLSeconds != 300 {
+				t.Fatal("object delivery not loaded through main configuration")
 			}
 		})
 	}

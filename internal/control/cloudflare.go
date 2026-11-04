@@ -38,7 +38,27 @@ func (b *cfBuffer) Write(p []byte) (int, error) {
 	return b.body.Write(p)
 }
 func cfResult(value any) map[string]any {
+	if page, ok := value.(domain.BucketObjectPage); ok {
+		objects := make([]any, 0, len(page.Objects))
+		for _, item := range page.Objects {
+			objects = append(objects, map[string]any{"key": item.Key, "size": item.Size, "etag": item.ETag, "last_modified": item.Uploaded})
+		}
+		return map[string]any{
+			"success": true, "errors": []any{}, "messages": []any{}, "result": objects,
+			"result_info": map[string]any{"cursor": page.Cursor, "delimited": page.Prefixes, "is_truncated": page.Truncated, "per_page": page.PerPage},
+		}
+	}
 	return map[string]any{"success": true, "errors": []any{}, "messages": []any{}, "result": value}
+}
+
+func cfResponse(value any) any {
+	if deferred, ok := value.(deferredResponse); ok {
+		return deferredResponse{run: func(ctx context.Context) (any, int, error) {
+			out, _, err := deferred.run(ctx)
+			return cfResult(out), 200, err
+		}}
+	}
+	return cfResult(value)
 }
 func (s *Server) cfTransport(fn http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -96,7 +116,7 @@ func (s *Server) cfProtected(fn endpoint) http.HandlerFunc {
 		}
 		s.protectedWorkersWithBodyLimit(false, workerapp.WorkerBuildRequestBodyMax, func(st *State, p Principal, r *http.Request) (any, int, error) {
 			out, _, err := fn(st, p, r)
-			return cfResult(out), 200, err
+			return cfResponse(out), 200, err
 		})(w, r)
 	})
 }
@@ -254,6 +274,7 @@ func (s *Server) cloudflareRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET "+base+"/r2/buckets", s.cfProtected(s.cfBucketList))
 	m.HandleFunc("POST "+base+"/r2/buckets", s.cfProtected(s.cfBucketCreate))
 	m.HandleFunc("GET "+base+"/r2/buckets/{bucket}", s.cfProtected(s.cfBucketList))
+	m.HandleFunc("GET "+base+"/r2/buckets/{bucket}/objects", s.cfProtected(s.workerObjects))
 	m.HandleFunc("GET "+cfPrefix+"/memberships", s.cfProtected(s.cfMemberships))
 	m.HandleFunc("GET "+cfPrefix+"/user", s.cfProtected(s.cfUser))
 	m.HandleFunc("GET "+cfPrefix+"/accounts", s.cfProtected(s.cfAccounts))

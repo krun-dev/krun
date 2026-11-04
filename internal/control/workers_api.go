@@ -31,6 +31,14 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/buckets", protect(false, s.workerBucketList))
 	m.HandleFunc("POST /api/v1/orgs/{org}/workers/buckets", protect(false, s.workerBucketCreate))
 	m.HandleFunc("PATCH /api/v1/orgs/{org}/workers/buckets/{bucket}", protect(false, s.workerBucketUpdate))
+	objects := "/api/v1/orgs/{org}/workers/buckets/{bucket}/objects"
+	// Object operations persist only the ordinary authorization audit, never
+	// Workers snapshots or per-object database rows.
+	objectHandler := s.protectedWith(false, PartitionAll, 0, apiJSONBodyMax, s.workerObjects)
+	m.HandleFunc("GET "+objects, objectHandler)
+	m.HandleFunc("DELETE "+objects, objectHandler)
+	m.HandleFunc("POST "+objects+"/access", objectHandler)
+	m.HandleFunc("GET "+objects+"/{objectOperation}", objectHandler)
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/services", protect(false, s.workerServiceList))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/domains", protect(false, s.workerDomains))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/network-profiles", protect(false, s.workerNetworkProfiles))

@@ -107,6 +107,7 @@ test("all literal translation keys are cataloged", async () => {
     "../components/audit.tsx",
     "../components/workers.tsx",
     "../components/buckets.tsx",
+    "../components/bucket-objects.tsx",
     "../components/workers/r2-bindings.tsx",
     "../components/workers/environment.tsx",
     "../components/workers/preview-base.tsx",

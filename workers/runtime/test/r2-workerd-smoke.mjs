@@ -67,6 +67,18 @@ export default class extends WorkerEntrypoint {
       const object = await this.env.BUCKET.get('large.bin');
       return new Response(object.body);
     }
+    if (new URL(request.url).pathname === '/direct-fixture') {
+      const object = await this.env.BUCKET.get('console.txt');
+      try {
+        return Response.json({
+          text: await object.text(),
+          custom: object.customMetadata,
+          type: object.httpMetadata.contentType,
+        });
+      } finally {
+        await this.env.BUCKET.delete('console.txt');
+      }
+    }
     if (new URL(request.url).pathname === '/cache-fixture') {
       const key = 'https://cached.fixture.test/item';
       if (request.method === 'POST') {
@@ -596,6 +608,15 @@ try {
     await runProject(project, requestWorker);
     console.log(project.name + " upstream HTTP scenarios completed");
   } else {
+    if (process.argv.includes("--direct-fixture")) {
+      const response = await requestWorker("/direct-fixture");
+      assert.equal(response.status, 200, "console upload was not readable by the R2 binding");
+      assert.deepEqual(await response.json(), {
+        text: "console direct upload: 中文",
+        custom: { source: "console" },
+        type: "text/plain",
+      });
+    }
     const bytes = 256 * 1024;
     const result = new Promise((resolve, reject) => {
       const request = http.request(

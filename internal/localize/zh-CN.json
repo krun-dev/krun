@@ -232,5 +232,16 @@
   "R2 bucket does not exist or is disabled in this organization": "R2 桶不存在或已在本组织中停用。",
   "Object storage is not configured": "平台尚未配置对象存储。",
   "R2 storage and its cursor key must be configured": "平台尚未完成 R2 存储配置。",
-  "At most 100 R2 bindings": "最多可配置 100 个 R2 绑定。"
+  "At most 100 R2 bindings": "最多可配置 100 个 R2 绑定。",
+  "Object storage request failed": "对象存储请求失败",
+  "Invalid object prefix or page size": "对象前缀或分页大小无效",
+  "Invalid or expired object cursor": "对象分页游标无效或已过期",
+  "Invalid object key": "对象 key 无效",
+  "Invalid object metadata": "对象元数据无效",
+  "Metadata and size are only accepted for upload": "仅上传操作接受元数据和大小",
+  "Single uploads must be at most 5 GiB": "单次上传不得超过 5 GiB",
+  "Unknown object access operation": "未知的对象访问操作",
+  "CDN delivery is not configured for this bucket": "此桶尚未配置 CDN 分发",
+  "CDN paths cannot contain empty segments": "CDN 路径不能包含空段",
+  "Object changed": "对象已更改"
 }

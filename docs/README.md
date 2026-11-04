@@ -16,6 +16,7 @@
 | S3 兼容对象存储与访问模式 | [对象存储](object-storage.md) |
 | TOS STS / static 凭据 provider 与缓存 | [存储凭据](storage-credentials.md) |
 | Workers R2 binding、逻辑桶与兼容范围 | [R2 binding](workers-r2.md) |
+| 对象浏览、浏览器直传和自有 CDN 域名 | [文件与分发](bucket-objects.md) |
 | Worker 构建、发布、回滚与内部 API | [后端](workers-backend.md) |
 | 控制台操作 | [控制台](workers-console.md) |
 | 资源池与 Network Profile | [资源池](workers-pools.md) |

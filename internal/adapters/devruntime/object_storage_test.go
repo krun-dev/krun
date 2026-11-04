@@ -16,6 +16,7 @@ func TestObjectStoragePinsTransportWithoutRenderingIssuerCredentials(t *testing.
 		RuntimePools:  []config.WorkerRuntimePool{{ID: "default", Default: true, RuntimeToken: "fixture-serving", ValidatorToken: "fixture-validator", ManagementToken: "fixture-management"}},
 		ObjectStorage: &config.WorkerObjectStorageConfig{DefaultStore: "data", Stores: []config.WorkerObjectStore{{ID: "data", Endpoint: "https://Storage.Example.com:443", AddressingStyle: "virtual", Bucket: "physical-data", Credentials: config.WorkerStorageCredentialConfig{SecretAccessKey: "issuer-must-stay-in-control-plane"}}}},
 	}}
+	cfg.Workers.ObjectStorage.Stores[0].Delivery = &config.WorkerObjectDeliveryConfig{Type: "volc_cdn_a", BaseURL: "https://files.example.com", SigningKey: "cdn-signing-must-stay-in-control-plane", TTLSeconds: 300}
 	out := t.TempDir()
 	if err := Render(cfg, "192.0.2.10", out); err != nil {
 		t.Fatal(err)
@@ -30,6 +31,9 @@ func TestObjectStoragePinsTransportWithoutRenderingIssuerCredentials(t *testing.
 		}
 	}
 	validator, _ := os.ReadFile(filepath.Join(out, "validator.capnp"))
+	if strings.Contains(string(runtime), "cdn-signing-must-stay-in-control-plane") || strings.Contains(string(validator), "cdn-signing-must-stay-in-control-plane") {
+		t.Fatal("CDN signing key leaked into runtime configuration")
+	}
 	if !strings.Contains(string(validator), `name = "CACHE_SOURCE"`) {
 		t.Fatal("validator is missing the isolated Cache API facade")
 	}
