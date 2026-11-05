@@ -3,6 +3,7 @@ package control
 import (
 	"net/http"
 
+	"github.com/krun-dev/krun/internal/authorization"
 	"github.com/krun-dev/krun/internal/iam"
 )
 
@@ -44,6 +45,32 @@ func (s *Server) orgDetail(st *State, p Principal, r *http.Request) (any, int, e
 		return nil, 0, e
 	}
 	return st.Organizations[t.ID], 200, nil
+}
+
+// orgPermissions projects the caller's effective organization permissions for
+// navigation. Each operation still authorizes against fresh state on the server.
+func (s *Server) orgPermissions(st *State, p Principal, r *http.Request) (any, int, error) {
+	target, err := s.orgTarget(st, r)
+	if err != nil {
+		return nil, 0, err
+	}
+	decision, err := Authorize(st, p, "organization.read", target)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !decision.Allowed {
+		return nil, 0, notFound()
+	}
+
+	actions, err := authorization.OrganizationPermissions(st, p, target)
+	if err != nil {
+		return nil, 0, err
+	}
+	return map[string]any{
+		"organization_id": target.ID,
+		"actions":         actions,
+		"revision":        st.Revision,
+	}, 200, nil
 }
 
 func (s *Server) orgUpdate(st *State, p Principal, r *http.Request) (any, int, error) {

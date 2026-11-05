@@ -1,11 +1,34 @@
 package control
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestSelfServiceCreatorOnlyAdministersOwnOrganization(t *testing.T) {
+	s, _ := testServer(t)
+	s.Config.OrganizationSelfService = true
+	response := request(s, "POST", "/api/v1/orgs", "krun_cli_viewer", `{"name":"My team"}`)
+	if response.Code != 201 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	var org Organization
+	if err := json.Unmarshal(response.Body.Bytes(), &org); err != nil {
+		t.Fatal(err)
+	}
+	if response = request(s, "GET", "/api/v1/orgs/"+org.ID+"/members", "krun_cli_viewer", ""); response.Code != 200 {
+		t.Fatal("creator cannot administer own organization", response.Code, response.Body.String())
+	}
+	if response = request(s, "GET", "/api/v1/orgs/org-b/members", "krun_cli_viewer", ""); response.Code != 403 {
+		t.Fatal("creator gained access to another organization", response.Code, response.Body.String())
+	}
+	if response = request(s, "GET", "/api/v1/system/users", "krun_cli_viewer", ""); response.Code != 403 {
+		t.Fatal("creator gained system privileges", response.Code, response.Body.String())
+	}
+}
 
 // Self-service must be gated by config, and never available to API keys.
 func TestOrganizationSelfServiceCreate(t *testing.T) {

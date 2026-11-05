@@ -82,7 +82,27 @@ func run() error {
 	cfg.PublicURL = "http://" + cfg.Listen
 	cfg.Development = true
 	cfg.OrganizationSelfService = true
-	cfg.Providers = []config.ProviderConfig{{ID: "ui-dev", Source: "ui-dev", Type: "dev", Name: "本地开发登录", Registration: "jit"}}
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "ui-dev", Source: "ui-dev", Type: "dev", Name: "本地开发登录", Registration: "jit"},
+		// Distinct placeholder client namespaces keep the fixed dev subject in
+		// separate identities, using the real source-registration rules.
+		{
+			ID:           "ui-member",
+			Source:       "ui-member",
+			Type:         "dev",
+			ClientID:     "replace-me-ui-member",
+			Name:         "普通成员测试登录",
+			Registration: "jit",
+		},
+		{
+			ID:           "ui-viewer",
+			Source:       "ui-viewer",
+			Type:         "dev",
+			ClientID:     "replace-me-ui-viewer",
+			Name:         "只读成员测试登录",
+			Registration: "jit",
+		},
+	}
 	cfg.StaticDir, _ = filepath.Abs("dist/console")
 	store, err := control.OpenStore(ctx, cfg.DB)
 	if err != nil {

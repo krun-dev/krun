@@ -71,10 +71,12 @@ import { EnvironmentSettings, Invocation } from "./workers/environment";
 export function WorkersPage({
   base,
   system,
+  canCreate,
   notify,
 }: {
   base: string;
   system: boolean;
+  canCreate: boolean;
   notify: (message: string) => void;
 }) {
   useTranslation();
@@ -99,7 +101,9 @@ export function WorkersPage({
   >([]);
   const [networkProfile, setNetworkProfile] = useState("");
   useEffect(() => {
-    if (system) return;
+    if (system || !canCreate) {
+      return;
+    }
     const c = new AbortController();
     void api<List<WorkerNetworkProfile>>(
       base + "/workers/network-profiles",
@@ -121,7 +125,7 @@ export function WorkersPage({
         setNetworkProfiles([]);
       });
     return () => c.abort();
-  }, [base, system]);
+  }, [base, system, canCreate]);
   useEffect(() => {
     if (system) return;
     const c = new AbortController();
@@ -205,19 +209,21 @@ export function WorkersPage({
         title={t("Workers")}
         description={t("构建代码，选择环境发布，并查看实际运行结果。")}
         action={
-          <Button
-            onClick={() => {
-              setNetworkProfile(
-                networkProfiles.find((profile) => profile.default)?.id ||
-                  networkProfiles[0]?.id ||
-                  "",
-              );
-              setCreate(true);
-            }}
-          >
-            <Plus size={16} />
-            {t("创建 Worker")}
-          </Button>
+          canCreate ? (
+            <Button
+              onClick={() => {
+                setNetworkProfile(
+                  networkProfiles.find((profile) => profile.default)?.id ||
+                    networkProfiles[0]?.id ||
+                    "",
+                );
+                setCreate(true);
+              }}
+            >
+              <Plus size={16} />
+              {t("创建 Worker")}
+            </Button>
+          ) : undefined
         }
       />
       {error ? (
@@ -962,7 +968,11 @@ function WorkerDetail({
             </Card>
           </TabsContent>
           <TabsContent value="preview-base" className="mt-5">
-            <PreviewBasePanel base={base} organizationBase={organizationBase} notify={notify} />
+            <PreviewBasePanel
+              base={base}
+              organizationBase={organizationBase}
+              notify={notify}
+            />
           </TabsContent>
           <TabsContent value="versions" className="mt-5">
             <VersionsPanel

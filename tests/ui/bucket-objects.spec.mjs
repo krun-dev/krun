@@ -35,7 +35,7 @@ test("browse directories and transfer object bytes directly to storage", async (
     return response.json();
   }
   await page.goto("/");
-  await page.getByRole("button", { name: /本地开发登录|kind 开发登录/ }).click();
+  await page.getByRole("button", { name: /本地开发登录|kind 开发登录/ }).first().click();
   await expect(page.getByRole("button", { name: "退出登录" })).toBeVisible();
   const id = randomUUID().slice(0, 8);
   const org = await api("/api/v1/orgs", "POST", { name: "Object browser " + id });

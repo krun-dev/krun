@@ -50,6 +50,11 @@ import {
   type Provider,
 } from "@/lib/api";
 import { AUTH_REQUIRED_EVENT } from "@/lib/auth-required";
+import {
+  canOpenSection,
+  type OrganizationPermissions,
+  type Section,
+} from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 import {
   Empty,
@@ -62,7 +67,11 @@ import {
   QuickLink,
   SelectField,
 } from "@/components/common";
-const OAuthConsent = lazy(() => import("@/components/oauth-consent").then(m => ({ default: m.OAuthConsent })));
+const OAuthConsent = lazy(() =>
+  import("@/components/oauth-consent").then((m) => ({
+    default: m.OAuthConsent,
+  })),
+);
 const Login = lazy(() =>
   import("@/components/login").then((module) => ({ default: module.Login })),
 );
@@ -94,25 +103,21 @@ const AuditPage = lazy(() =>
 const WorkersPage = lazy(() =>
   import("@/components/workers").then((m) => ({ default: m.WorkersPage })),
 );
-const BucketsPage = lazy(() => import("@/components/buckets").then((module) => ({ default: module.BucketsPage })));
+const BucketsPage = lazy(() =>
+  import("@/components/buckets").then((module) => ({
+    default: module.BucketsPage,
+  })),
+);
 const KeysPage = lazy(() =>
   import("@/components/keys").then((module) => ({ default: module.KeysPage })),
 );
 
-type Section =
-  | "overview"
-  | "orgs"
-  | "members"
-  | "groups"
-  | "roles"
-  | "keys"
-  | "check"
-  | "audit"
-  | "users"
-  | "resources"
-  | "workers"
-  | "buckets";
-const navigation: { id: Section; name: string; icon: typeof Users; group: string }[] = [
+const navigation: {
+  id: Section;
+  name: string;
+  icon: typeof Users;
+  group: string;
+}[] = [
   { id: "overview", name: "概览", icon: LayoutDashboard, group: "" },
   { id: "workers", name: "Workers", icon: Layers3, group: "计算服务" },
   { id: "buckets", name: "对象存储", icon: Database, group: "存储服务" },
@@ -123,7 +128,6 @@ const navigation: { id: Section; name: string; icon: typeof Users; group: string
   { id: "resources", name: "资源目录", icon: Building2, group: "组织管理" },
   { id: "check", name: "权限检查", icon: Search, group: "组织管理" },
   { id: "audit", name: "审计记录", icon: Activity, group: "组织管理" },
-  { id: "users", name: "系统用户", icon: Users, group: "系统" },
 ];
 const adminNavigation: { id: Section; name: string }[] = [
   { id: "orgs", name: "组织目录" },
@@ -190,13 +194,23 @@ export default function App() {
     [refresh, setRefresh] = useState(0),
     [menu, setMenu] = useState(false);
   const [workersNavigation, setWorkersNavigation] = useState(0);
-  const [systemView, setSystemView] = useState(false);
+  const [orgsLoaded, setOrgsLoaded] = useState(false);
+  const [organizationsError, setOrganizationsError] = useState("");
+  const [systemView, setSystemView] = useState(
+    () => new URLSearchParams(window.location.search).get("view") === "system",
+  );
+  const system = systemView && Boolean(me?.system_admin);
+  const [permissions, setPermissions] =
+    useState<OrganizationPermissions | null>(null);
+  const [permissionsError, setPermissionsError] = useState("");
   const [orgCatalog, setOrgCatalog] = useState<Organization[]>([]);
   const [orgDialog, setOrgDialog] = useState(false),
     [orgName, setOrgName] = useState(""),
     [saving, setSaving] = useState(false),
     [copied, setCopied] = useState(false);
-  const oauthLogin = new URLSearchParams(window.location.search).has("oauth") || new URLSearchParams(window.location.search).has("oauth_device");
+  const oauthLogin =
+    new URLSearchParams(window.location.search).has("oauth") ||
+    new URLSearchParams(window.location.search).has("oauth_device");
   const notify = useCallback((message: string) => setNotice(message), []);
   const reload = useCallback(() => setRefresh((x) => x + 1), []);
   useEffect(() => {
@@ -204,6 +218,10 @@ export default function App() {
       setMe(null);
       setOrgs([]);
       setOrgCatalog([]);
+      setOrgsLoaded(false);
+      setOrganizationsError("");
+      setPermissions(null);
+      setSystemView(false);
       setMenu(false);
       setOrgDialog(false);
       setSaving(false);
@@ -226,8 +244,15 @@ export default function App() {
   // previous page's parameters behind, so refreshing or sharing a link reopened
   // the wrong page.
   useEffect(() => {
-    if (oauthLogin) return;
+    if (oauthLogin || !me) {
+      return;
+    }
     const url = new URL(location.href);
+    if (system) {
+      url.searchParams.set("view", "system");
+    } else {
+      url.searchParams.delete("view");
+    }
     if (section === "overview") url.searchParams.delete("page");
     else url.searchParams.set("page", section);
     if (section !== "workers") {
@@ -241,7 +266,7 @@ export default function App() {
     if (scope) url.searchParams.set("workspace", scope);
     else url.searchParams.delete("workspace");
     if (url.toString() !== location.href) history.replaceState(null, "", url);
-  }, [section, scope]);
+  }, [section, scope, system, me, oauthLogin]);
   useEffect(() => {
     let active = true;
     Promise.all([
@@ -277,25 +302,90 @@ export default function App() {
   useEffect(() => {
     if (!me || oauthLogin) return;
     let active = true;
-    api<List<Organization>>("/api/v1/orgs")
-      .then((data) => {
+    setOrganizationsError("");
+    Promise.all([
+      api<List<Organization>>("/api/v1/orgs"),
+      api<Me>("/api/auth/me"),
+    ])
+      .then(([data, currentMe]) => {
         if (active) {
+          setMe(currentMe);
           setOrgs(data.items);
           setOrgCatalog(data.items);
+          setOrgsLoaded(true);
           setScope((current) =>
-            current === "system" || data.items.some((o) => o.id === current)
+            data.items.some((o) => o.id === current)
               ? current
               : (data.items[0]?.id ?? ""),
           );
         }
       })
       .catch((e) => {
-        if (active) notify(errorMessage(e));
+        if (active) setOrganizationsError(errorMessage(e));
       });
     return () => {
       active = false;
     };
-  }, [me, refresh, notify]);
+  }, [me?.user.user_id, refresh, oauthLogin]);
+  useEffect(() => {
+    const refreshPermissions = () => reload();
+    window.addEventListener("focus", refreshPermissions);
+    return () => window.removeEventListener("focus", refreshPermissions);
+  }, [reload]);
+  const org = orgs.find((o) => o.id === scope);
+  useEffect(() => {
+    setPermissionsError("");
+    if (!me || !org || system || oauthLogin) {
+      setPermissions(null);
+      return;
+    }
+    // Revalidate the same organization without unmounting its page and losing
+    // unsaved forms. A different organization remains closed until its reply.
+    setPermissions((current) => current?.organization_id === org.id ? current : null);
+    const controller = new AbortController();
+    api<OrganizationPermissions>(
+      `/api/v1/orgs/${encodeURIComponent(org.id)}/permissions`,
+      "GET",
+      undefined,
+      controller.signal,
+    )
+      .then((data) => {
+        if (!controller.signal.aborted) {
+          setPermissions(data);
+        }
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setPermissions(null);
+          setPermissionsError(errorMessage(error));
+        }
+      });
+    return () => controller.abort();
+  }, [me?.user.user_id, me?.revision, org?.id, system, refresh, oauthLogin]);
+  const canOpen = (page: Section) =>
+    canOpenSection(
+      page,
+      system,
+      Boolean(me?.system_admin),
+      org?.id ?? "",
+      organizationsError || permissionsError ? null : permissions,
+    );
+  const permissionsReady =
+    orgsLoaded && (system || !org || permissions?.organization_id === org.id);
+  useEffect(() => {
+    if (me && permissionsReady && !canOpen(section)) {
+      setSection(system ? "orgs" : "overview");
+    }
+  }, [
+    me,
+    permissionsReady,
+    permissions,
+    organizationsError,
+    permissionsError,
+    section,
+    system,
+    org?.id,
+  ]);
   async function mutate(operation: () => Promise<unknown>, message: string) {
     setSaving(true);
     try {
@@ -311,9 +401,7 @@ export default function App() {
   // Creation is allowed for system admins always, and for everyone else only
   // when the server enables self-service organizations.
   const canCreateOrg = Boolean(me?.system_admin) || orgSelfService;
-  const org = orgs.find((o) => o.id === scope),
-    system = systemView,
-    scopeName = systemView ? t("平台管理") : (org?.name ?? t("选择组织"));
+  const scopeName = system ? t("平台管理") : (org?.name ?? t("选择组织"));
   async function copyID() {
     try {
       await navigator.clipboard.writeText(me!.user.user_id);
@@ -339,7 +427,17 @@ export default function App() {
         </Button>
       </div>
     );
-  if (oauthLogin) return <Suspense fallback={<Loading />}><OAuthConsent me={me} providers={providers} development={development} onLogout={() => setMe(null)} /></Suspense>;
+  if (oauthLogin)
+    return (
+      <Suspense fallback={<Loading />}>
+        <OAuthConsent
+          me={me}
+          providers={providers}
+          development={development}
+          onLogout={() => setMe(null)}
+        />
+      </Suspense>
+    );
   if (!me)
     return (
       <Suspense fallback={<Loading />}>
@@ -347,7 +445,8 @@ export default function App() {
           providers={providers}
           development={development}
           error={
-            new URLSearchParams(window.location.search).get("error") ?? undefined
+            new URLSearchParams(window.location.search).get("error") ??
+            undefined
           }
         />
       </Suspense>
@@ -379,7 +478,10 @@ export default function App() {
               value={scope}
               onChange={(v) => {
                 setScope(v);
-
+                if (system) {
+                  setSystemView(false);
+                  setSection("overview");
+                }
                 setMenu(false);
               }}
             >
@@ -394,7 +496,7 @@ export default function App() {
             </SelectField>
           </div>
         </div>
-        {systemView ? (
+        {system ? (
           <>
             <div className="mt-7 px-3 text-[10px] font-semibold uppercase tracking-widest text-primary/80">
               {t("平台管理")}
@@ -424,65 +526,59 @@ export default function App() {
             </nav>
           </>
         ) : (
-        <>
-        <div className="mt-7 px-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-          {t("平台控制台")}
-        </div>
-        <nav className="mt-3 grid gap-1">
-          {[
-            ...navigation.filter((n) => n.group === ""),
-            ...navigation.filter((n) => n.group === "计算服务"),
-            ...navigation.filter((n) => n.group === "存储服务"),
-            ...navigation.filter((n) => n.group === "组织管理"),
-            ...navigation.filter((n) => n.group === "系统"),
-          ]
-            .filter(
-              (n) =>
-                !system ||
-                me.system_admin ||
-                ["overview", "keys", "check"].includes(n.id),
-            )
-            .map((n, index, all) => (
-              <div key={n.id} className="contents">
-                {index > 0 && n.group !== all[index - 1].group && (
-                  <div className="mt-5 px-3 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/80">
-                    {n.group === "" ? t("通用") : t(n.group)}
+          <>
+            <div className="mt-7 px-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+              {t("平台控制台")}
+            </div>
+            <nav className="mt-3 grid gap-1">
+              {[
+                ...navigation.filter((n) => n.group === ""),
+                ...navigation.filter((n) => n.group === "计算服务"),
+                ...navigation.filter((n) => n.group === "存储服务"),
+                ...navigation.filter((n) => n.group === "组织管理"),
+              ]
+                .filter((n) => canOpen(n.id))
+                .map((n, index, all) => (
+                  <div key={n.id} className="contents">
+                    {index > 0 && n.group !== all[index - 1].group && (
+                      <div className="mt-5 px-3 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/80">
+                        {n.group === "" ? t("通用") : t(n.group)}
+                      </div>
+                    )}
+                    <button
+                      onClick={() => {
+                        if (n.id === "workers") {
+                          const url = new URL(location.href);
+                          url.searchParams.set("page", "workers");
+                          if (scope) url.searchParams.set("workspace", scope);
+                          url.searchParams.delete("worker");
+                          url.searchParams.delete("environment");
+                          history.replaceState(null, "", url);
+                          setWorkersNavigation((v) => v + 1);
+                        }
+                        setSection(n.id);
+                        setMenu(false);
+                      }}
+                      className={cn(
+                        "flex items-center gap-3 rounded-md px-3 py-2.5 text-left text-[13px] transition",
+                        section === n.id
+                          ? "bg-secondary font-medium text-foreground"
+                          : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
+                      )}
+                    >
+                      {n.group === "" ? null : (
+                        <span className="w-[17px] shrink-0" />
+                      )}
+                      <n.icon size={17} />
+                      {t(n.name)}
+                      {section === n.id && (
+                        <span className="ml-auto size-1.5 rounded-full bg-primary" />
+                      )}
+                    </button>
                   </div>
-                )}
-                <button
-                  onClick={() => {
-                    if (n.id === "workers") {
-                      const url = new URL(location.href);
-                      url.searchParams.set("page", "workers");
-                      if (scope) url.searchParams.set("workspace", scope);
-                      url.searchParams.delete("worker");
-                      url.searchParams.delete("environment");
-                      history.replaceState(null, "", url);
-                      setWorkersNavigation((v) => v + 1);
-                    }
-                    setSection(n.id);
-                    setMenu(false);
-                  }}
-                  className={cn(
-                    "flex items-center gap-3 rounded-md px-3 py-2.5 text-left text-[13px] transition",
-                    section === n.id
-                      ? "bg-secondary font-medium text-foreground"
-                      : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
-                  )}
-                >
-                  {n.group === "" ? null : (
-                    <span className="w-[17px] shrink-0" />
-                  )}
-                  <n.icon size={17} />
-                  {t(n.name)}
-                  {section === n.id && (
-                    <span className="ml-auto size-1.5 rounded-full bg-primary" />
-                  )}
-                </button>
-              </div>
-            ))}
-        </nav>
-        </>
+                ))}
+            </nav>
+          </>
         )}
         <div className="mt-auto pt-8">
           <div className="rounded-md border bg-background/50 p-4">
@@ -523,31 +619,33 @@ export default function App() {
             <PanelLeft size={18} />
           </Button>
           <span className="hidden shrink-0 text-sm text-muted-foreground sm:inline">
-            {systemView ? t("平台管理") : t("组织")}
+            {system ? t("平台管理") : t("组织")}
           </span>
           <span className="hidden text-muted-foreground/40 sm:inline">/</span>
           <span className="truncate text-sm font-medium">{scopeName}</span>
           <span className="hidden text-muted-foreground/40 xl:inline">/</span>
           <span className="hidden shrink-0 text-xs text-muted-foreground xl:inline">
             {t(
-              (systemView ? adminNavigation : navigation).find((n) => n.id === section)?.name ?? "系统用户",
+              (system ? adminNavigation : navigation).find(
+                (n) => n.id === section,
+              )?.name ?? "概览",
             )}
           </span>
         </div>
         <div className="ml-3 flex shrink-0 items-center gap-3">
           {me.system_admin ? (
             <Button
-              variant={systemView ? "default" : "ghost"}
+              variant={system ? "default" : "ghost"}
               className="gap-1.5 px-2.5 text-[12px]"
-              aria-label={systemView ? t("返回组织") : t("平台管理")}
+              aria-label={system ? t("返回组织") : t("平台管理")}
               onClick={() => {
                 setSystemView((v) => !v);
-                setSection(systemView ? "overview" : "orgs");
+                setSection(system ? "overview" : "orgs");
               }}
             >
               <ShieldCheck size={15} />
               <span className="hidden sm:inline">
-                {systemView ? t("返回组织") : t("平台管理")}
+                {system ? t("返回组织") : t("平台管理")}
               </span>
             </Button>
           ) : null}
@@ -601,209 +699,237 @@ export default function App() {
       <main className="mx-auto max-w-[1440px] px-5 py-7 md:px-9 md:py-8">
         {notice && <Notice message={notice} close={() => setNotice("")} />}
         <Suspense fallback={<Loading />}>
-        {orgs.length === 0 && !system ? (
-          <NoOrganization
-            canCreate={canCreateOrg}
-            onCreate={() => setOrgDialog(true)}
-            userId={me.user.user_id}
-          />
-        ) : section === "overview" ? (
-          <>
-            <PageHeader
-              eyebrow={t("Workspace overview")}
-              title={t("组织概览")}
-              description={t("从这里管理团队身份、访问权限与自动化凭据。")}
-              action={
-                canCreateOrg ? (
-                  <Button onClick={() => setOrgDialog(true)}>
-                    <Plus size={16} />
-                    {t("创建组织")}
-                  </Button>
-                ) : undefined
-              }
+          {organizationsError || (permissionsError && !system) ? (
+            <div role="alert" className="grid justify-items-start gap-4">
+              <p>{organizationsError || permissionsError}</p>
+              <Button onClick={reload}>{t("重试")}</Button>
+            </div>
+          ) : !permissionsReady || !canOpen(section) ? (
+            <Loading />
+          ) : orgs.length === 0 && !system ? (
+            <NoOrganization
+              canCreate={canCreateOrg}
+              onCreate={() => setOrgDialog(true)}
+              userId={me.user.user_id}
             />
-            <div className="grid gap-4 sm:grid-cols-3">
-              <Metric
-                label={t("可访问组织")}
-                value={orgs.length}
-                icon={<Building2 size={18} />}
-                note={t("只展示当前身份获准访问的组织")}
-              />
-              <Metric
-                label={t("已启用身份来源")}
-                value={providers.length}
-                icon={<ShieldCheck size={18} />}
-                note={t("每个来源对应独立的平台账号")}
-              />
-              <Metric
-                label={t("当前身份")}
-                value={
-                  <span className="text-xl">
-                    {me.system_admin ? t("系统管理员") : t("平台用户")}
-                  </span>
+          ) : section === "overview" ? (
+            <>
+              <PageHeader
+                eyebrow={t("Workspace overview")}
+                title={t("组织概览")}
+                description={t("从这里管理团队身份、访问权限与自动化凭据。")}
+                action={
+                  canCreateOrg ? (
+                    <Button onClick={() => setOrgDialog(true)}>
+                      <Plus size={16} />
+                      {t("创建组织")}
+                    </Button>
+                  ) : undefined
                 }
-                icon={<Users size={18} />}
-                note={t("权限修订 {{v0}} · 每次请求重新检查", {
-                  v0: me.revision,
-                })}
               />
-            </div>
-            <div className="mt-6 grid gap-6 xl:grid-cols-[1.35fr_1fr]">
-              <Card className="gap-0 shadow-none">
-                <CardHeader className="border-b pb-5">
-                  <CardTitle className="text-base">{t("我的组织")}</CardTitle>
-                  <CardDescription>
-                    {t("协作与权限隔离的组织")}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="pt-5">
-                  {orgs.length ? (
-                    orgs.map((o) => (
-                      <button
-                        className="mb-2 flex w-full items-center gap-4 rounded-lg border p-4 text-left hover:bg-secondary/50"
-                        key={o.id}
-                        onClick={() => {
-                          setScope(o.id);
-                          setSection("members");
-                        }}
-                      >
-                        <div className="rounded-lg bg-secondary p-2.5">
-                          <Building2 size={18} />
-                        </div>
-                        <div>
-                          <p className="text-sm font-medium">{o.name}</p>
-                          <p className="mt-1 font-mono text-[11px] text-muted-foreground">
-                            {o.id}
-                          </p>
-                        </div>
-                        <ArrowUpRight
-                          className="ml-auto text-muted-foreground"
-                          size={16}
-                        />
-                      </button>
-                    ))
-                  ) : (
-                    <Empty
-                      title={t("尚未加入组织")}
-                      description={
-                        me.system_admin
-                          ? t("创建组织后即可管理成员与权限。")
-                          : t(
-                              "把下方的本地用户 ID 提供给管理员，申请组织成员资格与角色。",
-                            )
-                      }
-                    />
-                  )}
-                </CardContent>
-              </Card>
-              <Card className="gap-0 shadow-none">
-                <CardHeader className="border-b pb-5">
-                  <CardTitle className="text-base">{t("快速开始")}</CardTitle>
-                  <CardDescription>
-                    {t("把权限配置成团队需要的样子")}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="grid gap-3 pt-5">
-                  <QuickLink
-                    title={t("设置用户组与角色")}
-                    description={t("让团队通过用户组共享权限")}
-                    onClick={() => setSection("groups")}
-                  />
-                  <QuickLink
-                    title={t("创建受限 API Key")}
-                    description={t("精确选择自动化所需资源和动作")}
-                    onClick={() => setSection("keys")}
-                  />
-                  <div className="mt-1 rounded-lg bg-secondary/70 p-4">
-                    <p className="text-xs text-muted-foreground">
-                      {t("你的本地用户 ID")}
-                    </p>
-                    <div className="mt-2 flex items-center gap-2">
-                      <code className="min-w-0 break-all text-xs">
-                        {me.user.user_id}
-                      </code>
-                      <Button
-                        size="icon"
-                        className="ml-auto shrink-0"
-                        variant="ghost"
-                        aria-label={t("复制用户 ID")}
-                        onClick={copyID}
-                      >
-                        {copied ? <Check size={14} /> : <Clipboard size={14} />}
-                      </Button>
+              <div className="grid gap-4 sm:grid-cols-3">
+                <Metric
+                  label={t("可访问组织")}
+                  value={orgs.length}
+                  icon={<Building2 size={18} />}
+                  note={t("只展示当前身份获准访问的组织")}
+                />
+                <Metric
+                  label={t("已启用身份来源")}
+                  value={providers.length}
+                  icon={<ShieldCheck size={18} />}
+                  note={t("每个来源对应独立的平台账号")}
+                />
+                <Metric
+                  label={t("当前身份")}
+                  value={
+                    <span className="text-xl">
+                      {me.system_admin ? t("系统管理员") : t("平台用户")}
+                    </span>
+                  }
+                  icon={<Users size={18} />}
+                  note={t("权限修订 {{v0}} · 每次请求重新检查", {
+                    v0: me.revision,
+                  })}
+                />
+              </div>
+              <div className="mt-6 grid gap-6 xl:grid-cols-[1.35fr_1fr]">
+                <Card className="gap-0 shadow-none">
+                  <CardHeader className="border-b pb-5">
+                    <CardTitle className="text-base">{t("我的组织")}</CardTitle>
+                    <CardDescription>
+                      {t("协作与权限隔离的组织")}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="pt-5">
+                    {orgs.length ? (
+                      orgs.map((o) => (
+                        <button
+                          className="mb-2 flex w-full items-center gap-4 rounded-lg border p-4 text-left hover:bg-secondary/50"
+                          key={o.id}
+                          onClick={() => {
+                            setScope(o.id);
+                            setSection("overview");
+                          }}
+                        >
+                          <div className="rounded-lg bg-secondary p-2.5">
+                            <Building2 size={18} />
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium">{o.name}</p>
+                            <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                              {o.id}
+                            </p>
+                          </div>
+                          <ArrowUpRight
+                            className="ml-auto text-muted-foreground"
+                            size={16}
+                          />
+                        </button>
+                      ))
+                    ) : (
+                      <Empty
+                        title={t("尚未加入组织")}
+                        description={
+                          me.system_admin
+                            ? t("创建组织后即可管理成员与权限。")
+                            : t(
+                                "把下方的本地用户 ID 提供给管理员，申请组织成员资格与角色。",
+                              )
+                        }
+                      />
+                    )}
+                  </CardContent>
+                </Card>
+                <Card className="gap-0 shadow-none">
+                  <CardHeader className="border-b pb-5">
+                    <CardTitle className="text-base">{t("快速开始")}</CardTitle>
+                    <CardDescription>
+                      {t("把权限配置成团队需要的样子")}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="grid gap-3 pt-5">
+                    {canOpen("groups") && (
+                      <QuickLink
+                        title={t("设置用户组与角色")}
+                        description={t("让团队通过用户组共享权限")}
+                        onClick={() => setSection("groups")}
+                      />
+                    )}
+                    {canOpen("keys") && (
+                      <QuickLink
+                        title={t("创建受限 API Key")}
+                        description={t("精确选择自动化所需资源和动作")}
+                        onClick={() => setSection("keys")}
+                      />
+                    )}
+                    <div className="mt-1 rounded-lg bg-secondary/70 p-4">
+                      <p className="text-xs text-muted-foreground">
+                        {t("你的本地用户 ID")}
+                      </p>
+                      <div className="mt-2 flex items-center gap-2">
+                        <code className="min-w-0 break-all text-xs">
+                          {me.user.user_id}
+                        </code>
+                        <Button
+                          size="icon"
+                          className="ml-auto shrink-0"
+                          variant="ghost"
+                          aria-label={t("复制用户 ID")}
+                          onClick={copyID}
+                        >
+                          {copied ? (
+                            <Check size={14} />
+                          ) : (
+                            <Clipboard size={14} />
+                          )}
+                        </Button>
+                      </div>
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        {t("来源：")}
+                        {me.user.source_id}
+                      </p>
                     </div>
-                    <p className="mt-1 text-[11px] text-muted-foreground">
-                      {t("来源：")}
-                      {me.user.source_id}
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          </>
-        ) : section === "orgs" ? (
-          <OrgCatalogPage orgs={orgCatalog} onSelect={(id) => { setScope(id); setSystemView(false); setSection("overview"); }} />
-        ) : section === "users" ? (
-          <UsersPage notify={notify} refresh={refresh} reload={reload} />
-        ) : !scope ? (
-          <NoOrganization
-            canCreate={canCreateOrg}
-            onCreate={() => setOrgDialog(true)}
-            userId={me.user.user_id}
-          />
-        ) : ["members", "groups", "roles"].includes(section) ? (
-          <IAMPage
-            key={scope + section}
-            section={section as "members" | "groups" | "roles"}
-            base={base}
-            scope={scope}
-            system={system}
-            notify={notify}
-            refresh={refresh}
-            reload={reload}
-          />
-        ) : section === "keys" ? (
-          <KeysPage
-            key={scope}
-            base={base}
-            scope={scope}
-            system={system}
-            notify={notify}
-            refresh={refresh}
-            reload={reload}
-          />
-        ) : section === "workers" ? (
-          me.workers_configured === false ? (
-            <Empty
-              title={t("Workers 未配置")}
-              description={t(
-                "请在控制面配置 workers: 段并重启服务，然后刷新此页面。",
-              )}
+                  </CardContent>
+                </Card>
+              </div>
+            </>
+          ) : section === "orgs" ? (
+            <OrgCatalogPage
+              orgs={orgCatalog}
+              onSelect={(id) => {
+                setScope(id);
+                setSystemView(false);
+                setSection("overview");
+              }}
             />
-          ) : (
-            <WorkersPage
-              key={`${scope}:${workersNavigation}`}
+          ) : section === "users" ? (
+            <UsersPage notify={notify} refresh={refresh} reload={reload} />
+          ) : !scope && !system ? (
+            <NoOrganization
+              canCreate={canCreateOrg}
+              onCreate={() => setOrgDialog(true)}
+              userId={me.user.user_id}
+            />
+          ) : ["members", "groups", "roles"].includes(section) ? (
+            <IAMPage
+              key={scope + section}
+              section={section as "members" | "groups" | "roles"}
+              base={base}
+              scope={scope}
+              system={system}
+              notify={notify}
+              refresh={refresh}
+              reload={reload}
+            />
+          ) : section === "keys" ? (
+            <KeysPage
+              key={scope}
+              base={base}
+              scope={scope}
+              system={system}
+              notify={notify}
+              refresh={refresh}
+              reload={reload}
+            />
+          ) : section === "workers" ? (
+            me.workers_configured === false ? (
+              <Empty
+                title={t("Workers 未配置")}
+                description={t(
+                  "请在控制面配置 workers: 段并重启服务，然后刷新此页面。",
+                )}
+              />
+            ) : (
+              <WorkersPage
+                key={`${scope}:${workersNavigation}`}
+                base={base}
+                system={system}
+                canCreate={permissions?.actions["service.create"] === true}
+                notify={notify}
+              />
+            )
+          ) : section === "buckets" ? (
+            <BucketsPage
+              key={scope}
               base={base}
               system={system}
               notify={notify}
             />
-          )
-        ) : section === "buckets" ? (
-          <BucketsPage key={scope} base={base} system={system} notify={notify}/>
-        ) : section === "resources" ? (
-          <ResourcesPage
-            key={scope}
-            base={base}
-            system={system}
-            notify={notify}
-            refresh={refresh}
-            reload={reload}
-          />
-        ) : section === "check" ? (
-          <CheckPage scope={scope} system={system} />
-        ) : (
-          <AuditPage key={base} base={base} refresh={refresh} />
-        )}
+          ) : section === "resources" ? (
+            <ResourcesPage
+              key={scope}
+              base={base}
+              system={system}
+              notify={notify}
+              refresh={refresh}
+              reload={reload}
+            />
+          ) : section === "check" ? (
+            <CheckPage scope={scope} system={system} />
+          ) : (
+            <AuditPage key={base} base={base} refresh={refresh} />
+          )}
         </Suspense>
       </main>
       <Dialog open={orgDialog} onOpenChange={setOrgDialog}>
@@ -822,7 +948,9 @@ export default function App() {
                 const organization = await api<Organization>(
                   "/api/v1/orgs",
                   "POST",
-                  { name: orgName },
+                  {
+                    name: orgName,
+                  },
                 );
                 setScope(organization.id);
                 setOrgDialog(false);
@@ -900,7 +1028,13 @@ function NoOrganization({
   );
 }
 
-function OrgCatalogPage({ orgs, onSelect }: { orgs: Organization[]; onSelect: (id: string) => void }) {
+function OrgCatalogPage({
+  orgs,
+  onSelect,
+}: {
+  orgs: Organization[];
+  onSelect: (id: string) => void;
+}) {
   const { t } = useTranslation();
   return (
     <section className="grid gap-4">
@@ -927,9 +1061,14 @@ function OrgCatalogPage({ orgs, onSelect }: { orgs: Organization[]; onSelect: (i
             >
               <div className="flex items-center justify-between gap-2">
                 <strong className="truncate">{o.name}</strong>
-                <Building2 size={16} className="shrink-0 text-muted-foreground" />
+                <Building2
+                  size={16}
+                  className="shrink-0 text-muted-foreground"
+                />
               </div>
-              <code className="mt-2 block break-all text-[11px] text-muted-foreground">{o.id}</code>
+              <code className="mt-2 block break-all text-[11px] text-muted-foreground">
+                {o.id}
+              </code>
             </button>
           ))}
         </div>

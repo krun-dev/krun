@@ -8,8 +8,8 @@ listen: 0.0.0.0:8080
 internal_listen: 0.0.0.0:8081
 public_url: https://console.example.com
 development: false
-# 允许任何已登录用户创建组织（默认 false：仅系统管理员）
-organization_self_service: false
+# 允许已登录用户创建组织并成为该组织管理员；设为 false 则仅系统管理员可创建。
+organization_self_service: true
 db: ${KRUN_DATABASE_URL}
 # 生产控制台由 OSS/CDN 提供；Go 只接收 /api/*。
 static_dir: ""

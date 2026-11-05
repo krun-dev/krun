@@ -5,8 +5,8 @@
 listen: 127.0.0.1:8080
 public_url: http://127.0.0.1:8080
 development: true
-# 允许任何已登录用户创建组织（默认 false：仅系统管理员）
-organization_self_service: false
+# 允许已登录用户创建组织并成为该组织管理员；设为 false 则仅系统管理员可创建。
+organization_self_service: true
 db: postgres://krun:CHANGE_ME@127.0.0.1:25432/krun_dev?sslmode=disable
 static_dir: dist
 trusted_proxy_cidrs: []
