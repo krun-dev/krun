@@ -139,8 +139,11 @@ providers:
 workers:
   reconcile_concurrency: 8
   namespace: workers-mvp
-  # 集群内可省略以下三项，默认使用 Pod service account；local-first 开发
-  # 在 .data/dev.yaml 中显式填写本机可达 API 与 .data/kind-creds 的绝对路径。
+  # 集群内可省略以下三项，默认使用 Pod service account。
+  # 本地/集群外控制面可改用显式 kubeconfig；两种方式互斥，使用时删除下面三项。
+  # kubernetes_kubeconfig_file: /absolute/path/to/kubeconfig
+  # kubernetes_context: test-cluster # 省略时使用该文件的 current-context。
+  # 不搜索 KUBECONFIG 或 ~/.kube/config；namespace 始终由上面的配置决定。
   kubernetes_api: https://kubernetes.default.svc
   kubernetes_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
   kubernetes_ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt

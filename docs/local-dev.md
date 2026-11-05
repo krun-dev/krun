@@ -215,3 +215,34 @@ node deploy/workers-dev/storage.e2e.mjs
 
 静态域名应填写主 YAML 中私有域对应的 `static_domain`。结果和浏览器截图保存到
 被忽略的 `.data/dev-storage-e2e/`；测试组织和 Worker 保留，便于检查已部署页面。
+
+## 显式 kubeconfig
+
+本地或集群外运行控制面时，可在唯一主配置 `.data/dev.yaml` 的 `workers:` 段指定
+凭证文件和 context：
+
+```yaml
+workers:
+  namespace: workers-mvp
+  kubernetes_kubeconfig_file: /absolute/path/to/kubeconfig
+  kubernetes_context: test-cluster
+  # 其余 Workers 配置保持在同一段中。
+```
+
+`kubernetes_kubeconfig_file` 必须是绝对路径；`kubernetes_context` 可省略，使用该文件的
+`current-context`。这两项与 `kubernetes_api`、`kubernetes_token_file`、
+`kubernetes_ca_file` 互斥，切换时应删除后三项。不会读取 `$KUBECONFIG` 或合并
+`~/.kube/config`，指定文件或 context 不存在时启动失败。
+
+客户端使用 client-go 处理 kubeconfig 的 CA、客户端证书、Bearer Token 和认证 transport；
+文件内相对路径以 kubeconfig 所在目录为基准。tokenFile 每次请求重新读取，跟随文件
+轮换；嵌入的 token 或证书更新后需重启控制面重新加载。若使用 exec 凭证插件，运行
+控制面的主机必须安装文件中指定的插件，且插件须能非交互运行。
+
+API 操作的 namespace 始终使用主配置 `workers.namespace`，不使用 kubeconfig context
+中的 namespace。控制面到 runtime/validator、Gateway 和对象存储的网络连通性仍需
+按 local-first 拓扑准备；kubeconfig 只负责 Kubernetes API 的连接和认证。
+
+集群内标准部署继续使用专用 ServiceAccount；部署渲染器不挂载外部 kubeconfig，也不
+把本机凭证文件打入镜像或 Secret。运行时 kubeconfig 与执行部署脚本时 kubectl 使用的
+`KUBECONFIG` 是不同入口。

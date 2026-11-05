@@ -17,6 +17,11 @@ providers:
     type: dev
     name: 本地开发登录
   # 接入真实 SSO 时参考 config/example.yaml；Workers 与认证配置同文件，完整 workers: 段见 config/example.yaml。
+  # 本地连接集群时在同一 workers: 段配置：
+  # kubernetes_kubeconfig_file: /absolute/path/to/kubeconfig
+  # kubernetes_context: test-cluster # 可省略，使用文件内 current-context。
+  # 与 kubernetes_api / kubernetes_token_file / kubernetes_ca_file 互斥。
+  # kubeconfig 内的相对证书/token 路径相对于 kubeconfig 文件目录解析。
   # local-first 的 s3_endpoint / s3_builder_endpoint 通常使用本机 127.0.0.1；
   # s3_runtime_endpoint 必须改成集群可达且已加入 workerd allowlist 的开发机 MinIO 地址。
   # S3 兼容存储：s3_addressing_style 可选 auto/path/virtual，region 使用服务提供的签名区域。

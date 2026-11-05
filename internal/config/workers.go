@@ -36,6 +36,10 @@ type WorkersConfig struct {
 	KubernetesAPI       string `json:"kubernetes_api"`
 	KubernetesTokenFile string `json:"kubernetes_token_file"`
 	KubernetesCAFile    string `json:"kubernetes_ca_file"`
+	// An explicit kubeconfig is an alternative to the API/token/CA settings.
+	// Empty context selects current-context from that file, never from the host.
+	KubernetesKubeconfigFile string `json:"kubernetes_kubeconfig_file,omitempty"`
+	KubernetesContext        string `json:"kubernetes_context,omitempty"`
 	// Gateways and Domains are the routing catalog. Neither carries a network
 	// classification: a domain is just a suffix plus which Gateway instance
 	// serves it. Label is display text and never participates in routing.

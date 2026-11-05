@@ -171,7 +171,9 @@ func validate(c config.Config) error {
 	if port(c.Listen) == port(c.InternalListen) {
 		return errors.New("public and internal listeners require different ports")
 	}
-	if w.KubernetesTokenFile != "/var/run/secrets/kubernetes.io/serviceaccount/token" || w.KubernetesCAFile != "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt" {
+	if w.KubernetesKubeconfigFile != "" ||
+		w.KubernetesTokenFile != "/var/run/secrets/kubernetes.io/serviceaccount/token" ||
+		w.KubernetesCAFile != "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt" {
 		return errors.New("deployment requires in-cluster Kubernetes credentials")
 	}
 	if w.CloneDirectory != "/workdir" {

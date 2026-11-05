@@ -147,6 +147,12 @@ func TestProductionDeploymentRejectsDevelopmentAndAmbiguousTargets(t *testing.T)
 		{"loopback listener", func(c *config.Config) { c.Listen = "127.0.0.1:8080" }},
 		{"shared namespace", func(c *config.Config) { c.Workers.Namespace = "default" }},
 		{"local kube token", func(c *config.Config) { c.Workers.KubernetesTokenFile = "/local/token" }},
+		{"external kubeconfig", func(c *config.Config) {
+			c.Workers.KubernetesAPI = ""
+			c.Workers.KubernetesTokenFile = ""
+			c.Workers.KubernetesCAFile = ""
+			c.Workers.KubernetesKubeconfigFile = "/credentials/kubeconfig"
+		}},
 		{
 			"tunnel",
 			func(c *config.Config) { c.Workers.RuntimePools[0].ValidatorManagementBase = "http://127.0.0.1:38084" },

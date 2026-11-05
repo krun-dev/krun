@@ -211,3 +211,8 @@ Gateway 的 base 是同名 Service 的预期集群地址。渲染器不会创建
 测试模板所有真实值用占位符；用户指定的私有 `test.yaml` 只通过 `--config` 显式加载。
 实际发布前必须验证 CNI 的 NetworkPolicy 执行能力、Gateway Service、DNS/TLS、SSO
 回调白名单、静态回源权限和镜像 tag；数据库与存储的 CIDR 快照变化时应重新生成。
+
+控制面运行时支持主 YAML 中的 `workers.kubernetes_kubeconfig_file` 和可选
+`workers.kubernetes_context`，用于本地/集群外控制面；配置方式见
+[本地开发](../../docs/local-dev.md#显式-kubeconfig)。本目录的标准集群内渲染器仍要求
+ServiceAccount 凭证，不读取或打包操作者的 kubeconfig。

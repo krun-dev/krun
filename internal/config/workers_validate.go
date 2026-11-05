@@ -68,22 +68,8 @@ func (c *WorkersConfig) Validate() error {
 	if c.S3LocationID == "" {
 		c.S3LocationID = "primary"
 	}
-	if c.KubernetesAPI == "" {
-		c.KubernetesAPI = "https://kubernetes.default.svc"
-	}
-	u, e := url.Parse(c.KubernetesAPI)
-	if e != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("invalid Workers Kubernetes API")
-	}
-	c.KubernetesAPI = strings.TrimSuffix(c.KubernetesAPI, "/")
-	if c.KubernetesTokenFile == "" {
-		c.KubernetesTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token"
-	}
-	if c.KubernetesCAFile == "" {
-		c.KubernetesCAFile = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-	}
-	if !path.IsAbs(c.KubernetesTokenFile) || !path.IsAbs(c.KubernetesCAFile) {
-		return fmt.Errorf("Workers Kubernetes credential files must be absolute paths")
+	if err := c.validateKubernetes(); err != nil {
+		return err
 	}
 	dns := regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,180}$`)
 	if e := c.ValidateCatalog(dns); e != nil {
@@ -131,7 +117,7 @@ func (c *WorkersConfig) Validate() error {
 		}
 	}
 
-	u, e = url.Parse(c.S3Endpoint)
+	u, e := url.Parse(c.S3Endpoint)
 	if e != nil || u.Host == "" || u.Path != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return fmt.Errorf("invalid Workers S3 endpoint")
 	}

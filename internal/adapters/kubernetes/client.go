@@ -37,6 +37,9 @@ func (e *WorkerKubeError) Error() string {
 }
 
 func New(config *appconfig.WorkersConfig) (*Client, error) {
+	if config.KubernetesKubeconfigFile != "" {
+		return newKubeconfigClient(config)
+	}
 	token, e := os.ReadFile(config.KubernetesTokenFile)
 	if e != nil {
 		return nil, e
@@ -52,7 +55,20 @@ func New(config *appconfig.WorkersConfig) (*Client, error) {
 	if strings.TrimSpace(string(token)) == "" {
 		return nil, errors.New("empty Kubernetes bearer token")
 	}
-	return &Client{Base: config.KubernetesAPI, TokenFile: config.KubernetesTokenFile, Namespace: config.Namespace, NpmRegistry: config.NPMRegistry, runtimeClass: config.BuilderRuntimeClass, timeoutSeconds: config.BuilderTimeoutSeconds, Client: &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}}}, nil
+	return &Client{
+		Base:           config.KubernetesAPI,
+		TokenFile:      config.KubernetesTokenFile,
+		Namespace:      config.Namespace,
+		NpmRegistry:    config.NPMRegistry,
+		runtimeClass:   config.BuilderRuntimeClass,
+		timeoutSeconds: config.BuilderTimeoutSeconds,
+		Client: &http.Client{
+			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
+			},
+		},
+	}, nil
 }
 
 func (k *Client) Call(ctx context.Context, method, route string, in, out any) error {
