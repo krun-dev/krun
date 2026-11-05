@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"net"
-	"net/url"
 	"regexp"
 	"strings"
 )
@@ -11,12 +10,9 @@ import (
 // DeploymentConfig is infrastructure input in the same main YAML. Rendering is
 // explicit; loading this section never contacts or changes a cluster.
 type DeploymentConfig struct {
-	ConsolePrefix     string            `json:"console_prefix,omitempty"`
 	ConsoleGateway    string            `json:"console_gateway,omitempty"`
 	ControlImage      string            `json:"control_image"`
 	RuntimeImage      string            `json:"runtime_image"`
-	ConsoleImage      string            `json:"console_image"`
-	ConsoleOrigin     string            `json:"console_origin"`
 	DNSResolver       string            `json:"dns_resolver"`
 	ControlReplicas   int               `json:"control_replicas"`
 	RuntimeReplicas   int               `json:"runtime_replicas"`
@@ -30,7 +26,6 @@ type DeploymentNetwork struct {
 	Control []DeploymentEgress `json:"control"`
 	Runtime []DeploymentEgress `json:"runtime"`
 	Builder []DeploymentEgress `json:"builder"`
-	Console []DeploymentEgress `json:"console"`
 }
 
 // PublicHTTPS is an explicit portable-policy tradeoff for dynamic cloud IPs.
@@ -45,20 +40,10 @@ func (d *DeploymentConfig) validate() error {
 	if d == nil {
 		return nil
 	}
-	for _, image := range []string{d.ControlImage, d.RuntimeImage, d.ConsoleImage} {
+	for _, image := range []string{d.ControlImage, d.RuntimeImage} {
 		last := image[strings.LastIndex(image, "/")+1:]
 		if image == "" || strings.ContainsAny(image, " \t\r\n$") || strings.HasSuffix(image, ":latest") || !strings.Contains(last, ":") {
 			return fmt.Errorf("deployment images require explicit tags or digests")
-		}
-	}
-	u, err := url.Parse(d.ConsoleOrigin)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil ||
-		u.RawQuery != "" || u.Fragment != "" || u.Path != "" || strings.ContainsAny(u.Host, "'\";${} ") {
-		return fmt.Errorf("deployment console_origin must be a fixed HTTPS origin")
-	}
-	if d.ConsolePrefix != "" {
-		if !regexp.MustCompile(`^[a-zA-Z0-9/_-]+$`).MatchString(d.ConsolePrefix) || strings.HasPrefix(d.ConsolePrefix, "/") || strings.HasSuffix(d.ConsolePrefix, "/") || strings.Contains(d.ConsolePrefix, "//") {
-			return fmt.Errorf("deployment console_prefix must be an object key prefix without leading/trailing slash")
 		}
 	}
 	if net.ParseIP(d.DNSResolver) == nil {
@@ -88,7 +73,6 @@ func (d *DeploymentConfig) validate() error {
 		d.Network.Control,
 		d.Network.Runtime,
 		d.Network.Builder,
-		d.Network.Console,
 	} {
 		if len(rules) == 0 || len(rules) > 64 {
 			return fmt.Errorf("each deployment component requires explicit network egress")

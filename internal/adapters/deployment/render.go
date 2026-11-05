@@ -188,7 +188,7 @@ func validate(c config.Config) error {
 			}
 		}
 	}
-	services := map[string]bool{"krun-control": true, "krun-control-internal": true, "krun-console": true}
+	services := map[string]bool{"krun-control": true, "krun-control-internal": true}
 	for _, p := range w.RuntimePools {
 		if p.ValidatorManagementBase != "" {
 			return errors.New("deployment requires cluster-native validator addresses")
@@ -220,7 +220,7 @@ func validate(c config.Config) error {
 	if !enabled {
 		return errors.New("enable a company login provider before deployment")
 	}
-	for _, image := range []string{w.BuilderImage, d.ControlImage, d.RuntimeImage, d.ConsoleImage} {
+	for _, image := range []string{w.BuilderImage, d.ControlImage, d.RuntimeImage} {
 		last := image[strings.LastIndex(image, "/")+1:]
 		if !strings.Contains(last, ":") || strings.HasSuffix(image, ":latest") || strings.Contains(image, "replace-me") || strings.ContainsAny(image, " \n\r\t$") {
 			return errors.New("all deployed images require explicit release tags or digests")
@@ -382,7 +382,7 @@ func (r *renderer) resources() error {
 			r.runtimeDeployment(text, validator)
 		}
 	}
-	r.consoleResources()
+	r.consoleRoute()
 	r.networkPolicies()
 	return nil
 }
