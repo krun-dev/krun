@@ -85,8 +85,9 @@ Session Cookie：生产 `__Host-krun_session`，Secure/HttpOnly/SameSite=Lax/Pat
 | GET /me、/roles | S K | 当前主体；公开固定角色和动作目录 |
 | POST /authz/check | S K | 检查当前主体 action/resource_kind/resource_id/environment；不接受自定义 principal |
 | GET /orgs | S K | 过滤未授权组织 |
-| POST /orgs | S | 系统管理员创建组织，创建者获得组织管理员 |
+| POST /orgs | S | 开启 organization_self_service 时所有已登录用户可创建组织，否则仅系统管理员；创建者获得该组织的组织管理员 |
 | GET /orgs/:org | S K | organization.read |
+| GET /orgs/:org/permissions | S K | 当前主体在该组织 global 环境下的实际权限，返回 organization_id/actions/revision；要求 organization.read，无权或不存在统一 404 |
 | PATCH /orgs/:org | S | organization.update；name、allowed_sources |
 | GET /system/users | S K | system.user.read |
 | PATCH /system/users/:user | S | system.user.update；仅 active/disabled，增加 auth_version；最后管理员保护 |
@@ -107,6 +108,10 @@ Session Cookie：生产 `__Host-krun_session`，Secure/HttpOnly/SameSite=Lax/Pat
 | GET /system/audit、/orgs/:org/audit | S K | audit.read，游标分页，仅最近 7 天；limit 默认 50、最大 500 |
 
 JSON DTO 拒绝未知字段和重复键，正文上限 1 MiB。资源/组/Key/Assignment 的更新需要 expected_revision，不匹配 409。创建返回稳定随机 ID；删除后不会复用。名单、组织成员和组写入读取最新事实，禁止跨组织组/角色；错误的用户或资源不会被隐式创建。
+
+控制台依据组织权限接口显示菜单、概览快捷入口并限制页面访问；系统用户与全平台审计只在系统管理员的「平台管理」中显示。切换组织、完成修改或重新聚焦窗口时刷新权限，加载失败时关闭组织功能入口。页面权限仅用于界面显示，业务接口仍逐请求授权。
+
+主配置的 `organization_self_service` 控制自助创建，示例配置显式开启；省略或设为 `false` 时仅系统管理员可创建。API Key 不允许创建组织。创建者不会获得系统权限，也不会获得其他组织的权限。
 
 例：组织范围角色授予：
 

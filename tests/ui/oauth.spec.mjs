@@ -79,7 +79,7 @@ async function consent(page, link, application) {
   await page.goto(link);
   const local = page.getByRole("button", {
     name: /通过 .*本地开发登录.* 登录|通过 .*kind.* 登录/,
-  });
+  }).first();
   await expect(
     local.or(page.getByRole("heading", { name: `允许 ${application} 访问？` })),
   ).toBeVisible();

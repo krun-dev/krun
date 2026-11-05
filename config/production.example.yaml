@@ -5,7 +5,8 @@ internal_listen: 0.0.0.0:8081
 public_url: ${KRUN_PUBLIC_URL:-https://krun.example.com}
 development: false
 static_dir: ""
-organization_self_service: false
+# 允许已登录用户创建组织；创建者只获得该组织的管理员权限。
+organization_self_service: true
 db: ${KRUN_DATABASE_URL:-postgres://krun:replace-me@postgres.example.com:5432/krun}
 trusted_proxy_cidrs:
   - ${KRUN_GATEWAY_POD_CIDR:-192.0.2.0/24}

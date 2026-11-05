@@ -32,6 +32,18 @@ local-first 私有对象存储验收使用 `deploy/workers-dev/storage.e2e.mjs`�
 同时设置 `KRUN_STORAGE_PREFIX`。它覆盖真实上传、构建、发布、静态资产、浏览器调用
 和业务 Worker 的出站隔离。
 
+权限、组织自助创建与对象浏览器可在独立 schema 和临时 MinIO 上验收：
+
+```sh
+bash scripts/test-object-browser.sh .data/dev.yaml
+```
+
+脚本读取主配置连接 PostgreSQL，仅在新建的测试 schema 中初始化数据，并在退出时
+删除本次 schema 和临时 MinIO。真实浏览器覆盖普通用户创建组织、只读成员菜单、
+直接 URL/API 越权、用户组授权与撤销、对象上传下载、R2 配置，以及 CLI 的浏览器
+授权、设备码、取消和失效流程；不使用浏览器 API mock。Wrangler 发布与实际
+workerd 构建发布仍由上述完整 kind 验收覆盖。
+
 每次运行的结果、日志和截图保存在 gitignored 的 `.data/`、`test-results/` 或
 `evidence/`，不把带日期的验收快照作为接口或部署文档。
 

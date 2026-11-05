@@ -123,8 +123,12 @@ func TestYAMLServerExamples(t *testing.T) {
 	t.Setenv("KRUN_SMTP_PASSWORD", "test-only")
 	for _, name := range []string{"development.example.yaml", "example.yaml"} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := appconfig.LoadConfig(filepath.Join("..", "..", "config", name)); err != nil {
+			loaded, err := appconfig.LoadConfig(filepath.Join("..", "..", "config", name))
+			if err != nil {
 				t.Fatal(err)
+			}
+			if !loaded.OrganizationSelfService {
+				t.Fatal("example should enable organization self-service")
 			}
 		})
 	}

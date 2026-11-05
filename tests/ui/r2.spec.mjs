@@ -24,7 +24,7 @@ test("UI manages buckets and persists environment and Preview Base R2 bindings",
     return response.json();
   }
   await page.goto("/");
-  await page.getByRole("button", { name: /本地开发登录|kind 开发登录/ }).click();
+  await page.getByRole("button", { name: /本地开发登录|kind 开发登录/ }).first().click();
   await expect(page.getByRole("button", { name: "退出登录" })).toBeVisible();
   const run = randomUUID().slice(0, 8);
   const org = await api("/api/v1/orgs", "POST", { name: "R2 UI " + run });
