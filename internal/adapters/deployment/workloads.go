@@ -1,12 +1,8 @@
 package deployment
 
 import (
-	"fmt"
-	"net"
-	"net/url"
 	"sort"
 	"strconv"
-	"strings"
 )
 
 func security() map[string]any {
@@ -386,29 +382,7 @@ func (r *renderer) rbac() {
 	}
 }
 
-func (r *renderer) consoleResources() {
-	text := r.nginx()
-	r.add("v1", "ConfigMap", "krun-console", map[string]any{
-		"data": map[string]string{
-			"nginx.conf": text,
-		},
-	})
-	r.deployment("krun-console", "krun-console", 1, map[string]any{
-		"name":            "nginx",
-		"image":           r.cfg.Deployment.ConsoleImage,
-		"imagePullPolicy": "IfNotPresent",
-		"command":         []string{"nginx"},
-		"args":            []string{"-c", "/config/nginx.conf", "-g", "daemon off;"},
-		"readinessProbe":  probe("/", 8080),
-		"volumeMounts": []any{
-			mount("config", "/config"),
-			tempMount("tmp", "/tmp"),
-		},
-		"resources": resources("50m", "32Mi", "1", "256Mi"),
-	}, []any{configVolume("config", "krun-console"), tempVolume("tmp", "256Mi")}, map[string]string{
-		"krun.dev/config-hash": hash(text),
-	}, false)
-	r.service("krun-console", "krun-console", 8080)
+func (r *renderer) consoleRoute() {
 	r.add("gateway.networking.k8s.io/v1", "HTTPRoute", "krun-console", map[string]any{
 		"spec": map[string]any{
 			"parentRefs": []any{
@@ -436,93 +410,7 @@ func (r *renderer) consoleResources() {
 						},
 					},
 				},
-				map[string]any{
-					"matches": []any{
-						map[string]any{
-							"path": map[string]string{
-								"type":  "PathPrefix",
-								"value": "/",
-							},
-						},
-					},
-					"backendRefs": []any{
-						map[string]any{
-							"name": "krun-console",
-							"port": 8080,
-						},
-					},
-				},
 			},
 		},
 	})
-}
-
-func (r *renderer) nginx() string {
-	sources := []string{"'self'"}
-	if r.cfg.Workers.ObjectStorage != nil {
-		for _, store := range r.cfg.Workers.ObjectStorage.Stores {
-			u, _ := url.Parse(store.Endpoint)
-			if store.AddressingStyle == "virtual" {
-				host := store.Bucket + "." + u.Hostname()
-				if u.Port() != "" {
-					host = net.JoinHostPort(host, u.Port())
-				}
-				u.Host = host
-			}
-			sources = append(sources, u.Scheme+"://"+u.Host)
-		}
-	}
-	resolver := r.cfg.Deployment.DNSResolver
-	if strings.Contains(resolver, ":") {
-		resolver = "[" + resolver + "]"
-	}
-	origin, _ := url.Parse(r.cfg.Deployment.ConsoleOrigin)
-	staticBase := origin.Host
-	if r.cfg.Deployment.ConsolePrefix != "" {
-		staticBase += "/" + r.cfg.Deployment.ConsolePrefix
-	}
-	return fmt.Sprintf(`worker_processes auto;
-pid /tmp/nginx.pid;
-error_log /dev/stderr warn;
-events { worker_connections 1024; }
-http {
-  access_log /dev/stdout;
-  client_body_temp_path /tmp/client;
-  proxy_temp_path /tmp/proxy;
-  fastcgi_temp_path /tmp/fastcgi;
-  uwsgi_temp_path /tmp/uwsgi;
-  scgi_temp_path /tmp/scgi;
-  resolver %s valid=30s;
-  server {
-    listen 8080;
-    server_name _;
-    set $static_origin %s;
-    proxy_ssl_server_name on;
-    proxy_ssl_name %s;
-    proxy_ssl_verify on;
-    proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
-    proxy_ssl_protocols TLSv1.2 TLSv1.3;
-    proxy_set_header Host %s;
-    proxy_set_header Cookie "";
-    proxy_set_header Authorization "";
-    proxy_hide_header Set-Cookie;
-    proxy_hide_header Access-Control-Allow-Origin;
-    location = / {
-      proxy_pass https://$static_origin/index.html;
-      proxy_hide_header Cache-Control;
-      add_header Cache-Control "no-store" always;
-      add_header X-Content-Type-Options "nosniff" always;
-      add_header Referrer-Policy "no-referrer" always;
-      add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src %s; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
-    }
-    location ^~ /assets/ {
-      proxy_pass https://$static_origin$request_uri;
-      proxy_hide_header Cache-Control;
-      add_header Cache-Control "public, max-age=31536000, immutable";
-      add_header X-Content-Type-Options "nosniff" always;
-    }
-    location / { return 404; }
-  }
-}
-`, resolver, staticBase, origin.Hostname(), origin.Host, strings.Join(sources, " "))
 }

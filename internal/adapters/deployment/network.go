@@ -155,11 +155,6 @@ func (r *renderer) networkPolicies() {
 		}
 	}
 	r.policy("krun-builder", map[string]string{"app": "krun-builder"}, []any{}, configuredEgress(r.cfg.Deployment.Network.Builder))
-	r.policy("krun-console", map[string]string{"app": "krun-console"}, []any{
-		ingress([]any{
-			gatewayPeer(r.gateway),
-		}, 8080),
-	}, configuredEgress(r.cfg.Deployment.Network.Console))
 }
 
 // Only gateways selected by profiles that can use this pool may enter it.

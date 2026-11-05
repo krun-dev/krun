@@ -67,11 +67,8 @@ func TestThreeGatewaysKeepPoolsAndConsoleIsolated(t *testing.T) {
 				t.Fatal("console exposed outside office gateway")
 			}
 		}
-		if kind == "ConfigMap" && name == "krun-console" {
-			text := item["data"].(map[string]any)["nginx.conf"].(string)
-			if !strings.Contains(text, "/test/krun/console;") {
-				t.Fatal("console object prefix lost")
-			}
+		if name == "krun-console" && kind != "HTTPRoute" {
+			t.Fatal("renderer created a frontend proxy resource")
 		}
 		if kind == "Role" && strings.HasSuffix(name, "gateway-reader") {
 			rules := item["rules"].([]any)
@@ -106,8 +103,8 @@ func TestThreeGatewaysKeepPoolsAndConsoleIsolated(t *testing.T) {
 			}
 		}
 	}
-	if deployments != 8 {
-		t.Fatalf("want control + console + 3 serving + 3 validators, got %d", deployments)
+	if deployments != 7 {
+		t.Fatalf("want control + 3 serving + 3 validators, got %d", deployments)
 	}
 	for _, zone := range []string{"internal", "office", "public"} {
 		if seen["Service/krun-"+zone] {

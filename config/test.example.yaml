@@ -191,11 +191,8 @@ workers:
       base_url: ${KRUN_GITLAB_ORIGIN:-https://gitlab.example.com}
       allow_private_network: true
 deployment:
-  console_prefix: test/krun/console
   control_image: ${KRUN_CONTROL_IMAGE:-registry.example.com/krun/krun-control:replace-me}
   runtime_image: ${KRUN_RUNTIME_IMAGE:-registry.example.com/krun/krun-runtime:replace-me}
-  console_image: ${KRUN_CONSOLE_IMAGE:-registry.example.com/base/nginx:approved-tag}
-  console_origin: ${KRUN_CONSOLE_ORIGIN:-https://example-console.tos-cn-beijing.volces.com}
   dns_resolver: ${KRUN_CLUSTER_DNS:-192.0.2.53}
   control_replicas: 1
   runtime_replicas: 1
@@ -225,7 +222,5 @@ deployment:
           - ${KRUN_NPM_PROXY_CIDR:-203.0.113.0/24}
         ports:
           - 443
-      - public_https: true
-    console:
       - public_https: true
   console_gateway: office

@@ -65,6 +65,21 @@ func TestProductionResourcesPreserveConfigAndIsolateCredentials(t *testing.T) {
 		kind := resource["kind"].(string)
 		counts[kind]++
 		name := resource["metadata"].(map[string]any)["name"].(string)
+		if name == "krun-console" && kind != "HTTPRoute" {
+			t.Fatal("renderer provisioned a frontend proxy resource")
+		}
+		if kind == "HTTPRoute" {
+			rules := resource["spec"].(map[string]any)["rules"].([]any)
+			if len(rules) != 1 {
+				t.Fatal("control route contains a static catch-all")
+			}
+			rule := rules[0].(map[string]any)
+			match := rule["matches"].([]any)[0].(map[string]any)
+			backend := rule["backendRefs"].([]any)[0].(map[string]any)
+			if match["path"].(map[string]any)["value"] != "/api" || backend["name"] != "krun-control" {
+				t.Fatal("control route must forward only the API prefix")
+			}
+		}
 		if kind == "Gateway" || kind == "PersistentVolumeClaim" || kind == "ClusterRole" {
 			t.Fatal("renderer provisioned company-owned infrastructure")
 		}
@@ -113,7 +128,7 @@ func TestProductionResourcesPreserveConfigAndIsolateCredentials(t *testing.T) {
 			}
 		}
 	}
-	if counts["Deployment"] != 4 || counts["HTTPRoute"] != 1 || counts["NetworkPolicy"] != 7 {
+	if counts["Deployment"] != 3 || counts["HTTPRoute"] != 1 || counts["NetworkPolicy"] != 6 {
 		t.Fatalf("unexpected topology: %+v", counts)
 	}
 	path := filepath.Join(t.TempDir(), "control.yaml")

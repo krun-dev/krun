@@ -33,14 +33,6 @@ func TestDeploymentValidationRejectsUnboundedOrInjectedInput(t *testing.T) {
 		name   string
 		change func(*DeploymentConfig)
 	}{
-		{
-			"origin credentials",
-			func(d *DeploymentConfig) { d.ConsoleOrigin = "https://user:password@static.example.com" },
-		},
-		{
-			"origin directive injection",
-			func(d *DeploymentConfig) { d.ConsoleOrigin = "https://static.example.com;" },
-		},
 		{"unresolved DNS", func(d *DeploymentConfig) { d.DNSResolver = "dns.example.com" }},
 		{"untagged image with registry port", func(d *DeploymentConfig) { d.ControlImage = "registry.example.com:5000/krun" }},
 		{"unrestricted CIDR", func(d *DeploymentConfig) {
@@ -77,12 +69,6 @@ func TestThreeGatewayExampleLoadsThroughMainConfig(t *testing.T) {
 		pools := c.Workers.PoolsForProfile(profile.ID)
 		if len(domains) != 1 || len(pools) != 1 || domains[0].Gateway != profile.ID || pools[0].Labels["exposure"] != profile.ID {
 			t.Fatal("profile does not isolate its gateway and pool")
-		}
-	}
-	for _, prefix := range []string{"/test/krun", "test/../krun", "test;return", "test//krun", "test/"} {
-		c.Deployment.ConsolePrefix = prefix
-		if c.Validate() == nil {
-			t.Fatalf("invalid console prefix accepted: %s", prefix)
 		}
 	}
 }

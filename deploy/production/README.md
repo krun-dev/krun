@@ -1,8 +1,7 @@
 # 公司内网部署
 
 交付物面向已有 Kubernetes + Gateway API/kgateway 的单地域试用版。默认示例使用一个
-private pool、一个业务 domain 和一个已存在 Gateway。前端在 OSS；Go、console 静态回源代理、serving
-workerd 和独立 validator 在专用 namespace，builder 按需创建 Job。数据库、对象桶、
+private pool、一个业务 domain 和一个已存在 Gateway。前端在 OSS；Go、serving workerd 和独立 validator 在专用 namespace，builder 按需创建 Job。数据库、对象桶、
 SSO、TLS/内网入口、镜像仓库和 Gateway 由公司基础设施提供。本目录不创建数据库、
 云账号、桶策略、公网 LB 或证书，也不运行 kind/dev SSH 脚本。
 
@@ -11,8 +10,7 @@ flowchart LR
     Browser[浏览器] --> Edge[公司 HTTPS 入口]
     Edge --> Gateway[现有 kgateway]
     Gateway -->|控制台 /api/*| Go[krun-server]
-    Gateway -->|控制台静态路径| Console[Nginx 静态回源]
-    Console --> OSS[OSS 静态站点]
+    Edge -->|控制台静态路径| OSS[OSS 静态站点]
     Gateway -->|Worker 域名| Serving[serving workerd]
     Go --> PG[(PostgreSQL)]
     Go --> Validator[独立 validator]
@@ -54,10 +52,9 @@ flowchart LR
    summary，为 `*.workers.example.com` 和 `static.workers.example.com` 配置 DNS/TLS。
    Worker 地址使用 `w-<slug>-<environment>.workers.example.com`，不包含 pool hash。
    每个业务 domain 通过 Network Profile 绑定唯一 pool，扩容使用该 pool 的副本数。
-5. 控制台 HTTPRoute 的 `/api` 直接到 Go；`/` 到 Nginx 静态回源代理。代理只接受 `/`
-   和 `/assets/*`，向固定 HTTPS OSS origin 读取文件，其他路径 404。它不代理业务 API。
-6. 前端源站必须允许代理匿名只读/VPC 只读访问，或由公司 CDN 实现私有回源。当前 Nginx
-   代理不为 OSS 请求签名。不要把制品桶当作控制台公开静态桶。
+5. 渲染器只生成控制台 `/api` 到 Go 的 HTTPRoute，不创建前端代理 Deployment。公司
+   CDN / 入口代理在同一个 origin 下将 `/`、`/assets/*` 回源 OSS，其他静态路径返回 404。
+6. 静态发布平台负责 OSS 的访问权限与私有回源。不要把制品桶当作控制台公开静态桶。
 7. 集群 CNI 必须执行 NetworkPolicy，控制面到 Kubernetes API、数据库、SSO/Git、STS、
    存储的 CIDR/端口，以及 builder 到 npm/存储的网络范围必须在主 YAML 显式声明。
    DNS IP 必须是本集群真实的 CoreDNS/NodeLocal DNS IP，示例中的 TEST-NET 地址不能照抄。
@@ -83,12 +80,11 @@ flowchart LR
 - 私有制品桶及仅用于该 namespace 的 prefix，稳定的 storage location ID。
 - 独立业务对象桶；TOS AssumeRole 的角色授权和信任关系，或已实现的 static S3 provider。
 - 随机 Runtime/Management Token、32-byte Worker 加密 key ring、32-byte base64url cursor key。
-- 控制台静态桶 origin、公司镜像名、镜像拉取 Secret、真实网络范围。
+- 公司镜像名、镜像拉取 Secret、真实网络范围；静态源站由发布平台单独管理。
 
-`console_origin` 是静态桶的固定 HTTPS origin；需要把控制台产物放在桶内子目录时，设置
-`deployment.console_prefix`（不带首尾 `/`）。上传到该 prefix，浏览器仍使用 `/` 和
-`/assets/*`。`config/test.example.yaml` 提供 internal/office/public 三个入口与各自 pool
-的主配置模板，控制台默认只挂在 office Gateway；模板中的真实值仍由密钥平台提供。
+`config/test.example.yaml` 提供 internal/office/public 三个入口与各自 pool 的主配置
+模板，控制台 API 默认挂在 office Gateway；模板中的真实值由密钥平台提供。静态发布
+目录和 OSS key 前缀在发布平台配置，浏览器仍使用 `/` 和 `/assets/*`。
 
 可用 `openssl rand -base64 32` 生成 Worker 加密 key；cursor key 使用相同随机字节的
 base64url 编码并去掉 `=`。密钥只在密钥平台或 gitignored 主配置中保存；不要每次
@@ -110,14 +106,13 @@ scripts/build-deployment.sh --registry registry.example.com/team --tag RELEASE -
 scripts/package-console.sh .data/console-release
 ```
 
-把主配置的 control/runtime/builder image 指向本次 tag 或 digest。console image 使用
-公司批准的 Nginx 镜像，必须包含 nginx 和 `/etc/ssl/certs/ca-certificates.crt`，可以以
-UID 1000、只读根文件系统运行。三个应用镜像的底层镜像/包源应走公司镜像与包代理；
+把主配置的 control/runtime/builder image 指向本次 tag 或 digest。应用镜像的底层
+镜像/包源应走公司镜像与包代理；
 控制面 Dockerfile 的 `GO_IMAGE`、`BASE_IMAGE` 可通过 Docker build args 替换。
 
 将 `dist/console/` 的内容上传到静态桶根目录；不要上传仓库、主配置、Secret manifest、
 `.data/` 或 `dist/` 的其他内容。源站需要支持正确的 JS/CSS MIME 类型。入口 no-store，
-带 hash 的 assets 长期缓存由生成的 Nginx 配置落实。
+带 hash 的 assets 长期缓存由 CDN / 静态源站配置落实。
 
 ## 渲染、检查、部署
 
@@ -166,7 +161,7 @@ kubectl --context "$COMPANY_CONTEXT" -n "$NAMESPACE" exec deployment/krun-contro
 5. 检查 builder Job 没有 API Token，serving 和 validator 凭据不同，管理端口/内部
    Runtime API 无公网路由。Go 只有 namespace Role，不授予 cluster-admin。
 6. 按 browser-cors.json 合并业务桶 CORS，测试浏览器真实 PUT、下载、删除和 R2 读取。
-   CSP connect-src 由生成配置自动列入确切对象存储 origin。
+   CSP connect-src 由静态发布平台列入确切对象存储 origin。
 7. 在公司专用验收环境完成 UI/E2E。仓库 UI 的 console workflow 使用 kind-git fixture，
    不能直接拿公司真实仓库代替该 fixture；生产验收应按上面的实际业务步骤执行。
 
@@ -198,15 +193,15 @@ pool ID、域名或存储 prefix 也需要显式规划；不要原地把稳定 I
 `config/test.example.yaml` 引用现有 `kgateway-system/krun-internal`、`krun-office`、
 `krun-public`，listener 均为 `http:80`。模板分别使用 `internal-a`、`office-a`、
 `public-a` 三个池及独立 validator，`pool_selector` 和 `domain_selector` 按 exposure
-匹配。Office 使用 private 访问类型。控制台通过 `deployment.console_gateway: office`
+匹配。Office 使用 private 访问类型。控制台 API 通过 `deployment.console_gateway: office`
 仅挂在 Office Gateway；业务 HTTPRoute 在控制面运行后协调产生。
 
 Gateway 的 base 是同名 Service 的预期集群地址。渲染器不会创建或修改 Gateway
 及其 Service；selfManaged Gateway 若暂未创建 Service，必须在实际验收前补齐。
 不使用 hostNetwork。仅有 Gateway `Programmed=True` 不表示外部入口已可访问。
 
-`deployment.console_prefix` 为 OSS 对象 key 前缀，例如 `test/krun/console`，不带
-首尾斜杠。将静态构建产物放在该前缀内；浏览器仍访问 `/` 和 `/assets/*`。
+静态发布平台可使用 `test/krun/console` 作为 OSS 对象 key 前缀。将静态构建产物
+放在该前缀内，并由入口映射为浏览器的 `/` 和 `/assets/*`。
 制品和业务数据分别用其他私有前缀，不能因静态回源而公开整个共享桶。
 测试模板所有真实值用占位符；用户指定的私有 `test.yaml` 只通过 `--config` 显式加载。
 实际发布前必须验证 CNI 的 NetworkPolicy 执行能力、Gateway Service、DNS/TLS、SSO
