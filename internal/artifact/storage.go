@@ -129,10 +129,13 @@ var WorkerAssetTypes = map[string]string{
 
 var WorkerAssetBindingName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 
+// Keep in sync with reservedBindings and magicBindings in workers/runtime/entry.js.
 var WorkerReservedBindings = map[string]bool{
 	"PLATFORM": true, "LOADER": true, "RUNTIME_TOKEN": true, "RUNTIME_POOL": true,
 	"MANAGEMENT_TOKEN": true, "CONFIG_BASE": true, "POD_NAME": true, "POD_UID": true,
-	"ASSETS_CACHE_MAX": true,
+	"ASSETS_CACHE_MAX":   true,
+	"STORAGE_ACCESS_KEY": true, "STORAGE_SECRET_KEY": true, "STORAGE_REGION": true,
+	"STATIC_DOMAINS": true,
 	// These names have special prototype semantics on ordinary JavaScript
 	// objects. Reject them even though the runtime also uses null-prototype envs.
 	"__proto__": true, "prototype": true, "constructor": true,
