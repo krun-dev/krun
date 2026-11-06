@@ -3,7 +3,9 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,14 @@ import (
 func TestVersionUploadFreezesConfigurationWithoutDeploying(t *testing.T) {
 	server, store, base := workerTestServer(t)
 	active := seedPublishedWorker(t, store)
+	if err := store.Update(context.Background(), PartitionIAM, func(st *State) error {
+		user := st.Users["admin"]
+		user.Name = "Release Author"
+		st.Users[user.ID] = user
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	response := request(server, "POST", base+"/environments/production/versions", "krun_cli_admin", `{"artifact_id":"art_secret","idempotency_key":"upload-version"}`)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("upload: %d %s", response.Code, response.Body.String())
@@ -22,6 +32,9 @@ func TestVersionUploadFreezesConfigurationWithoutDeploying(t *testing.T) {
 	var version WorkerVersion
 	if err := json.Unmarshal(response.Body.Bytes(), &version); err != nil {
 		t.Fatal(err)
+	}
+	if version.CreatedBy != "admin" || version.CreatedByName != "Release Author" {
+		t.Fatalf("missing version author: %+v", version)
 	}
 	if version.ID == active.ID || version.Variables["PLAIN"] != "visible" {
 		t.Fatal("version snapshot not created")
@@ -155,6 +168,9 @@ func TestBuildDeploymentFreezesJSONAndVersionMetadata(t *testing.T) {
 	}
 	if err := store.View(context.Background(), PartitionWorkers, func(st *State) error {
 		version := st.Workers.Versions[op.Version]
+		if version.CreatedBy != "admin" {
+			t.Fatalf("build deployment lost author: %+v", version)
+		}
 		if version.VersionMetadata != "META" || version.Variables["CONFIG"].(map[string]any)["nullable"] != nil {
 			t.Fatal("native deployment lost frozen bindings", version)
 		}
@@ -236,5 +252,82 @@ func TestPinnedDeploymentRoutesKeepTheirVersion(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestVersionAndDeploymentPagination(t *testing.T) {
+	server, store, base := workerTestServer(t)
+	active := seedPublishedWorker(t, store)
+	created := time.Now().UTC()
+	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
+		for i := 0; i < 5; i++ {
+			version := active
+			version.ID = fmt.Sprintf("page-%02d", i)
+			// Equal timestamps must not lose items at page boundaries.
+			version.Created = created
+			version.Tag = "Candidate"
+			version.CreatedBy = "admin"
+			version.CreatedByName = "Release Author"
+			st.Workers.Versions[version.ID] = version
+			deployment := domain.WorkerDeployment{
+				ID: "dep-" + version.ID, Organization: version.Organization, Worker: version.Worker,
+				Environment: version.Environment, Version: version.ID, Operation: "op-" + version.ID,
+				Created: created, Expires: created.Add(time.Hour),
+			}
+			st.Workers.Deployments[deployment.ID] = deployment
+		}
+		hidden := active
+		hidden.ID = "page-other-environment"
+		hidden.Environment = "fix-demo"
+		hidden.Tag = "Candidate"
+		st.Workers.Versions[hidden.ID] = hidden
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, endpoint := range []string{"versions", "deployments"} {
+		seen := map[string]bool{}
+		after := ""
+		for _, count := range []int{2, 2, 1} {
+			var page struct {
+				Items []struct{ ID, Environment string } `json:"items"`
+				Next  string                             `json:"next_after"`
+			}
+			response := request(server, "GET", base+"/"+endpoint+"?environment=production&q=PAGE-&limit=2&after="+url.QueryEscape(after), "krun_cli_admin", "")
+			if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil || response.Code != 200 || len(page.Items) != count {
+				t.Fatalf("%s page: %d %s (%v)", endpoint, response.Code, response.Body.String(), err)
+			}
+			for _, item := range page.Items {
+				if seen[item.ID] || item.Environment != "production" {
+					t.Fatalf("duplicate or foreign item: %+v", item)
+				}
+				seen[item.ID] = true
+			}
+			after = page.Next
+		}
+		if after != "" || len(seen) != 5 {
+			t.Fatalf("incomplete %s pages: %v, %q", endpoint, seen, after)
+		}
+		for _, query := range []string{"limit=0", "limit=201", "limit=bad", "after=bad"} {
+			response := request(server, "GET", base+"/"+endpoint+"?"+query, "krun_cli_admin", "")
+			if response.Code != 422 {
+				t.Fatalf("invalid %s page: %d %s", endpoint, response.Code, response.Body.String())
+			}
+		}
+	}
+	response := request(server, "GET", base+"/versions?environment=production&q=release%20author&limit=2", "krun_cli_admin", "")
+	var page struct {
+		Items []WorkerVersion `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil || response.Code != 200 || len(page.Items) != 2 || page.Items[0].CreatedByName != "Release Author" {
+		t.Fatalf("author search failed: %d %s", response.Code, response.Body.String())
+	}
+	response = request(server, "GET", base+"/versions/page-04", "krun_cli_admin", "")
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"created_by_name":"Release Author"`) {
+		t.Fatalf("off-page detail missing author: %d %s", response.Code, response.Body.String())
+	}
+	response = request(server, "GET", "/api/v1/orgs/org-b/workers/svc-b/versions/page-04", "krun_cli_admin", "")
+	if response.Code != 404 {
+		t.Fatalf("cross-worker detail: %d %s", response.Code, response.Body.String())
 	}
 }

@@ -39,7 +39,7 @@ type DeploymentView struct {
 	Hosts []string `json:"hosts"`
 }
 
-func (s *Service) WorkerDeployments(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
+func (s *Service) WorkerDeployments(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, options ...VersionPageOptions) (any, Outcome, error) {
 	if _, err := s.WorkerCollectionTarget(st, ref, "worker.version.read", p); err != nil {
 		return nil, Read, err
 	}
@@ -69,6 +69,10 @@ func (s *Service) WorkerDeployments(ctx context.Context, st *domain.State, p aut
 	if ref.Item != "" {
 		return nil, Read, domain.NotFound()
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Created.After(out[j].Created) })
-	return collection(out)
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Created.After(out[j].Created) || out[i].Created.Equal(out[j].Created) && out[i].ID < out[j].ID
+	})
+	return versionPage(out, options, func(d DeploymentView) (time.Time, string, string) {
+		return d.Created, d.ID, d.ID + " " + d.Version + " " + d.State
+	})
 }

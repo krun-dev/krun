@@ -24,7 +24,7 @@ func TestPostgresR2BindingsAndRuntimeAuthorization(t *testing.T) {
 		st.Workers.Workers["svc-r2"] = domain.Worker{Worker: "svc-r2", Organization: "org-r2", Environments: map[string]domain.WorkerEnvironment{"production": {Name: "production", Enabled: true, Version: "version-r2", R2Bindings: map[string]domain.WorkerR2Binding{"IMAGES": ref}}}}
 		st.Workers.Placements[domain.WorkerPlacementKey("svc-r2", "default")] = domain.WorkerPlacement{Worker: "svc-r2", Organization: "org-r2", Pool: "default", Role: "primary", State: "active", Revision: 1, Created: at, Updated: at}
 		st.Workers.Artifacts["artifact-r2"] = domain.WorkerArtifact{ID: "artifact-r2", Organization: "org-r2", State: "finalized", Created: at}
-		st.Workers.Versions["version-r2"] = domain.WorkerVersion{ID: "version-r2", Organization: "org-r2", Worker: "svc-r2", Environment: "production", Artifact: "artifact-r2", Created: at, R2Bindings: map[string]domain.WorkerR2Binding{"IMAGES": ref}}
+		st.Workers.Versions["version-r2"] = domain.WorkerVersion{CreatedBy: "author-id", CreatedByName: "Version Author", ID: "version-r2", Organization: "org-r2", Worker: "svc-r2", Environment: "production", Artifact: "artifact-r2", Created: at, R2Bindings: map[string]domain.WorkerR2Binding{"IMAGES": ref}}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -32,6 +32,9 @@ func TestPostgresR2BindingsAndRuntimeAuthorization(t *testing.T) {
 	loaded, err := s.Open(ctx, PartitionWorkers)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if version := loaded.Workers.Versions["version-r2"]; version.CreatedBy != "author-id" || version.CreatedByName != "Version Author" {
+		t.Fatalf("version author did not reload: %+v", version)
 	}
 	if loaded.Workers.Buckets["bucket-r2"].Store != "primary" || loaded.Workers.Versions["version-r2"].R2Bindings["IMAGES"] != ref || loaded.Workers.Workers["svc-r2"].Environments["production"].R2Bindings["IMAGES"] != ref {
 		t.Fatal("bucket or binding rows did not reload")
@@ -51,6 +54,9 @@ func TestPostgresR2BindingsAndRuntimeAuthorization(t *testing.T) {
 	projection, err := s.WorkerConfigState(ctx, []string{"svc-r2"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if version := projection.Workers.Versions["version-r2"]; version.CreatedBy != "author-id" || version.CreatedByName != "Version Author" {
+		t.Fatalf("config projection lost author: %+v", version)
 	}
 	if projection.Workers.Versions["version-r2"].R2Bindings["IMAGES"] != ref {
 		t.Fatal("configuration projection lost R2 binding")

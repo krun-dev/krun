@@ -22,6 +22,9 @@ import {
 import { cn } from "@/lib/utils";
 import { OperationPanel } from "./version";
 import { Status } from "./shared";
+import { useCollectionPage } from "@/lib/collection-page";
+import { CollectionPagination, CollectionToolbar } from "@/components/collection-controls";
+import { VersionDetails } from "./version-details";
 import { VersionConfiguration } from "./version-configuration";
 
 type Deployment = {
@@ -31,6 +34,9 @@ type Deployment = {
   state: string;
   hosts: string[];
   expires_at: string;
+  created_at: string;
+  committed_at?: string;
+  operation_id: string;
 };
 
 function versionState(
@@ -86,52 +92,59 @@ export function VersionsPanel({
   selectOperation: (id: string) => void;
   deployed: (operation: Operation) => void;
 }) {
-  const [deployments, setDeployments] = useState<Deployment[]>([]);
-  const [deploymentsError, setDeploymentsError] = useState("");
+  const [selectedVersion, setSelectedVersion] = useState("");
+  const progress = useRef<HTMLDivElement>(null);
+  const focusedVersion = useRef("");
   const [busy, setBusy] = useState(false);
-  const [confirmation, setConfirmation] = useState<{ version: Version; revision: number } | null>(
-    null,
-  );
+  const [confirmation, setConfirmation] = useState<{
+    version: Version;
+    revision: number;
+  } | null>(null);
   const [error, setError] = useState("");
   const [stale, setStale] = useState(false);
   const submitting = useRef(false);
   const deploymentKey = useRef("");
   const createdCard = useRef<HTMLDivElement>(null);
   const active = operations.some((item) => item.environment === env.name && pending(item.state));
-  const versions = { ...data.versions };
-  if (createdVersion && !versions[createdVersion.id]) {
-    versions[createdVersion.id] = createdVersion;
+  const refreshKey = JSON.stringify([
+    Object.keys(data.versions).sort(),
+    createdVersion?.id,
+    env.deployment_revision,
+    env.confirmed_version_id,
+    operations.map((item) => [item.id, item.state]),
+  ]);
+  const versionPage = useCollectionPage<Version>(
+    base + "/versions?environment=" + encodeURIComponent(env.name),
+    true,
+    refreshKey,
+  );
+  const deploymentPage = useCollectionPage<Deployment>(
+    base + "/deployments?environment=" + encodeURIComponent(env.name),
+    true,
+    refreshKey,
+  );
+  const versions = [...(versionPage.items || [])];
+  if (
+    createdVersion?.environment === env.name &&
+    versionPage.pageNumber === 1 &&
+    !versionPage.search &&
+    !versions.some((version) => version.id === createdVersion.id)
+  ) {
+    versions.unshift(createdVersion);
   }
-  const environmentVersions = Object.values(versions)
-    .filter((version) => version.environment === env.name)
-    .sort(
-      (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || a.id.localeCompare(b.id),
-    );
+  const environmentVersions = versions.slice(0, versionPage.pageSize);
 
   useEffect(() => {
+    if (!createdVersion || focusedVersion.current === createdVersion.id) return;
     const frame = requestAnimationFrame(() => {
-      createdCard.current?.focus({ preventScroll: true });
-      createdCard.current?.scrollIntoView({ block: "nearest" });
+      if (createdCard.current) {
+        createdCard.current.focus({ preventScroll: true });
+        createdCard.current.scrollIntoView({ block: "nearest" });
+        focusedVersion.current = createdVersion.id;
+      }
     });
     return () => cancelAnimationFrame(frame);
-  }, [createdVersion?.id, env.name]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void api<{ items: Deployment[] }>(base + "/deployments")
-      .then((result) => {
-        if (!cancelled) {
-          setDeployments(result.items);
-          setDeploymentsError("");
-        }
-      })
-      .catch((cause) => {
-        if (!cancelled) setDeploymentsError(errorMessage(cause));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [base, data]);
+  }, [createdVersion?.id, versionPage.items]);
 
   async function deploy() {
     if (!confirmation || submitting.current || stale) {
@@ -154,6 +167,12 @@ export function VersionsPanel({
         },
       );
       deployed(result);
+      requestAnimationFrame(() => {
+        progress.current?.scrollIntoView({
+          block: "nearest",
+          behavior: "smooth",
+        });
+      });
       setConfirmation(null);
       reload();
       notify(t("发布已提交，正在等待实际生效。"));
@@ -173,179 +192,308 @@ export function VersionsPanel({
 
   return (
     <div className="grid gap-5">
-      <div>
+      <section
+        aria-label={t("当前部署")}
+        className="grid gap-3 rounded-md border bg-muted/30 p-4"
+      >
         <h3 className="font-medium">
-          {env.name} · {t("版本列表")}
+          {env.name} · {t("当前部署")}
         </h3>
-        <p className="mt-2 text-sm text-muted-foreground">
-          {t(
-            "版本固定代码与创建时的环境配置。待部署版本不会改变线上流量；选择“部署此版本”后才会启动发布。",
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span>{t("当前生效版本")}</span>
+          {env.confirmed_version_id ? (
+            <Button
+              variant="link"
+              size="sm"
+              className="h-auto min-w-0 shrink whitespace-normal break-all p-0 text-left font-mono"
+              onClick={() => setSelectedVersion(env.confirmed_version_id!)}
+            >
+              {env.confirmed_version_id}
+            </Button>
+          ) : (
+            <span className="text-muted-foreground">{t("尚无已确认生效的版本")}</span>
           )}
-        </p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t("需要提前准备版本时，在“构建与发布”的更多操作中选择“创建待部署版本”。")}
-        </p>
+          {!env.enabled ? <Badge variant="outline">{t("已禁用")}</Badge> : null}
+        </div>
+        {env.version_id && env.version_id !== env.confirmed_version_id ? (
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <LoaderCircle
+              size={14}
+              className="animate-spin"
+            />
+            <span>{t("正在生效的版本")}</span>
+            <Button
+              variant="link"
+              size="sm"
+              className="h-auto min-w-0 shrink whitespace-normal break-all p-0 text-left font-mono"
+              onClick={() => setSelectedVersion(env.version_id!)}
+            >
+              {env.version_id}
+            </Button>
+          </div>
+        ) : null}
+      </section>
+      <div
+        ref={progress}
+        className="scroll-mt-6"
+      >
+        {operation ? (
+          <OperationPanel
+            operation={operation}
+            operations={operations.filter((item) => item.environment === env.name)}
+            select={selectOperation}
+          />
+        ) : null}
       </div>
-      <div className="grid gap-3">
-        {environmentVersions.length === 0 ? (
-          <p className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-            {t("此环境还没有版本。可以直接发布成功构建，或先创建待部署版本。")}
+      <section
+        aria-label={t("版本列表")}
+        className="grid gap-3"
+      >
+        <div>
+          <h3 className="font-medium">
+            {env.name} · {t("版本列表")}
+          </h3>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {t(
+              "版本固定代码与创建时的环境配置。待部署版本不会改变线上流量；选择“部署此版本”后才会启动发布。",
+            )}
           </p>
-        ) : (
-          environmentVersions.map((version) => {
-            const justCreated = version.id === createdVersion?.id;
-            const awaitingDeployment =
-              justCreated &&
-              version.id !== env.version_id &&
-              !operations.some((item) => item.version_id === version.id);
-            const sourceBuilds = data.builds.filter(
-              (build) => build.artifact_id === version.artifact_id,
-            );
-            const state = versionState(version, env, data, operations);
-            return (
-              <div
-                key={version.id}
-                ref={justCreated ? createdCard : undefined}
-                tabIndex={-1}
-                aria-label={t("版本 {{id}}", { id: version.id })}
-                className={cn(
-                  "grid scroll-mt-6 gap-3 rounded-md border p-4 outline-none focus-visible:ring-2 focus-visible:ring-primary",
-                  justCreated && "border-primary/40 bg-primary/5",
-                )}
-              >
-                {awaitingDeployment ? (
-                  <p
-                    role="status"
-                    className="flex items-center gap-2 text-sm text-primary"
-                  >
-                    <Check size={16} />
-                    {t("待部署版本已创建，线上部署未改变。")}
-                  </p>
-                ) : null}
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <code
-                        title={version.id}
-                        className="text-sm"
-                      >
-                        {shortID(version.id)}
-                      </code>
-                      {version.tag ? (
-                        <Badge
-                          title={version.tag}
-                          variant="secondary"
-                          className="max-w-64 truncate"
-                        >
-                          {version.tag}
-                        </Badge>
-                      ) : null}
-                      <Badge variant="outline">{state}</Badge>
-                    </div>
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      {t("创建时间")} ·{" "}
-                      <time dateTime={version.created_at}>
-                        {new Date(version.created_at).toLocaleString()}
-                      </time>
-                    </p>
-                    {version.message ? (
-                      <p className="mt-2 whitespace-pre-wrap break-words text-sm">
-                        {version.message}
-                      </p>
-                    ) : null}
-                  </div>
-                  <Button
-                    size="sm"
-                    disabled={busy || active || !env.enabled || version.id === env.version_id}
-                    onClick={() => {
-                      deploymentKey.current = crypto.randomUUID();
-                      setError("");
-                      setStale(false);
-                      setConfirmation({ version, revision: env.deployment_revision });
-                    }}
-                  >
-                    <Rocket size={14} />
-                    {t("部署此版本")}
-                  </Button>
-                </div>
-                <dl className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
-                  <div>
-                    <dt>{t("关联构建")}</dt>
-                    <dd className="mt-1 grid gap-2 break-all">
-                      {sourceBuilds.length
-                        ? sourceBuilds.map((build) => (
-                            <div key={build.id}>
-                              <code title={build.id}>{shortID(build.id)}</code>
-                              {build.repository_source ? (
-                                <p className="mt-1">
-                                  {build.repository_source.repository} ·{" "}
-                                  {build.repository_source.ref} ·{" "}
-                                  {build.repository_source.commit?.slice(0, 12)}
-                                </p>
-                              ) : null}
-                            </div>
-                          ))
-                        : t("无关联构建记录")}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>{t("制品")}</dt>
-                    <dd
-                      title={version.artifact_id}
-                      className="mt-1 break-all font-mono"
-                    >
-                      {shortID(version.artifact_id)}
-                    </dd>
-                  </div>
-                </dl>
-                <details className="border-t pt-3">
-                  <summary className="cursor-pointer text-sm">
-                    {t("查看冻结配置")} · r{version.configuration_revision}
-                  </summary>
-                  <div className="mt-3">
-                    <VersionConfiguration config={version} />
-                  </div>
-                </details>
-              </div>
-            );
-          })
-        )}
-      </div>
-      {operation ? (
-        <OperationPanel
-          operation={operation}
-          operations={operations.filter((item) => item.environment === env.name)}
-          select={selectOperation}
+          <p className="mt-1 text-xs text-muted-foreground">
+            {t("需要提前准备版本时，在“构建与发布”的更多操作中选择“创建待部署版本”。")}
+          </p>
+        </div>
+        <CollectionToolbar
+          page={versionPage}
+          label={t("搜索版本 ID、标签、说明或保存者")}
         />
-      ) : null}
-      <h3 className="font-medium">{t("部署记录与固定地址")}</h3>
-      {deploymentsError ? (
-        <p
-          role="alert"
-          className="text-sm text-destructive"
-        >
-          {deploymentsError}
-        </p>
-      ) : null}
-      {deployments.filter((deployment) => deployment.environment === env.name).length === 0 &&
-      !deploymentsError ? (
-        <p className="text-sm text-muted-foreground">
-          {t("尚无部署记录。固定地址在部署验证通过并提交后生成。")}
-        </p>
-      ) : null}
-      {deployments
-        .filter((deployment) => deployment.environment === env.name)
-        .map((deployment) => (
+        {versionPage.error ? (
+          <p
+            role="alert"
+            className="text-sm text-destructive"
+          >
+            {versionPage.error}
+          </p>
+        ) : null}
+        {versionPage.loading ? (
+          <p
+            role="status"
+            className="text-sm text-muted-foreground"
+          >
+            {t("正在加载版本…")}
+          </p>
+        ) : null}
+        <div className="grid gap-3">
+          {environmentVersions.length === 0 && !versionPage.loading && !versionPage.error ? (
+            <p className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
+              {versionPage.search || versionPage.hasPrevious
+                ? t("没有匹配的版本。")
+                : t("此环境还没有版本。可以直接发布成功构建，或先创建待部署版本。")}
+            </p>
+          ) : (
+            environmentVersions.map((version) => {
+              const justCreated = version.id === createdVersion?.id;
+              const awaitingDeployment =
+                justCreated &&
+                version.id !== env.version_id &&
+                !operations.some((item) => item.version_id === version.id);
+              const sourceBuilds = data.builds.filter(
+                (build) => build.artifact_id === version.artifact_id,
+              );
+              const state = versionState(version, env, data, operations);
+              return (
+                <div
+                  key={version.id}
+                  ref={justCreated ? createdCard : undefined}
+                  tabIndex={-1}
+                  aria-label={t("版本 {{id}}", { id: version.id })}
+                  className={cn(
+                    "grid scroll-mt-6 gap-3 rounded-md border p-4 outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                    justCreated && "border-primary/40 bg-primary/5",
+                  )}
+                >
+                  {awaitingDeployment ? (
+                    <p
+                      role="status"
+                      className="flex items-center gap-2 text-sm text-primary"
+                    >
+                      <Check size={16} />
+                      {t("待部署版本已创建，线上部署未改变。")}
+                    </p>
+                  ) : null}
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          variant="link"
+                          size="sm"
+                          className="h-auto p-0 font-mono"
+                          title={version.id}
+                          onClick={() => setSelectedVersion(version.id)}
+                        >
+                          {shortID(version.id)}
+                        </Button>
+                        {version.tag ? (
+                          <Badge
+                            title={version.tag}
+                            variant="secondary"
+                            className="max-w-64 truncate"
+                          >
+                            {version.tag}
+                          </Badge>
+                        ) : null}
+                        <Badge variant="outline">{state}</Badge>
+                      </div>
+                      <p className="mt-2 break-words text-xs text-muted-foreground">
+                        {t("保存者")} ·{" "}
+                        <span title={version.created_by}>
+                          {version.created_by_name || version.created_by || t("未记录")}
+                        </span>
+                      </p>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        {t("创建时间")} ·{" "}
+                        <time dateTime={version.created_at}>
+                          {new Date(version.created_at).toLocaleString()}
+                        </time>
+                      </p>
+                      {version.message ? (
+                        <p className="mt-2 whitespace-pre-wrap break-words text-sm">
+                          {version.message}
+                        </p>
+                      ) : null}
+                    </div>
+                    <Button
+                      size="sm"
+                      disabled={busy || active || !env.enabled || version.id === env.version_id}
+                      onClick={() => {
+                        deploymentKey.current = crypto.randomUUID();
+                        setError("");
+                        setStale(false);
+                        setConfirmation({
+                          version,
+                          revision: env.deployment_revision,
+                        });
+                      }}
+                    >
+                      <Rocket size={14} />
+                      {t("部署此版本")}
+                    </Button>
+                  </div>
+                  <dl className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+                    <div>
+                      <dt>{t("关联构建")}</dt>
+                      <dd className="mt-1 grid gap-2 break-all">
+                        {sourceBuilds.length
+                          ? sourceBuilds.map((build) => (
+                              <div key={build.id}>
+                                <code title={build.id}>{shortID(build.id)}</code>
+                                {build.repository_source ? (
+                                  <p className="mt-1">
+                                    {build.repository_source.repository} ·{" "}
+                                    {build.repository_source.ref} ·{" "}
+                                    {build.repository_source.commit?.slice(0, 12)}
+                                  </p>
+                                ) : null}
+                              </div>
+                            ))
+                          : t("无关联构建记录")}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>{t("制品")}</dt>
+                      <dd
+                        title={version.artifact_id}
+                        className="mt-1 break-all font-mono"
+                      >
+                        {shortID(version.artifact_id)}
+                      </dd>
+                    </div>
+                  </dl>
+                  <details className="border-t pt-3">
+                    <summary className="cursor-pointer text-sm">
+                      {t("查看冻结配置")} · r{version.configuration_revision}
+                    </summary>
+                    <div className="mt-3">
+                      <VersionConfiguration config={version} />
+                    </div>
+                  </details>
+                </div>
+              );
+            })
+          )}
+        </div>
+        <CollectionPagination page={versionPage} />
+      </section>
+      <section
+        aria-label={t("部署记录与固定地址")}
+        className="grid gap-3"
+      >
+        <h3 className="font-medium">{t("部署记录与固定地址")}</h3>
+        <CollectionToolbar
+          page={deploymentPage}
+          label={t("搜索部署 ID、版本 ID 或状态")}
+        />
+        {deploymentPage.error ? (
+          <p
+            role="alert"
+            className="text-sm text-destructive"
+          >
+            {deploymentPage.error}
+          </p>
+        ) : null}
+        {deploymentPage.loading ? (
+          <p
+            role="status"
+            className="text-sm text-muted-foreground"
+          >
+            {t("正在加载部署记录…")}
+          </p>
+        ) : null}
+        {deploymentPage.items?.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            {deploymentPage.search || deploymentPage.hasPrevious
+              ? t("没有匹配的部署记录。")
+              : t("尚无部署记录。固定地址在部署验证通过并提交后生成。")}
+          </p>
+        ) : null}
+        {deploymentPage.items?.map((deployment) => (
           <div
             key={deployment.id}
             className="grid gap-2 rounded-md border p-3 text-sm"
           >
             <div className="flex flex-wrap items-center gap-2">
-              <code title={deployment.id}>
-                {shortID(deployment.id)} · {shortID(deployment.version_id)}
-              </code>
+              <code title={deployment.id}>{shortID(deployment.id)}</code>
               <Status state={deployment.state} />
+              {deployment.version_id === env.confirmed_version_id &&
+              deployment.state === "available" ? (
+                <Badge>{t("当前生效版本")}</Badge>
+              ) : null}
             </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span>{t("版本")}</span>
+              <Button
+                variant="link"
+                size="sm"
+                className="h-auto p-0 font-mono"
+                title={deployment.version_id}
+                onClick={() => setSelectedVersion(deployment.version_id)}
+              >
+                {shortID(deployment.version_id)}
+              </Button>
+            </div>
+            <span className="text-xs text-muted-foreground">
+              {t("部署时间")} ·{" "}
+              <time dateTime={deployment.created_at}>
+                {new Date(deployment.created_at).toLocaleString()}
+              </time>
+            </span>
+            {deployment.committed_at ? (
+              <span className="text-xs text-muted-foreground">
+                {t("提交时间")} ·{" "}
+                <time dateTime={deployment.committed_at}>
+                  {new Date(deployment.committed_at).toLocaleString()}
+                </time>
+              </span>
+            ) : null}
             {deployment.hosts.map((host) => (
               <a
                 className="break-all underline"
@@ -360,8 +508,36 @@ export function VersionsPanel({
             <span className="text-xs text-muted-foreground">
               {t("保留至")} {new Date(deployment.expires_at).toLocaleString()}
             </span>
+            {operations.some((item) => item.id === deployment.operation_id) ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="justify-self-start"
+                onClick={() => {
+                  selectOperation(deployment.operation_id);
+                  requestAnimationFrame(() =>
+                    progress.current?.scrollIntoView({
+                      block: "nearest",
+                      behavior: "smooth",
+                    }),
+                  );
+                }}
+              >
+                {t("查看发布进度")}
+              </Button>
+            ) : null}
           </div>
         ))}
+        <CollectionPagination page={deploymentPage} />
+      </section>
+      <VersionDetails
+        base={base}
+        id={selectedVersion}
+        data={data}
+        env={env}
+        operations={operations}
+        close={() => setSelectedVersion("")}
+      />
       <Dialog
         open={!!confirmation}
         onOpenChange={(open) => {

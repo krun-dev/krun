@@ -67,6 +67,8 @@ async function fixture(page) {
         variables: { MODE: "live" },
         configuration_revision: 1,
         created_at: "2026-01-01T00:00:00Z",
+        created_by: "user-versions",
+        created_by_name: "Version tester",
       },
     },
     builds: [
@@ -100,6 +102,9 @@ async function fixture(page) {
       },
     ],
     operations: [],
+    deployments: [],
+    listRequests: [],
+    waitForDeploy: null,
     creates: [],
     deploys: [],
     failCreate: false,
@@ -166,6 +171,41 @@ async function fixture(page) {
       data = { source: null, revision: 1 };
     } else if (path === workerBase + "/domains") {
       data = { selected: [], catalog: [], revision: 1, network_profile: {} };
+    } else if (
+      (path === workerBase + "/versions" || path === workerBase + "/deployments") &&
+      request.method() === "GET"
+    ) {
+      const query = new URL(request.url()).searchParams;
+      state.listRequests.push({ path, query: Object.fromEntries(query) });
+      const source = path.endsWith("/versions")
+        ? Object.values(state.versions)
+        : state.deployments.map((deployment) => ({
+            ...deployment,
+            state:
+              state.operations.find((operation) => operation.id === deployment.operation_id)
+                ?.state || deployment.state,
+          }));
+      const search = (query.get("q") || "").toLowerCase();
+      const items = source
+        .filter(
+          (item) =>
+            item.environment === query.get("environment") &&
+            JSON.stringify(item).toLowerCase().includes(search),
+        )
+        .sort((a, b) => b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id));
+      const after = query.get("after");
+      const offset = after ? items.findIndex((item) => item.id === after) + 1 : 0;
+      const limit = Number(query.get("limit") || 100);
+      data = {
+        items: items.slice(offset, offset + limit),
+        next_after: items.length > offset + limit ? items[offset + limit - 1].id : "",
+      };
+    } else if (path.startsWith(workerBase + "/versions/") && request.method() === "GET") {
+      data = state.versions[decodeURIComponent(path.slice((workerBase + "/versions/").length))];
+      if (!data) {
+        status = 404;
+        data = { error: { code: "RESOURCE_NOT_FOUND", message: "Version not found" } };
+      }
     } else if (path.endsWith("/versions") && request.method() === "POST") {
       const input = request.postDataJSON();
       state.creates.push({ path, input });
@@ -194,12 +234,15 @@ async function fixture(page) {
           tag: input.tag,
           message: input.message,
           created_at: "2026-01-04T00:00:00Z",
+          created_by: "user-versions",
+          created_by_name: "Version tester",
         };
         state.versions[data.id] = data;
       }
     } else if (path.endsWith("/deployments") && request.method() === "POST") {
       const input = request.postDataJSON();
       state.deploys.push(input);
+      if (state.waitForDeploy) await state.waitForDeploy;
       if (state.failDeploy) {
         status = 409;
         data = { error: { code: "REVISION_CONFLICT", message: "Environment version changed" } };
@@ -215,6 +258,16 @@ async function fixture(page) {
           steps: [{ name: "artifact", state: "pending" }],
         };
         state.operations.unshift(data);
+        state.deployments.unshift({
+          id: "dep-candidate",
+          environment: "production",
+          version_id: input.version_id || "version-current",
+          operation_id: data.id,
+          state: "queued",
+          hosts: [],
+          created_at: data.created_at,
+          expires_at: "2026-02-04T01:00:00Z",
+        });
       }
     }
     await route.fulfill({ status, json: data });
@@ -405,5 +458,137 @@ test("direct publishing stays available without creating an undeployed version f
   expect(state.deploys).toHaveLength(1);
   expect(state.deploys[0]).toMatchObject({ build_id: "build-candidate", expected_revision: 3 });
   expect(state.deploys[0].version_id).toBeUndefined();
+  expect(errors).toEqual([]);
+});
+
+test("versions and deployments paginate independently and open version details outside the current page", async ({
+  page,
+}) => {
+  const { state, errors } = await fixture(page);
+  for (let i = 0; i < 25; i++) {
+    const id = `version-page-${String(i).padStart(3, "0")}`;
+    state.versions[id] = {
+      ...state.versions["version-current"],
+      id,
+      tag: `release-${i}`,
+      message: `Release message ${i}`,
+      created_by: "author-123",
+      created_by_name: "Release Author",
+      created_at: "2026-01-05T00:00:00Z",
+    };
+    state.deployments.push({
+      id: `deployment-${String(i).padStart(3, "0")}`,
+      version_id: id,
+      environment: "production",
+      operation_id: `operation-${i}`,
+      state: "available",
+      hosts: [],
+      created_at: "2026-01-05T01:00:00Z",
+      expires_at: "2026-02-05T01:00:00Z",
+    });
+  }
+  await page.goto(origin + location + "&worker_tab=versions");
+  const versions = page.getByRole("region", { name: "版本列表", exact: true });
+  const deployments = page.getByRole("region", { name: "部署记录与固定地址", exact: true });
+  await expect(versions.locator('[aria-label^="版本 version-"]')).toHaveCount(20);
+  await expect(versions).toContainText("Release Author");
+  await expect(deployments.getByRole("button", { name: /^version-page-/ })).toHaveCount(20);
+  await versions.getByRole("button", { name: "下一页", exact: true }).click();
+  await expect(versions).toContainText("第 2 页");
+  await expect(versions.locator('[aria-label^="版本 version-"]')).toHaveCount(6);
+  await expect(deployments).toContainText("第 1 页");
+  await deployments.getByRole("button", { name: "下一页", exact: true }).click();
+  await expect(deployments.getByRole("button", { name: /^version-page-/ })).toHaveCount(5);
+  await expect(deployments.getByRole("button", { name: "下一页", exact: true })).toBeDisabled();
+  await deployments.getByRole("button", { name: "version-page-024", exact: true }).click();
+  const detail = page.getByRole("dialog", { name: "版本详情", exact: true });
+  await expect(detail).toContainText("Release Author");
+  await expect(detail).toContainText("author-123");
+  await expect(detail).toContainText("Release message 24");
+  await expect(detail.locator("time")).toHaveAttribute("datetime", "2026-01-05T00:00:00Z");
+  await expect(detail).toContainText("查看冻结配置");
+  await page.keyboard.press("Escape");
+  await versions.getByRole("button", { name: "上一页", exact: true }).click();
+  await expect(versions.locator('[aria-label^="版本 version-"]')).toHaveCount(20);
+  await expect(versions.locator('[aria-label="版本 version-current"]')).toHaveCount(0);
+  const current = page.getByRole("region", { name: "当前部署", exact: true });
+  await current.getByRole("button", { name: "version-current", exact: true }).click();
+  await expect(detail).toContainText("当前生效版本");
+  await expect(detail).toContainText("Version tester");
+  await page.keyboard.press("Escape");
+  await versions
+    .getByRole("textbox", { name: "搜索版本 ID、标签、说明或保存者" })
+    .fill("release-24");
+  await versions.getByRole("button", { name: "搜索", exact: true }).click();
+  await expect(versions.locator('[aria-label^="版本 version-"]')).toHaveCount(1);
+  await expect(versions).toContainText("第 1 页");
+  await expect(deployments).toContainText("第 2 页");
+  await versions.getByRole("button", { name: "清除", exact: true }).click();
+  await versions.getByRole("combobox", { name: "每页条数", exact: true }).selectOption("50");
+  await expect(versions.locator('[aria-label^="版本 version-"]')).toHaveCount(26);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  expect(state.listRequests.some(({ query }) => query.limit === "20" && query.after)).toBeTruthy();
+  expect(errors).toEqual([]);
+});
+
+test("deployment stays visible while submitting, then reports progress, failure and confirmed success", async ({
+  page,
+}) => {
+  const { state, errors } = await fixture(page);
+  state.versions["version-candidate"] = {
+    ...state.versions["version-current"],
+    id: "version-candidate",
+    created_at: "2026-01-05T00:00:00Z",
+  };
+  await page.goto(origin + location + "&worker_tab=versions");
+  const candidate = page.locator('[aria-label="版本 version-candidate"]');
+  await candidate.getByRole("button", { name: "部署此版本", exact: true }).click();
+  const confirm = page.getByRole("dialog", { name: "部署已保存版本" });
+  let release;
+  state.waitForDeploy = new Promise((resolve) => {
+    release = resolve;
+  });
+  await confirm.getByRole("button", { name: "确认部署", exact: true }).click();
+  await expect(confirm.getByRole("button", { name: "提交中…", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(confirm).toBeVisible();
+  expect(state.deploys).toHaveLength(1);
+  release();
+  await expect(confirm).toHaveCount(0);
+  await expect(
+    page.getByText("部署请求已受理，正在排队或验证，请等待生效。", { exact: true }),
+  ).toBeVisible();
+  await expect(candidate.getByRole("button", { name: "部署此版本", exact: true })).toBeDisabled();
+  const operation = state.operations[0];
+  operation.state = "failed";
+  operation.error = "Candidate validation failed: missing binding";
+  await expect(page.getByText("部署失败，请查看下方错误详情。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText(operation.error);
+  await expect(candidate.getByRole("button", { name: "部署此版本", exact: true })).toBeEnabled();
+  await expect(page.getByRole("region", { name: "当前部署", exact: true })).toContainText(
+    "version-current",
+  );
+  // Exercise the committed -> runtime acknowledgement transition independently
+  // from HTTP acceptance, which must never be presented as success.
+  operation.state = "committed";
+  delete operation.error;
+  state.environments[0].version_id = "version-candidate";
+  await page.reload();
+  await expect(
+    page.getByText("部署已提交，正在等待运行副本确认生效。", { exact: true }),
+  ).toBeVisible();
+  const current = page.getByRole("region", { name: "当前部署", exact: true });
+  await expect(current).toContainText("正在生效的版本");
+  await expect(current.getByRole("button", { name: "version-current", exact: true })).toBeVisible();
+  operation.state = "available";
+  state.environments[0].confirmed_version_id = "version-candidate";
+  await expect(page.getByText("部署成功，运行副本已确认生效。", { exact: true })).toBeVisible();
+  await expect(
+    current.getByRole("button", { name: "version-candidate", exact: true }),
+  ).toBeVisible();
+  await expect(current.getByRole("button", { name: "version-current", exact: true })).toHaveCount(
+    0,
+  );
   expect(errors).toEqual([]);
 });

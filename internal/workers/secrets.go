@@ -271,6 +271,8 @@ func (s *Service) WorkerSecretBatch(ctx context.Context, st *domain.State, p aut
 		return nil, Read, domain.Problem(409, "ARTIFACT_UNAVAILABLE", "Artifact unavailable")
 	}
 	version := SnapshotVersion(target.Organization, target.ID, environment, artifact, current)
+	version.CreatedBy = p.User.ID
+	version.CreatedByName = p.User.Name
 	st.Workers.Versions[version.ID] = version
 	if in.Deploy != nil && !*in.Deploy {
 		WorkerRemember(st, key, in, version.ID)
