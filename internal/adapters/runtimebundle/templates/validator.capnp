@@ -38,7 +38,7 @@ const config :W.Config = (
     ),
     (
       name = "platform",
-      external = (address = __CONTROL_ADDRESS__, http = ())
+      external = __CONTROL_EXTERNAL__
     ),
     (
       name = "storage",

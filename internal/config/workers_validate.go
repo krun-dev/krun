@@ -14,6 +14,11 @@ func (c *WorkersConfig) Validate() error {
 	if c == nil {
 		return nil
 	}
+	if origin, err := c.RuntimeAPIOrigin(); err != nil {
+		return err
+	} else if origin != nil {
+		c.RuntimeAPIURL = strings.TrimSuffix(origin.String(), "/")
+	}
 	if err := c.ObjectStorage.Validate(); err != nil {
 		return err
 	}

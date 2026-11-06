@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/krun-dev/krun/internal/config"
@@ -15,6 +16,23 @@ import (
 var templates embed.FS
 
 func Render(workers *config.WorkersConfig, pool config.WorkerRuntimePool, controlAddress string, networks []string, validator bool) (string, error) {
+	origin, err := workers.RuntimeAPIOrigin()
+	if err != nil {
+		return "", err
+	}
+	controlExternal := fmt.Sprintf("(address = %s, http = ())", quote(controlAddress))
+	if origin != nil {
+		port := origin.Port()
+		if port == "" {
+			port = "443"
+		}
+		controlExternal = fmt.Sprintf(
+			`(address = %s, https = (options = (injectRequestHeaders = [(name = "Host", value = %s)]), certificateHost = %s, tlsOptions = (trustBrowserCas = true)))`,
+			quote(net.JoinHostPort(origin.Hostname(), port)),
+			quote(origin.Host),
+			quote(origin.Hostname()),
+		)
+	}
 	name := "runtime"
 	loader := "krun-" + pool.ID
 	if validator {
@@ -36,7 +54,7 @@ func Render(workers *config.WorkersConfig, pool config.WorkerRuntimePool, contro
 		services = objectStorageServices(workers)
 	}
 	replacer := strings.NewReplacer(
-		"__CONTROL_ADDRESS__", quote(controlAddress),
+		"__CONTROL_EXTERNAL__", controlExternal,
 		"__STORAGE_ALLOW__", strings.Join(allowed, ","),
 		"__POOL__", quote(pool.ID),
 		"__LOADER_ID__", quote(loader),

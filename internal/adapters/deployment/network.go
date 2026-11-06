@@ -131,10 +131,15 @@ func (r *renderer) networkPolicies() {
 	for _, gateway := range r.cfg.Workers.Gateways {
 		controlOut = append(controlOut, egress([]any{gatewayPeer(gateway)}, gatewayPort(gateway)))
 	}
-	r.policy("krun-control", map[string]string{"app": "krun-control"}, []any{
+	controlIn := []any{
 		ingress([]any{gatewayPeer(r.gateway)}, integerPort(r.cfg.Listen)),
 		ingress([]any{podRole("krun-runtime"), podRole("krun-validator")}, integerPort(r.cfg.InternalListen)),
-	}, controlOut)
+	}
+	apiPort := r.runtimeAPIPort()
+	if apiPort != 0 {
+		controlIn = append(controlIn, ingress([]any{gatewayPeer(r.gateway)}, integerPort(r.cfg.InternalListen)))
+	}
+	r.policy("krun-control", map[string]string{"app": "krun-control"}, controlIn, controlOut)
 	for _, pool := range r.cfg.Workers.RuntimePools {
 		r.pool = pool
 		for _, validator := range []bool{false, true} {
@@ -153,6 +158,9 @@ func (r *renderer) networkPolicies() {
 				}
 			}
 			outgoing := configuredEgress(r.cfg.Deployment.Network.Runtime)
+			if apiPort != 0 {
+				outgoing = append(outgoing, egress([]any{gatewayPeer(r.gateway)}, apiPort))
+			}
 			outgoing = append(outgoing, egress([]any{peer("krun-control")}, integerPort(r.cfg.InternalListen)))
 			r.policy(name, map[string]string{"role": role, "pool": r.pool.ID}, incoming, outgoing)
 		}

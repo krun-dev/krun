@@ -69,3 +69,19 @@ binding 已实现；Service/数据库 binding、资源池管理页面和跨池�
 基础设施目录变更通过重新加载主配置生效；影响路由的配置 hash 变化会将服务加入有界
 重建队列。不能把已有池 ID 或存储位置 ID 静默指向不同的安全边界或数据位置。
 开发使用 [local-first](local-dev.md)，完整验收使用独立 [kind 栈](../deploy/workers-kind/README.md)。
+
+## Runtime API 地址
+
+部署方在主配置设置 `workers.runtime_api_url`，例如 `https://console.example.com`。
+留空时 workerd 使用控制面内部 Service；配置后 serving 和 validator 均通过该 HTTPS
+origin 调用 `/api/internal/workers/*`。该设置会接收 pool 认证 token，不向组织/Worker
+用户开放，也不进入业务 binding。只接受无凭据、路径、query、fragment 的 HTTPS origin。
+
+workerd 验证服务器证书与 SNI，并发送配置域名的 Host。生产渲染器在控制台选中的
+Gateway 上生成 `krun-runtime-api` HTTPRoute，只转发 Runtime API 前缀到内部 Service；
+同时允许该 Gateway 访问内部端口，并允许 runtime/validator 访问 Gateway 的 HTTPS
+端口。DNS、证书、TLS 终止与必要的边缘网络出口由部署方配置。若使用其他前置代理，
+须保留 `Authorization`、`X-Runtime-Pool` 及请求路径；未知凭据继续返回 403。
+
+地址修改后重新渲染并部署，ConfigMap hash 变化会滚动更新 workerd；不需要重新构建
+Worker 制品。该配置不修改对象存储地址或控制面调用 runtime 管理端口的 Pod 选址。

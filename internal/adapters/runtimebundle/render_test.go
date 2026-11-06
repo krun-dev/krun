@@ -62,6 +62,9 @@ func TestRenderedServingAndValidatorStartInRealWorkerd(t *testing.T) {
 					},
 				},
 			}
+			if validator {
+				cfg.RuntimeAPIURL = "https://runtime.example.test"
+			}
 			pool := config.WorkerRuntimePool{ID: "internal-a", Access: []string{"private"}}
 			text, err := Render(cfg, pool, strings.TrimPrefix(backend.URL, "http://"), []string{
 				"127.0.0.1/32",
@@ -139,5 +142,34 @@ func TestRenderedServingAndValidatorStartInRealWorkerd(t *testing.T) {
 			output, _ := os.ReadFile(log.Name())
 			t.Fatalf("rendered workerd did not become ready: %s", output)
 		})
+	}
+}
+
+func TestRuntimeAPIURLRendersTLSIdentity(t *testing.T) {
+	for _, validator := range []bool{false, true} {
+		for _, origin := range []string{"", "https://runtime.example.com:8443"} {
+			cfg := &config.WorkersConfig{RuntimeAPIURL: origin}
+			text, err := Render(cfg, config.WorkerRuntimePool{ID: "default"}, "control.example.svc:8081", nil, validator)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if origin == "" {
+				if !strings.Contains(text, `external = (address = "control.example.svc:8081", http = ())`) {
+					t.Fatal("default Service transport changed")
+				}
+				continue
+			}
+			for _, expected := range []string{
+				`address = "runtime.example.com:8443"`, `name = "Host", value = "runtime.example.com:8443"`,
+				`certificateHost = "runtime.example.com"`, `trustBrowserCas = true`,
+			} {
+				if !strings.Contains(text, expected) {
+					t.Fatalf("missing TLS configuration %s", expected)
+				}
+			}
+			if strings.Contains(text, "control.example.svc") {
+				t.Fatal("explicit origin did not replace Service")
+			}
+		}
 	}
 }

@@ -40,7 +40,7 @@ __STORAGE_BINDINGS__
     ),
     (
       name = "platform",
-      external = (address = __CONTROL_ADDRESS__, http = ())
+      external = __CONTROL_EXTERNAL__
     ),
     (
       name = "storage",
