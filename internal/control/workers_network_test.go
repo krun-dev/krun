@@ -792,7 +792,7 @@ func TestKubernetesClientReloadsRotatedBearerToken(t *testing.T) {
 }
 
 func TestProcessOperationValidationMembers(t *testing.T) {
-	for _, mode := range []string{"serving", "dedicated", "no-validator", "old-image", "membership-change", "no-members", "bad-identity", "candidate-invalid"} {
+	for _, mode := range []string{"serving", "dedicated", "dedicated-public", "no-validator", "old-image", "membership-change", "no-members", "bad-identity", "candidate-invalid"} {
 		t.Run(mode, func(t *testing.T) {
 			s, store, _ := workerTestServer(t)
 			raw := workerArchive(t, []string{"manifest.json", "modules/index.js"}, "export default {}", false)
@@ -817,7 +817,7 @@ func TestProcessOperationValidationMembers(t *testing.T) {
 			expectedPool := "default"
 			expectedRole := "runtime"
 			expectedToken := strings.Repeat("m", 24)
-			if mode == "dedicated" || mode == "no-validator" {
+			if strings.HasPrefix(mode, "dedicated") || mode == "no-validator" {
 				expectedUID = "validator-pod-1"
 				expectedPool = "validation"
 				expectedRole = "validator"
@@ -908,12 +908,17 @@ func TestProcessOperationValidationMembers(t *testing.T) {
 			c.S3Bucket, c.S3AccessKey, c.S3SecretKey, c.S3LocationID = "artifacts", "access", "secret", "test"
 			c.SecretsActiveKey = "v1"
 			c.SecretsKeys = map[string]string{"v1": "ERERERERERERERERERERERERERERERERERERERERERE="}
-			if mode == "dedicated" || mode == "no-validator" {
+			if strings.HasPrefix(mode, "dedicated") || mode == "no-validator" {
 				c.ValidatorPool = "validation"
 				c.RuntimePools = append(c.RuntimePools, appconfig.WorkerRuntimePool{
 					ID: "validation", RuntimeService: "runtime-validation", ValidatorService: "runtime-validator-default",
 					ManagementToken: expectedToken,
 				})
+			}
+			sourcePool := "default"
+			if mode == "dedicated-public" {
+				sourcePool = "public"
+				c.RuntimePools[0].ID = sourcePool
 			}
 			c.RuntimePools[0].ManagementToken = strings.Repeat("m", 24)
 			s.Config.Workers = c
@@ -936,7 +941,7 @@ func TestProcessOperationValidationMembers(t *testing.T) {
 			version.SecretVersions = map[string]string{"API_SECRET": encrypted.Version.ID}
 			version.SecretDigest = workerapp.WorkerSecretsDigest(version.SecretVersions)
 			state := WorkerState{
-				Placements: map[string]WorkerPlacement{"svc-a\x00default": {Service: "svc-a", Organization: "org-a", Pool: "default", Role: "primary", State: "active"}},
+				Placements: map[string]WorkerPlacement{"svc-a\x00" + sourcePool: {Service: "svc-a", Organization: "org-a", Pool: sourcePool, Role: "primary", State: "active"}},
 				Versions:   map[string]WorkerVersion{version.ID: version}, Artifacts: map[string]WorkerArtifact{artifact.ID: artifact},
 				Operations: map[string]WorkerOperation{op.ID: op}, OperationPrivate: map[string]WorkerOperationPrivate{op.ID: {Actor: WorkerActor{User: "admin", AuthVersion: 1}}},
 			}

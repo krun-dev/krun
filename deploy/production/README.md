@@ -215,5 +215,5 @@ ServiceAccount 凭证，不读取或打包操作者的 kubeconfig。
 
 候选校验默认复用业务 pool 的 Ready Pod，不额外渲染 validator。需要进程隔离时在主配置
 设置 `workers.validator_pool` 为已有 pool ID，所有业务 pool 共用该池的独立 validator。
-先升级 runtime 镜像再升级控制面；旧镜像不支持 `validation_protocol: 1` 时会等待。
+升级期间暂停发布，先升级 runtime 镜像再升级控制面后恢复发布；旧镜像不支持 `validation_protocol: 1` 时会等待。
 切换模式不自动删除旧 validator 资源；确认新模式可发布后显式清理。

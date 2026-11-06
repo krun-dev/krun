@@ -23,9 +23,13 @@ rollout 或跨池迁移 API。
 placement 权限保持不变。校验后再次检查 Ready EndpointSlice 成员，变化时重试。
 无可用成员时等待，不跨模式回退。
 
-先升级 runtime 镜像，再升级控制面。控制面通过 `/ready` 的 `validation_protocol: 1`、
+升级期间暂停发布，先升级 runtime 镜像，再升级控制面后恢复发布。控制面通过 `/ready` 的 `validation_protocol: 1`、
 role、pool 和 Pod UID 确认能力，旧镜像不会执行候选。已有独立 validator 不会被渲染器
 自动删除，切换模式并确认发布成功后，由运维显式清理未再使用的资源。
+
+校验检查制品、模块初始化及 `KrunValidation`，不遍历业务 `fetch()` 分支，也不执行真实
+对象存储读写。通过校验不代表目标业务 pool 的网络、存储权限、配置分发或资源容量已通过
+验证；这些能力需要在目标 serving pool 上用真实请求检查。
 
 组织用户选择 `network_profiles` 中公开且获准使用的产品配置。Profile 通过
 `pool_selector`、`domain_selector` 与入口/出口 requirements 筛选基础设施；名称和 ID

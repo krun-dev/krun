@@ -54,9 +54,53 @@ function tar(files) {
   }
   return gzipSync(Buffer.concat([...chunks, Buffer.alloc(1024)]));
 }
-const source = project
-  ? readFileSync(project.source, "utf8")
-  : `import { env as imported, WorkerEntrypoint } from 'cloudflare:workers';
+const sharedValidator = process.argv.includes("--shared-validator");
+const sharedSource = `import {env, WorkerEntrypoint} from 'cloudflare:workers';
+if (env.FAIL) {
+  throw new Error('Rejected candidate fixture');
+}
+let owner = null;
+export class KrunValidation extends WorkerEntrypoint {
+  async ping() {
+    const marker = this.env.MARKER;
+    if (owner !== null && owner !== marker) {
+      throw new Error('Candidate loader state crossed versions');
+    }
+    owner = marker;
+    if (this.env[this.env.SECRET_BINDING] !== marker + '-secret' ||
+        this.env[this.env.OTHER_BINDING] !== undefined) {
+      throw new Error('Candidate secrets crossed services');
+    }
+    const key = 'https://shared-validator.test/identical-key';
+    const previous = await caches.default.match(key);
+    if (previous && await previous.text() !== marker) {
+      throw new Error('Candidate cache crossed versions');
+    }
+    await caches.default.put(key, new Response(marker));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const current = await caches.default.match(key);
+    if (!current || await current.text() !== marker) {
+      throw new Error('Concurrent candidate changed cache');
+    }
+    let denied = false;
+    try {
+      await this.env.BUCKET.put('shared-validator-must-not-write', marker);
+    } catch (error) {
+      denied = error.message === 'Storage signer unavailable';
+    }
+    if (!denied) {
+      throw new Error('Shared validator obtained storage access');
+    }
+    return true;
+  }
+}
+export default {fetch() {return new Response('unused');}};
+`;
+const source = sharedValidator
+  ? sharedSource
+  : project
+    ? readFileSync(project.source, "utf8")
+    : `import { env as imported, WorkerEntrypoint } from 'cloudflare:workers';
 const atModuleScope = imported.BUCKET;
 let validationTouched = false;
 export default class extends WorkerEntrypoint {
@@ -250,6 +294,7 @@ const descriptor = {
 };
 let grantRequests = 0;
 let secretRequests = 0;
+let servingRequests = 0;
 let firstStorageData;
 const storageStarted = new Promise((resolve) => {
   firstStorageData = resolve;
@@ -467,6 +512,9 @@ const platform = http.createServer((request, response) => {
   }
   response.setHeader("content-type", "application/json");
   const url = new URL(request.url, "http://platform");
+  if (url.pathname.includes("/config/") || url.pathname.endsWith("/ack")) {
+    servingRequests++;
+  }
   if (url.pathname === "/archive") {
     response.end(archive);
     return;
@@ -559,15 +607,21 @@ const protocol =
 const objectService =
   '(name="objects",external=(address=' + JSON.stringify(address) + "," + protocol + "))";
 const managementPort = await freePort();
+const objectBindings = sharedValidator
+  ? '(name="VALIDATOR_ONLY",text="true")'
+  : `(name="OBJECT_STORES",text=${JSON.stringify(JSON.stringify({ primary: { binding: "OBJECT_STORE_0" } }))}),(name="OBJECT_STORE_0",service="objects")`;
+const privateSocket = sharedValidator
+  ? ""
+  : `,(name="private",address="127.0.0.1:${port}",http=(),service=(name="entry",entrypoint="Private"))`;
 const config = `using W=import "/workerd/workerd.capnp";
 const config :W.Config=(services=[
  (name="entry",worker=(modules=[${modules}],compatibilityDate="2026-09-28",compatibilityFlags=["experimental","enable_ctx_exports","enable_request_signal","request_signal_passthrough"],bindings=[${sources},(name="CACHE_SOURCE",text=embed ${JSON.stringify(path.join(root, "cache.js"))}),
- (name="LOADER",workerLoader=(id="r2-smoke")),(name="PLATFORM",service="platform"),(name="POD_UID",text="uid"),(name="POD_NAME",text="pod"),(name="RUNTIME_POOL",text="default"),(name="RUNTIME_TOKEN",text="test"),(name="MANAGEMENT_TOKEN",text="test-management"),
- (name="OBJECT_STORES",text=${JSON.stringify(JSON.stringify({ primary: { binding: "OBJECT_STORE_0" } }))}),(name="OBJECT_STORE_0",service="objects")],globalOutbound="network")),
+ (name="LOADER",workerLoader=(id="r2-smoke")),(name="PLATFORM",service="platform"),(name="POD_UID",text="uid"),(name="POD_NAME",text="pod"),(name="RUNTIME_POOL",text="${sharedValidator ? "validation" : "default"}"),(name="RUNTIME_TOKEN",text="${sharedValidator ? "validator-only-token" : "test"}"),(name="MANAGEMENT_TOKEN",text="test-management"),
+ ${objectBindings}],globalOutbound="network")),
  (name="platform",external=(address="127.0.0.1:${platformPort}",http=())),
- ${objectService},
+ ${sharedValidator ? "" : objectService + ","}
  (name="network",network=(allow=["127.0.0.1/32"]))],
- sockets=[(name="management",address="127.0.0.1:${managementPort}",http=(),service=(name="entry",entrypoint="Management")),(name="private",address="127.0.0.1:${port}",http=(),service=(name="entry",entrypoint="Private"))]);`;
+ sockets=[(name="management",address="127.0.0.1:${managementPort}",http=(),service=(name="entry",entrypoint="Management"))${privateSocket}]);`;
 // Use JSON escaping for the nested text binding instead of Cap'n Proto escapes.
 const configPath = path.join(directory, "runtime.capnp");
 writeFileSync(configPath, config);
@@ -632,7 +686,10 @@ try {
       throw new Error("workerd exited: " + output);
     }
     try {
-      const response = await fetch("http://127.0.0.1:" + port + "/", {
+      const probeURL = sharedValidator
+        ? `http://127.0.0.1:${managementPort}/ready`
+        : "http://127.0.0.1:" + port + "/";
+      const response = await fetch(probeURL, {
         headers: { host: "unknown.test" },
       });
       await response.body?.cancel();
@@ -641,7 +698,73 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 30));
     }
   }
-  if (project) {
+  if (sharedValidator) {
+    const readyResponse = await fetch(`http://127.0.0.1:${managementPort}/ready`);
+    assert.equal(readyResponse.status, 200, output);
+    const ready = await readyResponse.json();
+    assert.equal(ready.pool, "validation");
+    assert.equal(ready.role, "validator");
+    assert.equal(ready.validation_protocol, 1);
+    const validateShared = async (marker, service, options = {}) => {
+      const candidate = {
+        ...descriptor,
+        id: options.id ?? "version-" + marker,
+        service_id: service,
+        archive_sha256: sha(archive),
+        secret_digest: "digest-" + marker,
+        variables: {
+          MARKER: marker,
+          SECRET_BINDING: "SECRET_" + marker,
+          OTHER_BINDING: marker === "a" ? "SECRET_b" : "SECRET_a",
+          FAIL: options.fail ?? false,
+        },
+      };
+      const response = await fetch(`http://127.0.0.1:${managementPort}/validate`, {
+        method: "POST",
+        headers: { authorization: "Bearer test-management", "content-type": "application/json" },
+        body: JSON.stringify({
+          version: candidate,
+          artifact: {
+            download_url: `http://127.0.0.1:${platformPort}/archive`,
+            size: archive.length,
+            archive_sha256: sha(archive),
+          },
+          secrets: {
+            version_id: candidate.id,
+            secret_digest: candidate.secret_digest,
+            values: { ["SECRET_" + marker]: marker + "-secret" },
+          },
+        }),
+      });
+      const result = await response.json();
+      assert.equal(response.status, options.fail ? 503 : 200, JSON.stringify(result) + output);
+      if (!options.fail) {
+        assert.equal(result.version_id, candidate.id);
+        assert.equal(result.archive_sha256, candidate.archive_sha256);
+        assert.equal(result.pod_uid, "uid");
+      }
+    };
+    // Same cache key and interleaved RPCs on one dedicated validator. Include
+    // different services and different versions of the same service. Source-pool
+    // selection and authorization are checked by the controller HTTP tests.
+    for (let round = 0; round < 3; round++) {
+      await Promise.all([
+        validateShared("a", "service-a"),
+        validateShared("b", "service-b"),
+        validateShared("a-next", "service-a"),
+        validateShared("bad", "service-b", { fail: true }),
+      ]);
+    }
+    await validateShared("a", "service-a");
+    await validateShared("b", "service-b");
+    assert.equal(secretRequests, 0, "shared validator read source-pool secrets");
+    assert.equal(grantRequests, 0, "shared validator requested object credentials");
+    assert.equal(servingRequests, 0, "shared validator followed serving config or acknowledged it");
+    assert.equal(objects.size, 0, "shared validator changed objects");
+    console.log(
+      "Shared validator: concurrent services/versions, secrets/cache isolation and candidate failure passed",
+    );
+  } else if (project) {
     await runProject(project, requestWorker);
     console.log(project.name + " upstream HTTP scenarios completed");
   } else {
