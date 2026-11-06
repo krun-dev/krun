@@ -5,11 +5,12 @@ import { useTranslation } from "react-i18next";
 import { useState } from "react";
 import {
   ArrowRight,
+  Boxes,
+  CloudUpload,
+  HardDrive,
   Github,
-  Layers3,
   LockKeyhole,
   ShieldCheck,
-  Terminal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -65,7 +66,9 @@ export function Login({
   return (
     <div className="grid min-h-screen lg:grid-cols-[1.05fr_1fr]">
       <div className="relative hidden flex-col overflow-hidden bg-[#151515] p-14 text-white lg:flex">
-        <Logo dark />
+        <a href="/" aria-label={t("RUN 首页")}>
+          <Logo dark />
+        </a>
         <div className="absolute right-[-110px] top-[18%] size-[500px] rounded-full border border-white/5" />
         <div className="absolute right-[-45px] top-[24%] size-[370px] rounded-full border border-white/5" />
         <div className="relative my-auto max-w-lg">
@@ -73,23 +76,23 @@ export function Login({
             className="mb-7 border-white/15 bg-card/5 text-white/65"
             variant="outline"
           >
-            {t("YOUR INFRASTRUCTURE, ONE CONTROL PLANE")}
+            {t("RUN ANYTHING")}
           </Badge>
           <h1 className="text-5xl font-semibold leading-[1.15] tracking-tight">
-            {t("构建、运行，")}
+            {t("让想法，")}
             <br />
-            {t("尽在掌握。")}
+            {t("跑起来。")}
           </h1>
           <p className="mt-6 max-w-sm text-base leading-relaxed text-slate-400">
-            {t("让团队在同一个组织协作。")}
+            {t("从一个 API 到完整应用，")}
             <br />
-            {t("从身份认证到资源授权，每一次访问都有明确的边界。")}
+            {t("在 RUN 构建、部署、运行。")}
           </p>
           <div className="mt-12 grid grid-cols-3 gap-6 border-t border-white/10 pt-7">
             {[
-              [ShieldCheck, t("统一身份")],
-              [Layers3, t("组织隔离")],
-              [Terminal, t("CLI 协作")],
+              [CloudUpload, t("构建部署")],
+              [Boxes, t("应用运行")],
+              [HardDrive, t("对象存储")],
             ].map(([Icon, text]) => {
               const I = Icon as typeof ShieldCheck;
               return (
@@ -101,9 +104,6 @@ export function Login({
             })}
           </div>
         </div>
-        <p className="text-xs text-slate-500">
-          {t("krun · Infrastructure control plane")}
-        </p>
       </div>
       <main className="flex items-center justify-center p-6 md:p-12">
         <div className="w-full max-w-sm">
@@ -112,21 +112,21 @@ export function Login({
             <LanguageSwitch />
           </div>
           <div className="mb-12 lg:hidden">
-            <Logo />
+            <a href="/" aria-label={t("RUN 首页")}>
+              <Logo />
+            </a>
           </div>
           <div className="mb-7 flex size-11 items-center justify-center rounded-lg border bg-card text-primary">
             <LockKeyhole size={22} />
           </div>
           <p className="mb-2 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
-            {t("Welcome to krun")}
+            {t("Welcome to RUN")}
           </p>
           <h2 className="text-3xl font-semibold tracking-tight">
             {application ? t("登录以连接 {{application}}", { application }) : t("登录组织")}
           </h2>
           <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
-            {t("使用团队的身份来源继续。首次登录后，")}
-            <br />
-            {t("由管理员为你分配组织与资源权限。")}
+            {t("登录后，开始构建和部署你的应用。")}
           </p>
           {(error || failed) && (
             <p
@@ -196,10 +196,6 @@ export function Login({
               </CardContent>
             </Card>
           )}
-          <div className="mt-10 flex items-center gap-2 border-t pt-5 text-xs text-muted-foreground">
-            <ShieldCheck size={14} />
-            {t("独立账号 · 安全会话 · 最小权限")}
-          </div>
         </div>
       </main>
     </div>

@@ -51,7 +51,7 @@ const originalMessages = new Map(
 function updateDocument() {
   if (typeof document === "undefined") return;
   document.documentElement.lang = locale();
-  document.title = `krun · ${t("控制台")}`;
+  document.title = `RUN · ${t("控制台")}`;
 }
 export async function setLanguage(language: Language) {
   await i18next.changeLanguage(language);

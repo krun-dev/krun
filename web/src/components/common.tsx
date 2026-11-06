@@ -27,7 +27,7 @@ export function Logo({ dark = false }: { dark?: boolean }) {
         <Terminal size={18} />
       </div>
       <span className="text-xl font-semibold tracking-tight">
-        krun<span className="text-primary">.</span>
+        RUN<span className="text-primary">.</span>
       </span>
     </div>
   );

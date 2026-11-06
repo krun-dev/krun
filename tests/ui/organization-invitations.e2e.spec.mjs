@@ -36,7 +36,7 @@ async function contextPage(browser) {
 
 async function login(browser, provider) {
   const client = await contextPage(browser);
-  await client.page.goto("/");
+  await client.page.goto("/?page=login");
   await client.page
     .locator(`form[action="/api/auth/${provider}/login"]`)
     .getByRole("button")

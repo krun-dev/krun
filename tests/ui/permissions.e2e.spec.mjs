@@ -31,7 +31,7 @@ async function login(browser, provider) {
   await context.addInitScript(() => localStorage.setItem("krun.language", "zh-CN"));
   const page = await context.newPage();
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto("/");
+  await page.goto("/?page=login");
   await page.locator(`form[action="/api/auth/${provider}/login"]`).getByRole("button").click();
   await expect(page.getByRole("button", { name: "退出登录", exact: true })).toBeVisible();
   return { context, page };
