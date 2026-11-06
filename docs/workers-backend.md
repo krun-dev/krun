@@ -246,7 +246,7 @@ header 与该 pool 独立 token，不能只信任 header：
 
 `GET .../builds/{id}/logs` 返回 `build_id`、`state`、`download_url` 和 `expired`。预签名 GET URL 有效期 5 分钟；调用方不要保存或记录 URL。尚无快照或日志已过期时 URL 为空。成功响应有 `X-Log-Poll-Interval` 时按秒继续请求，没有时读取最终对象后停止；错误响应不代表构建结束。控制面响应和对象均禁用缓存。
 
-日志对象保留 7 天，由后台对象清理器分批清理（包括失去租约后产生的孤立快照）。主 YAML 的 `s3_endpoint` 必须是浏览器可访问的地址；TOS bucket 的 CORS 需允许控制台 origin 的 GET，浏览器请求不携带控制面 Cookie。构建和 runtime 的内部 endpoint 不用于浏览器日志 URL。
+日志对象保留 7 天，由后台对象清理器分批清理（包括失去租约后产生的孤立快照）。主 YAML 的可选 `s3_log_read_endpoint` 决定浏览器/CLI 日志预签名 URL 的访问地址，不填时沿用 `s3_endpoint`。控制面上传及清理始终使用 `s3_endpoint`；两者可以分别配置为内网和公网 endpoint，但必须指向同一桶及对象前缀。选择地址由部署配置决定，不按访问者网络自动探测。HTTPS 控制台需使用 HTTPS 读取地址；TOS bucket 的 CORS 需允许控制台 origin 的 GET，浏览器请求不携带控制面 Cookie。构建和 runtime 的内部 endpoint 不用于浏览器日志 URL。
 
 CLI：`krun build logs --org ID --service ID --build ID [--follow]`。`--follow` 遵循相同轮询 Header，直接读取对象时不转发 API Token。
 

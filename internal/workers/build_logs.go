@@ -57,7 +57,11 @@ func (w *Controller) BuildLogURL(ctx context.Context, key string) (string, error
 	if key == "" {
 		return "", nil
 	}
-	u, err := w.S3.PresignedGetObject(ctx, w.Config.S3Bucket, key, 5*time.Minute, nil)
+	client := w.S3LogRead
+	if client == nil {
+		client = w.S3
+	}
+	u, err := client.PresignedGetObject(ctx, w.Config.S3Bucket, key, 5*time.Minute, nil)
 	if err != nil {
 		return "", err
 	}

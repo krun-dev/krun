@@ -30,6 +30,7 @@ type Controller struct {
 	Service   *Service
 	Config    *appconfig.WorkersConfig
 	S3        objectstore.Client
+	S3LogRead objectstore.Client
 	PutObject WorkerPutObject
 	// Builder and runtime URLs may use different network views of the same
 	// immutable bucket. Presigning is offline; the control process need not
@@ -90,11 +91,18 @@ func NewController(s *Service) (*Controller, error) {
 			return nil, e
 		}
 	}
+	s3LogRead := s3
+	if endpoint := s.Config.Workers.S3LogReadEndpoint; endpoint != "" && endpoint != s.Config.Workers.S3Endpoint {
+		s3LogRead, e = NewWorkerS3Endpoint(s.Config.Workers, endpoint)
+		if e != nil {
+			return nil, e
+		}
+	}
 	k, e := kubernetes.New(s.Config.Workers)
 	if e != nil {
 		return nil, e
 	}
-	controller := &Controller{Service: s, Config: s.Config.Workers, S3: s3, PutObject: s3.PutObject, S3Builder: s3Builder, S3Runtime: s3Runtime, Kube: k, Http: runtimeclient.New(), AssetCache: map[string]WorkerCachedAssets{}, localBuilds: map[string]*WorkerLocalBuild{}, Replica: WorkerReplicaID()}
+	controller := &Controller{Service: s, Config: s.Config.Workers, S3: s3, S3LogRead: s3LogRead, PutObject: s3.PutObject, S3Builder: s3Builder, S3Runtime: s3Runtime, Kube: k, Http: runtimeclient.New(), AssetCache: map[string]WorkerCachedAssets{}, localBuilds: map[string]*WorkerLocalBuild{}, Replica: WorkerReplicaID()}
 	s.Controller = controller
 	return controller, nil
 }

@@ -38,3 +38,34 @@ func TestBuildLogSnapshotsArePrivateBoundedAndOwnerScoped(t *testing.T) {
 		t.Fatal("unbounded log")
 	}
 }
+
+func TestLogURLSignsReaderEndpointWithoutChangingUploadClient(t *testing.T) {
+	cfg := &config.WorkersConfig{S3Endpoint: "https://storage.internal.example.com", S3Region: "us-east-1", S3Bucket: "logs", S3Prefix: "dev", S3AccessKey: "replace-me", S3SecretKey: "replace-me", S3AddressingStyle: "path"}
+	upload, err := objectstore.NewWorkerS3(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &Controller{Config: cfg, S3: upload}
+	original, err := w.BuildLogURL(context.Background(), "build-logs/build/log.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(original, "https://storage.internal.example.com/logs/dev/build-logs/") {
+		t.Fatal("default endpoint not used")
+	}
+	reader, err := objectstore.NewWorkerS3Endpoint(cfg, "https://storage.public.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.S3LogRead = reader
+	signed, err := w.BuildLogURL(context.Background(), "build-logs/build/log.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(signed, "https://storage.public.example.com/logs/dev/build-logs/") || !strings.Contains(signed, "X-Amz-Signature=") {
+		t.Fatal("reader endpoint not signed")
+	}
+	if w.S3 != upload {
+		t.Fatal("upload client was changed")
+	}
+}
