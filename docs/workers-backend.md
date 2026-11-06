@@ -86,6 +86,10 @@ Build 是编译结果，不是某个环境的活动版本。同一个成功 Buil
 
 Version 固定引用 Artifact、目标环境、构建 profile、compatibility 配置、普通变量和 Secret version 集合。创建版本不会改变线上流量，部署时使用创建时冻结的快照。`POST /environments/{env}/versions` 从成功 Build 或本 Worker已有制品创建版本；`POST /environments/{env}/deployments` 接受 `version_id` 部署已有版本，也支持 `build_id` 完成创建并部署。
 
+创建版本可传 `expected_configuration_revision`，与目标环境的配置 revision 不一致时
+返回 `409 REVISION_CONFLICT`，不生成版本。控制台确认配置后携带此字段，避免冻结的
+内容与确认框不一致。同一幂等 key 和输入的重试返回原版本，即使环境配置随后已改变。
+
 普通变量支持 JSON 字符串、对象、数组、数字、布尔和 null，嵌套值随版本独立冻结。
 环境配置的 `version_metadata` 指定元数据 binding 名，留空关闭；运行时提供
 `{id,tag,timestamp}`。创建版本可以传 `tag`（最多 100 bytes）和 `message`（最多

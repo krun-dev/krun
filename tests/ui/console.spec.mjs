@@ -301,10 +301,11 @@ test("UI saves an undeployed Version and lists pinned deployments", async ({
       r.request().method() === "POST" &&
       r.url().endsWith("/environments/production/versions"),
   );
-  await page
-    .getByRole("button", { name: "保存版本", exact: true })
-    .first()
-    .click();
+  await page.getByRole("button", { name: "更多构建操作", exact: true }).first().click();
+  await page.getByRole("menuitem", { name: "创建待部署版本", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "创建待部署版本", exact: true });
+  await dialog.getByRole("textbox", { name: "版本标签（可选）" }).fill("ui-candidate-" + run);
+  await dialog.getByRole("button", { name: "创建待部署版本", exact: true }).click();
   const response = await upload;
   expect(response.status()).toBe(201);
   const version = await response.json();
@@ -318,10 +319,13 @@ test("UI saves an undeployed Version and lists pinned deployments", async ({
   expect((await currentEnvironment(context)).version_id).toBe(
     before.version_id,
   );
-  await page.getByRole("tab", { name: "版本与部署", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "版本与部署", exact: true })).toHaveAttribute("data-state", "active");
+  await expect(page.getByText("ui-candidate-" + run, { exact: true })).toBeVisible();
   await expect(
     page.getByText(version.id.slice(0, 16), { exact: true }),
   ).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("ui-candidate-" + run, { exact: true })).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "部署记录与固定地址" }),
   ).toBeVisible();

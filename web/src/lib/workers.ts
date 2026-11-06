@@ -53,6 +53,7 @@ export type Environment = {
   configuration_revision: number;
   variables: Record<string, unknown>;
   version_metadata?: string;
+  assets_binding?: string;
   secret_names: string[];
   deployment_revision: number;
   version_id?: string;
@@ -86,10 +87,13 @@ export type Version = {
   environment: string;
   variables: Record<string, unknown>;
   version_metadata?: string;
+  assets_binding?: string;
+  secret_digest?: string;
   tag?: string;
   message?: string;
   configuration_revision: number;
   archive_sha256: string;
+  created_at: string;
 };
 export type Operation = {
   id: string;

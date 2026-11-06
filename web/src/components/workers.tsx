@@ -4,6 +4,7 @@ import { readBuildLog } from "../lib/build-logs";
 import { BuildInspector, type BuildArtifact } from "./workers/build-inspector";
 import { PreviewBasePanel } from "./workers/preview-base";
 import { VersionsPanel } from "./workers/versions";
+import { BuildVersionMenu, CreateVersionDialog } from "./workers/version-create";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -13,7 +14,6 @@ import {
   GitBranch,
   FileText,
   LoaderCircle,
-  Save,
   Rocket,
   Plus,
   RefreshCw,
@@ -31,6 +31,8 @@ import {
   type WorkerDomain,
   type WorkerNetworkProfile,
   type WorkerRouting,
+  type Environment,
+  type Version,
 } from "@/lib/workers";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -161,6 +163,7 @@ export function WorkersPage({
     if (id) url.searchParams.set("worker", id);
     else url.searchParams.delete("worker");
     url.searchParams.delete("environment");
+    url.searchParams.delete("worker_tab");
     history.pushState(null, "", url);
     setWorker(id);
     if (!id) setRevision((v) => v + 1);
@@ -482,7 +485,30 @@ function WorkerDetail({
   const [environment, setEnvironment] = useState(
     new URLSearchParams(location.search).get("environment") || "production",
   );
-  const [tab, setTab] = useState("delivery");
+  const [tab, setTab] = useState(() => {
+    const value = new URLSearchParams(location.search).get("worker_tab") || "delivery";
+    const tabs = [
+      "delivery",
+      "preview-base",
+      "versions",
+      "source",
+      "routing",
+      "settings",
+      "invoke",
+    ];
+    return tabs.includes(value) ? value : "delivery";
+  });
+  const [versionDraft, setVersionDraft] = useState<{
+    build: Build;
+    env: Environment;
+  } | null>(null);
+  const [createdVersion, setCreatedVersion] = useState<Version | null>(null);
+  useEffect(() => {
+    const url = new URL(location.href);
+    url.searchParams.set("environment", environment);
+    url.searchParams.set("worker_tab", tab);
+    history.replaceState(null, "", url);
+  }, [environment, tab]);
   const [editor, setEditor] = useState(false);
   const [publish, setPublish] = useState<Build | null>(null);
   const [busy, setBusy] = useState(false);
@@ -788,16 +814,19 @@ function WorkerDetail({
         <Tabs
           value={tab}
           onValueChange={setTab}
+          className="min-w-0"
         >
-          <TabsList>
-            <TabsTrigger value="delivery">{t("构建与发布")}</TabsTrigger>
-            <TabsTrigger value="preview-base">{t("预览基础配置")}</TabsTrigger>
-            <TabsTrigger value="versions">{t("版本与部署")}</TabsTrigger>
-            <TabsTrigger value="source">{t("代码源")}</TabsTrigger>
-            <TabsTrigger value="routing">{t("路由与域名")}</TabsTrigger>
-            <TabsTrigger value="settings">{t("环境配置")}</TabsTrigger>
-            <TabsTrigger value="invoke">{t("调用测试")}</TabsTrigger>
-          </TabsList>
+          <div className="max-w-full overflow-x-auto">
+            <TabsList>
+              <TabsTrigger value="delivery">{t("构建与发布")}</TabsTrigger>
+              <TabsTrigger value="preview-base">{t("预览基础配置")}</TabsTrigger>
+              <TabsTrigger value="versions">{t("版本与部署")}</TabsTrigger>
+              <TabsTrigger value="source">{t("代码源")}</TabsTrigger>
+              <TabsTrigger value="routing">{t("路由与域名")}</TabsTrigger>
+              <TabsTrigger value="settings">{t("环境配置")}</TabsTrigger>
+              <TabsTrigger value="invoke">{t("调用测试")}</TabsTrigger>
+            </TabsList>
+          </div>
           <TabsContent
             value="delivery"
             className="mt-5 grid gap-5"
@@ -885,26 +914,6 @@ function WorkerDetail({
                             {inspectingBuild === b.id ? t("加载中…") : t("日志与制品")}
                           </Button>
                           <Button
-                            variant="outline"
-                            size="sm"
-                            className="bg-card shadow-none hover:border-primary/30 hover:bg-primary/5 hover:text-primary"
-                            disabled={b.state !== "succeeded" || busy}
-                            onClick={() => {
-                              void api(base + "/environments/" + env.name + "/versions", "POST", {
-                                build_id: b.id,
-                                idempotency_key: crypto.randomUUID(),
-                              })
-                                .then(() => {
-                                  reload();
-                                  notify(t("版本已保存，线上部署未改变。"));
-                                })
-                                .catch((e) => notify(errorMessage(e)));
-                            }}
-                          >
-                            <Save size={14} />
-                            {t("保存版本")}
-                          </Button>
-                          <Button
                             size="sm"
                             className="shadow-none"
                             disabled={b.state !== "succeeded" || active || !env.enabled}
@@ -913,6 +922,10 @@ function WorkerDetail({
                             <Rocket size={14} />
                             {t("发布")}
                           </Button>
+                          <BuildVersionMenu
+                            disabled={b.state !== "succeeded" || busy || !env.enabled}
+                            create={() => setVersionDraft({ build: b, env })}
+                          />
                         </div>
                       </TableCell>
                     </TableRow>
@@ -996,6 +1009,14 @@ function WorkerDetail({
               data={data}
               reload={reload}
               notify={notify}
+              createdVersion={createdVersion}
+              operations={operations}
+              operation={operation}
+              selectOperation={setSelectedOperation}
+              deployed={(op) => {
+                setAcceptedOperation(op);
+                setSelectedOperation(op.id);
+              }}
             />
           </TabsContent>
           <TabsContent
@@ -1116,6 +1137,24 @@ function WorkerDetail({
           </Button>
         </DialogContent>
       </Dialog>
+      {versionDraft ? (
+        <CreateVersionDialog
+          base={base}
+          build={versionDraft.build}
+          env={versionDraft.env}
+          close={() => {
+            setVersionDraft(null);
+            reload();
+          }}
+          created={(version) => {
+            setVersionDraft(null);
+            setCreatedVersion(version);
+            setEnvironment(version.environment);
+            setTab("versions");
+            reload();
+          }}
+        />
+      ) : null}
       <RepositoryBuild
         open={editor}
         close={() => setEditor(false)}
