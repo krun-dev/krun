@@ -1,3 +1,6 @@
 package domain
 
-type ExternalIdentity struct{ Subject, Name, Email string }
+type ExternalIdentity struct {
+	Subject, Name, Email string
+	EmailVerified        bool
+}

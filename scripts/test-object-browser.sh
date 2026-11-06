@@ -61,6 +61,7 @@ if [[ -z "$origin" ]]; then
   exit 1
 fi
 KRUN_IAM_E2E=1 KRUN_UI_ORIGIN="$origin" npx playwright test \
-  tests/ui/permissions.e2e.spec.mjs tests/ui/bucket-objects.spec.mjs tests/ui/r2.spec.mjs
+  tests/ui/permissions.e2e.spec.mjs tests/ui/organization-invitations.e2e.spec.mjs \
+  tests/ui/bucket-objects.spec.mjs tests/ui/r2.spec.mjs
 KRUN_UI_ORIGIN="$origin" npx playwright test tests/ui/oauth.spec.mjs \
   --grep-invert 'official Wrangler'

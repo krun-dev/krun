@@ -18,6 +18,10 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
+  OrganizationInvitationDialog,
+  OrganizationInvitationList,
+} from "./organization-invitations";
+import {
   Card,
   CardContent,
   CardDescription,
@@ -61,6 +65,7 @@ import {
 } from "./common";
 
 export type Props = {
+  canInvite?: boolean;
   base: string;
   scope: string;
   system: boolean;
@@ -226,6 +231,7 @@ export function IAMPage({
     [scopeKind, setScopeKind] = useState(p.system ? "system" : "organization"),
     [scopeID, setScopeID] = useState(""),
     [envs, setEnvs] = useState("");
+  const [membersView, setMembersView] = useState("members");
   const labels = {
     members: {
       title: t("组织成员"),
@@ -298,13 +304,37 @@ export function IAMPage({
         title={l.title}
         description={l.description}
         action={
-          <Button onClick={() => setOpen(true)}>
-            <Plus size={16} />
-            {l.action}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            {section === "members" && p.canInvite ? (
+              <OrganizationInvitationDialog base={p.base} notify={p.notify} reload={p.reload} />
+            ) : null}
+            <Button
+              variant={section === "members" ? "outline" : "default"}
+              onClick={() => setOpen(true)}
+            >
+              <Plus size={16} />
+              {l.action}
+            </Button>
+          </div>
         }
       />
-      {loading ? (
+      {section === "members" ? (
+        <Tabs value={membersView} onValueChange={setMembersView} className="mb-5">
+          <TabsList>
+            <TabsTrigger value="members">{t("成员")}</TabsTrigger>
+            <TabsTrigger value="invitations">{t("邀请链接")}</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      ) : null}
+      {section === "members" && membersView === "invitations" ? (
+        <OrganizationInvitationList
+          base={p.base}
+          notify={p.notify}
+          reload={p.reload}
+          refresh={p.refresh}
+          canManage={Boolean(p.canInvite)}
+        />
+      ) : loading ? (
         <Loading />
       ) : error ? (
         <ErrorState error={t(error)} />

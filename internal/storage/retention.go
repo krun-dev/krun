@@ -8,6 +8,9 @@ import (
 )
 
 func (s *Store) RetainExpired(ctx context.Context) error {
+	if err := s.retainOrganizationInvitations(ctx); err != nil {
+		return err
+	}
 	if s.pool == nil {
 		s.mu.Lock()
 		for id, a := range s.assetSessions {

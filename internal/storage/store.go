@@ -20,7 +20,7 @@ import (
 //
 // No upstream HTTP calls may run inside Update.
 type Store struct {
-	assetSessions map[string]domain.WorkerAssetSession
+	assetSessions       map[string]domain.WorkerAssetSession
 	oauthAuthorizations map[string]domain.OAuthAuthorization
 	oauthGrants         map[string]domain.OAuthGrant
 	oauthRefresh        map[string]domain.OAuthRefresh
@@ -51,7 +51,9 @@ type Store struct {
 	ackMu sync.Mutex
 	acks  map[string]domain.WorkerAck
 	// memorySecretValues backs encrypted secret rows in the test-only store.
-	memorySecretValues map[string]domain.EncryptedWorkerSecret
+	memorySecretValues      map[string]domain.EncryptedWorkerSecret
+	organizationInvitations map[string]domain.OrganizationInvitation
+	invitationRedemptions   map[string]map[string]bool
 }
 
 // StatePartition selects which tables Update loads and persists. Keeping the
@@ -251,6 +253,12 @@ func (s *Store) updateMemory(fn func(*domain.State) error) error {
 	audits := after.PendingAudits
 	after.PendingAudits = nil
 	s.memory = after
+	for id, invitation := range s.organizationInvitations {
+		if _, exists := after.Organizations[invitation.Organization]; !exists {
+			delete(s.organizationInvitations, id)
+			delete(s.invitationRedemptions, id)
+		}
+	}
 	if s.onPersist != nil && !sameStateContent(src, after) {
 		s.onPersist()
 	}

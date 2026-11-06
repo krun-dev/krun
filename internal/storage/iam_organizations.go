@@ -37,6 +37,12 @@ func writeOrganizations(ctx context.Context, tx ormTransaction, before, after ma
 			continue
 		}
 		row := models.Organization{OrgID: id}
+		if _, err := tx.Exec(ctx, `DELETE FROM krun_org_invitation_redemptions WHERE invitation_id IN (SELECT invitation_id FROM krun_org_invitation_links WHERE org_id=$1)`, id); err != nil {
+			return err
+		}
+		if _, err := tx.orm.NewDelete().Model((*models.OrgInvitationLink)(nil)).Where("org_id = ?", id).Exec(ctx); err != nil {
+			return err
+		}
 		if err := ormCAS(ctx, "Organization changed", tx.orm.NewDelete().Model(&row).WherePK().Where("revision = ?", previous.Revision)); err != nil {
 			return err
 		}

@@ -49,6 +49,7 @@ type User struct {
 	Subject       string    `bun:"subject"`
 	Name          string    `bun:"name"`
 	Email         string    `bun:"email"`
+	EmailVerified bool      `bun:"email_verified"`
 	Status        string    `bun:"status"`
 	AuthVersion   int       `bun:"auth_version"`
 	CreatedAt     time.Time `bun:"created_at"`
@@ -138,6 +139,30 @@ type Invitation struct {
 	Source        string    `bun:"source,pk"`
 	Subject       string    `bun:"subject,pk"`
 	ExpiresAt     time.Time `bun:"expires_at"`
+}
+
+type OrgInvitationLink struct {
+	bun.BaseModel `bun:"table:krun_org_invitation_links,alias:krun_org_invitation_links"`
+	InvitationID  string     `bun:"invitation_id,pk"`
+	OrgID         string     `bun:"org_id"`
+	CreatorUserID string     `bun:"creator_user_id"`
+	Role          string     `bun:"role"`
+	TargetUserID  string     `bun:"target_user_id"`
+	TargetEmail   string     `bun:"target_email"`
+	TokenHash     string     `bun:"token_hash"`
+	MaxUses       int        `bun:"max_uses"`
+	UseCount      int        `bun:"use_count"`
+	CreatedAt     time.Time  `bun:"created_at"`
+	ExpiresAt     time.Time  `bun:"expires_at"`
+	RevokedAt     *time.Time `bun:"revoked_at"`
+	Revision      int        `bun:"revision"`
+}
+
+type OrgInvitationRedemption struct {
+	bun.BaseModel `bun:"table:krun_org_invitation_redemptions,alias:krun_org_invitation_redemptions"`
+	InvitationID  string    `bun:"invitation_id,pk"`
+	UserID        string    `bun:"user_id,pk"`
+	JoinedAt      time.Time `bun:"joined_at"`
 }
 
 type EmailSendLock struct {

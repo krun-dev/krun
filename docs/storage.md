@@ -33,6 +33,7 @@ IAM 与 Workers 是两套独立分区，**不共享事务**：
 | IAM | `krun_users`、`krun_organizations`、`krun_org_sources`、`krun_members`、`krun_groups`、`krun_group_members`、`krun_assignments`、`krun_resources`、`krun_api_keys`、`krun_api_key_hashes`、`krun_invitations`、`krun_identity_sources`、`krun_identity_providers`、`krun_meta` |
 | Workers | `krun_worker_services`、`krun_worker_service_domains`、`krun_worker_environments`、`krun_worker_secret_versions`、`krun_worker_environment_secrets`、`krun_worker_builds`、`krun_worker_build_private`、`krun_worker_artifacts`、`krun_worker_versions`、`krun_worker_deployments`、`krun_worker_version_secrets`、`krun_worker_operations`、`krun_worker_history`、`krun_worker_idempotency`、`krun_repository_connections`、`krun_repository_connect_states` |
 | 会话（不属于任何分区） | `krun_sessions`、`krun_browsers`、`krun_login_states`、`krun_email_logins`、`krun_oauth_authorizations`、`krun_oauth_grants`、`krun_oauth_refresh_tokens` |
+| 组织邀请（类型化方法，不进入 State） | `krun_org_invitation_links`、`krun_org_invitation_redemptions`；邀请、名额、成员和直接角色在有界 IAM 事务内提交 |
 | 旁路 | `krun_audits`、`worker_config_revisions`、`worker_config_routes`、`worker_config_versions`、`worker_config_ops`、`worker_config_dirty`、`worker_config_checkpoints`、`worker_asset_objects`、`worker_retention_scopes`、`worker_runtime_acks` |
 
 完整 DDL 在 `internal/storage/schema.sql`，由同目录 `schema.go` 通过 `go:embed` 原样嵌入。新库直接初始化；已有库校验 `schema_baseline` fingerprint，匹配时不重复执行 DDL。
@@ -91,6 +92,7 @@ UPDATE krun_worker_environments SET version_id=$4, deployment_revision=deploymen
 | `krun_sessions` | 30 分钟未活动或超过 8 小时绝对上限 |
 | `krun_browsers` / `krun_login_states` / `krun_email_logins` / `krun_oauth_authorizations`、`krun_oauth_grants`、`krun_oauth_refresh_tokens` / `krun_repository_connect_states` / `krun_invitations` | 过期即删 |
 | `krun_audits` | 7 天 |
+| `krun_org_invitation_links` / `krun_org_invitation_redemptions` | 链接到期后 7 天一并清理，每批 1000 条；删除组织显式删除关联行；清理孤儿 redemption |
 | `krun_worker_builds` | 每服务最近 100 条终态；日志 7 天后清空 |
 | `krun_worker_operations` | 终态保留 30 天 |
 | `krun_worker_artifacts` | 无 version 引用且超过 30 天 |

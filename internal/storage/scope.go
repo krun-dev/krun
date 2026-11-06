@@ -25,6 +25,9 @@ func WithReadScope(ctx context.Context, scope ReadScope) context.Context {
 // queueStateRead preserves the shared row decoders while moving filtering into
 // indexed SQL. The parameters are values; table/predicate text is internal.
 func queueStateRead(ctx context.Context, b *pgx.Batch, query string) {
+	if queueInvitationRead(ctx, b, query) {
+		return
+	}
 	if queueLoginRead(ctx, b, query) {
 		return
 	}

@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS krun_users (
 	subject      text NOT NULL,
 	name         text NOT NULL DEFAULT '',
 	email        text NOT NULL DEFAULT '',
+	email_verified boolean NOT NULL DEFAULT false,
 	status       text NOT NULL DEFAULT 'active',
 	auth_version integer NOT NULL DEFAULT 1,
 	created_at   timestamptz NOT NULL DEFAULT now(),
@@ -137,6 +138,33 @@ CREATE TABLE IF NOT EXISTS krun_invitations (
 	PRIMARY KEY (source, subject)
 );
 CREATE INDEX IF NOT EXISTS krun_invitations_expiry ON krun_invitations (expires_at);
+
+CREATE TABLE IF NOT EXISTS krun_org_invitation_links (
+	invitation_id text PRIMARY KEY,
+	org_id text NOT NULL,
+	creator_user_id text NOT NULL,
+	role text NOT NULL CHECK (role IN ('member', 'viewer')),
+	target_user_id text NOT NULL DEFAULT '',
+	target_email text NOT NULL DEFAULT '',
+	token_hash text NOT NULL UNIQUE,
+	max_uses integer NOT NULL CHECK (max_uses BETWEEN 1 AND 100),
+	use_count integer NOT NULL DEFAULT 0 CHECK (use_count >= 0 AND use_count <= max_uses),
+	created_at timestamptz NOT NULL,
+	expires_at timestamptz NOT NULL,
+	revoked_at timestamptz,
+	revision integer NOT NULL DEFAULT 1,
+	CHECK (target_user_id = '' OR target_email = ''),
+	CHECK (expires_at > created_at)
+);
+CREATE INDEX IF NOT EXISTS krun_org_invitation_links_org ON krun_org_invitation_links (org_id, created_at DESC, invitation_id DESC);
+CREATE INDEX IF NOT EXISTS krun_org_invitation_links_expiry ON krun_org_invitation_links (expires_at);
+
+CREATE TABLE IF NOT EXISTS krun_org_invitation_redemptions (
+	invitation_id text NOT NULL,
+	user_id text NOT NULL,
+	joined_at timestamptz NOT NULL,
+	PRIMARY KEY (invitation_id, user_id)
+);
 
 CREATE TABLE IF NOT EXISTS krun_sessions (
 	session_hash text PRIMARY KEY,

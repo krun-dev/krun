@@ -98,7 +98,8 @@ Session Cookie：生产 `__Host-krun_session`，Secure/HttpOnly/SameSite=Lax/Pat
 更新时返回 `POLICY_INVALID`；未知角色不产生资源权限，不做启动回填或隐式角色映射。
 
 `system_admin` 在全平台范围管理系统和组织；创建组织只会授予创建者该组织的
-`org_admin`。加入组织本身仍不等于获得业务角色，添加成员与角色授权使用已有独立接口。
+`org_admin`。手动添加成员与角色授权是独立接口；[组织链接邀请](org-invitation-links.md)
+在明确接受时同时建立成员资格和 `member` / `viewer` 角色。
 每个成员都可以管理自己的 API Key，实际访问始终取当前角色与 Key 策略的交集。
 
 上表为整个组织、全部环境授权。`member` / `viewer` 也可限定到指定服务或模型及环境；
@@ -124,6 +125,11 @@ Key 范围和撤权检查逐请求生效。模型执行相关动作仍是预留�
 | GET /orgs/:org/members | S K | member.read |
 | POST /orgs/:org/members | S | member.manage；准确本地 user_id |
 | DELETE /orgs/:org/members/:user | S | member.manage；移除成员、组成员关系及本组织直接角色 |
+| GET /orgs/:org/invitation-links | S | member.read；游标分页，不返回凭证 |
+| POST /orgs/:org/invitation-links | S | member.manage + iam.grant；默认 member、1 人，可定向账号或已验证邮箱，固定 7 天有效；返回一次性链接 |
+| DELETE /orgs/:org/invitation-links/:id | S | member.manage + iam.grant；幂等撤销 |
+| POST /invitation-links/preview | 公开 | 请求 token，最小组织/角色/到期预览；限流、no-store |
+| POST /invitation-links/accept | 仅浏览器 Session | CSRF、身份来源、定向对象和创建者权限校验；明确加入，重复接受不占名额 |
 | GET /orgs/:org/groups | S K | iam.read |
 | POST/PATCH/DELETE /orgs/:org/groups[/:group] | S | iam.grant/revoke |
 | PUT/DELETE /orgs/:org/groups/:group/members/:user | S | iam.grant/revoke；必须是有效组织成员 |

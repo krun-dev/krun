@@ -86,6 +86,7 @@ export type User = {
   user_id: string;
   name: string;
   email?: string;
+  email_verified: boolean;
   source_id: string;
   subject: string;
   status: string;

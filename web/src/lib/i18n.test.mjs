@@ -120,6 +120,8 @@ test("all literal translation keys are cataloged", async () => {
     "../components/oauth-consent.tsx",
     "../components/email-login.tsx",
     "../components/management.tsx",
+    "../components/organization-invitations.tsx",
+    "../components/organization-invitation-join.tsx",
     "../components/keys.tsx",
     "../components/audit.tsx",
     "../components/workers.tsx",
