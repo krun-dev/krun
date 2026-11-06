@@ -21,6 +21,12 @@ func (r *renderer) runtimeAPIRoute() {
 	if origin == nil {
 		return
 	}
+	service := "krun-control-internal"
+	port := integerPort(r.cfg.InternalListen)
+	if r.cfg.MergedDeployment {
+		service = "krun-control"
+		port = integerPort(r.cfg.Listen)
+	}
 	r.add("gateway.networking.k8s.io/v1", "HTTPRoute", "krun-runtime-api", map[string]any{
 		"spec": map[string]any{
 			"parentRefs": []any{map[string]string{
@@ -34,8 +40,8 @@ func (r *renderer) runtimeAPIRoute() {
 					"path": map[string]string{"type": "PathPrefix", "value": "/api/internal/workers"},
 				}},
 				"backendRefs": []any{map[string]any{
-					"name": "krun-control-internal",
-					"port": integerPort(r.cfg.InternalListen),
+					"name": service,
+					"port": port,
 				}},
 			}},
 		},

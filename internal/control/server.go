@@ -151,6 +151,11 @@ func (s *Server) routes() {
 		s.internalMux.HandleFunc("POST /api/internal/workers/ack", s.workerRuntimeAck)
 	}
 	s.internalMux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { s.writeError(w, r, notFound()) })
+	if s.Config.MergedDeployment {
+		proxy := s.mergedRuntimeProxy()
+		m.Handle("/api/internal/workers", proxy)
+		m.Handle("/api/internal/workers/", proxy)
+	}
 	if s.Config.StaticDir == "" {
 		m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { s.writeError(w, r, notFound()) })
 		return

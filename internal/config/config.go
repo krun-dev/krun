@@ -9,6 +9,7 @@ import (
 	"os"
 	"regexp"
 	slices "slices"
+	"strconv"
 	"strings"
 
 	"github.com/krun-dev/krun/internal/configfile"
@@ -69,10 +70,13 @@ type Config struct {
 	SMTP           SMTPConfig        `json:"smtp"`
 	Listen         string            `json:"listen"`
 	InternalListen string            `json:"internal_listen"`
-	PublicURL      string            `json:"public_url"`
-	DB             string            `json:"db"`
-	Development    bool              `json:"development"`
-	StaticDir      string            `json:"static_dir"`
+	// MergedDeployment proxies Runtime API requests on the main HTTP listener
+	// to this process's internal listener. Off preserves separate listeners.
+	MergedDeployment bool   `json:"merged_deployment"`
+	PublicURL        string `json:"public_url"`
+	DB               string `json:"db"`
+	Development      bool   `json:"development"`
+	StaticDir        string `json:"static_dir"`
 	// TrustedProxyCIDRs is the explicit set of reverse-proxy source networks
 	// allowed to supply X-Forwarded-For. The header is ignored for every other
 	// peer so clients cannot choose their own rate-limit identity.
@@ -122,6 +126,16 @@ func (c *Config) Validate() error {
 		}
 		if c.InternalListen == c.Listen {
 			return errors.New("internal_listen must differ from listen")
+		}
+	}
+	if c.MergedDeployment {
+		if c.Workers == nil || c.InternalListen == "" {
+			return errors.New("merged_deployment requires Workers and internal_listen")
+		}
+		_, port, _ := net.SplitHostPort(c.InternalListen)
+		value, err := strconv.Atoi(port)
+		if err != nil || value < 1 || value > 65535 {
+			return errors.New("merged_deployment requires a fixed numeric internal_listen port")
 		}
 	}
 	u, e := url.Parse(c.PublicURL)
