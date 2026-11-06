@@ -528,6 +528,7 @@
   "保存仓库配置": "Save repository settings",
   "开始构建": "Start build",
   "该来源尚未配置凭证，可读取公开仓库。私有仓库请联系管理员。": "No credentials are configured for this provider. Public repositories are available; contact an administrator for private repositories.",
+  "个人设置": "Personal settings",
   "组织管理": "Organization",
   "基线环境常驻对外服务；预览环境用于验证，可随时删除。": "The baseline environment serves production traffic; preview environments are for validation and can be deleted anytime.",
   "创建预览环境": "Create preview environment",
