@@ -66,8 +66,10 @@ origin 的 CORS，静态 HTML 的 CSP `connect-src` 必须增加精确的对象�
 
 健康检查访问 `/api/healthz`。它执行轻量数据库连通性检查，不加载完整 IAM 或
 Workers 状态。启用 `workers:` 时必须配置 `internal_listen`，并通过内部 Service 与
-NetworkPolicy 仅暴露给 runtime；该端口承载配置流、制品下载和 ACK，不得接入公网
-网关。任一监听器绑定失败都会让进程退出，不会留下半健康实例。
+NetworkPolicy 仅暴露给 runtime；该端口承载配置流、制品下载和 ACK。默认仅在集群内使用；需要域名回调时，
+部署方可显式设置 `workers.runtime_api_url`，由选定 Gateway 将
+`/api/internal/workers/*` 转发到内部 Service，继续校验 pool 凭据，见
+[资源池配置](workers-pools.md#runtime-api-地址)。任一监听器绑定失败都会让进程退出，不会留下半健康实例。
 
 ## 本地
 

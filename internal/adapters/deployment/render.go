@@ -389,6 +389,7 @@ func (r *renderer) resources() error {
 		}
 	}
 	r.consoleRoute()
+	r.runtimeAPIRoute()
 	r.networkPolicies()
 	return nil
 }

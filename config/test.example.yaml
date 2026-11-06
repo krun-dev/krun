@@ -74,6 +74,9 @@ workers:
       default: false
   # 默认从业务 pool 的 Ready serving Pod 校验候选，不额外部署 validator。
   # 需要进程隔离时填一个 pool ID，所有业务 pool 共用该池的独立 validator。
+  # 可选 HTTPS origin；留空使用控制面内部 Service，不含 /api/internal/workers 路径。
+  # 这是部署方配置，会接收 pool 凭据；不得开放给 Worker 用户编辑。
+  runtime_api_url: ""
   validator_pool: ""
   runtime_pools:
     - id: internal-a

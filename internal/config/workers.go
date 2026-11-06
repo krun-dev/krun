@@ -2,6 +2,9 @@ package config
 
 // Workers is opt-in: existing authentication deployments keep their current behavior.
 type WorkersConfig struct {
+	// RuntimeAPIURL overrides the cluster Service used by workerd to call the
+	// authenticated Runtime API. Only deployment operators may configure it.
+	RuntimeAPIURL        string                     `json:"runtime_api_url,omitempty"`
 	ObjectStorage        *WorkerObjectStorageConfig `json:"object_storage,omitempty"`
 	ReconcileConcurrency int                        `json:"reconcile_concurrency"`
 	RepositoryProviders  []WorkerRepositoryProvider `json:"repository_providers"`
