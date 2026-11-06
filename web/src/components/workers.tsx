@@ -4,6 +4,7 @@ import {
   CollectionPagination,
 } from "@/components/collection-controls";
 import { readBuildLog } from "../lib/build-logs";
+import { BuildInspector, type BuildArtifact } from "./workers/build-inspector";
 import { PreviewBasePanel } from "./workers/preview-base";
 import { VersionsPanel } from "./workers/versions";
 import { useCallback, useEffect, useState } from "react";
@@ -13,6 +14,10 @@ import {
   ArrowRight,
   ArrowUpRight,
   GitBranch,
+  FileText,
+  LoaderCircle,
+  Save,
+  Rocket,
   Plus,
   RefreshCw,
 } from "lucide-react";
@@ -528,8 +533,10 @@ function WorkerDetail({
     build: Build;
     log: string;
     pollSeconds: number | null;
-    artifact?: unknown;
+    artifact?: BuildArtifact;
+    artifactError?: string;
   } | null>(null);
+  const [inspectingBuild, setInspectingBuild] = useState("");
   const inspectedBuildID = buildInfo?.build.id;
   const pollSeconds = buildInfo?.pollSeconds;
   useEffect(() => {
@@ -651,21 +658,30 @@ function WorkerDetail({
     }
   }
   async function inspectBuild(b: Build) {
+    setInspectingBuild(b.id);
     try {
-      const [logs, artifact] = await Promise.all([
+      const [logs, artifactResult] = await Promise.all([
         readBuildLog(base + "/builds/" + b.id + "/logs"),
         b.artifact_id
-          ? api(base + "/artifacts/" + b.artifact_id).catch(() => undefined)
-          : Promise.resolve(undefined),
+          ? api<BuildArtifact>(base + "/artifacts/" + b.artifact_id)
+              .then((artifact) => ({ artifact, error: undefined }))
+              .catch((error) => ({
+                artifact: undefined,
+                error: errorMessage(error),
+              }))
+          : Promise.resolve({ artifact: undefined, error: undefined }),
       ]);
       setBuildInfo({
-        build: b,
+        build: { ...b, state: logs.state },
         log: logs.log,
-        artifact,
+        artifact: artifactResult.artifact,
+        artifactError: artifactResult.error,
         pollSeconds: logs.pollSeconds,
       });
     } catch (e) {
       notify(errorMessage(e));
+    } finally {
+      setInspectingBuild("");
     }
   }
   if (!data)
@@ -909,17 +925,27 @@ function WorkerDetail({
                         />
                       </TableCell>
                       <TableCell>
-                        <div className="flex gap-1">
+                        <div className="flex items-center gap-2">
                           <Button
-                            variant="ghost"
+                            variant="outline"
+                            className="border-primary/20 bg-primary/5 text-primary shadow-none hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
                             size="sm"
+                            disabled={!!inspectingBuild}
                             onClick={() => void inspectBuild(b)}
                           >
-                            {t("日志与制品")}
+                            {inspectingBuild === b.id ? (
+                              <LoaderCircle size={14} className="animate-spin" />
+                            ) : (
+                              <FileText size={14} />
+                            )}
+                            {inspectingBuild === b.id
+                              ? t("加载中…")
+                              : t("日志与制品")}
                           </Button>
                           <Button
                             variant="outline"
                             size="sm"
+                            className="bg-card shadow-none hover:border-primary/30 hover:bg-primary/5 hover:text-primary"
                             disabled={b.state !== "succeeded" || busy}
                             onClick={() => {
                               void api(
@@ -940,16 +966,18 @@ function WorkerDetail({
                                 .catch((e) => notify(errorMessage(e)));
                             }}
                           >
+                            <Save size={14} />
                             {t("保存版本")}
                           </Button>
                           <Button
-                            variant="outline"
                             size="sm"
+                            className="shadow-none"
                             disabled={
                               b.state !== "succeeded" || active || !env.enabled
                             }
                             onClick={() => setPublish(b)}
                           >
+                            <Rocket size={14} />
                             {t("发布")}
                           </Button>
                         </div>
@@ -1243,32 +1271,14 @@ function WorkerDetail({
           </Button>
         </DialogContent>
       </Dialog>
-      <Dialog
-        open={!!buildInfo}
-        onOpenChange={(v) => {
-          if (!v) setBuildInfo(null);
-        }}
-      >
-        <DialogContent className="sm:max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>{t("日志与制品")}</DialogTitle>
-            <DialogDescription>{buildInfo?.build.id}</DialogDescription>
-          </DialogHeader>
-          {buildInfo?.build.repository_source ? (
-            <pre className="rounded-md border p-3 text-xs whitespace-pre-wrap">
-              {JSON.stringify(buildInfo.build.repository_source, null, 2)}
-            </pre>
-          ) : null}
-          <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-md bg-secondary p-4 text-xs">
-            {buildInfo?.log || t("暂无构建日志。")}
-          </pre>
-          {buildInfo?.artifact ? (
-            <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-md border p-4 text-xs">
-              {JSON.stringify(buildInfo.artifact, null, 2)}
-            </pre>
-          ) : null}
-        </DialogContent>
-      </Dialog>
+      {buildInfo ? (
+        <BuildInspector
+          key={buildInfo.build.id}
+          info={buildInfo}
+          onClose={() => setBuildInfo(null)}
+          notify={notify}
+        />
+      ) : null}
     </div>
   );
 }
