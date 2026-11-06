@@ -181,3 +181,9 @@ fingerprint；已有库与基线不一致时拒绝启动，由开发者显式重
 - 测试中的 Worker 源码也保持可读的多行格式，不写成一长串字符串。
 - Go 使用 `gofmt`；Workers JavaScript 使用仓库 Prettier 配置，运行
   `npm run format:workers` 和 `npm run check:workers-format`。格式化不替代人工检查逻辑分段。
+
+## 12. 使用 Git worktree 隔离功能开发
+
+- 开发功能时可以使用 `git worktree` 创建独立工作目录和分支，隔离不同任务的改动，减少并行开发冲突。
+- 当前工作目录已有未提交改动或有其他任务进行时，优先使用独立 worktree；保留原目录中的已有改动，不要覆盖、重置或清理其他任务的文件。
+- 新分支默认使用 `codex/` 前缀；完成后只合并当前任务相关改动，并在确认改动已保留后清理对应 worktree。
