@@ -604,7 +604,8 @@ async function bootstrap(env) {
         throw new Error("unsupported config head");
       }
 
-      applySnapshot({ ...latest, pool: env.RUNTIME_POOL || "default", routes: [], versions: {} });
+      const pool = env.RUNTIME_POOL || "default";
+      applySnapshot({ ...latest, pool, routes: [], versions: {} }, pool);
 
       return view;
     } catch (e) {

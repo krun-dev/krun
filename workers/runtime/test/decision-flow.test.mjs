@@ -464,6 +464,66 @@ await check(
     assert(!downloads.some((key) => key.startsWith("config:snapshots/")));
   },
 );
+for (const pool of [undefined, "internal-a", "office-a", "public-a"]) {
+  await check(
+    `storage bootstrap works without the control plane for ${pool || "default"}`,
+    async () => {
+      configObjects.set(
+        "latest.json",
+        encoder.encode(JSON.stringify({ config_revision: 7, lazy_routes: true })),
+      );
+      const env = makeEnv(null, []);
+      env.CONFIG_BASE = "http://config.test";
+      env.RUNTIME_POOL = pool;
+      let snapshotCalls = 0;
+      env.PLATFORM = {
+        async fetch(request) {
+          if (new URL(request.url).pathname.endsWith("/config/snapshot")) {
+            snapshotCalls++;
+          }
+          return new Response("unavailable", { status: 503 });
+        },
+      };
+      const module = await freshEntry();
+      const response = await new module.Management(env, {}).fetch(new Request("http://pod/ready"));
+      assert.equal(response.status, 200);
+      const ready = await response.json();
+      assert.equal(ready.pool, pool || "default");
+      assert.equal(ready.revision, 7);
+      assert.equal(
+        snapshotCalls,
+        0,
+        "storage bootstrap should not need the control-plane snapshot",
+      );
+    },
+  );
+}
+await check(
+  "non-default pool falls back to the control plane when storage is unavailable",
+  async () => {
+    configObjects.delete("latest.json");
+    const env = makeEnv(null, []);
+    env.CONFIG_BASE = "http://config.test";
+    env.RUNTIME_POOL = "internal-a";
+    let snapshotCalls = 0;
+    env.PLATFORM = {
+      async fetch(request) {
+        if (new URL(request.url).pathname.endsWith("/config/snapshot")) {
+          snapshotCalls++;
+          return Response.json({ pool: "internal-a", config_revision: 8, lazy_routes: true });
+        }
+        return new Response("unavailable", { status: 503 });
+      },
+    };
+    const module = await freshEntry();
+    const response = await new module.Management(env, {}).fetch(new Request("http://pod/ready"));
+    assert.equal(response.status, 200);
+    const ready = await response.json();
+    assert.equal(ready.pool, "internal-a");
+    assert.equal(ready.revision, 8);
+    assert.equal(snapshotCalls, 1);
+  },
+);
 await check("readiness starts the follow loop for an idle Pod", async () => {
   const plain = { ...version, id: "rel_idle" };
   const changes = [
