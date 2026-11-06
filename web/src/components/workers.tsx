@@ -1004,6 +1004,7 @@ function WorkerDetail({
             className="mt-5"
           >
             <VersionsPanel
+              key={base + "/" + env.name}
               base={base}
               env={env}
               data={data}

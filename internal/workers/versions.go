@@ -86,6 +86,8 @@ func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p a
 	}
 	version := SnapshotVersion(target.Organization, target.ID, ref.Environment, artifact, environment)
 	version.Tag, version.Message = in.Tag, in.Message
+	version.CreatedBy = p.User.ID
+	version.CreatedByName = p.User.Name
 	st.Workers.Versions[version.ID] = version
 	WorkerRemember(st, key, in, version.ID)
 	s.audit(st, p, "workers.version.create", target.ID+"/"+ref.Environment, true)
@@ -113,7 +115,7 @@ func SnapshotVersion(org, worker, environment string, artifact domain.WorkerArti
 		Created:            time.Now().UTC(),
 	}
 }
-func (s *Service) WorkerVersionList(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
+func (s *Service) WorkerVersionList(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, options ...VersionPageOptions) (any, Outcome, error) {
 	if _, err := s.WorkerCollectionTarget(st, ref, "worker.version.read", p); err != nil {
 		return nil, Read, err
 	}
@@ -126,6 +128,10 @@ func (s *Service) WorkerVersionList(ctx context.Context, st *domain.State, p aut
 			out = append(out, v)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Created.After(out[j].Created) })
-	return collection(out)
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Created.After(out[j].Created) || out[i].Created.Equal(out[j].Created) && out[i].ID < out[j].ID
+	})
+	return versionPage(out, options, func(v domain.WorkerVersion) (time.Time, string, string) {
+		return v.Created, v.ID, v.ID + " " + v.Tag + " " + v.Message + " " + v.CreatedBy + " " + v.CreatedByName
+	})
 }

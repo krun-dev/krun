@@ -139,6 +139,8 @@ type WorkerPlacement struct {
 }
 
 type WorkerVersion struct {
+	CreatedBy          string                     `json:"created_by"`
+	CreatedByName      string                     `json:"created_by_name"`
 	R2Bindings         map[string]WorkerR2Binding `json:"r2_buckets,omitempty"`
 	VersionMetadata    string                     `json:"version_metadata,omitempty"`
 	AssetsBinding      string                     `json:"assets_binding,omitempty"`

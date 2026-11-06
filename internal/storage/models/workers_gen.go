@@ -172,6 +172,8 @@ type Artifact struct {
 
 type Version struct {
 	bun.BaseModel      `bun:"table:krun_worker_versions,alias:krun_worker_versions"`
+	CreatedBy          string          `bun:"created_by"`
+	CreatedByName      string          `bun:"created_by_name"`
 	VersionMetadata    string          `bun:"version_metadata"`
 	AssetsBinding      string          `bun:"assets_binding"`
 	Tag                string          `bun:"tag"`

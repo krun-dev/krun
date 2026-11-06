@@ -125,3 +125,7 @@ CF 资产临时对象在写入前登记 `krun_worker_source_uploads`，由现有
 
 OAuth 请求保留 5 分钟；access Session 最长 1 小时；授权与旋转 refresh 记录最长 30 天。
 授权码与刷新令牌仅保存摘要，单次兑换使用条件更新；过期及孤儿行接入统一后台清理。
+
+Worker Version 的 `created_by` 与 `created_by_name` 保存创建者 ID 和保存时的姓名，
+作为不可变版本元数据，与 `created_at` 一同持久化；相同版本再次部署时不覆盖。
+新增列直接纳入 `schema.sql` 基线，不执行启动迁移或旧版本作者回填。

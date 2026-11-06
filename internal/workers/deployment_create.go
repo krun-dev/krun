@@ -109,6 +109,8 @@ func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, 
 		raw, _ := json.Marshal(version)
 		version.ID = "rel_" + workerartifact.BytesDigest(raw)
 		version.Created = time.Now().UTC()
+		version.CreatedBy = p.User.ID
+		version.CreatedByName = p.User.Name
 		if old, ok := st.Workers.Versions[version.ID]; ok {
 			version = old
 		}

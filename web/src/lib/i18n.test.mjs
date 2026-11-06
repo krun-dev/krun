@@ -114,6 +114,8 @@ test("all literal translation keys are cataloged", async () => {
     "../components/workers/versions.tsx",
     "../components/workers/version-create.tsx",
     "../components/workers/version-configuration.tsx",
+    "../components/workers/version-details.tsx",
+    "../components/workers/version.tsx",
     "./object-storage.ts",
     "./worker-variables.ts",
     "../components/workers/variables.tsx",

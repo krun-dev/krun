@@ -439,6 +439,8 @@ CREATE TABLE IF NOT EXISTS krun_worker_artifacts (
 CREATE INDEX IF NOT EXISTS krun_worker_artifacts_created ON krun_worker_artifacts (created_at);
 
 CREATE TABLE IF NOT EXISTS krun_worker_versions (
+ created_by text NOT NULL DEFAULT '',
+ created_by_name text NOT NULL DEFAULT '',
  version_metadata text NOT NULL DEFAULT '',
  assets_binding text NOT NULL DEFAULT '',
  tag text NOT NULL DEFAULT '',

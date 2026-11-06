@@ -87,6 +87,30 @@ export function OperationPanel({
           </div>
           <Status state={op.state} />
         </div>
+        <div
+          role="status"
+          aria-live="polite"
+          className="mb-4 grid gap-2 rounded-md bg-muted/40 p-3 text-sm"
+        >
+          <p className={cn(op.state === "failed" && "text-destructive")}>
+            {op.state === "available"
+              ? t("部署成功，运行副本已确认生效。")
+              : op.state === "failed"
+                ? t("部署失败，请查看下方错误详情。")
+                : op.state === "superseded"
+                  ? t("此部署已被后续部署替换。")
+                  : op.state === "committed"
+                    ? t("部署已提交，正在等待运行副本确认生效。")
+                    : t("部署请求已受理，正在排队或验证，请等待生效。")}
+          </p>
+          <p className="break-all text-xs text-muted-foreground">
+            {t("目标版本")} · <code>{op.version_id}</code>
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {t("部署时间")} ·{" "}
+            <time dateTime={op.created_at}>{new Date(op.created_at).toLocaleString()}</time>
+          </p>
+        </div>
         <div className="grid gap-4 sm:grid-cols-4">
           {op.steps.map((s) => (
             <div

@@ -592,7 +592,7 @@ func sameVersion(a, b domain.WorkerVersion) bool {
 	if !reflect.DeepEqual(a.R2Bindings, b.R2Bindings) {
 		return false
 	}
-	return a.VersionMetadata == b.VersionMetadata && a.AssetsBinding == b.AssetsBinding && a.Tag == b.Tag && a.Message == b.Message && a.ID == b.ID && a.Worker == b.Worker && a.Organization == b.Organization &&
+	return a.CreatedBy == b.CreatedBy && a.CreatedByName == b.CreatedByName && a.VersionMetadata == b.VersionMetadata && a.AssetsBinding == b.AssetsBinding && a.Tag == b.Tag && a.Message == b.Message && a.ID == b.ID && a.Worker == b.Worker && a.Organization == b.Organization &&
 		a.Environment == b.Environment && a.Artifact == b.Artifact && a.Profile == b.Profile && a.ArchiveDigest == b.ArchiveDigest &&
 		a.ModuleDigest == b.ModuleDigest && a.CompatibilityDate == b.CompatibilityDate &&
 		sameStrings(a.CompatibilityFlags, b.CompatibilityFlags) && a.ConfigRevision == b.ConfigRevision &&
@@ -617,13 +617,13 @@ func writeVersions(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 		if err != nil {
 			return err
 		}
-		tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_versions (version_id, org_id, worker_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message)
-				SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18
+		tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_versions (version_id, org_id, worker_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message, created_by, created_by_name)
+				SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20
 				WHERE EXISTS (SELECT 1 FROM krun_worker_artifacts
 					WHERE artifact_id=$5 AND state='finalized' AND org_id=$2
 					  AND profile=$6 AND archive_digest=$7 AND module_digest=$8
 					  AND compatibility_date=$9 AND compatibility_flags=$10)
-				ON CONFLICT (version_id) DO UPDATE SET version_id=excluded.version_id`, id, r.Organization, r.Worker, r.Environment, r.Artifact, r.Profile, r.ArchiveDigest, r.ModuleDigest, r.CompatibilityDate, flags, r.ConfigRevision, variables, r.SecretDigest, r.Created, r.VersionMetadata, r.AssetsBinding, r.Tag, r.Message)
+				ON CONFLICT (version_id) DO UPDATE SET version_id=excluded.version_id`, id, r.Organization, r.Worker, r.Environment, r.Artifact, r.Profile, r.ArchiveDigest, r.ModuleDigest, r.CompatibilityDate, flags, r.ConfigRevision, variables, r.SecretDigest, r.Created, r.VersionMetadata, r.AssetsBinding, r.Tag, r.Message, r.CreatedBy, r.CreatedByName)
 		if err != nil {
 			return err
 		}

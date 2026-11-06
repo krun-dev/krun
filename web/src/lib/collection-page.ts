@@ -2,7 +2,11 @@ import { useEffect, useState } from "react";
 import { api, type List } from "./api";
 import { errorMessage } from "./i18n";
 
-export function useCollectionPage<T>(endpoint: string, enabled: boolean, revision: number) {
+export function useCollectionPage<T>(
+  endpoint: string,
+  enabled: boolean,
+  revision: number | string,
+) {
   const [items, setItems] = useState<T[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -27,8 +31,17 @@ export function useCollectionPage<T>(endpoint: string, enabled: boolean, revisio
     setLoading(true);
     setItems(null);
     setError("");
-    const query = new URLSearchParams({ q: search, limit: String(pageSize), after });
-    void api<List<T>>(endpoint + "?" + query, "GET", undefined, controller.signal)
+    const query = new URLSearchParams({
+      q: search,
+      limit: String(pageSize),
+      after,
+    });
+    void api<List<T>>(
+      endpoint + (endpoint.includes("?") ? "&" : "?") + query,
+      "GET",
+      undefined,
+      controller.signal,
+    )
       .then((result) => {
         if (!controller.signal.aborted) {
           setItems(result.items);
