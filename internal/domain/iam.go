@@ -172,6 +172,8 @@ type State struct {
 	// enters the generic WorkerState snapshot; persistWorkers consumes it in
 	// the same transaction as the environment, Version and Operation rows.
 	PendingWorkerSecrets map[string]EncryptedWorkerSecret `json:"-"`
+	// Expected draft revisions for newly saved configuration snapshots.
+	PendingWorkerConfigurationGuards map[string]int `json:"-"`
 }
 
 type LoginCommit struct {

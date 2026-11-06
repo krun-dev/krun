@@ -81,6 +81,8 @@ export type WorkerRouting = {
   network_profile: WorkerNetworkProfile;
 };
 export type Version = {
+  secret_names?: string[];
+  configuration_id?: string;
   created_by?: string;
   created_by_name?: string;
   r2_buckets?: Record<string, R2Binding>;

@@ -104,6 +104,7 @@ func truncateControlTables(t *testing.T, store *Store) {
 		return
 	}
 	tables := []string{
+		"krun_worker_configuration_secrets", "krun_worker_configuration_r2", "krun_worker_configurations",
 		"krun_org_invitation_redemptions", "krun_org_invitation_links",
 		"worker_retention_scopes", "worker_asset_objects", "worker_config_dirty", "worker_config_checkpoints", "worker_config_ops", "worker_config_revisions", "worker_config_routes", "worker_config_versions", "worker_runtime_acks",
 		"krun_rate_limits", "krun_audits",

@@ -88,6 +88,7 @@ func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p a
 	version.Tag, version.Message = in.Tag, in.Message
 	version.CreatedBy = p.User.ID
 	version.CreatedByName = p.User.Name
+	version.Configuration = inheritedConfiguration(st, environment)
 	st.Workers.Versions[version.ID] = version
 	WorkerRemember(st, key, in, version.ID)
 	s.audit(st, p, "workers.version.create", target.ID+"/"+ref.Environment, true)

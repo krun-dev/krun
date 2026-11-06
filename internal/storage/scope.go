@@ -51,6 +51,10 @@ func queueStateRead(ctx context.Context, b *pgx.Batch, query string) {
 		if !scope.Summary {
 			pred = workers
 		}
+	case "krun_worker_configuration_r2", "krun_worker_configuration_secrets":
+		if !scope.Summary {
+			pred = `configuration_id IN (SELECT configuration_id FROM krun_worker_configurations WHERE ` + workers + `)`
+		}
 	case "krun_worker_version_r2":
 		if !scope.Summary {
 			pred = `version_id IN (SELECT version_id FROM krun_worker_versions WHERE ` + workers + `)`
@@ -75,7 +79,7 @@ func queueStateRead(ctx context.Context, b *pgx.Batch, query string) {
 		pred = `true`
 	case "krun_workers", "krun_worker_placements", "krun_worker_domains", "krun_worker_environments":
 		pred = workers
-	case "krun_worker_deployments", "krun_worker_builds", "krun_worker_versions", "krun_worker_operations", "krun_worker_history", "krun_worker_secret_versions", "krun_worker_environment_secrets":
+	case "krun_worker_configurations", "krun_worker_deployments", "krun_worker_builds", "krun_worker_versions", "krun_worker_operations", "krun_worker_history", "krun_worker_secret_versions", "krun_worker_environment_secrets":
 		if !scope.Summary {
 			pred = workers
 		}

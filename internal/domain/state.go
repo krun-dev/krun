@@ -63,6 +63,7 @@ func WorkerAvailableInPool(state *WorkerState, worker, pool string) bool {
 
 func NewWorkerState() *WorkerState {
 	return &WorkerState{
+		Configurations:   map[string]WorkerConfiguration{},
 		Buckets:          map[string]WorkerBucket{},
 		Revision:         1,
 		Workers:          map[string]Worker{},
@@ -162,6 +163,11 @@ func CloneState(src *State) (*State, error) {
 		}
 		target.SecretVersions = CloneStringsMap(source.SecretVersions)
 		dst.Workers.Versions[id] = target
+	}
+	for id, source := range src.Workers.Configurations {
+		target := dst.Workers.Configurations[id]
+		target.SecretVersions = CloneStringsMap(source.SecretVersions)
+		dst.Workers.Configurations[id] = target
 	}
 	// Refresh tokens and their CAS/lease metadata are intentionally omitted
 	// from JSON. Preserve them only for the in-memory test store; PostgreSQL

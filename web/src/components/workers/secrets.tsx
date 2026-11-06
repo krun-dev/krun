@@ -18,6 +18,9 @@ export function SecretsEditor({
   disabled,
   previewBase = false,
   published = false,
+  effectDescription,
+  pendingNames = [],
+  saveLabel,
   onSave,
   onDelete,
 }: {
@@ -25,6 +28,9 @@ export function SecretsEditor({
   disabled: boolean;
   previewBase?: boolean;
   published?: boolean;
+  effectDescription?: string;
+  pendingNames?: string[];
+  saveLabel?: string;
   onSave: (name: string, value: string) => Promise<boolean>;
   onDelete: (name: string) => Promise<boolean>;
 }) {
@@ -36,11 +42,13 @@ export function SecretsEditor({
   const [deleting, setDeleting] = useState<string>();
   const validName = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/.test(name) && !name.startsWith("KRUN_");
   const duplicate = editing === "" && names.includes(name);
-  const effect = previewBase
-    ? t("仅影响之后新建的 Preview，已有 Preview 和生产环境保持不变。")
-    : published
-      ? t("保存或删除后会自动发布新版本，无需重新构建代码。")
-      : t("保存后在首次部署时生效。");
+  const effect =
+    effectDescription ??
+    (previewBase
+      ? t("仅影响之后新建的 Preview，已有 Preview 和生产环境保持不变。")
+      : published
+        ? t("保存或删除后会自动发布新版本，无需重新构建代码。")
+        : t("保存后在首次部署时生效。"));
 
   function closeEditor() {
     setEditing(null);
@@ -81,7 +89,9 @@ export function SecretsEditor({
             >
               <div className="min-w-0">
                 <code className="break-all text-xs">{secretName}</code>
-                <span className="ml-3 text-xs text-muted-foreground">{t("已加密 · 不可回显")}</span>
+                <span className="ml-3 text-xs text-muted-foreground">
+                  {pendingNames.includes(secretName) ? t("待保存") : t("已加密 · 不可回显")}
+                </span>
               </div>
               <div className="flex gap-2">
                 <Button
@@ -181,7 +191,7 @@ export function SecretsEditor({
               type="submit"
               disabled={disabled || !validName || duplicate}
             >
-              {published ? t("保存并发布 Secret") : t("保存 Secret")}
+              {saveLabel || (published ? t("保存并发布 Secret") : t("保存 Secret"))}
             </Button>
             <Button
               type="button"

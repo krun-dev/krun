@@ -64,6 +64,7 @@ func (s *Store) retainWorkerScopes(ctx context.Context) error {
 		}
 		if !live {
 			queries := []string{
+				`WITH victims AS MATERIALIZED(SELECT configuration_id FROM krun_worker_configurations WHERE worker_id=$1 LIMIT 1000), secrets AS(DELETE FROM krun_worker_configuration_secrets WHERE configuration_id IN(SELECT configuration_id FROM victims)), r2 AS(DELETE FROM krun_worker_configuration_r2 WHERE configuration_id IN(SELECT configuration_id FROM victims)) DELETE FROM krun_worker_configurations WHERE configuration_id IN(SELECT configuration_id FROM victims)`,
 				`WITH victims AS MATERIALIZED(SELECT build_id FROM krun_worker_builds WHERE worker_id=$1 LIMIT 1000), private AS(DELETE FROM krun_worker_build_private WHERE build_id IN(SELECT build_id FROM victims)) DELETE FROM krun_worker_builds WHERE build_id IN(SELECT build_id FROM victims)`,
 				`WITH victims AS MATERIALIZED(SELECT version_id FROM krun_worker_versions WHERE worker_id=$1 LIMIT 1000), bindings AS(DELETE FROM krun_worker_version_secrets WHERE version_id IN(SELECT version_id FROM victims)), r2 AS(DELETE FROM krun_worker_version_r2 WHERE version_id IN(SELECT version_id FROM victims)) DELETE FROM krun_worker_versions WHERE version_id IN(SELECT version_id FROM victims)`,
 			}

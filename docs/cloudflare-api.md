@@ -127,3 +127,15 @@ Secret、Previews Base、Preview 部署/Secret/删除、流量比例拒绝、删
 is_truncated、per_page；列表不逐项 HEAD，不包含对象 version 或 HTTP/custom metadata。
 对象内容上传下载使用 [原生直传接口](bucket-objects.md)，不实现经控制面传输对象内容的
 Cloudflare REST GET/PUT 代理。
+
+## 控制台配置版本与兼容接口
+
+控制台命名配置库使用原生 `/api/v1/.../configurations` 接口，独立于 Cloudflare
+协议资源。应用配置时复用当前代码创建普通 Worker Version，再通过相同 Deployment
+队列发布；配置名称与说明写入版本的 `workers/tag`、`workers/message` annotations。
+Cloudflare 客户端读取版本仍得到标准 bindings 和 annotations，不需要识别原生
+`configuration_id`。原生配置库可以复制兼容 API 写入的当前环境或版本配置。
+
+代码更新且绑定未变时保留已有命名配置的关联；Cloudflare 或原生 API 改变绑定后，
+下一版本不再沿用旧配置关联。Previews Base 仍只在创建 Preview 时复制，直接 Secrets
+API 的自动发布行为也保持不变。

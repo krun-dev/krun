@@ -67,7 +67,12 @@ test("UI manages buckets and persists environment and Preview Base R2 bindings",
 
   async function settings() {
     await page.goto(workerURL);
-    await page.getByRole("tab", { name: "环境配置", exact: true }).click();
+    await page.getByRole("tab", { name: "配置版本", exact: true }).click();
+    const draft = page
+      .locator("details")
+      .filter({ has: page.getByText("管理环境草稿", { exact: true }) });
+    if ((await draft.getAttribute("open")) === null)
+      await draft.locator(":scope > summary").click();
   }
   async function environment() {
     return (await api(workers + "/environments")).items.find((item) => item.name === "production");
@@ -107,9 +112,12 @@ test("UI manages buckets and persists environment and Preview Base R2 bindings",
   ).toBeVisible();
   await page.getByRole("button", { name: "加载最新配置", exact: true }).click();
 
-  await page.getByRole("tab", { name: "预览基础配置", exact: true }).click();
+  await page.getByRole("button", { name: "创建预览环境", exact: true }).click();
+  await page.getByText("新建预览默认配置", { exact: true }).first().click();
   await page.getByRole("button", { name: "添加对象存储绑定", exact: true }).click();
-  await page.getByRole("textbox", { name: "对象存储绑定名称 1", exact: true }).fill("PREVIEW_BUCKET");
+  await page
+    .getByRole("textbox", { name: "对象存储绑定名称 1", exact: true })
+    .fill("PREVIEW_BUCKET");
   await page.getByRole("combobox", { name: "存储桶 1", exact: true }).selectOption(bucketName);
   await page.getByRole("button", { name: "保存对象存储绑定", exact: true }).click();
   await expect
@@ -117,7 +125,6 @@ test("UI manages buckets and persists environment and Preview Base R2 bindings",
       async () => (await api(workers + "/previews-base")).r2_buckets?.PREVIEW_BUCKET?.bucket_name,
     )
     .toBe(bucketName);
-  await page.getByRole("button", { name: "创建预览环境", exact: true }).click();
   await dialog.getByRole("textbox", { name: "预览名称", exact: true }).fill("preview-" + run);
   await dialog.getByRole("button", { name: "创建", exact: true }).click();
   await expect(dialog).not.toBeVisible();

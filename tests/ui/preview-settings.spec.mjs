@@ -46,7 +46,8 @@ test("preview defaults save independently and Secrets can be replaced and delete
   const original = { TEXT: "false", CONFIG: { nested: [1, true, null] }, COUNT: 7 };
   await api(base + "/previews-base", "PATCH", { variables: original, expected_revision: 0 });
   await page.goto("/?page=workers&workspace=" + org.id + "&worker=" + worker.id);
-  await page.getByRole("tab", { name: "预览基础配置", exact: true }).click();
+  await page.getByRole("button", { name: "创建预览环境", exact: true }).click();
+  await page.getByText("新建预览默认配置", { exact: true }).first().click();
   const variables = page.getByRole("region", { name: "环境变量", exact: true });
   const secrets = page.getByRole("region", { name: "Secrets", exact: true });
   const variable = (name) =>
@@ -105,7 +106,7 @@ test("preview defaults save independently and Secrets can be replaced and delete
   expect(publicData).not.toContain("replacement-test-value");
 
   await secrets.getByRole("button", { name: "删除 Secret API_TOKEN", exact: true }).click();
-  const dialog = page.getByRole("dialog");
+  const dialog = page.getByRole("dialog", { name: /^删除 Secret/ });
   await expect(dialog).toContainText("仅影响之后新建的 Preview");
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
   expect((await api(base + "/previews-base")).secret_names).toEqual(["API_TOKEN"]);
@@ -129,10 +130,14 @@ test("preview defaults save independently and Secrets can be replaced and delete
   await expect
     .poll(async () => (await api(base + "/previews-base")).variables.CONFIG)
     .toEqual({ nested: [2, false, null] });
-  await expect(page.getByRole("textbox", { name: "对象存储绑定名称 2", exact: true })).toHaveValue("");
+  await expect(page.getByRole("textbox", { name: "对象存储绑定名称 2", exact: true })).toHaveValue(
+    "",
+  );
   expect(Object.keys((await api(base + "/previews-base")).r2_buckets)).toEqual(["BUCKET"]);
   await page.getByRole("button", { name: "加载最新配置", exact: true }).click();
-  await expect(page.getByRole("textbox", { name: "对象存储绑定名称 2", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "对象存储绑定名称 2", exact: true })).toHaveCount(
+    0,
+  );
 
   // A stale save must report a conflict and retain the unsaved draft.
   const current = await api(base + "/previews-base");
@@ -149,7 +154,12 @@ test("preview defaults save independently and Secrets can be replaced and delete
     "EXTERNAL",
   );
 
-  await page.getByRole("tab", { name: "环境配置", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "创建预览环境", exact: true })
+    .getByRole("button", { name: "关闭", exact: true })
+    .click();
+  await page.getByRole("tab", { name: "配置版本", exact: true }).click();
+  await page.getByText("管理环境草稿", { exact: true }).click();
   await secrets.getByRole("button", { name: "添加 Secret", exact: true }).click();
   await secrets.getByRole("textbox", { name: "Secret 名称", exact: true }).fill("ENV_TOKEN");
   await secrets.getByLabel("Secret 值", { exact: true }).fill("environment-test-value");
@@ -167,15 +177,22 @@ test("preview defaults save independently and Secrets can be replaced and delete
   await dialog.getByRole("button", { name: "确认删除", exact: true }).click();
   await expect(dialog).not.toBeVisible();
   await expect(secrets.getByRole("listitem")).toHaveCount(0);
-  await page.getByRole("tab", { name: "预览基础配置", exact: true }).click();
+  await page.getByRole("button", { name: "创建预览环境", exact: true }).click();
+  await page.getByText("新建预览默认配置", { exact: true }).first().click();
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
   await page.screenshot({ path: ".data/preview-settings-mobile.png", fullPage: true });
+  await page
+    .getByRole("dialog", { name: "创建预览环境", exact: true })
+    .getByRole("button", { name: "关闭", exact: true })
+    .click();
   await page.getByRole("combobox", { name: "语言", exact: true }).selectOption("en");
+  await page.getByRole("button", { name: "Create preview environment", exact: true }).click();
+  await page.getByText("Defaults for new Previews", { exact: true }).first().click();
   await expect(
-    page.getByRole("heading", { name: "Defaults for new Preview environments", exact: true }),
+    page.getByRole("heading", { name: "Defaults for new Previews", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Save object storage bindings", exact: true }),

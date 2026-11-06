@@ -170,8 +170,37 @@ type Artifact struct {
 	GcClaimedAt        *time.Time      `bun:"gc_claimed_at"`
 }
 
+type Configuration struct {
+	bun.BaseModel   `bun:"table:krun_worker_configurations,alias:krun_worker_configurations"`
+	ConfigurationID string          `bun:"configuration_id,pk"`
+	OrgID           string          `bun:"org_id"`
+	WorkerID        string          `bun:"worker_id"`
+	EnvName         string          `bun:"env_name"`
+	Name            string          `bun:"name"`
+	Message         string          `bun:"message"`
+	Variables       json.RawMessage `bun:"variables,type:jsonb"`
+	VersionMetadata string          `bun:"version_metadata"`
+	AssetsBinding   string          `bun:"assets_binding"`
+	CreatedAt       time.Time       `bun:"created_at"`
+}
+
+type ConfigurationSecret struct {
+	bun.BaseModel   `bun:"table:krun_worker_configuration_secrets,alias:krun_worker_configuration_secrets"`
+	ConfigurationID string `bun:"configuration_id,pk"`
+	Name            string `bun:"name,pk"`
+	SecretVersionID string `bun:"secret_version_id"`
+}
+
+type ConfigurationR2 struct {
+	bun.BaseModel   `bun:"table:krun_worker_configuration_r2,alias:krun_worker_configuration_r2"`
+	ConfigurationID string `bun:"configuration_id,pk"`
+	Name            string `bun:"name,pk"`
+	BucketID        string `bun:"bucket_id"`
+}
+
 type Version struct {
 	bun.BaseModel      `bun:"table:krun_worker_versions,alias:krun_worker_versions"`
+	ConfigurationID    string          `bun:"configuration_id"`
 	CreatedBy          string          `bun:"created_by"`
 	CreatedByName      string          `bun:"created_by_name"`
 	VersionMetadata    string          `bun:"version_metadata"`

@@ -7,7 +7,12 @@ import (
 	"github.com/krun-dev/krun/internal/domain"
 )
 
+const WorkerConfigurationRetain = 30 * 24 * time.Hour
+
 func (s *Store) RetainExpired(ctx context.Context) error {
+	if err := s.retainWorkerConfigurations(ctx); err != nil {
+		return err
+	}
 	if err := s.retainOrganizationInvitations(ctx); err != nil {
 		return err
 	}
@@ -59,7 +64,8 @@ func (s *Store) RetainExpired(ctx context.Context) error {
  DELETE FROM krun_worker_versions WHERE version_id IN(SELECT version_id FROM victims)`, []any{at.Add(-WorkerArtifactRetain)}},
 		{`DELETE FROM krun_worker_secret_versions WHERE secret_version_id IN (SELECT secret.secret_version_id FROM krun_worker_secret_versions secret WHERE secret.created_at<=$1
  AND NOT EXISTS(SELECT 1 FROM krun_worker_environment_secrets b WHERE b.secret_version_id=secret.secret_version_id)
- AND NOT EXISTS(SELECT 1 FROM krun_worker_version_secrets b WHERE b.secret_version_id=secret.secret_version_id) ORDER BY secret.created_at LIMIT 1000)`, []any{at.Add(-WorkerArtifactRetain)}},
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_version_secrets b WHERE b.secret_version_id=secret.secret_version_id)
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_configuration_secrets b WHERE b.secret_version_id=secret.secret_version_id) ORDER BY secret.created_at LIMIT 1000)`, []any{at.Add(-WorkerArtifactRetain)}},
 	}
 	for _, statement := range statements {
 		if _, err := s.pool.Exec(ctx, boundedRetentionDelete(statement.sql), statement.args...); err != nil {

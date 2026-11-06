@@ -438,7 +438,38 @@ CREATE TABLE IF NOT EXISTS krun_worker_artifacts (
 );
 CREATE INDEX IF NOT EXISTS krun_worker_artifacts_created ON krun_worker_artifacts (created_at);
 
+CREATE TABLE IF NOT EXISTS krun_worker_configurations (
+ configuration_id text PRIMARY KEY,
+ org_id text NOT NULL,
+ worker_id text NOT NULL,
+ env_name text NOT NULL,
+ name text NOT NULL CHECK (octet_length(name) BETWEEN 1 AND 100),
+ message text NOT NULL DEFAULT '' CHECK (octet_length(message) <= 1000),
+ variables jsonb NOT NULL DEFAULT '{}'::jsonb,
+ version_metadata text NOT NULL DEFAULT '',
+ assets_binding text NOT NULL DEFAULT '',
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS krun_worker_configurations_scope ON krun_worker_configurations(worker_id,env_name,created_at DESC);
+CREATE INDEX IF NOT EXISTS krun_worker_configurations_age ON krun_worker_configurations(created_at);
+
+CREATE TABLE IF NOT EXISTS krun_worker_configuration_secrets (
+ configuration_id text NOT NULL,
+ name text NOT NULL,
+ secret_version_id text NOT NULL,
+ PRIMARY KEY(configuration_id,name)
+);
+CREATE INDEX IF NOT EXISTS krun_worker_configuration_secrets_version ON krun_worker_configuration_secrets(secret_version_id);
+
+CREATE TABLE IF NOT EXISTS krun_worker_configuration_r2 (
+ configuration_id text NOT NULL,
+ name text NOT NULL,
+ bucket_id text NOT NULL,
+ PRIMARY KEY(configuration_id,name)
+);
+
 CREATE TABLE IF NOT EXISTS krun_worker_versions (
+ configuration_id text NOT NULL DEFAULT '',
  created_by text NOT NULL DEFAULT '',
  created_by_name text NOT NULL DEFAULT '',
  version_metadata text NOT NULL DEFAULT '',
@@ -460,6 +491,7 @@ CREATE TABLE IF NOT EXISTS krun_worker_versions (
 	secret_digest   text NOT NULL DEFAULT '',
 	created_at      timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS krun_worker_versions_configuration ON krun_worker_versions(configuration_id) WHERE configuration_id<>'';
 CREATE INDEX IF NOT EXISTS krun_worker_versions_worker ON krun_worker_versions (worker_id, env_name, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS krun_worker_version_secrets (

@@ -101,6 +101,7 @@ async function fixture(page) {
         created_at: "2026-01-01T00:00:00Z",
       },
     ],
+    configurations: [],
     operations: [],
     deployments: [],
     listRequests: [],
@@ -205,6 +206,50 @@ async function fixture(page) {
       if (!data) {
         status = 404;
         data = { error: { code: "RESOURCE_NOT_FOUND", message: "Version not found" } };
+      }
+    } else if (path.endsWith("/configurations") && request.method() === "GET") {
+      data = { items: state.configurations };
+    } else if (
+      path.includes("/configurations/") &&
+      path.endsWith("/deployments") &&
+      request.method() === "POST"
+    ) {
+      const input = request.postDataJSON();
+      state.deploys.push(input);
+      const env = state.environments[0];
+      if (
+        input.expected_revision !== env.deployment_revision ||
+        input.expected_configuration_revision !== env.configuration_revision
+      ) {
+        status = 409;
+        data = {
+          error: {
+            code: "REVISION_CONFLICT",
+            message: "Environment configuration or deployment changed",
+          },
+        };
+      } else {
+        const configuration = state.configurations.find((item) =>
+          path.includes("/" + item.id + "/"),
+        );
+        state.versions["configuration-release"] = {
+          ...state.versions[input.code_version_id],
+          id: "configuration-release",
+          configuration_id: configuration.id,
+          variables: configuration.variables,
+          tag: configuration.name,
+        };
+        data = {
+          id: "configuration-operation",
+          kind: "publish",
+          environment: env.name,
+          version_id: "configuration-release",
+          state: "queued",
+          created_at: "2026-01-04T01:00:00Z",
+          steps: [{ name: "candidate", state: "pending" }],
+        };
+        state.operations.unshift(data);
+        status = 202;
       }
     } else if (path.endsWith("/versions") && request.method() === "POST") {
       const input = request.postDataJSON();
@@ -590,5 +635,59 @@ test("deployment stays visible while submitting, then reports progress, failure 
   await expect(current.getByRole("button", { name: "version-current", exact: true })).toHaveCount(
     0,
   );
+  expect(errors).toEqual([]);
+});
+
+test("configuration publication preserves code and updates the active marker only after confirmation", async ({
+  page,
+}) => {
+  const { state, errors } = await fixture(page);
+  state.configurations = [
+    {
+      id: "config-candidate",
+      name: "XXX 测试",
+      environment: "production",
+      variables: { MODE: "candidate" },
+      secret_names: [],
+      created_at: "2026-01-02T00:00:00Z",
+    },
+    {
+      id: "config-live",
+      name: "正式基线",
+      environment: "production",
+      variables: { MODE: "live" },
+      secret_names: [],
+      created_at: "2026-01-01T00:00:00Z",
+    },
+  ];
+  state.versions["version-current"].configuration_id = "config-live";
+  await page.goto(origin + location + "&worker_tab=configurations");
+  const active = page
+    .getByRole("tabpanel", { name: "配置版本" })
+    .locator('[data-slot="card"]')
+    .first();
+  await expect(active).toContainText("正式基线");
+  const detail = page.getByRole("region", { name: "配置版本详情" });
+  await detail.getByRole("button", { name: "发布并生效", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "确认发布到生产环境", exact: true });
+  await expect(dialog).toContainText("version-current");
+  await expect(dialog).toContainText("XXX 测试");
+  await dialog.getByRole("button", { name: "确认发布", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  expect(state.deploys[0].code_version_id).toBe("version-current");
+  expect(state.deploys[0].expected_configuration_revision).toBe(4);
+  expect(state.versions["configuration-release"].artifact_id).toBe("artifact-live");
+  await expect(active).toContainText("正式基线");
+  state.environments[0].version_id = "configuration-release";
+  state.operations[0].state = "committed";
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect(page.getByRole("heading", { name: /发布进度/ })).toBeVisible();
+  await expect(active).toContainText("正式基线");
+  state.environments[0].confirmed_version_id = "configuration-release";
+  state.environments[0].deployment_revision++;
+  state.operations[0].state = "available";
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect(active).toContainText("XXX 测试");
+  await expect(detail.getByRole("button", { name: "当前已生效", exact: true })).toBeDisabled();
   expect(errors).toEqual([]);
 });
