@@ -413,6 +413,21 @@ export default function App() {
   // when the server enables self-service organizations.
   const canCreateOrg = Boolean(me?.system_admin) || orgSelfService;
   const scopeName = system ? t("平台管理") : (org?.name ?? t("选择组织"));
+  function sectionHref(page: Section) {
+    const params = new URLSearchParams();
+    if (scope) {
+      params.set("workspace", scope);
+    }
+    if (system) {
+      params.set("view", "system");
+    }
+    if (page !== "overview") {
+      params.set("page", page);
+    }
+    const query = params.toString();
+    return query ? `/?${query}` : "/";
+  }
+  const homeHref = sectionHref(system ? "orgs" : "overview");
   async function copyID() {
     try {
       await navigator.clipboard.writeText(me!.user.user_id);
@@ -635,19 +650,45 @@ export default function App() {
           >
             <PanelLeft size={18} />
           </Button>
-          <span className="hidden shrink-0 text-sm text-muted-foreground sm:inline">
-            {system ? t("平台管理") : t("组织")}
-          </span>
-          <span className="hidden text-muted-foreground/40 sm:inline">/</span>
-          <span className="truncate text-sm font-medium">{scopeName}</span>
-          <span className="hidden text-muted-foreground/40 xl:inline">/</span>
-          <span className="hidden shrink-0 text-xs text-muted-foreground xl:inline">
-            {t(
-              (system ? adminNavigation : navigation).find(
-                (n) => n.id === section,
-              )?.name ?? "概览",
-            )}
-          </span>
+          <nav aria-label={t("面包屑")} className="min-w-0">
+            <ol className="flex min-w-0 items-center gap-3">
+              <li className="hidden shrink-0 text-sm text-muted-foreground sm:block">
+                <a href={homeHref} className="hover:text-foreground hover:underline">
+                  {system ? t("平台管理") : t("组织")}
+                </a>
+              </li>
+              <li
+                aria-hidden="true"
+                className="hidden text-muted-foreground/40 sm:block"
+              >
+                /
+              </li>
+              <li className="min-w-0 text-sm font-medium">
+                <a href={homeHref} className="block truncate hover:underline">
+                  {scopeName}
+                </a>
+              </li>
+              <li
+                aria-hidden="true"
+                className="hidden text-muted-foreground/40 xl:block"
+              >
+                /
+              </li>
+              <li className="hidden shrink-0 text-xs text-muted-foreground xl:block">
+                <a
+                  href={sectionHref(section)}
+                  aria-current="page"
+                  className="hover:text-foreground hover:underline"
+                >
+                  {t(
+                    (system ? adminNavigation : navigation).find(
+                      (n) => n.id === section,
+                    )?.name ?? "概览",
+                  )}
+                </a>
+              </li>
+            </ol>
+          </nav>
         </div>
         <div className="ml-3 flex shrink-0 items-center gap-3">
           {me.system_admin ? (
