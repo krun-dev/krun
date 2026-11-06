@@ -199,7 +199,9 @@ test("switching organizations closes old management pages until new permissions 
   });
   await page.goto(origin + "/?page=members&workspace=org-a");
   await expect(page.getByRole("heading", { name: "组织成员", exact: true })).toBeVisible();
-  await page.getByRole("combobox", { name: "切换组织" }).selectOption("org-b");
+  await page.getByRole("button", { name: "切换组织：org-a", exact: true }).click();
+  await expect(page.getByRole("menuitemradio", { name: "org-a" })).toBeChecked();
+  await page.getByRole("menuitemradio", { name: "org-b" }).click();
   await expect(page.getByRole("heading", { name: "组织成员", exact: true })).toHaveCount(0);
   await expect(
     page.locator("aside nav").getByRole("button", { name: "角色授权", exact: true }),
@@ -207,6 +209,43 @@ test("switching organizations closes old management pages until new permissions 
   release();
   await expect(page.getByRole("heading", { name: "组织概览" })).toBeVisible();
   await expect(page).toHaveURL(/workspace=org-b/);
+  await expect(page.getByRole("button", { name: "切换组织：org-b", exact: true })).toBeVisible();
+  await expect(page.getByRole("menu")).toHaveCount(0);
+});
+
+test("organization switcher supports keyboard selection and escape", async ({ page }) => {
+  await fixture(page, {
+    orgs: [organization("org-a"), organization("org-b")],
+    actions: { "org-a": viewer, "org-b": viewer },
+  });
+  await page.goto(origin + "/?workspace=org-a");
+  const trigger = page.getByRole("button", { name: "切换组织：org-a", exact: true });
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("menuitemradio", { name: "org-a" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("menuitemradio", { name: "org-a" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("menuitemradio", { name: "org-b" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/workspace=org-b/);
+  await expect(page.getByRole("button", { name: "切换组织：org-b", exact: true })).toBeFocused();
+});
+
+test("selecting the current organization exits platform management on mobile", async ({ page }) => {
+  await fixture(page, { systemAdmin: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(origin + "/?workspace=org-a&view=system");
+  await expect(page.getByRole("heading", { name: "组织目录" })).toBeVisible();
+  await page.getByRole("button", { name: "打开导航", exact: true }).click();
+  await page.getByRole("button", { name: "切换组织：org-a", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: "org-a" }).click();
+  await expect(page.getByRole("heading", { name: "组织概览" })).toBeVisible();
+  await expect(page).not.toHaveURL(/view=system/);
+  await expect(page.locator("aside")).toBeHidden();
 });
 
 test("permission failures close organization navigation and allow retry", async ({ page }) => {
@@ -239,7 +278,9 @@ test("deployments can disable organization self-service", async ({ page }) => {
   await expect(page.getByText("把你的用户 ID 提供给管理员")).toBeVisible();
 });
 
-test("focus revalidation preserves unsaved forms when permissions are unchanged", async ({ page }) => {
+test("focus revalidation preserves unsaved forms when permissions are unchanged", async ({
+  page,
+}) => {
   await fixture(page, { actions: { "org-a": admin } });
   await page.goto(origin + "/?page=workers&workspace=org-a");
   await page.getByRole("button", { name: "创建 Worker", exact: true }).click();

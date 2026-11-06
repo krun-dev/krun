@@ -1,4 +1,5 @@
 import { LanguageSwitch } from "@/components/language";
+import { OrganizationSwitcher } from "@/components/organization-switcher";
 import { errorMessage, t } from "@/lib/i18n";
 import { useTranslation } from "react-i18next";
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
@@ -48,7 +49,6 @@ import {
   Notice,
   PageHeader,
   QuickLink,
-  SelectField,
 } from "@/components/common";
 const OAuthConsent = lazy(() =>
   import("@/components/oauth-consent").then((m) => ({
@@ -488,40 +488,19 @@ export default function App() {
         <div className="px-3">
           <Logo />
         </div>
-        <div className="mt-6 rounded-md border bg-background/50 p-3">
-          <div className="mb-2 flex items-center gap-2 text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
-            <Building2 size={12} />
-            {t("组织")}
-          </div>
-          <div className="relative">
-            <SelectField
-              label={t("切换组织")}
-              value={scope}
-              onChange={(v) => {
-                setScope(v);
-                if (system) {
-                  setSystemView(false);
-                  setSection("overview");
-                }
-                setMenu(false);
-              }}
-            >
-              <option
-                value=""
-                disabled
-              >
-                {t("选择组织")}
-              </option>
-              {orgs.map((o) => (
-                <option
-                  key={o.id}
-                  value={o.id}
-                >
-                  {o.name}
-                </option>
-              ))}
-            </SelectField>
-          </div>
+        <div className="mt-6">
+          <OrganizationSwitcher
+            organizations={orgs}
+            value={scope}
+            onChange={(v) => {
+              setScope(v);
+              if (system) {
+                setSystemView(false);
+                setSection("overview");
+              }
+              setMenu(false);
+            }}
+          />
         </div>
         {system ? (
           <>
