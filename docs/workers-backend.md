@@ -230,7 +230,7 @@ header 与该 pool 独立 token，不能只信任 header：
 {"version_id": "rel_...", "expected_revision": 1, "idempotency_key": "rollback-001"}
 ```
 
-`build.start` 控制构建，`service.publish` / `service.rollback` 控制目标环境发布；队列提交时及执行时均检查。控制台调用需要目标环境的 `service.invoke`，内置 developer / publisher 角色具有该动作；不转发平台 Cookie 或 Authorization。集合 API 支持只拥有某个环境权限的 Key，隐藏其他环境。
+`build.start` 控制构建，`service.publish` / `service.rollback` 控制目标环境发布；队列提交时及执行时均检查。控制台调用需要目标环境的 `service.invoke`，内置 member 角色具有构建、发布、回滚和调用权限，viewer 只读；不转发平台 Cookie 或 Authorization。集合 API 支持只拥有某个环境权限的 Key，隐藏其他环境。
 
 ## 支持范围
 

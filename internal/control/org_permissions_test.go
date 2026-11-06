@@ -37,10 +37,10 @@ func TestOrganizationPermissions(t *testing.T) {
 			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 				t.Fatal(err)
 			}
-			if result.Organization != "org-a" || !result.Actions["service.list"] || !result.Actions["apiKey.create"] {
+			if result.Organization != "org-a" || !result.Actions["service.list"] || !result.Actions["apiKey.create"] || !result.Actions["storage.object.read"] {
 				t.Fatalf("missing user permissions: %+v", result)
 			}
-			for _, action := range []string{"member.read", "iam.read", "audit.read", "storage.object.read"} {
+			for _, action := range []string{"member.read", "iam.read", "audit.read", "storage.object.write", "storage.bucket.create"} {
 				if result.Actions[action] != (tc.token == "krun_cli_admin") {
 					t.Errorf("unexpected %s permission: %+v", action, result.Actions)
 				}

@@ -78,9 +78,8 @@ export function roleLabel(value: string): string {
   const labels: Record<string, string> = {
     system_admin: "系统管理员",
     org_admin: "组织管理员",
-    developer: "开发者",
-    publisher: "发布者",
-    viewer: "查看者",
+    member: "成员",
+    viewer: "只读",
   };
   return t(labels[value] ?? value);
 }

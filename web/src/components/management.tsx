@@ -585,7 +585,7 @@ export function IAMPage({
                       <SelectField value={role} onChange={setRole}>
                         {(p.system
                           ? ["system_admin"]
-                          : ["org_admin", "developer", "publisher", "viewer"]
+                          : ["org_admin", "member", "viewer"]
                         ).map((r) => (
                           <option key={r} value={r}>
                             {roleLabel(r)} ({r})

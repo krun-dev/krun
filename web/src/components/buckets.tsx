@@ -28,10 +28,18 @@ import { BucketObjects } from "@/components/bucket-objects";
 export function BucketsPage({
   base,
   system,
+  canCreate,
+  canUpdate,
+  canWrite,
+  canDelete,
   notify,
 }: {
   base: string;
   system: boolean;
+  canCreate: boolean;
+  canUpdate: boolean;
+  canWrite: boolean;
+  canDelete: boolean;
   notify: (message: string) => void;
 }) {
   const [buckets, setBuckets] = useState<WorkerBucket[] | null>(null);
@@ -122,6 +130,8 @@ export function BucketsPage({
         key={base + opened.id}
         base={base}
         bucket={opened}
+        canWrite={canWrite}
+        canDelete={canDelete}
         back={() => selectBucket("")}
         notify={notify}
       />
@@ -134,15 +144,17 @@ export function BucketsPage({
         title={t("对象存储")}
         description={t("管理逻辑桶，并通过兼容 Cloudflare R2 的 binding 在 Worker 中使用。")}
         action={
-          <Button
-            onClick={() => {
-              setFormError("");
-              setCreate(true);
-            }}
-          >
-            <Plus size={16} />
-            {t("创建桶")}
-          </Button>
+          canCreate ? (
+            <Button
+              onClick={() => {
+                setFormError("");
+                setCreate(true);
+              }}
+            >
+              <Plus size={16} />
+              {t("创建桶")}
+            </Button>
+          ) : undefined
         }
       />
       {error ? (
@@ -196,7 +208,7 @@ export function BucketsPage({
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={busy}
+                        disabled={busy || !canUpdate}
                         onClick={() => setTarget(bucket)}
                       >
                         {bucket.enabled ? t("停用") : t("启用")}

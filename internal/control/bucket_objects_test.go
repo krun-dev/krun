@@ -83,18 +83,22 @@ func TestObjectBrowserAuthorizationAndControlOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := "/api/v1/orgs/org-a/workers/buckets/bkt-fixture/objects"
-	for _, method := range []string{"GET", "DELETE", "POST"} {
+	for _, method := range []string{"DELETE", "POST"} {
 		path, data := base, ""
 		if method == "POST" {
 			path += "/access"
 			data = `{"key":"hello.txt","operation":"upload","size":5}`
 		}
 		if out := request(s, method, path, "krun_cli_viewer", data); out.Code != 403 {
-			t.Fatalf("bucket metadata access conferred object access: %d", out.Code)
+			t.Fatalf("viewer gained object write access: %d", out.Code)
 		}
 	}
 	if requests.Load() != 0 {
 		t.Fatal("denied request contacted storage")
+	}
+	viewerList := request(s, "GET", base, "krun_cli_viewer", "")
+	if viewerList.Code != 200 || !strings.Contains(viewerList.Body.String(), `"key":"hello.txt"`) {
+		t.Fatal("viewer cannot list objects", viewerList.Code, viewerList.Body.String())
 	}
 	list := request(s, "GET", base, "krun_cli_admin", "")
 	if list.Code != 200 || !strings.Contains(list.Body.String(), `"key":"hello.txt"`) || strings.Contains(list.Body.String(), prefix) || !listOutsideLock.Load() {

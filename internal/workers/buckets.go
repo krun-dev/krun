@@ -35,7 +35,7 @@ func (s *Service) BucketCreate(st *domain.State, p authorization.Principal, orga
 	if err != nil {
 		return domain.WorkerBucket{}, err
 	}
-	if err := s.require(st, p, "organization.update", target); err != nil {
+	if err := s.require(st, p, "storage.bucket.create", target); err != nil {
 		return domain.WorkerBucket{}, err
 	}
 	if s.Config.Workers == nil || s.Config.Workers.ObjectStorage == nil {
@@ -76,7 +76,7 @@ func (s *Service) BucketSetEnabled(st *domain.State, p authorization.Principal, 
 	if err != nil {
 		return domain.WorkerBucket{}, err
 	}
-	if err := s.require(st, p, "organization.update", target); err != nil {
+	if err := s.require(st, p, "storage.bucket.update", target); err != nil {
 		return domain.WorkerBucket{}, err
 	}
 	bucket, exists := st.Workers.Buckets[id]

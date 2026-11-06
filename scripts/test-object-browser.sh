@@ -38,7 +38,11 @@ for attempt in {1..100}; do
   fi
   sleep 0.1
 done
-"$directory/server" -config "$config" -endpoint "$endpoint" >"$directory/server.log" 2>&1 &
+server_args=(-config "$config" -endpoint "$endpoint")
+if [[ -n "${KRUN_TEST_POSTGRES_URL:-}" ]]; then
+  server_args+=(-database-url "$KRUN_TEST_POSTGRES_URL")
+fi
+"$directory/server" "${server_args[@]}" >"$directory/server.log" 2>&1 &
 server_pid=$!
 origin=""
 for attempt in {1..200}; do

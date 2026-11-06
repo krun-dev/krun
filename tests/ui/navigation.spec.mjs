@@ -48,6 +48,7 @@ const viewer = {
   "service.list": true,
   "model.list": true,
   "apiKey.create": true,
+  "storage.object.read": true,
 };
 const admin = {
   ...viewer,
@@ -129,6 +130,7 @@ test("viewer deep links retain allowed pages and hide administration and Worker 
   await expect(page.locator("aside nav button")).toHaveText([
     "概览",
     "Workers",
+    "对象存储",
     "API 密钥",
     "资源目录",
     "权限检查",
@@ -142,7 +144,7 @@ test("unauthorized direct URLs fall back without requesting protected page data"
   page,
 }) => {
   const { requests } = await fixture(page);
-  for (const section of ["users", "orgs", "members", "roles", "audit", "buckets"]) {
+  for (const section of ["users", "orgs", "members", "roles", "audit"]) {
     await page.goto(origin + `/?page=${section}&workspace=org-a&view=system`);
     await expect(page.getByRole("heading", { name: "组织概览" })).toBeVisible();
     await expect(page).not.toHaveURL(new RegExp(`page=${section}`));
