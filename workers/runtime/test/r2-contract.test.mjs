@@ -61,7 +61,9 @@ const page = await prepareStorageRequest(grant, "list", "", { ...options, cursor
 const pageURL = new URL(page.url);
 assert.equal(pageURL.searchParams.get("continuation-token"), "opaque+/=upstream-token");
 assert.equal(pageURL.searchParams.get("prefix"), grant.prefix + options.prefix);
-const tampered = cursor.slice(0, -1) + (cursor.endsWith("X") ? "Y" : "X");
+const [payload, signature] = cursor.split(".");
+// Changing the final Base64URL character can change only unused padding bits.
+const tampered = payload + "." + (signature[0] === "A" ? "B" : "A") + signature.slice(1);
 await assert.rejects(
   prepareStorageRequest(grant, "list", "", { ...options, cursor: tampered }),
   TypeError,
