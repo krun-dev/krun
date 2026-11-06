@@ -271,6 +271,7 @@ export default function App() {
     if (section !== "workers") {
       url.searchParams.delete("worker");
       url.searchParams.delete("environment");
+      url.searchParams.delete("worker_tab");
     }
     if (section !== "buckets") {
       url.searchParams.delete("bucket");
