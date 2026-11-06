@@ -4,8 +4,7 @@
 [公司部署包](../deploy/production/README.md)：包含镜像构建、主配置示例、离线资源渲染、
 Gateway 预检和显式 apply 脚本。它与下面的静态控制台同源契约一致。
 
-生产控制台是纯静态站点：`npm run build` 只生成 `dist/console/index.html` 和
-`dist/console/assets/`。把 **`dist/console/` 的内容** 上传到 OSS bucket 根目录；生产
+生产控制台是纯静态站点：`npm run build` 生成 `dist/console/index.html`、`assets/`、用户文档和多平台 CLI 下载文件。构建需要 Go 工具链；这些 CLI 是静态文件，无需生产 Node 运行时。把 **`dist/console/` 的内容** 上传到 OSS bucket 根目录；生产
 环境不运行 Node，也不要把仓库、`dist/` 的其他内容或配置文件一起上传。
 
 控制台与控制面 API 共用一个公开 origin。这个 origin 前的 CDN / 反向代理必须实现且只实现：
@@ -13,7 +12,7 @@ Gateway 预检和显式 apply 脚本。它与下面的静态控制台同源契�
 | 外部路径 | 上游 |
 | --- | --- |
 | `/api/*` | Go 控制面，保留原始路径 |
-| `/`、`/assets/*` | OSS 静态 bucket |
+| `/`、`/docs`、`/assets/*`、`/downloads/*`、`/quickstart.md`、`/llms.txt` | OSS 静态 bucket |
 | 其他路径 | 404 |
 
 页面状态保存在查询参数中，因此不需要把未知路径重写到 `index.html`。OSS 的 default
@@ -47,7 +46,7 @@ db: ${KRUN_DATABASE_URL}
 ## 路由示例
 
 仓库中的 [`deploy/production/nginx.conf.example`](../deploy/production/nginx.conf.example)
-是同一契约的 Nginx 模板；替换证书路径、域名、上游和静态根目录后再执行 `nginx -t`。
+是同一契约的 Nginx 模板；替换证书路径、域名、上游和静态根目录，并按需配置新增的静态文件路径后再执行 `nginx -t`。
 使用云 CDN 时配置等价的两个 origin behavior：优先匹配
 `/api/*` 到 Go，其余请求到 OSS；OSS 对不存在的对象返回 404。
 
@@ -56,7 +55,9 @@ Set-Cookie；`/api/*` 不得缓存。每一层代理都应把自己的直接下�
 `X-Forwarded-For`；最外层 CDN 应清洗公网传入的同名头。Go 会从右向左剥离
 `trusted_proxy_cidrs`，并采用遇到的第一个不可信地址作为客户端地址。
 
-`index.html` 必须 `no-store`（或至少每次重新验证），带内容哈希的 `/assets/*` 才能
+`/docs` 是无扩展名的静态 HTML 对象，上传 OSS 时必须设置其 `Content-Type` 为 `text/html; charset=utf-8`；它与 `/llms.txt`、`/quickstart.md` 和 CLI 下载文件均无需登录，必须随静态产物一起上传。
+
+`index.html` 和 `/docs` 必须 `no-store`（或至少每次重新验证），带内容哈希的 `/assets/*` 才能
 长期 immutable 缓存。静态入口还应下发 CSP、`nosniff`、点击劫持和 Referrer-Policy
 等浏览器安全头；Nginx 模板给出了与当前纯静态前端兼容的基线。
 

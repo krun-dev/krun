@@ -82,3 +82,347 @@
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
+
+/* The documentation is a standalone static view and does not require a session. */
+.docs-shell {
+  background: #fafbf9;
+  color: #1d2922;
+  min-height: 100vh;
+}
+.docs-header {
+  height: 70px;
+  border-bottom: 1px solid #e4eae5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 5%;
+  background: #fff;
+}
+.docs-brand,
+.docs-console,
+.docs-back,
+.docs-nav-active,
+.docs-nav-link,
+.docs-footer a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+}
+.docs-brand {
+  font-size: 14px;
+  color: #64736a;
+}
+.docs-brand strong {
+  font-size: 20px;
+  letter-spacing: -0.05em;
+  color: #17291e;
+}
+.docs-mark {
+  display: grid;
+  place-items: center;
+  width: 29px;
+  height: 29px;
+  border-radius: 8px;
+  color: white;
+  background: #157a50;
+  font-weight: 700;
+  font-size: 19px;
+}
+.docs-divider {
+  height: 19px;
+  width: 1px;
+  background: #e0e7e2;
+  margin: 0 8px;
+}
+.docs-console {
+  color: #43584b;
+  font-size: 13px;
+  font-weight: 600;
+}
+.docs-layout {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 740px) 160px;
+  justify-content: center;
+  gap: 56px;
+  padding: 0 5%;
+}
+.docs-sidebar {
+  border-right: 1px solid #e5ebe6;
+  min-height: calc(100vh - 70px);
+  padding: 37px 22px 30px 0;
+}
+.docs-back {
+  font-size: 12px;
+  color: #79887d;
+  margin-bottom: 52px;
+}
+.docs-nav-label {
+  color: #9aa79e;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  margin: 30px 10px 13px;
+}
+.docs-nav-active,
+.docs-nav-link {
+  padding: 11px;
+  font-size: 13px;
+  border-radius: 7px;
+}
+.docs-nav-active {
+  background: #e8f3eb;
+  color: #197c50;
+  font-weight: 600;
+}
+.docs-nav-link {
+  color: #687a6d;
+}
+.docs-sidebar-note {
+  margin: 125px 0 0;
+  padding: 17px;
+  border: 1px solid #e3eae4;
+  border-radius: 9px;
+  color: #7b8d80;
+  font-size: 12px;
+  line-height: 1.9;
+}
+.docs-sidebar-note span {
+  display: block;
+  margin-top: 14px;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: #a1b1a5;
+}
+.docs-main {
+  min-width: 0;
+  padding: 40px 0 70px;
+}
+.docs-breadcrumb {
+  color: #91a096;
+  font-size: 12px;
+}
+.docs-breadcrumb span {
+  padding: 0 8px;
+  color: #c1ccc3;
+}
+.docs-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  margin-top: 56px;
+}
+.docs-eyebrow {
+  color: #218b5a;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.docs-eyebrow span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #34ad72;
+}
+.docs-title-row h1 {
+  margin: 14px 0 9px;
+  font-size: clamp(38px, 5vw, 54px);
+  line-height: 1.05;
+  letter-spacing: -0.055em;
+  font-weight: 650;
+}
+.docs-title-row h1 span {
+  color: #31a86e;
+}
+.docs-title-row p {
+  color: #7c8c80;
+  font-size: 14px;
+}
+.docs-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+}
+.docs-source {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #6a7f70;
+  font-size: 12px;
+  text-decoration: none;
+}
+.docs-copy {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid #dce5dd;
+  border-radius: 7px;
+  background: white;
+  color: #53685a;
+  font-size: 12px;
+}
+.docs-copy-error {
+  color: #b42318;
+  font-size: 13px;
+  margin-top: 12px;
+}
+.docs-intro {
+  margin: 38px 0 48px;
+  padding: 20px;
+  display: flex;
+  gap: 15px;
+  border: 1px solid #d9ecde;
+  background: #f0f8f1;
+  border-radius: 9px;
+}
+.docs-intro-icon {
+  color: #27895b;
+}
+.docs-intro strong {
+  font-size: 13px;
+}
+.docs-intro p {
+  font-size: 12px;
+  color: #718578;
+  margin-top: 5px;
+  line-height: 1.7;
+}
+.docs-article section {
+  scroll-margin-top: 25px;
+  margin: 0 0 48px;
+}
+.docs-article h2 {
+  font-size: 21px;
+  letter-spacing: -0.025em;
+  font-weight: 650;
+  margin-bottom: 15px;
+}
+.docs-article p,
+.docs-article li {
+  font-size: 14px;
+  line-height: 1.9;
+  color: #607166;
+}
+.docs-article p {
+  margin: 13px 0;
+}
+.docs-article ul {
+  list-style: disc;
+  padding-left: 23px;
+  margin: 16px 0;
+}
+.docs-article li {
+  padding: 3px 0;
+}
+.docs-article a {
+  color: #188254;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.docs-article strong {
+  color: #304b38;
+}
+.docs-article code {
+  font-size: 0.9em;
+  background: #edf2ed;
+  padding: 2px 5px;
+  border-radius: 4px;
+  color: #276c47;
+}
+.docs-article pre {
+  overflow-x: auto;
+  background: #17241c;
+  border-radius: 9px;
+  padding: 20px 22px;
+  margin: 19px 0;
+}
+.docs-article pre code {
+  padding: 0;
+  background: transparent;
+  color: #d4e7d8;
+  font-size: 12px;
+  line-height: 1.9;
+}
+.docs-footer {
+  border-top: 1px solid #e2eae3;
+  display: flex;
+  justify-content: space-between;
+  padding-top: 25px;
+  color: #a4b1a7;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+.docs-footer a {
+  color: #6a7f70;
+  font-size: 12px;
+  letter-spacing: 0;
+}
+.docs-toc {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  padding-top: 166px;
+  font-size: 12px;
+}
+.docs-toc div {
+  font-weight: 700;
+  color: #53675a;
+  margin-bottom: 18px;
+}
+.docs-toc a {
+  display: flex;
+  gap: 10px;
+  color: #849389;
+  text-decoration: none;
+  padding: 8px 0;
+}
+.docs-toc a span {
+  color: #b4c1b6;
+  font-size: 10px;
+}
+@media (max-width: 1100px) {
+  .docs-layout {
+    grid-template-columns: 190px minmax(0, 740px);
+    gap: 36px;
+  }
+  .docs-toc {
+    display: none;
+  }
+}
+@media (max-width: 700px) {
+  .docs-header {
+    height: 60px;
+  }
+  .docs-layout {
+    display: block;
+    padding: 0 6%;
+  }
+  .docs-sidebar {
+    display: none;
+  }
+  .docs-main {
+    padding-top: 28px;
+  }
+  .docs-title-row {
+    margin-top: 42px;
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .docs-actions {
+    margin-top: 5px;
+  }
+  .docs-intro {
+    margin: 30px 0 38px;
+  }
+  .docs-footer {
+    gap: 15px;
+    flex-wrap: wrap;
+  }
+}

@@ -12,7 +12,7 @@ import sys,tarfile
 root=Path('dist/console')
 output=Path(sys.argv[1])/'console.tar.gz'
 with tarfile.open(output,'w:gz') as archive:
-    archive.add(root/'index.html',arcname='index.html')
-    archive.add(root/'assets',arcname='assets')
+    for item in sorted(root.iterdir()):
+        archive.add(item, arcname=item.name)
 print('Static console archive:',output)
 PY
