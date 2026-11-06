@@ -5,6 +5,7 @@ import llmsTxt from "starlight-llms-txt";
 
 export default defineConfig({
   site: "https://krun.invalid",
+  base: "/docs",
   output: "static",
   outDir: "../dist/starlight",
   build: { format: "file", inlineStylesheets: "never" },
@@ -39,10 +40,17 @@ export default defineConfig({
         Footer: "./src/components/Footer.astro",
       },
       sidebar: [
-        { label: "返回控制台", link: "/" },
-        { label: "开始使用", items: ["docs", { autogenerate: { directory: "guides" } }] },
+        { label: "开始使用", items: ["index", "guides/concepts"] },
+        {
+          label: "组件",
+          items: ["guides/component-workers", "guides/component-object-storage"],
+        },
+        {
+          label: "命令行工具",
+          items: ["guides/krun-cli", "guides/cloudflare-workers"],
+        },
       ],
-      head: [{ tag: "script", attrs: { src: "/docs-enhance.js", defer: true } }],
+      head: [{ tag: "script", attrs: { src: "/docs/docs-enhance.js", defer: true } }],
       plugins: [pageActions({ position: "page-title" }), llmsTxt()],
     }),
   ],

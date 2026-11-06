@@ -9,8 +9,9 @@
 `npm run build` 将文档静态构建并合并到控制台产物；`npm run docs:dev` 可单独预览
 文档，完整的同源路由和 CLI 下载请使用构建产物预览。
 
-Quick Start 位于 `docs.md`，访问入口为 `/docs`。新增文档放在 `guides/`，使用
-Markdown 和 Starlight 的标题 frontmatter，导航、章节目录、搜索和 `llms.txt` 自动生成。
+Quick Start 位于 `index.md`，访问入口为 `/docs/`。新增文档放在 `guides/`，使用
+Markdown 和 Starlight 的标题 frontmatter；在 `user-docs/astro.config.mjs` 配置导航，
+章节目录、搜索和 `llms.txt` 自动生成。
 文中 `{{KRUN_ORIGIN}}` 在浏览器显示和复制时替换为当前 origin，Markdown 原文保留
 占位符。Go 和 OSS 部署时不需要文档服务进程。
 | 内容 | 入口 |

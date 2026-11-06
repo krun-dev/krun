@@ -19,7 +19,13 @@ sidebar:
 
 ## 2. 安装 CLI
 
-下载适用于你电脑的 krun CLI。下载地址与当前控制台使用相同域名：
+macOS 和 Linux 可以运行以下命令，自动识别系统和架构并安装到 `~/.local/bin/krun`：
+
+```sh
+curl -fsSL {{KRUN_ORIGIN}}/install.sh | sh -s -- {{KRUN_ORIGIN}}
+```
+
+如提示 `~/.local/bin` 不在 PATH 中，请按提示配置。详细用法见 [命令行工具](/docs/guides/krun-cli.html)。也可以手动下载对应版本：
 
 - [macOS Apple Silicon](/downloads/krun-darwin-arm64)
 - [macOS Intel](/downloads/krun-darwin-amd64)
@@ -28,15 +34,7 @@ sidebar:
 - [Windows x86-64](/downloads/krun-windows-amd64.exe)
 - [Windows ARM64](/downloads/krun-windows-arm64.exe)
 
-例如，在 macOS Apple Silicon 上打开终端：
-
-```sh
-curl -fL {{KRUN_ORIGIN}}/downloads/krun-darwin-arm64 -o krun
-chmod +x krun
-./krun help
-```
-
-将可执行文件移动到 PATH 中的目录，即可直接使用 `krun`。其他平台请选择对应文件；Windows 用户可在 PowerShell 中运行下载的 `krun-windows-amd64.exe help`。
+手动下载后，将文件设为可执行并放到 PATH 中；Windows 用户可在 PowerShell 中运行下载的 `krun-windows-amd64.exe help`。
 
 ## 3. 连接你的账号
 

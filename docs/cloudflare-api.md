@@ -1,5 +1,7 @@
 # Cloudflare Workers 协议适配
 
+创建项目、构建和发布的简明步骤见 [使用 Wrangler 部署 Workers](../user-docs/src/content/docs/guides/cloudflare-workers.md)。本文记录适配接口与实现细节。
+
 入口为同源 `/api/v1/cloudflare/client/v4`。使用 krun API Key 或 OAuth Token；`account_id` 是 krun
 组织 ID。Script 名称在组织内稳定映射到服务 ID，不拆解环境后缀。Wrangler 的普通
 `deploy` 和 `--env` 生成的不同 Script 名称对应不同服务；`wrangler preview --name`
