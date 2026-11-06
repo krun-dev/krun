@@ -1,0 +1,18 @@
+---
+import DefaultPageTitle from "@astrojs/starlight/components/PageTitle.astro";
+const id = Astro.locals.starlightRoute.entry.id.replace(/\.(md|mdx)$/, "");
+const source = `/${id}.md${import.meta.env.DEV ? "" : ".txt"}`;
+---
+<div class="krun-breadcrumb">文档 <span>/</span> 开始使用 <span>/</span> {Astro.locals.starlightRoute.entry.data.title}</div>
+<div class="krun-title-row">
+  <div>
+    <div class="krun-eyebrow">● GETTING STARTED</div>
+    <DefaultPageTitle />
+    <p class="krun-description">{Astro.locals.starlightRoute.entry.data.description}</p>
+  </div>
+  <div class="krun-doc-actions">
+    <a href={source} data-doc-source>查看原文 ↗</a>
+    <button type="button" data-doc-copy hidden>复制 Markdown</button>
+  </div>
+</div>
+<p class="krun-copy-error" data-doc-error role="alert" hidden>复制失败，请打开 Markdown 原文手动复制。</p>
