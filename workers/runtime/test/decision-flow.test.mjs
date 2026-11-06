@@ -1,3 +1,4 @@
+import { fixtureRead, readObjectURL } from "./read-grant.mjs";
 // Executes the real workers/runtime/entry.js decision flow in Node with stubbed
 // bindings (PLATFORM, LOADER, fetch). Not a substitute for kind e2e, but it runs
 // the actual shipped code rather than a re-implementation.
@@ -108,7 +109,7 @@ const downloads = [];
 const configObjects = new Map();
 const artifactObjects = new Map();
 globalThis.fetch = async (url) => {
-  const raw = url instanceof Request ? url.url : String(url);
+  const raw = readObjectURL(url instanceof Request ? url.url : String(url)).href;
   if (raw.startsWith("http://config.test/")) {
     const key = raw.replace("http://config.test/", "");
     downloads.push("config:" + key);
@@ -129,7 +130,14 @@ globalThis.fetch = async (url) => {
   if (!(key in files)) {
     return new Response("missing", { status: 404 });
   }
-  return new Response(files[key], { status: 200 });
+  return new Response(files[key], {
+    status: 200,
+    headers: {
+      "content-length": String(meta[key].size),
+      "content-type": meta[key].type,
+      "x-amz-meta-krun-sha256": meta[key].sha256,
+    },
+  });
 };
 function platformFor(manifestConfig, fileList, rel, options = {}) {
   const changes = options.changes || [];
@@ -192,23 +200,13 @@ function platformFor(manifestConfig, fileList, rel, options = {}) {
           version_id: id,
           config: id === rel.id ? manifestConfig : null,
           files: id === rel.id ? fileList : [],
+          storage: fixtureRead("http://assets.test/index.html").storage,
         });
       }
-      const m = path.match(new RegExp(`^/versions/${rel.id}/assets/(.+)$`));
-      if (m) {
-        const name = m[1].split("/").map(decodeURIComponent).join("/");
-        const info = meta[name];
-        if (!info) {
-          return new Response("not found", { status: 404 });
-        }
-        return Response.json({
-          path: name,
-          sha256: info.sha256,
-          size_bytes: info.size,
-          content_type: info.type,
-          download_url: "http://assets.test/" + name,
-        });
+      if (path === "/versions/" + rel.id + "/assets/credentials") {
+        return Response.json(fixtureRead("http://assets.test/index.html").storage);
       }
+
       return new Response("not found", { status: 404 });
     },
   };
@@ -341,6 +339,61 @@ await check("asset bytes are cached in the LRU (single download)", async () => {
   await call(handler, "/");
   const after = downloads.filter((d) => d === "index.html").length;
   assert.equal(after, before, "index.html was re-downloaded");
+});
+await check(
+  "one manifest grant serves different cold files without per-file platform calls",
+  async () => {
+    const mod = await freshEntry();
+    const local = makeEnv(config, fileList);
+    const original = local.PLATFORM.fetch;
+    const calls = [];
+    local.PLATFORM.fetch = async (request) => {
+      calls.push(new URL(request.url).pathname);
+      return original(request);
+    };
+    const entry = new mod.Private(local, {});
+    for (const path of ["/", "/about", "/LICENSE"]) {
+      const response = await call(entry, path);
+      assert.equal(response.status, 200);
+      await response.text();
+    }
+    assert.equal(calls.filter((path) => path.endsWith("/assets")).length, 1);
+    assert.equal(calls.filter((path) => path.includes("/assets/")).length, 0);
+  },
+);
+await check("expired grants renew only on cache misses and renewal fails closed", async () => {
+  const mod = await freshEntry();
+  const local = makeEnv(config, fileList);
+  const original = local.PLATFORM.fetch;
+  let renewals = 0;
+  let unavailable = false;
+  local.PLATFORM.fetch = async (request) => {
+    if (new URL(request.url).pathname.endsWith("/assets/credentials")) {
+      renewals++;
+      assert.equal(request.method, "POST");
+      if (unavailable) {
+        return new Response(null, { status: 503 });
+      }
+    }
+    return original(request);
+  };
+  const entry = new mod.Private(local, {});
+  assert.equal((await call(entry, "/")).status, 200);
+  const now = Date.now;
+  try {
+    Date.now = () => now() + 301000;
+    assert.equal((await call(entry, "/")).status, 200);
+    assert.equal(renewals, 0, "cached bytes should not renew a grant");
+    assert.equal((await call(entry, "/about")).status, 200);
+    assert.equal(renewals, 1);
+    Date.now = () => now() + 602000;
+    unavailable = true;
+    assert.equal((await call(entry, "/LICENSE")).status, 503);
+    assert.equal(renewals, 2);
+    assert.equal((await call(entry, "/about")).status, 200);
+  } finally {
+    Date.now = now;
+  }
 });
 await check("services without assets forward everything to the worker", async () => {
   const plainEnv = makeEnv(null, [], "rel_plain");
@@ -527,7 +580,7 @@ await check(
       artifact_id: "art",
       archive_sha256: v2Version.archive_sha256,
       size: archive.length,
-      download_url: "http://artifacts.test/v2.tar.gz",
+      ...fixtureRead("http://artifacts.test/v2.tar.gz"),
     };
     const v2Env = makeEnv(manifestConfig, fileList, "rel_v2", {
       exerciseLoader: true,
@@ -565,6 +618,9 @@ await check(
     assert.equal(loaded.env.STORAGE_ACCESS_KEY, undefined);
     assert.equal(loaded.env.STORAGE_SECRET_KEY, undefined);
     assert.equal(loaded.env.STORAGE_REGION, undefined);
+    assert.equal(loaded.env.storage, undefined);
+    assert.equal(loaded.env.secret_access_key, undefined);
+    assert.equal(loaded.env.session_token, undefined);
     assert.ok(loaded.env.ASSETS, "ASSETS binding missing");
     const asset = await loaded.env.ASSETS.fetch(new Request("https://assets.local/about"));
     assert.equal(asset.status, 200);
@@ -581,16 +637,9 @@ await check(
     env.PLATFORM = {
       fetch: async (request) => {
         assert.equal(request.headers.get("authorization"), "Bearer t");
-        if (new URL(request.url).pathname.endsWith("/missing.txt")) {
-          return new Response(null, { status: 404 });
-        }
-        return Response.json({
-          path: "index.html",
-          sha256: meta["index.html"].sha256,
-          size_bytes: meta["index.html"].size,
-          content_type: meta["index.html"].type,
-          download_url: "http://assets.test/index.html",
-        });
+        assert.ok(new URL(request.url).pathname.endsWith("/credentials"));
+        assert.equal(request.method, "POST");
+        return Response.json(fixtureRead("http://assets.test/index.html").storage);
       },
     };
     const entry = new mod.Private(env, {});
@@ -674,7 +723,7 @@ await check("prototype-magic asset binding names are rejected before WorkerLoade
     artifact_id: "art",
     archive_sha256: magicVersion.archive_sha256,
     size: archive.length,
-    download_url: "http://artifacts.test/magic-binding.tar.gz",
+    ...fixtureRead("http://artifacts.test/magic-binding.tar.gz"),
   };
   const magicEnv = makeEnv(magicConfig, [fileList[0]], magicVersion.id, {
     exerciseLoader: true,
@@ -743,7 +792,7 @@ await check("asset binding cannot replace variables or reserved platform binding
     artifact_id: "art",
     archive_sha256: collisionVersion.archive_sha256,
     size: archive.length,
-    download_url: "http://artifacts.test/collision.tar.gz",
+    ...fixtureRead("http://artifacts.test/collision.tar.gz"),
   };
   const collisionEnv = makeEnv(manifest.assets, [fileList[0]], "rel_collision", {
     exerciseLoader: true,
@@ -798,7 +847,7 @@ await check("candidate validation rejects undeclared artifact entries", async ()
     artifact_id: "art",
     archive_sha256: invalidVersion.archive_sha256,
     size: archive.length,
-    download_url: "http://artifacts.test/invalid.tar.gz",
+    ...fixtureRead("http://artifacts.test/invalid.tar.gz"),
   };
   const invalidEnv = makeEnv(null, [], "rel_invalid", {
     exerciseLoader: true,
@@ -863,7 +912,7 @@ await check("candidate validation rejects malformed typed module payloads", asyn
       artifact_id: "art",
       archive_sha256: invalidVersion.archive_sha256,
       size: archive.length,
-      download_url: "http://artifacts.test/" + item.key + ".tar.gz",
+      ...fixtureRead("http://artifacts.test/" + item.key + ".tar.gz"),
     };
     const invalidEnv = makeEnv(null, [], invalidVersion.id, {
       exerciseLoader: true,

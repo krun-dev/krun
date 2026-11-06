@@ -32,22 +32,7 @@ func NewRegistry(c *config.WorkerObjectStorageConfig) (*Registry, error) {
 		return nil, &provider.Error{Kind: provider.InvalidConfiguration}
 	}
 	for _, store := range copy.Stores {
-		var source provider.Provider
-		var err error
-		switch store.Credentials.Type {
-		case "static":
-			source, err = staticcred.New(store.Credentials.AccessKeyID, store.Credentials.SecretAccessKey)
-		case "tos_assume_role":
-			source, err = tos.New(tos.Options{
-				AccessKeyID:     store.Credentials.AccessKeyID,
-				SecretAccessKey: store.Credentials.SecretAccessKey,
-				RoleTrn:         store.Credentials.RoleTrn,
-				Region:          store.Region,
-				Endpoint:        store.Credentials.STSEndpoint,
-			})
-		default:
-			err = &provider.Error{Kind: provider.InvalidConfiguration}
-		}
+		source, err := credentialProvider(store.Credentials, store.Region)
 		if err != nil {
 			return nil, err
 		}
@@ -77,4 +62,46 @@ func (r *Registry) Credentials(ctx context.Context, scope domain.StorageCredenti
 		return domain.StorageCredentials{}, &provider.Error{Kind: provider.InvalidScope}
 	}
 	return store.manager.Credentials(ctx, scope, minimum)
+}
+
+// NewArtifactManager reuses the STS provider and cache implementation while
+// keeping artifact read scopes separate from business storage.
+func NewArtifactManager(c *config.WorkersConfig) (*Manager, error) {
+	credentials := config.WorkerStorageCredentialConfig{
+		Type:            "static",
+		AccessKeyID:     c.S3AccessKey,
+		SecretAccessKey: c.S3SecretKey,
+	}
+	if c.S3RuntimeCredentials != nil {
+		credentials = *c.S3RuntimeCredentials
+	}
+	source, err := credentialProvider(credentials, c.S3Region)
+	if err != nil {
+		return nil, err
+	}
+	return New(source, Options{
+		TTL:              time.Hour,
+		RefreshBefore:    5 * time.Minute,
+		Timeout:          20 * time.Second,
+		CacheEntries:     1024,
+		MaxConcurrent:    8,
+		RequireTemporary: credentials.Type != "static",
+	})
+}
+
+func credentialProvider(credentials config.WorkerStorageCredentialConfig, region string) (provider.Provider, error) {
+	switch credentials.Type {
+	case "static":
+		return staticcred.New(credentials.AccessKeyID, credentials.SecretAccessKey)
+	case "tos_assume_role":
+		return tos.New(tos.Options{
+			AccessKeyID:     credentials.AccessKeyID,
+			SecretAccessKey: credentials.SecretAccessKey,
+			RoleTrn:         credentials.RoleTrn,
+			Region:          region,
+			Endpoint:        credentials.STSEndpoint,
+		})
+	default:
+		return nil, &provider.Error{Kind: provider.InvalidConfiguration}
+	}
 }

@@ -131,15 +131,16 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 			return w.NoteOperation(ctx, op.ID, "Candidate secrets unavailable")
 		}
 
-		signed, e := w.DownloadURL(ctx, artifact)
+		grant, e := w.ArtifactReadGrant(ctx, artifact)
 		if e != nil {
-			return w.NoteOperation(ctx, op.ID, "Artifact URL unavailable")
+			return w.NoteOperation(ctx, op.ID, "Artifact credentials unavailable")
 		}
 		payload := map[string]any{
 			"version": version,
 			"secrets": secrets,
 			"artifact": map[string]any{
-				"download_url":   signed,
+				"storage":        runtimeclient.ReadGrantPayload(grant),
+				"object_key":     "bundle.tar.gz",
 				"size":           artifact.Size,
 				"archive_sha256": artifact.ArchiveDigest,
 			},

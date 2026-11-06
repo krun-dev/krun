@@ -130,6 +130,10 @@ fingerprint；已有库与基线不一致时拒绝启动，由开发者显式重
 7. **配置示例必须可加载**：`config/development.example.yaml` 和 `config/example.yaml` 由测试覆盖；示例只能使用占位符，不能写真实凭据。
 8. **dev 拓扑保持一致**：local-first；控制面/Postgres/builder/Vite 在开发机；对象存储使用本地 MinIO 或主配置中声明的外部 S3/TOS。集群只保留 serving runtime、独立 validator + kgateway。变更拓扑时同步修改 `docs/local-dev.md` 和 `scripts/dev-*.sh`。
 
+本地真实 TOS/STS 联调凭据保存在本仓库 `.data/dev.yaml`：制品使用 `workers.s3_*` 与
+`workers.s3_runtime_credentials`，业务存储使用 `workers.object_storage`。后续调试直接读取
+这份配置，不把凭据复制到脚本、命令行参数、文档或记忆中；记忆只记录本段路径与用途。
+
 ## 9. 持久化设计约束（硬约束）
 
 方案与表结构见 [docs/storage.md](docs/storage.md)。

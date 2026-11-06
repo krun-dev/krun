@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/krun-dev/krun/internal/adapters/runtimeclient"
 	appconfig "github.com/krun-dev/krun/internal/config"
 )
 
@@ -113,7 +114,7 @@ func (s *Server) workerConfigResync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {
-	pool, allowed := s.workerRuntimePool(r)
+	pool, allowed := s.workerRuntimeServingPool(r)
 	if !allowed {
 		s.writeError(w, r, forbidden())
 		return
@@ -123,7 +124,15 @@ func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	s.json(w, 200, out)
+	w.Header().Set("Cache-Control", "no-store")
+	s.json(w, 200, map[string]any{
+		"artifact_id":    out.ID,
+		"object_key":     out.ObjectKey,
+		"archive_sha256": out.ArchiveDigest,
+		"module_sha256":  out.ModuleDigest,
+		"size":           out.Size,
+		"storage":        runtimeclient.ReadGrantPayload(out.Storage),
+	})
 }
 
 // workerRuntimeVersionSecrets is the only plaintext delivery path. It is
@@ -163,7 +172,7 @@ func (s *Server) workerRuntimeAck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) workerRuntimeVersionAssets(w http.ResponseWriter, r *http.Request) {
-	pool, allowed := s.workerRuntimePool(r)
+	pool, allowed := s.workerRuntimeServingPool(r)
 	if !allowed {
 		s.writeError(w, r, forbidden())
 		return
@@ -173,21 +182,32 @@ func (s *Server) workerRuntimeVersionAssets(w http.ResponseWriter, r *http.Reque
 		s.writeError(w, r, err)
 		return
 	}
-	s.json(w, 200, out)
+	var grant any
+	if out.Storage != nil {
+		grant = runtimeclient.ReadGrantPayload(*out.Storage)
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	s.json(w, 200, map[string]any{
+		"version_id": out.Version,
+		"config":     out.Config,
+		"files":      out.Files,
+		"storage":    grant,
+	})
 }
 
-func (s *Server) workerRuntimeVersionAssetURL(w http.ResponseWriter, r *http.Request) {
-	pool, allowed := s.workerRuntimePool(r)
+func (s *Server) workerRuntimeAssetCredentials(w http.ResponseWriter, r *http.Request) {
+	pool, allowed := s.workerRuntimeServingPool(r)
 	if !allowed {
 		s.writeError(w, r, forbidden())
 		return
 	}
-	out, err := s.runtimeApplication().AssetURL(r.Context(), r.PathValue("version"), r.PathValue("path"), pool)
+	grant, err := s.runtimeApplication().AssetCredentials(r.Context(), r.PathValue("version"), pool.ID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	s.json(w, 200, out)
+	w.Header().Set("Cache-Control", "no-store")
+	s.json(w, 200, runtimeclient.ReadGrantPayload(grant))
 }
 
 // A cold host resolves exactly one normalized route and immutable version.
@@ -205,24 +225,26 @@ func (s *Server) workerRuntimeConfigRoute(w http.ResponseWriter, r *http.Request
 	s.json(w, 200, out)
 }
 
-func (s *Server) workerRuntimeStaticAssetURL(w http.ResponseWriter, r *http.Request) {
-	pool, ok := s.workerRuntimePool(r)
-	if !ok {
+func (s *Server) workerRuntimeStaticAssetCredentials(w http.ResponseWriter, r *http.Request) {
+	pool, allowed := s.workerRuntimeServingPool(r)
+	if !allowed {
 		s.writeError(w, r, forbidden())
 		return
 	}
-	out, err := s.runtimeApplication().StaticAssetURL(
-		r.Context(),
-		r.PathValue("organization"),
-		r.PathValue("worker"),
-		r.PathValue("digest"),
-		r.PathValue("path"),
-		r.PathValue("prefix"),
-		pool,
+	grant, err := s.runtimeApplication().StaticAssetCredentials(
+		r.Context(), r.PathValue("organization"), r.PathValue("worker"),
+		r.PathValue("digest"), r.PathValue("prefix"), pool,
 	)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	s.json(w, 200, out)
+	w.Header().Set("Cache-Control", "no-store")
+	s.json(w, 200, runtimeclient.ReadGrantPayload(grant))
+}
+
+func (s *Server) workerRuntimeServingPool(r *http.Request) (appconfig.WorkerRuntimePool, bool) {
+	pool, allowed := s.workerRuntimePool(r)
+	serving := subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+pool.RuntimeToken))
+	return pool, allowed && serving == 1
 }

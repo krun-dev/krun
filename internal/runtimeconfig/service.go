@@ -66,12 +66,12 @@ func (s *Service) ReadChanges(ctx context.Context, pool string, since int64) (Ch
 }
 
 type Artifact struct {
-	ID            string `json:"artifact_id"`
-	ObjectKey     string `json:"object_key"`
-	DownloadURL   string `json:"download_url"`
-	ArchiveDigest string `json:"archive_sha256"`
-	ModuleDigest  string `json:"module_sha256"`
-	Size          int    `json:"size"`
+	ID            string                  `json:"artifact_id"`
+	ObjectKey     string                  `json:"object_key"`
+	Storage       domain.StorageReadGrant `json:"-"`
+	ArchiveDigest string                  `json:"archive_sha256"`
+	ModuleDigest  string                  `json:"module_sha256"`
+	Size          int                     `json:"size"`
 }
 
 func (s *Service) Artifact(ctx context.Context, id, pool string) (Artifact, error) {
@@ -79,11 +79,18 @@ func (s *Service) Artifact(ctx context.Context, id, pool string) (Artifact, erro
 	if err != nil {
 		return Artifact{}, err
 	}
-	url, err := s.Controller.DownloadURL(ctx, out)
+	grant, err := s.Controller.ArtifactReadGrant(ctx, out)
 	if err != nil {
 		return Artifact{}, domain.Problem(503, "ARTIFACT_UNAVAILABLE", "Artifact storage unavailable")
 	}
-	return Artifact{ID: out.ID, ObjectKey: out.ObjectKey, DownloadURL: url, ArchiveDigest: out.ArchiveDigest, ModuleDigest: out.ModuleDigest, Size: out.Size}, nil
+	return Artifact{
+		ID:            out.ID,
+		ObjectKey:     "bundle.tar.gz",
+		Storage:       grant,
+		ArchiveDigest: out.ArchiveDigest,
+		ModuleDigest:  out.ModuleDigest,
+		Size:          out.Size,
+	}, nil
 }
 
 type Secrets struct {
@@ -119,6 +126,7 @@ func (s *Service) Ack(ctx context.Context, pool string, in domain.WorkerAck) err
 }
 
 type Assets struct {
+	Storage *domain.StorageReadGrant            `json:"-"`
 	Version string                              `json:"version_id"`
 	Config  *domain.WorkerAssetsConfig          `json:"config"`
 	Files   []workerartifact.WorkerManifestFile `json:"files"`
@@ -129,43 +137,34 @@ func (s *Service) Assets(ctx context.Context, version, pool string) (Assets, err
 	if err != nil {
 		return Assets{}, err
 	}
-	return Assets{Version: assets.Version.ID, Config: assets.Config, Files: assets.Files}, nil
-}
-
-type AssetURL struct {
-	Path        string `json:"path"`
-	Digest      string `json:"sha256"`
-	Size        int    `json:"size_bytes"`
-	ContentType string `json:"content_type"`
-	DownloadURL string `json:"download_url"`
-}
-
-func (s *Service) AssetURL(ctx context.Context, version, name string, pool appconfig.WorkerRuntimePool) (AssetURL, error) {
-	assets, err := s.Controller.VersionAssets(ctx, version, pool.ID)
-	if err != nil {
-		return AssetURL{}, err
-	}
-	var file *workerartifact.WorkerManifestFile
-	for i := range assets.Files {
-		if assets.Files[i].Path == name {
-			file = &assets.Files[i]
-			break
+	out := Assets{Version: assets.Version.ID, Config: assets.Config, Files: assets.Files}
+	if assets.Config != nil {
+		grant, err := s.AssetCredentials(ctx, version, pool)
+		if err != nil {
+			return Assets{}, err
 		}
+		out.Storage = &grant
 	}
-	if file == nil {
-		return AssetURL{}, domain.NotFound()
+	return out, nil
+}
+
+func (s *Service) AssetCredentials(ctx context.Context, version, poolID string) (domain.StorageReadGrant, error) {
+	rel, artifact, err := s.Store.RuntimeVersion(ctx, version, poolID)
+	if err != nil {
+		return domain.StorageReadGrant{}, err
+	}
+	pool, ok := s.Config.RuntimePool(poolID)
+	if !ok || artifact.StorageLocation != s.Config.S3LocationID || artifact.Bucket != s.Config.S3Bucket {
+		return domain.StorageReadGrant{}, domain.NotFound()
 	}
 	prefix := "int"
 	if appconfig.RuntimePoolHasAccess(pool, "public") {
 		prefix = "pub"
 	}
-	key := workerapp.WorkerAssetObjectKey(prefix, assets.Version.Organization, assets.Version.Worker, assets.Artifact.ArchiveDigest, name)
-	url, err := s.Controller.S3Runtime.PresignedGetObject(ctx, s.Config.S3Bucket, key, 15*time.Minute, nil)
-	if err != nil {
-		return AssetURL{}, domain.Problem(503, "ASSET_UNAVAILABLE", "Asset storage unavailable")
-	}
-	return AssetURL{Path: file.Path, Digest: file.Digest, Size: file.Size, ContentType: file.ContentType, DownloadURL: url.String()}, nil
+	key := workerapp.WorkerAssetObjectKey(prefix, rel.Organization, rel.Worker, artifact.ArchiveDigest, "")
+	return s.Controller.ReadGrant(ctx, rel.Organization, artifact.ID, key)
 }
+
 func (s *Service) Route(ctx context.Context, host, pool string) (workerapp.WorkerConfigSnapshot, error) {
 	host = strings.ToLower(host)
 	if len(host) > 253 || strings.ContainsAny(host, "/\\: ") {
@@ -178,44 +177,26 @@ func (s *Service) Route(ctx context.Context, host, pool string) (workerapp.Worke
 	return workerapp.WorkerConfigSnapshot{Pool: pool, ConfigRevision: revision, Routes: projection.Routes, Versions: projection.Versions}, nil
 }
 
-// StaticAssetURL authorizes an immutable asset in this runtime pool. Private
-// external buckets never need anonymous access or a bucket-wide policy rewrite.
-func (s *Service) StaticAssetURL(
+// StaticAssetCredentials authorizes the same pub/int visibility as the static
+// origin. Its read-only scope includes one immutable site's asset directory.
+func (s *Service) StaticAssetCredentials(
 	ctx context.Context,
-	organization, service, digest, name, prefix string,
+	organization, worker, digest, prefix string,
 	pool appconfig.WorkerRuntimePool,
-) (AssetURL, error) {
+) (domain.StorageReadGrant, error) {
 	invalidPrefix := prefix != "pub" && prefix != "int"
 	invalidDigest := len(digest) != 64 || strings.Trim(digest, "0123456789abcdef") != ""
-	invalidOwner := organization == "" || service == "" ||
-		strings.ContainsAny(organization+service, "/\\")
+	invalidOwner := organization == "" || worker == "" || strings.ContainsAny(organization+worker, "/\\")
 	if invalidPrefix || invalidDigest || invalidOwner {
-		return AssetURL{}, domain.NotFound()
-	}
-	if _, ok := workerartifact.WorkerAssetPath(name); !ok {
-		return AssetURL{}, domain.NotFound()
+		return domain.StorageReadGrant{}, domain.NotFound()
 	}
 	access := "private"
 	if prefix == "pub" {
 		access = "public"
 	}
 	if !appconfig.RuntimePoolHasAccess(pool, access) {
-		return AssetURL{}, domain.Forbidden()
+		return domain.StorageReadGrant{}, domain.Forbidden()
 	}
-	file, err := s.Controller.StaticAsset(ctx, prefix, organization, service, digest, name)
-	if err != nil {
-		return AssetURL{}, err
-	}
-	key := workerapp.WorkerAssetObjectKey(prefix, organization, service, digest, name)
-	signed, err := s.Controller.S3Runtime.PresignedGetObject(ctx, s.Config.S3Bucket, key, 15*time.Minute, nil)
-	if err != nil {
-		return AssetURL{}, domain.Problem(503, "ASSET_UNAVAILABLE", "Asset storage unavailable")
-	}
-	return AssetURL{
-		Path:        name,
-		Digest:      file.Digest,
-		Size:        file.Size,
-		ContentType: file.ContentType,
-		DownloadURL: signed.String(),
-	}, nil
+	key := workerapp.WorkerAssetObjectKey(prefix, organization, worker, digest, "")
+	return s.Controller.ReadGrant(ctx, organization, worker+"/"+digest, key)
 }

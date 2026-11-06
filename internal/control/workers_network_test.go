@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	kubernetes "github.com/krun-dev/krun/internal/adapters/kubernetes"
+	"github.com/krun-dev/krun/internal/adapters/storagecredentials"
 	workerartifact "github.com/krun-dev/krun/internal/artifact"
 	appconfig "github.com/krun-dev/krun/internal/config"
 	workerapp "github.com/krun-dev/krun/internal/workers"
@@ -927,12 +928,16 @@ func TestProcessOperationValidationMembers(t *testing.T) {
 				t.Fatal(err)
 			}
 			controller := &workerapp.Controller{
-				Service: s.workerApplication(nil), Config: c, S3: s3, S3Builder: s3, S3Runtime: s3,
+				Service: s.workerApplication(nil), Config: c, S3: s3, S3Builder: s3,
 				Kube: &kubernetes.Client{Base: apiServer.URL, Namespace: c.Namespace, Client: apiServer.Client()},
 				Http: &http.Client{Transport: validationTransport{target: apiServer.URL, base: apiServer.Client().Transport}}, AssetCache: map[string]workerapp.WorkerCachedAssets{}, Replica: "test",
 			}
+			controller.ReadCredentials, err = storagecredentials.NewArtifactManager(c)
+			if err != nil {
+				t.Fatal(err)
+			}
 			version := WorkerVersion{ID: "rel-cas", Worker: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-cas", ArchiveDigest: code.ArchiveDigest, ModuleDigest: code.Digest}
-			artifact := WorkerArtifact{ID: "art-cas", Organization: "org-a", State: "finalized", Profile: code.Profile, ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: code.CompatibilityFlags, Size: len(raw), ObjectKey: "v1/org-a/archive.tar.gz", StorageLocation: "test", Bucket: "artifacts", Created: now()}
+			artifact := WorkerArtifact{ID: "art-cas", Organization: "org-a", State: "finalized", Profile: code.Profile, ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: code.CompatibilityFlags, Size: len(raw), ObjectKey: "v1/org-a/sha256/" + code.ArchiveDigest + "/bundle.tar.gz", StorageLocation: "test", Bucket: "artifacts", Created: now()}
 			op := WorkerOperation{ID: "op-cas", Kind: "publish", Worker: "svc-a", Organization: "org-a", Environment: "production", State: "validating", Version: version.ID, ExpectedRevision: 99, Created: now()}
 			encrypted, err := workerapp.EncryptWorkerSecret(c, "org-a", "svc-a", "production", "API_SECRET", "admin", "candidate-only")
 			if err != nil {

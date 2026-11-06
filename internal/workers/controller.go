@@ -27,20 +27,17 @@ import (
 type WorkerPutObject func(ctx context.Context, bucket, object string, reader io.Reader, size int64, opts objectstore.PutObjectOptions) (objectstore.UploadInfo, error)
 
 type Controller struct {
-	Service   *Service
-	Config    *appconfig.WorkersConfig
-	S3        objectstore.Client
-	S3LogRead objectstore.Client
-	PutObject WorkerPutObject
-	// Builder and runtime URLs may use different network views of the same
-	// immutable bucket. Presigning is offline; the control process need not
-	// resolve either endpoint.
+	ReadCredentials ReadCredentialSource
+	Service         *Service
+	Config          *appconfig.WorkersConfig
+	S3              objectstore.Client
+	S3LogRead       objectstore.Client
+	PutObject       WorkerPutObject
+	// Builder uploads can use a different network view of the same bucket.
 	S3Builder objectstore.Client
-	S3Runtime objectstore.Client
 	Kube      *kubernetes.Client
 	Http      runtimeclient.Doer
-	// Parsed asset manifests are immutable per artifact; cache them so presigning
-	// a single file does not re-download the archive.
+	// Cache immutable manifests independently of the scoped read grants.
 	assetFlights singleflight.Group
 	assetMu      sync.RWMutex
 	AssetCache   map[string]WorkerCachedAssets
@@ -84,13 +81,6 @@ func NewController(s *Service) (*Controller, error) {
 			return nil, e
 		}
 	}
-	s3Runtime := s3Builder
-	if s.Config.Workers.S3RuntimeEndpoint != s.Config.Workers.S3BuilderEndpoint {
-		s3Runtime, e = NewWorkerS3Endpoint(s.Config.Workers, s.Config.Workers.S3RuntimeEndpoint)
-		if e != nil {
-			return nil, e
-		}
-	}
 	s3LogRead := s3
 	if endpoint := s.Config.Workers.S3LogReadEndpoint; endpoint != "" && endpoint != s.Config.Workers.S3Endpoint {
 		s3LogRead, e = NewWorkerS3Endpoint(s.Config.Workers, endpoint)
@@ -102,7 +92,7 @@ func NewController(s *Service) (*Controller, error) {
 	if e != nil {
 		return nil, e
 	}
-	controller := &Controller{Service: s, Config: s.Config.Workers, S3: s3, S3LogRead: s3LogRead, PutObject: s3.PutObject, S3Builder: s3Builder, S3Runtime: s3Runtime, Kube: k, Http: runtimeclient.New(), AssetCache: map[string]WorkerCachedAssets{}, localBuilds: map[string]*WorkerLocalBuild{}, Replica: WorkerReplicaID()}
+	controller := &Controller{Service: s, Config: s.Config.Workers, S3: s3, S3LogRead: s3LogRead, PutObject: s3.PutObject, S3Builder: s3Builder, Kube: k, Http: runtimeclient.New(), AssetCache: map[string]WorkerCachedAssets{}, localBuilds: map[string]*WorkerLocalBuild{}, Replica: WorkerReplicaID()}
 	s.Controller = controller
 	return controller, nil
 }

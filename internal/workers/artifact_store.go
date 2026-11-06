@@ -146,21 +146,6 @@ func (w *Controller) BuildURLTTL() time.Duration {
 	return time.Duration(seconds+300) * time.Second
 }
 
-// Runtime artifact URLs use the runtime's own network view. In a full
-// in-cluster deployment this normally equals the builder endpoint; local-first
-// keeps the builder local while the runtime reaches MinIO through a selectorless
-// Service, so the two endpoints must be independently configurable.
-func (w *Controller) DownloadURL(ctx context.Context, a domain.WorkerArtifact) (string, error) {
-	if a.StorageLocation != w.Config.S3LocationID || a.Bucket != w.Config.S3Bucket {
-		return "", errors.New("artifact storage location mismatch")
-	}
-	u, e := w.S3Runtime.PresignedGetObject(ctx, w.Config.S3Bucket, a.ObjectKey, 15*time.Minute, nil)
-	if e != nil {
-		return "", e
-	}
-	return u.String(), nil
-}
-
 func WorkerUploadKey(b domain.WorkerBuild) string {
 	return "uploads/" + b.Organization + "/" + b.ID + "/bundle.tar.gz"
 }
@@ -220,33 +205,4 @@ func (w *Controller) PutAssetObjects(ctx context.Context, b domain.WorkerBuild, 
 		failures = append(failures, err)
 	}
 	return errors.Join(failures...)
-}
-
-// StaticAsset reads only immutable per-file asset metadata. Static domains have
-// the same visibility as the former pub/int origins, independently of pool placement.
-func (w *Controller) StaticAsset(ctx context.Context, prefix, organization, worker, digest, name string) (workerartifact.WorkerManifestFile, error) {
-	key := WorkerAssetObjectKey(prefix, organization, worker, digest, name)
-	info, err := w.S3.StatObject(ctx, w.Config.S3Bucket, key, objectstore.StatObjectOptions{})
-	if err != nil {
-		if objectstore.ToErrorResponse(err).Code == "NoSuchKey" {
-			return workerartifact.WorkerManifestFile{}, domain.NotFound()
-		}
-		return workerartifact.WorkerManifestFile{}, err
-	}
-	hash := ""
-	for key, value := range info.UserMetadata {
-		if strings.EqualFold(key, "krun-sha256") {
-			hash = value
-		}
-	}
-	if len(hash) != 64 || strings.Trim(hash, "0123456789abcdef") != "" || info.Size < 0 || info.Size > workerartifact.WorkerAssetMax {
-		return workerartifact.WorkerManifestFile{}, domain.NotFound()
-	}
-	kind, _ := workerartifact.WorkerAssetType(name)
-	return workerartifact.WorkerManifestFile{
-		Path:        name,
-		Digest:      hash,
-		Size:        int(info.Size),
-		ContentType: kind,
-	}, nil
 }
