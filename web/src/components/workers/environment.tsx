@@ -287,25 +287,32 @@ export function Invocation({ base, env }: { base: string; env: Environment }) {
             }
           }}
         >
-          <div className="flex gap-3">
-            <div className="w-28">
-              <SelectField
-                label={t("请求方法")}
-                value={method}
-                onChange={setMethod}
-              >
-                {["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((m) => (
-                  <option key={m}>{m}</option>
-                ))}
-              </SelectField>
-            </div>
-            <Input
-              aria-label={t("请求路径")}
-              value={path}
-              onChange={(e) => setPath(e.target.value)}
-              placeholder="/orders?id=1"
-              required
-            />
+          <div className="grid gap-3 sm:grid-cols-[7rem_minmax(0,1fr)_auto] sm:items-end">
+            <SelectField
+              label={t("请求方法")}
+              value={method}
+              onChange={setMethod}
+            >
+              {["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((m) => (
+                <option key={m}>{m}</option>
+              ))}
+            </SelectField>
+            <Field label={t("请求路径")}>
+              <Input
+                aria-label={t("请求路径")}
+                value={path}
+                onChange={(e) => setPath(e.target.value)}
+                placeholder="/orders?id=1"
+                required
+              />
+            </Field>
+            <Button
+              className="w-fit"
+              disabled={busy || !env.enabled || !env.version_id}
+              type="submit"
+            >
+              {busy ? t("调用中…") : t("发送请求")}
+            </Button>
           </div>
           {method !== "GET" && method !== "HEAD" ? (
             <Field label={t("请求体")}>
@@ -316,13 +323,6 @@ export function Invocation({ base, env }: { base: string; env: Environment }) {
               />
             </Field>
           ) : null}
-          <Button
-            className="w-fit"
-            disabled={busy || !env.enabled || !env.version_id}
-            type="submit"
-          >
-            {busy ? t("调用中…") : t("发送请求")}
-          </Button>
         </form>
         {!env.version_id ? (
           <p className="text-sm text-muted-foreground">{t("先发布到此环境，再发送请求。")}</p>
