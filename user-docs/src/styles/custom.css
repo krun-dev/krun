@@ -140,14 +140,19 @@
   margin: 0 8px;
   background: #e0e7e2;
 }
+@media (min-width: 50rem) {
+  :root {
+    /* Sidebar group labels include 0.5rem of item padding. */
+    --sl-nav-pad-x: calc(var(--sl-sidebar-pad-x) + 0.5rem);
+  }
+}
 @media (min-width: 72rem) {
   :root {
     --sl-sidebar-width: 20rem;
+    --sl-sidebar-pad-x: max(1rem, calc(var(--sl-sidebar-width) - 210px - 22px));
     --sl-content-pad-x: 3rem;
-    --sl-nav-pad-x: 5%;
   }
   .sidebar-content {
-    padding-left: max(1rem, calc(100% - 210px - 22px));
     padding-right: 22px;
   }
 }
