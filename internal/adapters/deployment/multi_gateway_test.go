@@ -26,95 +26,109 @@ func multiFixture(t *testing.T) config.Config {
 }
 
 func TestThreeGatewaysKeepPoolsAndConsoleIsolated(t *testing.T) {
-	c := multiFixture(t)
-	out := t.TempDir()
-	if err := Render(c, out); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(filepath.Join(out, "resources.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var list struct{ Items []map[string]any }
-	if err := json.Unmarshal(raw, &list); err != nil {
-		t.Fatal(err)
-	}
-	seen := map[string]bool{}
-	deployments := 0
-	for _, item := range list.Items {
-		kind := item["kind"].(string)
-		meta := item["metadata"].(map[string]any)
-		name := meta["name"].(string)
-		key := kind + "/" + name
-		if seen[key] {
-			t.Fatalf("duplicate resource %s", key)
-		}
-		seen[key] = true
-		if kind == "Gateway" {
-			t.Fatal("created infrastructure Gateway")
-		}
-		if kind == "Deployment" {
-			deployments++
-			spec := item["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
-			if spec["hostNetwork"] == true {
-				t.Fatal("host network enabled")
+	for _, selected := range []string{"", "office"} {
+		t.Run("validator_pool="+selected, func(t *testing.T) {
+			c := multiFixture(t)
+			if selected != "" {
+				c.Workers.ValidatorPool = selected + "-a"
 			}
-		}
-		if kind == "HTTPRoute" {
-			spec := item["spec"].(map[string]any)
-			parents := spec["parentRefs"].([]any)
-			if len(parents) != 1 || parents[0].(map[string]any)["name"] != "krun-office" {
-				t.Fatal("console exposed outside office gateway")
+			out := t.TempDir()
+			if err := Render(c, out); err != nil {
+				t.Fatal(err)
 			}
-		}
-		if name == "krun-console" && kind != "HTTPRoute" {
-			t.Fatal("renderer created a frontend proxy resource")
-		}
-		if kind == "Role" && strings.HasSuffix(name, "gateway-reader") {
-			rules := item["rules"].([]any)
-			names := rules[0].(map[string]any)["resourceNames"].([]any)
-			if len(names) != 3 {
-				t.Fatal("missing gateway read permissions")
+			raw, err := os.ReadFile(filepath.Join(out, "resources.json"))
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-		if kind != "NetworkPolicy" {
-			continue
-		}
-		if !strings.HasPrefix(name, "runtime-") && !strings.HasPrefix(name, "validator-") {
-			continue
-		}
-		spec := item["spec"].(map[string]any)
-		incoming := spec["ingress"].([]any)
-		expectedRules := 1
-		if strings.HasPrefix(name, "runtime-") {
-			expectedRules = 2
-		}
-		if len(incoming) != expectedRules {
-			t.Fatalf("unexpected ingress for %s", name)
-		}
-		if expectedRules == 2 {
-			peers := incoming[1].(map[string]any)["from"].([]any)
-			if len(peers) != 1 {
-				t.Fatalf("pool %s permits multiple gateways", name)
+			var list struct{ Items []map[string]any }
+			if err := json.Unmarshal(raw, &list); err != nil {
+				t.Fatal(err)
 			}
-			labels := peers[0].(map[string]any)["podSelector"].(map[string]any)["matchLabels"].(map[string]any)
-			if labels["gateway.networking.k8s.io/gateway-name"] != "krun-"+strings.TrimPrefix(name, "runtime-") {
-				t.Fatal("cross-zone gateway ingress")
+			seen := map[string]bool{}
+			deployments := 0
+			for _, item := range list.Items {
+				kind := item["kind"].(string)
+				meta := item["metadata"].(map[string]any)
+				name := meta["name"].(string)
+				key := kind + "/" + name
+				if seen[key] {
+					t.Fatalf("duplicate resource %s", key)
+				}
+				seen[key] = true
+				if kind == "Gateway" {
+					t.Fatal("created infrastructure Gateway")
+				}
+				if kind == "Deployment" {
+					deployments++
+					spec := item["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+					if spec["hostNetwork"] == true {
+						t.Fatal("host network enabled")
+					}
+				}
+				if kind == "HTTPRoute" {
+					spec := item["spec"].(map[string]any)
+					parents := spec["parentRefs"].([]any)
+					if len(parents) != 1 || parents[0].(map[string]any)["name"] != "krun-office" {
+						t.Fatal("console exposed outside office gateway")
+					}
+				}
+				if name == "krun-console" && kind != "HTTPRoute" {
+					t.Fatal("renderer created a frontend proxy resource")
+				}
+				if kind == "Role" && strings.HasSuffix(name, "gateway-reader") {
+					rules := item["rules"].([]any)
+					names := rules[0].(map[string]any)["resourceNames"].([]any)
+					if len(names) != 3 {
+						t.Fatal("missing gateway read permissions")
+					}
+				}
+				if kind != "NetworkPolicy" {
+					continue
+				}
+				if !strings.HasPrefix(name, "runtime-") && !strings.HasPrefix(name, "validator-") {
+					continue
+				}
+				spec := item["spec"].(map[string]any)
+				incoming := spec["ingress"].([]any)
+				expectedRules := 1
+				if strings.HasPrefix(name, "runtime-") {
+					expectedRules = 2
+				}
+				if len(incoming) != expectedRules {
+					t.Fatalf("unexpected ingress for %s", name)
+				}
+				if expectedRules == 2 {
+					peers := incoming[1].(map[string]any)["from"].([]any)
+					if len(peers) != 1 {
+						t.Fatalf("pool %s permits multiple gateways", name)
+					}
+					labels := peers[0].(map[string]any)["podSelector"].(map[string]any)["matchLabels"].(map[string]any)
+					if labels["gateway.networking.k8s.io/gateway-name"] != "krun-"+strings.TrimPrefix(name, "runtime-") {
+						t.Fatal("cross-zone gateway ingress")
+					}
+				}
 			}
-		}
-	}
-	if deployments != 7 {
-		t.Fatalf("want control + 3 serving + 3 validators, got %d", deployments)
-	}
-	for _, zone := range []string{"internal", "office", "public"} {
-		if seen["Service/krun-"+zone] {
-			t.Fatal("created gateway Service")
-		}
-		for _, prefix := range []string{"runtime-", "validator-"} {
-			if !seen["Deployment/"+prefix+zone] {
-				t.Fatal("missing runtime")
+			expectedDeployments := 4
+			if selected != "" {
+				expectedDeployments++
 			}
-		}
+			if deployments != expectedDeployments {
+				t.Fatalf("want control + 3 serving + optional shared validator, got %d", deployments)
+			}
+			for _, zone := range []string{"internal", "office", "public"} {
+				if seen["Service/krun-"+zone] {
+					t.Fatal("created gateway Service")
+				}
+				if !seen["Deployment/runtime-"+zone] {
+					t.Fatal("missing runtime")
+				}
+				for _, kind := range []string{"Deployment", "Service", "Secret", "ConfigMap", "NetworkPolicy"} {
+					if seen[kind+"/validator-"+zone] != (zone == selected) {
+						t.Fatalf("unexpected validator resources: %s/%s", kind, zone)
+					}
+				}
+			}
+		})
 	}
 }
 

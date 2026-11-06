@@ -6,9 +6,26 @@ rollout 或跨池迁移 API。
 
 ## 资源池与服务分配
 
-`runtime_pools` 定义池 ID、public/private 入口能力、标签、出口能力、serving Service、
-独立 validator Service，以及两个不同的认证 token。serving 和 validator 不能复用同一
-Service 或凭据。每个池对应部署侧维护的 workerd 运行环境。
+`runtime_pools` 定义池 ID、public/private 入口能力、标签、出口能力、serving Service
+及认证凭据。每个池对应部署侧维护的 workerd 运行环境。
+
+候选校验有两种模式，在同一主配置的 `workers:` 段二选一：
+
+- `validator_pool: ""`（默认）：从业务当前 placement 的 Ready serving Pod 中选一个。
+  不额外创建 validator；候选使用独立 WorkerLoader 实例和 Cache API 命名空间，禁用
+  对象存储签名和传输。候选与业务共享进程 CPU、内存，失败或资源耗尽仍可能影响业务。
+- `validator_pool: <pool-id>`：所有业务 pool 共用所选池的独立 validator。所选池必须
+  配置 `validator_service`，且与 serving Service 不同；渲染器只为该池创建独立 validator
+  Deployment、管理 Service、配置及 NetworkPolicy，不接受 Gateway 入站。
+
+控制面使用目标池的 management token，并仅发送本次候选的不可变描述符、短时制品 URL
+及绑定的 Secret 值。不会把业务池 runtime token 交给共享 validator；内部数据接口的
+placement 权限保持不变。校验后再次检查 Ready EndpointSlice 成员，变化时重试。
+无可用成员时等待，不跨模式回退。
+
+先升级 runtime 镜像，再升级控制面。控制面通过 `/ready` 的 `validation_protocol: 1`、
+role、pool 和 Pod UID 确认能力，旧镜像不会执行候选。已有独立 validator 不会被渲染器
+自动删除，切换模式并确认发布成功后，由运维显式清理未再使用的资源。
 
 组织用户选择 `network_profiles` 中公开且获准使用的产品配置。Profile 通过
 `pool_selector`、`domain_selector` 与入口/出口 requirements 筛选基础设施；名称和 ID

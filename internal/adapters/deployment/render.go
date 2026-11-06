@@ -194,6 +194,9 @@ func validate(c config.Config) error {
 			return errors.New("deployment requires cluster-native validator addresses")
 		}
 		for _, name := range []string{p.RuntimeService, p.ValidatorService} {
+			if name == "" {
+				continue
+			}
 			if services[name] {
 				return errors.New("deployment runtime and validator service names must be unique and not reserved")
 			}
@@ -375,6 +378,9 @@ func (r *renderer) resources() error {
 	for _, pool := range r.cfg.Workers.RuntimePools {
 		r.pool = pool
 		for _, validator := range []bool{false, true} {
+			if validator && r.cfg.Workers.ValidatorPool != pool.ID {
+				continue
+			}
 			text, err := runtimebundle.Render(r.cfg.Workers, r.pool, controlAddress, networks, validator)
 			if err != nil {
 				return err

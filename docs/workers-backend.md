@@ -16,7 +16,7 @@ sequenceDiagram
     participant A as Go 控制服务
     participant J as Kubernetes 构建 Job
     participant S as S3 制品存储
-    participant V as validator workerd
+    participant V as 选中的 workerd
     participant W as workerd × 2
     C->>A: 上传源码，创建 Build
     A-->>C: 202 + queued Build
@@ -28,7 +28,7 @@ sequenceDiagram
     A->>A: Build succeeded，登记 Artifact
     C->>A: build_id + 环境 + expected_revision
     A-->>C: 202 + queued Operation
-    A->>V: 在独立 validator 加载候选 Version（冷加载 + RPC）
+    A->>V: 在选中成员加载候选 Version（隔离实例 + RPC）
     A->>A: CAS 提交 Version，Operation committed
     A->>A: 生成 config revision（routes + versions 的不可变投影）
     A->>S: 写入受影响的 host-hash shard checkpoint 与 compact latest.json
@@ -96,12 +96,12 @@ Deployment 独立记录目标 Version、Operation、创建时间、30 天的固�
 Previews Base 使用独立配置范围；新建 Preview 复制其普通变量与不可变 Secret 引用，后续 Base 修改只影响新建 Preview，生产配置独立。`GET/PATCH /previews-base` 管理基础变量，`PATCH /previews-base/secrets` 管理基础密钥。
 Secret 的普通写操作会自动部署：`PUT`（新增或轮换）和 `DELETE` 都创建不可变 Version 并立即进入发布流程，但复用当前 Artifact，不重新构建代码。每个环境保存 name → secret version 的期望映射，每个 Version 再固定一份映射，因此轮换后仍能准确回滚。值以 AES-256-GCM 加密后入库，AAD 绑定组织、服务、环境、名称和版本；公开 API 只返回名称与创建时间。首次部署前可以保存 Secret；`deploy:false` 只生成配置版本，批量接口 `PATCH /environments/{env}/secrets` 使用 name → value/null 表示新增、轮换或删除，一批变更只生成一个版本。`workers.secrets_keys` 是带版本的 key ring，`secrets_active_key` 只用于新写入，仍被保留 Version 引用的旧 key 不得删除。生产 key 应由 KMS/Secret Manager 注入配置，而不是提交到仓库。
 
-发布 API 提交 `expected_revision`，防止覆盖其他发布。幂等 key 相同且请求相同返回原对象；内容不同返回 409。候选验证失败不会修改 Version。每个 pool 必须配置与 serving Service 不同的 `validator_service`；控制面只从该 Service 的 Ready EndpointSlice 选择带 `role=krun-validator` 的 Pod。validator 使用相同 runtime 镜像和 Version/Secret 快照，但没有业务监听 Service、Gateway 入站、配置跟随或 Ack。生产部署仍应把它放进 gVisor、Kata 或 VM 等适合不可信代码的隔离边界。
+发布 API 提交 `expected_revision`，防止覆盖其他发布。幂等 key 相同且请求相同返回原对象；内容不同返回 409。候选验证失败不会修改 Version。默认从业务 pool 的 Ready serving Pod 校验；设置 `workers.validator_pool` 则使用所选池的独立 validator，供所有业务 pool 共用。候选的 WorkerLoader、缓存和存储能力与 serving 隔离；默认模式仍共享进程资源。需要进程隔离时选择独立 validator，它没有业务监听 Service、Gateway 入站、配置跟随或 Ack。配置见 [资源池](workers-pools.md)。
 
 | Operation 状态 | 含义 |
 | --- | --- |
 | `queued` | 已持久化，尚未执行 |
-| `validating` | 正在检查制品并在独立 validator 中加载候选、执行顶层作用域和 `KrunValidation` |
+| `validating` | 正在检查制品并在选中成员的隔离实例中加载候选、执行顶层作用域和 `KrunValidation` |
 | `committed` | Version 已提交，正在等待 runtime 同步 |
 | `available` | 当前 serving 成员已采用包含该 Version 的配置 revision 并发送新鲜 Ack；不表示每个成员都已加载业务 isolate |
 | `failed` | 提交前失败，或候选准备超过 deadline |
@@ -145,7 +145,7 @@ URI 路径、query、method、body 保留；网关和入口清除客户端伪造
 
 控制面不可用时，已运行的 Pod 继续用最后一份内存视图服务；新 Pod 仍可从对象存储 bootstrap。尚未缓存的 Version 冷加载仍需控制面签发短时 presigned URL，因此“新版本冷启动”依赖控制面，“已加载版本继续服务”不依赖。
 
-controller 不对 serving Pod 做候选管理 RPC。`/validate` 只在独立 validator 成员上冷加载并运行 `KrunValidation`；commit 后由配置流传播，controller 通过 `worker_runtime_acks` 观察收敛，`available` 表示当前 serving 成员都已上报该 revision。serving readiness 只要求配置视图已加载；Version 在首次请求时懒加载，避免 Pod 启动成本随服务数量线性增长。validator readiness 不启动配置跟随或 Ack，也没有业务 socket。
+controller 默认对业务 pool 的 Ready serving Pod 调用 `/validate`，配置 `validator_pool` 后改用独立 validator。该接口总是在校验专用的 WorkerLoader 实例中加载并运行 `KrunValidation`；commit 后由配置流传播，controller 通过 `worker_runtime_acks` 观察收敛，`available` 表示当前 serving 成员都已上报该 revision。serving readiness 只要求配置视图已加载；Version 在首次请求时懒加载，避免 Pod 启动成本随服务数量线性增长。validator readiness 不启动配置跟随或 Ack，也没有业务 socket。
 
 资源池和 Network Profile 来自主 YAML，使用有效 placement 限定路由和内部数据访问；
 当前模型见 [资源池配置](workers-pools.md)。Secret binding 已支持，Service/DB binding 不在当前范围。

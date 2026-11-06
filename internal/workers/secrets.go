@@ -51,6 +51,24 @@ func WorkerSecretsDigest(versions map[string]string) string {
 	return workerartifact.BytesDigest(raw)
 }
 
+// DecryptWorkerSecrets resolves exactly one immutable Version's secret bindings.
+func DecryptWorkerSecrets(config *appconfig.WorkersConfig, digest string, encrypted []domain.EncryptedWorkerSecret) (map[string]string, error) {
+	values := make(map[string]string, len(encrypted))
+	versions := make(map[string]string, len(encrypted))
+	for _, item := range encrypted {
+		value, err := DecryptWorkerSecret(config, item)
+		if err != nil {
+			return nil, domain.Problem(503, "WORKER_SECRET_UNAVAILABLE", "Worker secret unavailable")
+		}
+		values[item.Version.Name] = value
+		versions[item.Version.Name] = item.Version.ID
+	}
+	if WorkerSecretsDigest(versions) != digest {
+		return nil, domain.Problem(503, "WORKER_SECRET_UNAVAILABLE", "Worker secret binding mismatch")
+	}
+	return values, nil
+}
+
 func WorkerSecretNameValid(name string) bool {
 	return WorkerBindingName.MatchString(name) && !strings.HasPrefix(name, "KRUN_")
 }

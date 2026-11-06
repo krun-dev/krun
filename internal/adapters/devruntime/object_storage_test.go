@@ -12,6 +12,7 @@ import (
 func TestObjectStoragePinsTransportWithoutRenderingIssuerCredentials(t *testing.T) {
 	t.Chdir(filepath.Join("..", "..", ".."))
 	cfg := config.Config{InternalListen: "0.0.0.0:9001", Workers: &config.WorkersConfig{
+		ValidatorPool:     "default",
 		S3RuntimeEndpoint: "http://192.0.2.20:9000", ConfigBaseURL: "http://192.0.2.20:9000/artifacts/config",
 		RuntimePools:  []config.WorkerRuntimePool{{ID: "default", Default: true, RuntimeToken: "fixture-serving", ValidatorToken: "fixture-validator", ManagementToken: "fixture-management"}},
 		ObjectStorage: &config.WorkerObjectStorageConfig{DefaultStore: "data", Stores: []config.WorkerObjectStore{{ID: "data", Endpoint: "https://Storage.Example.com:443", AddressingStyle: "virtual", Bucket: "physical-data", Credentials: config.WorkerStorageCredentialConfig{SecretAccessKey: "issuer-must-stay-in-control-plane"}}}},

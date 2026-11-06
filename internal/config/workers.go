@@ -26,6 +26,9 @@ type WorkersConfig struct {
 	// deployment-defined network profiles; access modes, pool ids and services
 	// never leave the system scope.
 	RuntimePools []WorkerRuntimePool `json:"runtime_pools"`
+	// ValidatorPool optionally selects one pool's dedicated validator for all
+	// candidates. Empty selects a Ready serving Pod in the business pool.
+	ValidatorPool string `json:"validator_pool,omitempty"`
 	// NetworkProfiles are the deployment-defined product choices shown to
 	// organization users. Profiles describe intent; pool ids, Gateway names and
 	// enforcement details remain infrastructure-only.
@@ -81,7 +84,8 @@ type WorkerRuntimePool struct {
 	PublicEgress   string            `json:"public_egress"`
 	RuntimeService string            `json:"runtime_service"`
 	// ValidatorService selects a dedicated workerd Deployment that loads version
-	// candidates before commit. It must not be the serving RuntimeService.
+	// candidates before commit when selected by ValidatorPool. It must not be
+	// the serving RuntimeService; other pools may omit it.
 	ValidatorService        string `json:"validator_service"`
 	ValidatorManagementBase string `json:"validator_management_base"`
 	RuntimeToken            string `json:"runtime_token"`

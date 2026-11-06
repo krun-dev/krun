@@ -37,6 +37,7 @@ func fixture(t *testing.T) config.Config {
 }
 func TestProductionResourcesPreserveConfigAndIsolateCredentials(t *testing.T) {
 	c := fixture(t)
+	c.Workers.ValidatorPool = c.Workers.RuntimePools[0].ID
 	// Credentials containing dollar expressions must survive the container's
 	// second LoadConfig pass without consulting unrelated environment values.
 	c.Workers.S3SecretKey = "artifact-secret-${literal}-$token"

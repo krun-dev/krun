@@ -58,10 +58,22 @@ const source = project
   ? readFileSync(project.source, "utf8")
   : `import { env as imported, WorkerEntrypoint } from 'cloudflare:workers';
 const atModuleScope = imported.BUCKET;
+let validationTouched = false;
 export default class extends WorkerEntrypoint {
   async fetch(request) {
     if (atModuleScope !== this.env.BUCKET || typeof atModuleScope.resumeMultipartUpload !== 'function') {
       throw new Error('binding initialization mismatch');
+    }
+    if (new URL(request.url).pathname === '/validation-storage-prime') {
+      return Response.json(await this.env.BUCKET.head('validation-must-not-write'));
+    }
+    if (new URL(request.url).pathname === '/validation-state') {
+      const cached = await caches.default.match('https://cached.fixture.test/item');
+      return Response.json({
+        validationTouched,
+        secret: this.env.TEST_SECRET ?? null,
+        cached: cached ? await cached.text() : null,
+      });
     }
     if (new URL(request.url).pathname === '/download') {
       const object = await this.env.BUCKET.get('large.bin');
@@ -176,7 +188,27 @@ export default class extends WorkerEntrypoint {
   }
 }
 export class KrunValidation extends WorkerEntrypoint {
-  ping() { return { ok: true }; }
+  async ping() {
+    validationTouched = true;
+    if (this.env.TEST_SECRET !== 'candidate-only') {
+      throw new Error('Candidate secret was not supplied');
+    }
+    const key = 'https://cached.fixture.test/item';
+    if (await caches.default.match(key)) {
+      throw new Error('Serving cache leaked into validation');
+    }
+    await caches.default.put(key, new Response('candidate-cache'));
+    let denied = false;
+    try {
+      await this.env.BUCKET.put('validation-must-not-write', 'candidate');
+    } catch (error) {
+      denied = error.message === 'Storage signer unavailable';
+    }
+    if (!denied) {
+      throw new Error('Validation obtained object storage access');
+    }
+    return { ok: true };
+  }
 }
 `;
 
@@ -217,6 +249,7 @@ const descriptor = {
   },
 };
 let grantRequests = 0;
+let secretRequests = 0;
 let firstStorageData;
 const storageStarted = new Promise((resolve) => {
   firstStorageData = resolve;
@@ -429,6 +462,9 @@ const grant = liveGrant
     }
   : mockGrant;
 const platform = http.createServer((request, response) => {
+  if (request.url.endsWith("/secrets")) {
+    secretRequests++;
+  }
   response.setHeader("content-type", "application/json");
   const url = new URL(request.url, "http://platform");
   if (url.pathname === "/archive") {
@@ -522,15 +558,16 @@ const protocol =
     : "http=" + objectOptions;
 const objectService =
   '(name="objects",external=(address=' + JSON.stringify(address) + "," + protocol + "))";
+const managementPort = await freePort();
 const config = `using W=import "/workerd/workerd.capnp";
 const config :W.Config=(services=[
  (name="entry",worker=(modules=[${modules}],compatibilityDate="2026-09-28",compatibilityFlags=["experimental","enable_ctx_exports","enable_request_signal","request_signal_passthrough"],bindings=[${sources},(name="CACHE_SOURCE",text=embed ${JSON.stringify(path.join(root, "cache.js"))}),
- (name="LOADER",workerLoader=(id="r2-smoke")),(name="PLATFORM",service="platform"),(name="POD_UID",text="uid"),(name="POD_NAME",text="pod"),(name="RUNTIME_POOL",text="default"),(name="RUNTIME_TOKEN",text="test"),
+ (name="LOADER",workerLoader=(id="r2-smoke")),(name="PLATFORM",service="platform"),(name="POD_UID",text="uid"),(name="POD_NAME",text="pod"),(name="RUNTIME_POOL",text="default"),(name="RUNTIME_TOKEN",text="test"),(name="MANAGEMENT_TOKEN",text="test-management"),
  (name="OBJECT_STORES",text=${JSON.stringify(JSON.stringify({ primary: { binding: "OBJECT_STORE_0" } }))}),(name="OBJECT_STORE_0",service="objects")],globalOutbound="network")),
  (name="platform",external=(address="127.0.0.1:${platformPort}",http=())),
  ${objectService},
  (name="network",network=(allow=["127.0.0.1/32"]))],
- sockets=[(name="private",address="127.0.0.1:${port}",http=(),service=(name="entry",entrypoint="Private"))]);`;
+ sockets=[(name="management",address="127.0.0.1:${managementPort}",http=(),service=(name="entry",entrypoint="Management")),(name="private",address="127.0.0.1:${port}",http=(),service=(name="entry",entrypoint="Private"))]);`;
 // Use JSON escaping for the nested text binding instead of Cap'n Proto escapes.
 const configPath = path.join(directory, "runtime.capnp");
 writeFileSync(configPath, config);
@@ -617,6 +654,61 @@ try {
         type: "text/plain",
       });
     }
+    // Validate on an already-serving Pod with a cached storage grant. Candidate
+    // bindings and loader state must remain separate from the serving instance.
+    await requestWorker("/cache-fixture", { method: "POST" });
+    const beforeValidation = await (await requestWorker("/validation-state")).json();
+    assert.deepEqual(beforeValidation, {
+      validationTouched: false,
+      secret: null,
+      cached: "0123456789",
+    });
+    const prime = await requestWorker("/validation-storage-prime");
+    assert.equal(prime.status, 200, await prime.text());
+    const grantsBefore = grantRequests;
+    assert.ok(grantsBefore > 0, "serving did not cache storage credentials");
+    const readiness = await (await fetch(`http://127.0.0.1:${managementPort}/ready`)).json();
+    assert.equal(readiness.validation_protocol, 1);
+    assert.equal(readiness.role, "runtime");
+    const candidate = { ...descriptor, secret_digest: "candidate-digest" };
+    const validateCandidate = (version, secrets) =>
+      fetch(`http://127.0.0.1:${managementPort}/validate`, {
+        method: "POST",
+        headers: { authorization: "Bearer test-management", "content-type": "application/json" },
+        body: JSON.stringify({
+          version,
+          artifact: {
+            download_url: `http://127.0.0.1:${platformPort}/archive`,
+            size: archive.length,
+            archive_sha256: sha(archive),
+          },
+          secrets,
+        }),
+      });
+    const rejected = await validateCandidate(
+      { ...candidate, id: "bad-secret" },
+      {
+        version_id: "different-version",
+        secret_digest: candidate.secret_digest,
+        values: { TEST_SECRET: "candidate-only" },
+      },
+    );
+    assert.equal(rejected.status, 503, await rejected.text());
+    const validation = await validateCandidate(candidate, {
+      version_id: candidate.id,
+      secret_digest: candidate.secret_digest,
+      values: { TEST_SECRET: "candidate-only" },
+    });
+    assert.equal(validation.status, 200, (await validation.text()) + output);
+    assert.equal(grantRequests, grantsBefore, "validation requested storage credentials");
+    assert.equal(secretRequests, 0, "validation fetched source-pool secrets with the target token");
+    assert.ok(![...objects.keys()].some((key) => key.endsWith("/validation-must-not-write")));
+    assert.deepEqual(
+      await (await requestWorker("/validation-state")).json(),
+      beforeValidation,
+      "validation changed serving loader, environment, or cache",
+    );
+
     const bytes = 256 * 1024;
     const result = new Promise((resolve, reject) => {
       const request = http.request(

@@ -29,16 +29,20 @@ func (c *WorkersConfig) ValidateRuntimePools(dns *regexp.Regexp) error {
 			mac.Write([]byte("krun/validator/" + pool.ID))
 			pool.ValidatorToken = base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 		}
-		if !Slug.MatchString(pool.ID) || !dns.MatchString(pool.RuntimeService) || !dns.MatchString(pool.ValidatorService) {
+		if !Slug.MatchString(pool.ID) || !dns.MatchString(pool.RuntimeService) || (pool.ValidatorService != "" && !dns.MatchString(pool.ValidatorService)) {
 			return fmt.Errorf("invalid Workers runtime pool")
 		}
 		if pool.RuntimeService == pool.ValidatorService {
 			return fmt.Errorf("Workers runtime pool validator service must be distinct from the serving runtime service")
 		}
-		if seenIDs[pool.ID] || seenServices[pool.RuntimeService] || seenServices[pool.ValidatorService] {
+		if seenIDs[pool.ID] || seenServices[pool.RuntimeService] || (pool.ValidatorService != "" && seenServices[pool.ValidatorService]) {
 			return fmt.Errorf("duplicate Workers runtime pool id or service")
 		}
-		seenIDs[pool.ID], seenServices[pool.RuntimeService], seenServices[pool.ValidatorService] = true, true, true
+		seenIDs[pool.ID] = true
+		seenServices[pool.RuntimeService] = true
+		if pool.ValidatorService != "" {
+			seenServices[pool.ValidatorService] = true
+		}
 		access, err := NormalizeWorkerAccess(pool.Access)
 		if err != nil {
 			return err
@@ -78,6 +82,12 @@ func (c *WorkersConfig) ValidateRuntimePools(dns *regexp.Regexp) error {
 		}
 		if pool.Default {
 			defaults++
+		}
+	}
+	if c.ValidatorPool != "" {
+		pool, ok := c.RuntimePool(c.ValidatorPool)
+		if !ok || pool.ValidatorService == "" {
+			return fmt.Errorf("Workers validator_pool must select a configured pool with a validator_service")
 		}
 	}
 	if defaults == 0 && len(c.RuntimePools) == 1 {

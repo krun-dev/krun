@@ -14,7 +14,7 @@ import { cacheRequest } from "./cache.js";
 // its own request context; no request-owned I/O object or promise is retained.
 const storageGrants = new Map();
 async function storageGrant(env, props) {
-  if (env.VALIDATOR_ONLY === "true") {
+  if (env.VALIDATOR_ONLY === "true" || props.validation === true) {
     throw new Error("Storage access is unavailable during validation");
   }
   if (Date.now() - lastSync > 60000) {
@@ -1152,9 +1152,11 @@ const reservedBindings = new Set([
 ]);
 const magicBindings = new Set(["__proto__", "prototype", "constructor"]);
 
-async function worker(env, ctx, d, artifact) {
+async function worker(env, ctx, d, artifact, validation) {
+  const validating = validation !== undefined;
+  const mode = validating ? "validation" : "serving";
   return env.LOADER.get(
-    `${d.organization_id}/${d.service_id}/${d.environment}/${d.id}/workerd-20260928/workerd-bundle-v2`,
+    `${d.organization_id}/${d.service_id}/${d.environment}/${d.id}/${mode}/workerd-20260928/workerd-bundle-v2`,
     async () => {
       // The platform hands out a short-lived URL; artifact bytes go straight from
       // object storage to this Pod, never through the control plane. Candidate
@@ -1178,9 +1180,12 @@ async function worker(env, ctx, d, artifact) {
       let secrets = {};
 
       if (d.secret_digest) {
-        const payload = await platform(env, "/versions/" + encodeURIComponent(d.id) + "/secrets");
+        const payload = validating
+          ? validation.secrets
+          : await platform(env, "/versions/" + encodeURIComponent(d.id) + "/secrets");
 
         if (
+          !payload ||
           payload.version_id !== d.id ||
           payload.secret_digest !== d.secret_digest ||
           !payload.values ||
@@ -1219,7 +1224,7 @@ async function worker(env, ctx, d, artifact) {
               d.organization_id,
               d.service_id,
               d.environment,
-              env.VALIDATOR_ONLY === "true" ? d.id : "serving",
+              validating ? "validation/" + d.id : "serving",
             ]),
           },
         });
@@ -1248,17 +1253,21 @@ Object.defineProperty(globalThis,'caches',{value:createCacheStorage(env.KRUN_CAC
             throw new Error("Invalid R2 binding");
           }
           const target = targets[binding.store_id];
-          if (env.VALIDATOR_ONLY !== "true" && (!target || !env[target.binding])) {
+          if (!validating && (!target || !env[target.binding])) {
             throw new Error("R2 storage transport is unavailable");
           }
           childEnv[name] = {
             signer: ctx.exports.VersionStorage({
-              props: { version_id: d.id, binding: name, bucket_id: binding.bucket_id },
+              props: {
+                version_id: d.id,
+                binding: name,
+                bucket_id: binding.bucket_id,
+                validation: validating,
+              },
             }),
-            transport:
-              env.VALIDATOR_ONLY === "true"
-                ? ctx.exports.StorageDisabled({ props: {} })
-                : env[target.binding],
+            transport: validating
+              ? ctx.exports.StorageDisabled({ props: {} })
+              : env[target.binding],
           };
         }
         const reserved = [
@@ -1346,8 +1355,8 @@ for(const name of ${JSON.stringify(Object.keys(d.r2_buckets))}) {
   );
 }
 
-async function validate(env, ctx, d, artifact) {
-  const stub = await worker(env, ctx, d, artifact);
+async function validate(env, ctx, d, artifact, secrets) {
+  const stub = await worker(env, ctx, d, artifact, { secrets });
   await stub.getEntrypoint("KrunValidation").ping();
 }
 
@@ -1525,7 +1534,7 @@ export class Management extends WorkerEntrypoint {
 
         // The controller supplies the immutable descriptor and a short-lived
         // artifact URL; cold-load and run the KrunValidation RPC on this member.
-        await validate(this.env, this.ctx, input.version, input.artifact);
+        await validate(this.env, this.ctx, input.version, input.artifact, input.secrets);
 
         return json({
           pod_uid: this.env.POD_UID,
@@ -1542,6 +1551,7 @@ export class Management extends WorkerEntrypoint {
         return json({
           status: "ready",
           role: "validator",
+          validation_protocol: 1,
           pod_uid: this.env.POD_UID,
           pool: this.env.RUNTIME_POOL || "default",
         });
@@ -1553,6 +1563,8 @@ export class Management extends WorkerEntrypoint {
 
       return json({
         status: "ready",
+        role: "runtime",
+        validation_protocol: 1,
         pod_uid: this.env.POD_UID,
         pool: this.env.RUNTIME_POOL || "default",
         revision: view.revision,

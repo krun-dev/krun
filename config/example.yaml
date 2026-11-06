@@ -179,6 +179,9 @@ workers:
       static_domain: static.workers.example.com
   # 资源池是部署侧的物理执行单元，组织用户看不到。一个网络档案可以匹配多个
   # pool；控制面使用稳定哈希选出 placement，并持久化选择结果。
+  # 默认从业务 pool 的 Ready serving Pod 校验候选，不额外部署 validator。
+  # 需要进程隔离时填一个 pool ID，所有业务 pool 共用该池的独立 validator。
+  validator_pool: ""
   runtime_pools:
     - id: public-a
       access: [public]
@@ -187,7 +190,7 @@ workers:
       private_egress: deny
       public_egress: direct
       runtime_service: runtime-default
-      # 专用候选验证 workerd；不得与 runtime_service 相同，也不接业务 Gateway。
+      # 仅当 validator_pool 选中此池时部署；不得与 runtime_service 相同。
       validator_service: runtime-validator-default
       runtime_token: ${KRUN_RUNTIME_TOKEN:-replace-with-serving-runtime-token}
       # 省略 validator_token 时从 runtime_token 按 pool 派生，validator 只挂载派生凭据。

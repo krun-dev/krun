@@ -138,6 +138,9 @@ func (r *renderer) networkPolicies() {
 	for _, pool := range r.cfg.Workers.RuntimePools {
 		r.pool = pool
 		for _, validator := range []bool{false, true} {
+			if validator && r.cfg.Workers.ValidatorPool != pool.ID {
+				continue
+			}
 			role := "krun-runtime"
 			name := r.pool.RuntimeService
 			incoming := []any{ingress([]any{peer("krun-control")}, 8083)}

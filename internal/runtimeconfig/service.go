@@ -97,18 +97,9 @@ func (s *Service) Secrets(ctx context.Context, version, pool string) (Secrets, e
 	if err != nil {
 		return Secrets{}, err
 	}
-	values := make(map[string]string, len(encrypted))
-	versions := make(map[string]string, len(encrypted))
-	for _, item := range encrypted {
-		value, err := workerapp.DecryptWorkerSecret(s.Config, item)
-		if err != nil {
-			return Secrets{}, domain.Problem(503, "WORKER_SECRET_UNAVAILABLE", "Worker secret unavailable")
-		}
-		values[item.Version.Name] = value
-		versions[item.Version.Name] = item.Version.ID
-	}
-	if workerapp.WorkerSecretsDigest(versions) != digest {
-		return Secrets{}, domain.Problem(503, "WORKER_SECRET_UNAVAILABLE", "Worker secret binding mismatch")
+	values, err := workerapp.DecryptWorkerSecrets(s.Config, digest, encrypted)
+	if err != nil {
+		return Secrets{}, err
 	}
 	return Secrets{Version: version, Digest: digest, Values: values}, nil
 }
