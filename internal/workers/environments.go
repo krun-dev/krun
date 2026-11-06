@@ -117,6 +117,11 @@ func (s *Service) WorkerEnvironmentDelete(ctx context.Context, st *domain.State,
 	if WorkerBusy(st, t.ID, env) {
 		return nil, Read, domain.Problem(409, "DEPLOYMENT_BUSY", "Wait for the active version operation")
 	}
+	for id, configuration := range st.Workers.Configurations {
+		if configuration.Worker == t.ID && configuration.Environment == env {
+			delete(st.Workers.Configurations, id)
+		}
+	}
 	delete(ws.Environments, env)
 	ws.PreviewRevision++
 	st.Workers.Workers[t.ID] = ws

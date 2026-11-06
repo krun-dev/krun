@@ -2,6 +2,7 @@ import { useCollectionPage } from "@/lib/collection-page";
 import { CollectionToolbar, CollectionPagination } from "@/components/collection-controls";
 import { readBuildLog } from "../lib/build-logs";
 import { BuildInspector, type BuildArtifact } from "./workers/build-inspector";
+import { ConfigurationsPanel } from "./workers/configurations";
 import { PreviewBasePanel } from "./workers/preview-base";
 import { VersionsPanel } from "./workers/versions";
 import { BuildVersionMenu, CreateVersionDialog } from "./workers/version-create";
@@ -487,15 +488,7 @@ function WorkerDetail({
   );
   const [tab, setTab] = useState(() => {
     const value = new URLSearchParams(location.search).get("worker_tab") || "delivery";
-    const tabs = [
-      "delivery",
-      "preview-base",
-      "versions",
-      "source",
-      "routing",
-      "settings",
-      "invoke",
-    ];
+    const tabs = ["delivery", "versions", "source", "routing", "configurations", "invoke"];
     return tabs.includes(value) ? value : "delivery";
   });
   const [versionDraft, setVersionDraft] = useState<{
@@ -707,109 +700,122 @@ function WorkerDetail({
           {error}
         </p>
       ) : null}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span>{t("基线环境常驻对外服务；预览环境用于验证，可随时删除。")}</span>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={busy || data.environments.length - 1 >= 32}
-          onClick={() => setPreviewDialog(true)}
-        >
-          {t("创建预览环境")}
-        </Button>
-      </div>
-      <div className="grid gap-3 md:grid-cols-3">
-        {data.environments.map((e) => (
-          <button
-            key={e.name}
-            onClick={() => setEnvironment(e.name)}
-            aria-pressed={env?.name === e.name}
-            className={cn(
-              "min-w-0 rounded-lg border bg-card p-4 text-left",
-              env?.name === e.name
-                ? "border-primary ring-1 ring-primary/15"
-                : "hover:border-primary/40",
-            )}
+      <section
+        aria-label={t("环境管理")}
+        className="grid gap-3"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="grid gap-1">
+            <h3 className="text-sm font-medium">{t("环境管理")}</h3>
+            <p className="text-xs text-muted-foreground">
+              {t("生产环境和预览环境统一管理，各自使用独立的配置与发布记录。")}
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy || data.environments.length - 1 >= 32}
+            onClick={() => setPreviewDialog(true)}
           >
-            <div className="flex items-center justify-between">
-              <strong>{e.name}</strong>
-              <Badge
-                variant="outline"
-                className={cn(
-                  e.enabled && e.version_id === e.confirmed_version_id && e.version_id
-                    ? "border-primary/40 text-primary"
-                    : e.enabled && e.version_id !== e.confirmed_version_id
-                      ? "border-amber-500/40 text-amber-600 dark:text-amber-500"
-                      : "",
-                )}
-              >
-                {!e.enabled
-                  ? t("未启用")
-                  : e.version_id !== e.confirmed_version_id
-                    ? t("生效中")
-                    : e.version_id
-                      ? t("已发布")
-                      : t("未发布")}
-              </Badge>
-            </div>
-            <div className="my-3 text-sm">
-              {t("Version")} r{e.deployment_revision}{" "}
-              <span className="text-muted-foreground">· {shortID(e.version_id)}</span>
-            </div>
-            <div className="grid gap-1">
-              {(e.hosts || []).map((host, i) => {
-                const d = domains.find((x) => x.id === (e.domains || [])[i]);
-                const text = d?.label ? `${host}（${d.label}）` : host;
-                return e.version_id && e.enabled ? (
-                  <a
-                    key={host}
-                    href={workerURL(host)}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 break-all text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
-                    onClick={(event) => event.stopPropagation()}
-                  >
-                    {text}
-                    <ArrowUpRight
-                      size={11}
-                      className="shrink-0"
-                    />
-                  </a>
-                ) : (
-                  <code
-                    key={host}
-                    className="break-all text-[11px] text-muted-foreground"
-                  >
-                    {text}
-                  </code>
-                );
-              })}
-              {(e.hosts || []).length === 0 ? (
-                <code className="break-all text-[11px] text-muted-foreground">
-                  {t("未绑定域名")}
-                </code>
-              ) : null}
-            </div>
-            {e.name !== "production" ? (
-              <div className="mt-2 flex justify-end">
-                <Button
+            {t("创建预览环境")}
+          </Button>
+        </div>
+        <div className="grid gap-3 md:grid-cols-3">
+          {data.environments.map((e) => (
+            <button
+              key={e.name}
+              onClick={() => setEnvironment(e.name)}
+              aria-pressed={env?.name === e.name}
+              className={cn(
+                "min-w-0 rounded-lg border bg-card p-4 text-left",
+                env?.name === e.name
+                  ? "border-primary ring-1 ring-primary/15"
+                  : "hover:border-primary/40",
+              )}
+            >
+              <div className="flex items-center justify-between">
+                <div className="min-w-0">
+                  <strong className="break-all">{e.name}</strong>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {e.name === "production" ? t("生产环境") : t("预览环境")}
+                  </p>
+                </div>
+                <Badge
                   variant="outline"
-                  size="sm"
-                  disabled={busy}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setPreviewDelete(e.name);
-                  }}
+                  className={cn(
+                    e.enabled && e.version_id === e.confirmed_version_id && e.version_id
+                      ? "border-primary/40 text-primary"
+                      : e.enabled && e.version_id !== e.confirmed_version_id
+                        ? "border-amber-500/40 text-amber-600 dark:text-amber-500"
+                        : "",
+                  )}
                 >
-                  {t("删除")}
-                </Button>
+                  {!e.enabled
+                    ? t("未启用")
+                    : e.version_id !== e.confirmed_version_id
+                      ? t("生效中")
+                      : e.version_id
+                        ? t("已发布")
+                        : t("未发布")}
+                </Badge>
               </div>
-            ) : null}
-          </button>
-        ))}
-      </div>
+              <div className="my-3 text-sm">
+                {t("Version")} r{e.deployment_revision}{" "}
+                <span className="text-muted-foreground">· {shortID(e.version_id)}</span>
+              </div>
+              <div className="grid gap-1">
+                {(e.hosts || []).map((host, i) => {
+                  const d = domains.find((x) => x.id === (e.domains || [])[i]);
+                  const text = d?.label ? `${host}（${d.label}）` : host;
+                  return e.version_id && e.enabled ? (
+                    <a
+                      key={host}
+                      href={workerURL(host)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 break-all text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      {text}
+                      <ArrowUpRight
+                        size={11}
+                        className="shrink-0"
+                      />
+                    </a>
+                  ) : (
+                    <code
+                      key={host}
+                      className="break-all text-[11px] text-muted-foreground"
+                    >
+                      {text}
+                    </code>
+                  );
+                })}
+                {(e.hosts || []).length === 0 ? (
+                  <code className="break-all text-[11px] text-muted-foreground">
+                    {t("未绑定域名")}
+                  </code>
+                ) : null}
+              </div>
+              {e.name !== "production" ? (
+                <div className="mt-2 flex justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setPreviewDelete(e.name);
+                    }}
+                  >
+                    {t("删除")}
+                  </Button>
+                </div>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      </section>
       {env ? (
         <Tabs
           value={tab}
@@ -819,11 +825,10 @@ function WorkerDetail({
           <div className="max-w-full overflow-x-auto">
             <TabsList>
               <TabsTrigger value="delivery">{t("构建与发布")}</TabsTrigger>
-              <TabsTrigger value="preview-base">{t("预览基础配置")}</TabsTrigger>
               <TabsTrigger value="versions">{t("版本与部署")}</TabsTrigger>
               <TabsTrigger value="source">{t("代码源")}</TabsTrigger>
               <TabsTrigger value="routing">{t("路由与域名")}</TabsTrigger>
-              <TabsTrigger value="settings">{t("环境配置")}</TabsTrigger>
+              <TabsTrigger value="configurations">{t("配置版本")}</TabsTrigger>
               <TabsTrigger value="invoke">{t("调用测试")}</TabsTrigger>
             </TabsList>
           </div>
@@ -990,16 +995,6 @@ function WorkerDetail({
             </Card>
           </TabsContent>
           <TabsContent
-            value="preview-base"
-            className="mt-5"
-          >
-            <PreviewBasePanel
-              base={base}
-              organizationBase={organizationBase}
-              notify={notify}
-            />
-          </TabsContent>
-          <TabsContent
             value="versions"
             className="mt-5"
           >
@@ -1051,20 +1046,45 @@ function WorkerDetail({
             />
           </TabsContent>
           <TabsContent
-            value="settings"
+            value="configurations"
             className="mt-5 grid gap-6"
           >
-            <EnvironmentSettings
+            <ConfigurationsPanel
               key={env.name}
               base={base}
               organizationBase={organizationBase}
               env={env}
-              active={active}
               data={data}
-              domains={domains}
+              active={active}
               reload={reload}
               notify={notify}
+              operations={operations}
+              operation={operation}
+              selectOperation={setSelectedOperation}
+              deployed={(op) => {
+                setAcceptedOperation(op);
+                setSelectedOperation(op.id);
+              }}
             />
+            <details className="rounded-lg border p-4">
+              <summary className="cursor-pointer text-sm font-medium">{t("管理环境草稿")}</summary>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {t("草稿用于下次从构建发布；可先编辑，再从草稿保存一个命名配置版本。")}
+              </p>
+              <div className="mt-4">
+                <EnvironmentSettings
+                  key={env.name}
+                  base={base}
+                  organizationBase={organizationBase}
+                  env={env}
+                  active={active}
+                  data={data}
+                  domains={domains}
+                  reload={reload}
+                  notify={notify}
+                />
+              </div>
+            </details>
           </TabsContent>
           <TabsContent
             value="invoke"
@@ -1082,7 +1102,7 @@ function WorkerDetail({
         open={previewDialog}
         onOpenChange={setPreviewDialog}
       >
-        <DialogContent>
+        <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{t("创建预览环境")}</DialogTitle>
             <DialogDescription>
@@ -1103,6 +1123,18 @@ function WorkerDetail({
               disabled={busy}
             />
           </Field>
+          <details className="min-w-0 rounded-lg border p-4">
+            <summary className="cursor-pointer text-sm font-medium">
+              {t("新建预览默认配置")}
+            </summary>
+            <div className="mt-4">
+              <PreviewBasePanel
+                base={base}
+                organizationBase={organizationBase}
+                notify={notify}
+              />
+            </div>
+          </details>
           <Button
             disabled={
               busy ||

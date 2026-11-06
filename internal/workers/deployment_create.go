@@ -21,6 +21,7 @@ type WorkerDeploymentCreateInput struct {
 }
 
 func PublicWorkerVersion(version domain.WorkerVersion) domain.WorkerVersion {
+	version.SecretNames = domain.WorkerSecretNames(version.SecretVersions)
 	return version
 }
 
@@ -106,6 +107,7 @@ func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, 
 			SecretDigest:       WorkerSecretsDigest(current.SecretVersions),
 			SecretVersions:     domain.CloneStringsMap(current.SecretVersions),
 		}
+		version.Configuration = inheritedConfiguration(st, current)
 		raw, _ := json.Marshal(version)
 		version.ID = "rel_" + workerartifact.BytesDigest(raw)
 		version.Created = time.Now().UTC()

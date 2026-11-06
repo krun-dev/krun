@@ -42,3 +42,16 @@ export default {
 支持 Wrangler 配置、JavaScript/TypeScript 模块、静态资产和已配置的自定义构建；仓库构建支持 npm、pnpm、Yarn 或 Bun 锁文件。具体步骤见 [使用 Wrangler 部署 Workers](/docs/guides/cloudflare-workers.html)。
 
 如需限定编码 Agent 的使用范围，参照 [Workers 代码兼容范围](/docs/guides/workers-runtime-compatibility.html)。
+
+## 命名配置版本
+
+在 Worker 中选择环境并进入「配置版本」，可以从环境草稿或当前生效配置保存一份带名称、
+说明的配置，例如“XXX 测试”。通过「复制并修改」创建新版本，普通变量、存储绑定和
+Secret 引用一起保存；保存不会改变当前运行。
+
+选择配置后点击「发布并生效」，复用当前代码制品并确认发布。恢复旧配置也使用当前代码；
+要连同代码回滚，请使用「版本与部署」。首次部署需先完成一次构建，再选择该构建发布。
+当前生效标记会在运行时确认后更新。非活动配置历史保留 30 天，当前和发布中的配置继续保留。
+
+「环境管理 → 创建预览环境 → 新建预览默认配置」只决定之后新建 Preview 的初始值，已有环境各自独立。
+这些控制台操作保持 Cloudflare Version、Deployment 和 Previews Base API 兼容。

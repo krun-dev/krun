@@ -42,6 +42,35 @@ sequenceDiagram
 
 Kubernetes、S3 和 runtime HTTP 请求均在 IAM 状态事务外进行。执行者的用户状态、AuthVersion、API Key 和当前权限会在执行及提交前重新检查。
 
+## 配置版本接口
+
+以下路径均以 `/api/v1/orgs/{org}/workers/{worker}/environments/{env}` 为前缀：
+
+| 方法和路径 | 行为与权限 |
+| --- | --- |
+| `GET /configurations` | 按创建时间倒序返回本环境的命名配置，需 `worker.version.read` |
+| `POST /configurations` | 创建不可变配置，需 `worker.update`；变更 Secrets 另需 `worker.publish` |
+| `POST /configurations/{configuration}/deployments` | 组合所选配置和代码，创建标准 Version、Operation、Deployment，需 `worker.publish` 与 `worker.version.read` |
+
+创建输入包含 `name`（必填，最多 100 字节）、`message`（最多 1000 字节）、
+`expected_configuration_revision` 与 `idempotency_key`。可用 `source_configuration_id`
+或 `source_version_id` 复制本 Worker、本环境的配置；不传时从当前环境草稿复制。可覆盖
+`variables`、`r2_buckets`、`version_metadata`，`secrets` 以名称到新值或 `null` 的映射
+新增、替换或删除；未传的绑定保留来源值。Secret 只返回名称，不返回值与内部版本 ID。
+
+发布输入包含 `code_version_id`（必须为本环境当前版本）或首次部署使用的 `build_id`、
+`expected_revision`、`expected_configuration_revision` 和 `idempotency_key`。使用配置时
+同时更新该环境草稿，后续从构建发布沿用该配置；当前生效状态仍由原有运行时 ack 决定。
+版本标签与说明映射为 Cloudflare `annotations["workers/tag"]` 和
+`annotations["workers/message"]`。Cloudflare 现有路由、请求与响应结构、Previews Base
+及 Secrets 发布语义不变；配置库是原生 API 管理能力，Cloudflare 客户端无需使用新接口。
+
+配置行在 `krun_worker_configurations`，每个 Secret、R2 引用分别在
+`krun_worker_configuration_secrets`、`krun_worker_configuration_r2` 中持久化。创建时在有界
+事务内校验环境 revision 和引用，读取不写库。非活动配置保留 30 天，后台保护当前、已确认
+和发布中的引用，每批最多删除 1000 份。DDL 仍以 `schema.sql` 和 fingerprint 为唯一基线，
+已有开发数据库不自动迁移，需开发者显式重建专用库。
+
 ## 构建和制品
 
 内联源码使用固定的 `esbuild` profile；仓库构建使用项目中的 Wrangler 配置和固定

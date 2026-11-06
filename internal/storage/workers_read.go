@@ -25,7 +25,7 @@ func (s *Store) loadWorkers(ctx context.Context, st *domain.State) error {
 	queueStateRead(ctx, batch, `SELECT worker_id, env_name, name, secret_version_id FROM krun_worker_environment_secrets`)
 	queueStateRead(ctx, batch, `SELECT build_id, org_id, worker_id, env_name, state, entrypoint, source_digest, profile, compatibility_date, compatibility_flags, job, artifact_id, error, repository, assets, created_at, finished_at, claimed_by, claimed_at FROM krun_worker_builds`)
 	queueStateRead(ctx, batch, `SELECT artifact_id, org_id, state, profile, archive_digest, manifest_digest, module_digest, compatibility_date, compatibility_flags, size_bytes, object_key, storage_location, bucket, created_at FROM krun_worker_artifacts`)
-	queueStateRead(ctx, batch, `SELECT version_id, org_id, worker_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message, created_by, created_by_name FROM krun_worker_versions`)
+	queueStateRead(ctx, batch, `SELECT version_id, org_id, worker_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message, created_by, created_by_name, configuration_id FROM krun_worker_versions`)
 	queueStateRead(ctx, batch, `SELECT version_id, name, secret_version_id FROM krun_worker_version_secrets`)
 	queueStateRead(ctx, batch, `SELECT deployment_id,org_id,worker_id,env_name,version_id,operation_id,created_at,expires_at,committed_at FROM krun_worker_deployments`)
 	queueStateRead(ctx, batch, `SELECT operation_id, kind, org_id, worker_id, env_name, state, build_id, version_id, expected_revision, config_revision, edge_revision, deployment_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at FROM krun_worker_operations`)
@@ -33,6 +33,10 @@ func (s *Store) loadWorkers(ctx context.Context, st *domain.State) error {
 	queueStateRead(ctx, batch, `SELECT idem_key, digest, target_id FROM krun_worker_idempotency`)
 	queueStateRead(ctx, batch, `SELECT worker_id, env_name, name, bucket_id FROM krun_worker_environment_r2`)
 	queueStateRead(ctx, batch, `SELECT version_id, name, bucket_id FROM krun_worker_version_r2`)
+
+	queueStateRead(ctx, batch, `SELECT configuration_id,org_id,worker_id,env_name,name,message,variables,version_metadata,assets_binding,created_at FROM krun_worker_configurations`)
+	queueStateRead(ctx, batch, `SELECT configuration_id,name,secret_version_id FROM krun_worker_configuration_secrets`)
+	queueStateRead(ctx, batch, `SELECT configuration_id,name,bucket_id FROM krun_worker_configuration_r2`)
 
 	results := s.pool.SendBatch(ctx, batch)
 	defer results.Close()
@@ -45,6 +49,7 @@ func (s *Store) loadWorkers(ctx context.Context, st *domain.State) error {
 		readWorkerVersions, readWorkerVersionSecrets, readWorkerDeployments, readWorkerOperations, readWorkerHistory,
 		readWorkerIdempotency,
 		readWorkerEnvironmentR2, readWorkerVersionR2,
+		readWorkerConfigurations, readWorkerConfigurationSecrets, readWorkerConfigurationR2,
 	} {
 		if err := read(results, st); err != nil {
 			return err
@@ -277,7 +282,7 @@ func readWorkerVersions(results pgx.BatchResults, st *domain.State) error {
 	for rows.Next() {
 		var r domain.WorkerVersion
 		var variables, flags []byte
-		if err = rows.Scan(&r.ID, &r.Organization, &r.Worker, &r.Environment, &r.Artifact, &r.Profile, &r.ArchiveDigest, &r.ModuleDigest, &r.CompatibilityDate, &flags, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created, &r.VersionMetadata, &r.AssetsBinding, &r.Tag, &r.Message, &r.CreatedBy, &r.CreatedByName); err != nil {
+		if err = rows.Scan(&r.ID, &r.Organization, &r.Worker, &r.Environment, &r.Artifact, &r.Profile, &r.ArchiveDigest, &r.ModuleDigest, &r.CompatibilityDate, &flags, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created, &r.VersionMetadata, &r.AssetsBinding, &r.Tag, &r.Message, &r.CreatedBy, &r.CreatedByName, &r.Configuration); err != nil {
 			return err
 		}
 		if err = json.Unmarshal(flags, &r.CompatibilityFlags); err != nil {

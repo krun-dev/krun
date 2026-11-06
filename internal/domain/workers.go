@@ -139,6 +139,8 @@ type WorkerPlacement struct {
 }
 
 type WorkerVersion struct {
+	SecretNames        []string                   `json:"secret_names,omitempty"`
+	Configuration      string                     `json:"configuration_id,omitempty"`
 	CreatedBy          string                     `json:"created_by"`
 	CreatedByName      string                     `json:"created_by_name"`
 	R2Bindings         map[string]WorkerR2Binding `json:"r2_buckets,omitempty"`
@@ -241,6 +243,7 @@ type WorkerAck struct {
 }
 
 type WorkerState struct {
+	Configurations   map[string]WorkerConfiguration
 	Buckets          map[string]WorkerBucket
 	Revision         int
 	Workers          map[string]Worker

@@ -29,6 +29,9 @@ func (s *Store) persistWorkers(ctx context.Context, before, after *domain.State,
 	if err = s.writeWorkerR2Bindings(ctx, tx, before.Workers, after.Workers); err != nil {
 		return err
 	}
+	if err = s.writeWorkerConfigurations(ctx, tx, before, after); err != nil {
+		return err
+	}
 	if err = insertAudits(ctx, tx, audits); err != nil {
 		return err
 	}
@@ -224,6 +227,9 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 				}
 				if tag.RowsAffected() != 1 {
 					return domain.Problem(409, "REVISION_CONFLICT", "Environment configuration changed")
+				}
+				if err := deleteEnvironmentConfigurations(ctx, tx, id, name); err != nil {
+					return err
 				}
 			}
 		}
@@ -592,7 +598,7 @@ func sameVersion(a, b domain.WorkerVersion) bool {
 	if !reflect.DeepEqual(a.R2Bindings, b.R2Bindings) {
 		return false
 	}
-	return a.CreatedBy == b.CreatedBy && a.CreatedByName == b.CreatedByName && a.VersionMetadata == b.VersionMetadata && a.AssetsBinding == b.AssetsBinding && a.Tag == b.Tag && a.Message == b.Message && a.ID == b.ID && a.Worker == b.Worker && a.Organization == b.Organization &&
+	return a.Configuration == b.Configuration && a.CreatedBy == b.CreatedBy && a.CreatedByName == b.CreatedByName && a.VersionMetadata == b.VersionMetadata && a.AssetsBinding == b.AssetsBinding && a.Tag == b.Tag && a.Message == b.Message && a.ID == b.ID && a.Worker == b.Worker && a.Organization == b.Organization &&
 		a.Environment == b.Environment && a.Artifact == b.Artifact && a.Profile == b.Profile && a.ArchiveDigest == b.ArchiveDigest &&
 		a.ModuleDigest == b.ModuleDigest && a.CompatibilityDate == b.CompatibilityDate &&
 		sameStrings(a.CompatibilityFlags, b.CompatibilityFlags) && a.ConfigRevision == b.ConfigRevision &&
@@ -609,6 +615,16 @@ func writeVersions(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 			}
 			return errors.New("worker version descriptors are immutable")
 		}
+
+		if r.Configuration != "" {
+			tag, err := tx.Exec(ctx, `UPDATE krun_worker_configurations SET name=name WHERE configuration_id=$1 AND org_id=$2 AND worker_id=$3 AND env_name=$4`, r.Configuration, r.Organization, r.Worker, r.Environment)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() != 1 {
+				return domain.Problem(409, "WORKER_CONFIGURATION_UNAVAILABLE", "Saved configuration is no longer available")
+			}
+		}
 		variables, err := json.Marshal(r.Variables)
 		if err != nil {
 			return err
@@ -617,13 +633,13 @@ func writeVersions(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 		if err != nil {
 			return err
 		}
-		tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_versions (version_id, org_id, worker_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message, created_by, created_by_name)
-				SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20
+		tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_versions (version_id, org_id, worker_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message, created_by, created_by_name, configuration_id)
+				SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21
 				WHERE EXISTS (SELECT 1 FROM krun_worker_artifacts
 					WHERE artifact_id=$5 AND state='finalized' AND org_id=$2
 					  AND profile=$6 AND archive_digest=$7 AND module_digest=$8
 					  AND compatibility_date=$9 AND compatibility_flags=$10)
-				ON CONFLICT (version_id) DO UPDATE SET version_id=excluded.version_id`, id, r.Organization, r.Worker, r.Environment, r.Artifact, r.Profile, r.ArchiveDigest, r.ModuleDigest, r.CompatibilityDate, flags, r.ConfigRevision, variables, r.SecretDigest, r.Created, r.VersionMetadata, r.AssetsBinding, r.Tag, r.Message, r.CreatedBy, r.CreatedByName)
+				ON CONFLICT (version_id) DO UPDATE SET version_id=excluded.version_id`, id, r.Organization, r.Worker, r.Environment, r.Artifact, r.Profile, r.ArchiveDigest, r.ModuleDigest, r.CompatibilityDate, flags, r.ConfigRevision, variables, r.SecretDigest, r.Created, r.VersionMetadata, r.AssetsBinding, r.Tag, r.Message, r.CreatedBy, r.CreatedByName, r.Configuration)
 		if err != nil {
 			return err
 		}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { t, errorMessage } from "@/lib/i18n";
 import type { Environment } from "@/lib/workers";
@@ -19,6 +19,14 @@ export function PreviewBasePanel({
   notify: (s: string) => void;
 }) {
   const [config, setConfig] = useState<Environment>();
+  const [message, setMessage] = useState("");
+  const report = useCallback(
+    (value: string) => {
+      setMessage(value);
+      notify(value);
+    },
+    [notify],
+  );
   const [variables, setVariables] = useState(() => variableRows());
   const [versionMetadata, setVersionMetadata] = useState("");
   const [r2Bindings, setR2Bindings] = useState(() => bindingRows());
@@ -37,17 +45,17 @@ export function PreviewBasePanel({
     void api<Environment>(base + "/previews-base", "GET", undefined, controller.signal)
       .then(reset)
       .catch((error) => {
-        if (!controller.signal.aborted) notify(errorMessage(error));
+        if (!controller.signal.aborted) report(errorMessage(error));
       });
     return () => controller.abort();
-  }, [base, notify]);
+  }, [base, report]);
 
   async function reload() {
     setBusy(true);
     try {
       reset(await api<Environment>(base + "/previews-base"));
     } catch (error) {
-      notify(errorMessage(error));
+      report(errorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -79,9 +87,9 @@ export function PreviewBasePanel({
       } else {
         setR2Bindings(bindingRows(result.r2_buckets));
       }
-      notify(t("预览基础配置已保存，仅影响新建 Preview。"));
+      report(t("新建预览默认配置已保存，仅影响之后新建的预览。"));
     } catch (error) {
-      notify(errorMessage(error));
+      report(errorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -97,10 +105,10 @@ export function PreviewBasePanel({
         idempotency_key: crypto.randomUUID(),
       });
       setConfig(await api<Environment>(base + "/previews-base"));
-      notify(t("预览基础配置已保存，仅影响新建 Preview。"));
+      report(t("新建预览默认配置已保存，仅影响之后新建的预览。"));
       return true;
     } catch (error) {
-      notify(errorMessage(error));
+      report(errorMessage(error));
       return false;
     } finally {
       setBusy(false);
@@ -109,8 +117,17 @@ export function PreviewBasePanel({
 
   return (
     <div className="grid gap-5 rounded-lg border p-5">
+      {message ? (
+        <p
+          role="status"
+          aria-live="polite"
+          className="rounded-md border p-3 text-sm"
+        >
+          {message}
+        </p>
+      ) : null}
       <div>
-        <h3 className="font-medium">{t("新建预览环境的默认配置")}</h3>
+        <h3 className="font-medium">{t("新建预览默认配置")}</h3>
         <p className="mt-2 text-sm text-muted-foreground">
           {t(
             "新建 Preview 时，复制这里的环境变量、Secrets 和对象存储绑定。各区域独立保存；已有 Preview 和生产环境不会随之改变。",

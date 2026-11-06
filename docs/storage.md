@@ -129,3 +129,15 @@ OAuth 请求保留 5 分钟；access Session 最长 1 小时；授权与旋转 r
 Worker Version 的 `created_by` 与 `created_by_name` 保存创建者 ID 和保存时的姓名，
 作为不可变版本元数据，与 `created_at` 一同持久化；相同版本再次部署时不覆盖。
 新增列直接纳入 `schema.sql` 基线，不执行启动迁移或旧版本作者回填。
+
+## Worker 命名配置历史
+
+`krun_worker_configurations` 一份配置一行，普通变量在该实体的 `variables` 列中；
+Secret 引用与 R2 引用分别按绑定名称保存在 `krun_worker_configuration_secrets`、
+`krun_worker_configuration_r2`。配置不可变，不包含代码、域名和流量指针。
+`krun_worker_versions.configuration_id` 记录配置来源，发布仍使用版本中冻结的完整配置。
+
+创建时校验环境 revision，在同一小事务中保存配置及引用，不新增外键。删除预览显式删除
+配置绑定及配置行；删除 Worker 的后台清理也覆盖这三张表。非活动配置 30 天过期，当前、
+已确认和进行中的部署引用受保护；`RetainExpired` 每批清理最多 1000 份。Secret 版本清理
+同时检查配置引用，防止尚存配置丢失 Secret。配置接口见 [Workers 后端](workers-backend.md)。

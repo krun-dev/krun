@@ -257,5 +257,12 @@
   "Invitation changed": "邀请状态已变化，请重试",
   "Invitation changed; retry the request": "邀请状态已变化，请重试",
   "Invitation page limit must be between 1 and 100": "邀请列表每页数量必须在 1–100 之间",
-  "Invalid invitation cursor": "邀请列表游标无效"
+  "Invalid invitation cursor": "邀请列表游标无效",
+  "Configuration name is required (100 bytes maximum); message allows 1000 bytes": "配置名称必填且最多 100 字节，说明最多 1000 字节。",
+  "Configuration secret is unavailable": "配置引用的 Secret 不可用。",
+  "Environment configuration or deployment changed": "环境配置或部署已改变，请重新加载。",
+  "Select code_version_id or build_id": "请选择当前代码版本或首次部署使用的构建。",
+  "Current code version changed": "当前代码版本已改变，请重新核对。",
+  "Wait for the current deployment to synchronize": "请等待当前部署同步完成。",
+  "Saved configuration is no longer available": "已保存的配置不再可用，请重新加载配置历史。"
 }
