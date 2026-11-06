@@ -63,6 +63,73 @@ func TestVersionUploadFreezesConfigurationWithoutDeploying(t *testing.T) {
 	}
 }
 
+func TestVersionUploadChecksReviewedConfigurationAndRetriesIdempotently(t *testing.T) {
+	server, store, base := workerTestServer(t)
+	active := seedPublishedWorker(t, store)
+	path := base + "/environments/production/versions"
+	staleInput := `{"artifact_id":"art_secret","expected_configuration_revision":0,"idempotency_key":"stale-review"}`
+	response := request(server, "POST", path, "krun_cli_admin", staleInput)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "REVISION_CONFLICT") {
+		t.Fatalf("stale review: %d %s", response.Code, response.Body.String())
+	}
+	if err := store.View(context.Background(), PartitionWorkers, func(st *State) error {
+		if len(st.Workers.Versions) != 1 || len(st.Workers.Operations) != 0 {
+			t.Fatal("stale review created a version or deployment")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	input := `{"artifact_id":"art_secret","expected_configuration_revision":1,"tag":"reviewed-release","message":"Ready for a later deployment","idempotency_key":"reviewed-version"}`
+	response = request(server, "POST", path, "krun_cli_admin", input)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("reviewed upload: %d %s", response.Code, response.Body.String())
+	}
+	var version WorkerVersion
+	if err := json.Unmarshal(response.Body.Bytes(), &version); err != nil {
+		t.Fatal(err)
+	}
+	if version.ConfigRevision != 1 || version.Tag != "reviewed-release" || version.Message != "Ready for a later deployment" {
+		t.Fatalf("reviewed snapshot: %+v", version)
+	}
+	response = request(server, "GET", base+"/overview", "krun_cli_admin", "")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), version.ID) {
+		t.Fatalf("saved version missing from overview: %d %s", response.Code, response.Body.String())
+	}
+
+	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
+		worker := st.Workers.Workers[active.Worker]
+		env := worker.Environments["production"]
+		env.Variables = map[string]any{"PLAIN": "changed after review"}
+		env.ConfigRevision++
+		worker.Environments["production"] = env
+		st.Workers.Workers[active.Worker] = worker
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	response = request(server, "POST", path, "krun_cli_admin", input)
+	if response.Code != http.StatusOK {
+		t.Fatalf("retry after configuration change: %d %s", response.Code, response.Body.String())
+	}
+	var retry WorkerVersion
+	if err := json.Unmarshal(response.Body.Bytes(), &retry); err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID != version.ID || retry.Variables["PLAIN"] != "visible" {
+		t.Fatal("retry created or changed the frozen version")
+	}
+	if err := store.View(context.Background(), PartitionWorkers, func(st *State) error {
+		if len(st.Workers.Versions) != 2 || len(st.Workers.Operations) != 0 || st.Workers.Workers[active.Worker].Environments["production"].Version != active.ID {
+			t.Fatal("version creation or retry changed live traffic")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestBuildDeploymentFreezesJSONAndVersionMetadata(t *testing.T) {
 	server, store, base := workerTestServer(t)
 	seedPublishedWorker(t, store)

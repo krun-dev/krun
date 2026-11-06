@@ -12,11 +12,12 @@ import (
 
 // A version freezes executable content and bindings without changing traffic.
 type WorkerVersionUploadInput struct {
-	Tag      string `json:"tag,omitempty"`
-	Message  string `json:"message,omitempty"`
-	Build    string `json:"build_id,omitempty"`
-	Artifact string `json:"artifact_id,omitempty"`
-	Key      string `json:"idempotency_key"`
+	Tag                   string `json:"tag,omitempty"`
+	Message               string `json:"message,omitempty"`
+	Build                 string `json:"build_id,omitempty"`
+	Artifact              string `json:"artifact_id,omitempty"`
+	ConfigurationRevision *int   `json:"expected_configuration_revision,omitempty"`
+	Key                   string `json:"idempotency_key"`
 }
 
 func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, in WorkerVersionUploadInput) (any, Outcome, error) {
@@ -43,6 +44,9 @@ func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p a
 	}
 	if !environment.Enabled {
 		return nil, Read, domain.Problem(409, "ENVIRONMENT_DISABLED", "Target environment is disabled")
+	}
+	if in.ConfigurationRevision != nil && *in.ConfigurationRevision != environment.ConfigRevision {
+		return nil, Read, domain.Problem(409, "REVISION_CONFLICT", "Environment configuration changed")
 	}
 	artifactID := in.Artifact
 	if in.Build != "" {
