@@ -163,12 +163,12 @@ export function OAuthConsent({
         <LanguageSwitch />
       </header>
       <main className="mx-auto grid max-w-6xl gap-10 px-6 pb-14 pt-5 md:grid-cols-[.9fr_1fr] md:gap-16 md:px-10 md:pt-14">
-        <section className="relative hidden flex-col justify-between overflow-hidden rounded-3xl md:flex bg-[#141b18] p-7 text-white md:min-h-[570px] md:p-10">
-          <div className="pointer-events-none absolute -right-32 -top-32 size-96 rounded-full border border-emerald-300/10" />
-          <div className="pointer-events-none absolute -right-16 -top-16 size-64 rounded-full border border-emerald-300/10" />
+        <section className="relative hidden flex-col justify-between overflow-hidden rounded-3xl border bg-card p-7 text-card-foreground md:flex md:min-h-[570px] md:p-10">
+          <div className="pointer-events-none absolute -right-32 -top-32 size-96 rounded-full border border-primary/10" />
+          <div className="pointer-events-none absolute -right-16 -top-16 size-64 rounded-full border border-primary/10" />
           <div className="relative">
-            <p className="flex items-center gap-2 text-xs font-medium tracking-widest text-emerald-300">
-              <span className="size-1.5 rounded-full bg-emerald-300" />
+            <p className="flex items-center gap-2 text-xs font-medium tracking-widest text-primary">
+              <span className="size-1.5 rounded-full bg-primary" />
               {t("开发工具授权")}
             </p>
             <h1 className="mt-7 text-3xl font-semibold leading-tight tracking-tight md:text-4xl">
@@ -176,37 +176,37 @@ export function OAuthConsent({
               <br />
               {t("连接你的工作空间。")}
             </h1>
-            <p className="mt-5 max-w-xs text-sm leading-7 text-white/55">
+            <p className="mt-5 max-w-xs text-sm leading-7 text-muted-foreground">
               {t("使用同一个 krun 账号，在浏览器与命令行之间顺畅工作。")}
             </p>
             <div className="my-10 flex items-center gap-4">
-              <div className="flex size-16 items-center justify-center rounded-2xl border border-white/10 bg-white/5">
+              <div className="flex size-16 items-center justify-center rounded-2xl border border-border bg-muted">
                 <AppIcon
                   size={27}
                   className={
-                    isWrangler ? "text-orange-300" : "text-emerald-200"
+                    isWrangler ? "text-orange-500" : "text-primary"
                   }
                 />
               </div>
-              <div className="flex flex-1 items-center text-emerald-300/40">
+              <div className="flex flex-1 items-center text-primary/40">
                 <span className="h-px flex-1 bg-current" />
                 <ArrowRight size={17} />
                 <span className="h-px flex-1 bg-current" />
               </div>
-              <div className="grid size-16 place-items-center rounded-2xl border border-emerald-300/25 bg-emerald-300/10">
-                <Terminal size={27} className="text-emerald-300" />
+              <div className="grid size-16 place-items-center rounded-2xl border border-primary/25 bg-primary/10">
+                <Terminal size={27} className="text-primary" />
               </div>
             </div>
           </div>
-          <div className="relative border-t border-white/10 pt-6">
+          <div className="relative border-t border-border pt-6">
             <div className="flex items-start gap-3">
               <ShieldCheck
                 size={18}
-                className="mt-1 shrink-0 text-emerald-300"
+                className="mt-1 shrink-0 text-primary"
               />
               <div>
                 <p className="text-sm font-medium">{t("权限始终由你掌握")}</p>
-                <p className="mt-2 text-xs leading-6 text-white/50">
+                <p className="mt-2 text-xs leading-6 text-muted-foreground">
                   {t(
                     "工具只能执行你本来就有权执行的操作。退出终端登录后，本次授权随即撤销。",
                   )}
