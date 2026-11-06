@@ -102,7 +102,7 @@ func (w *Controller) ProcessBuild(ctx context.Context, b domain.WorkerBuild, pri
 			if errors.Is(err, storage.ErrBuildClaimLost) || ctx.Err() != nil {
 				return err
 			}
-			return w.FailBuild(ctx, b.ID, err.Error(), private.Log)
+			return w.FailBuild(ctx, b.ID, err.Error(), repositoryBuildLog(b))
 		}
 	}
 
@@ -150,19 +150,19 @@ func (w *Controller) ProcessBuild(ctx context.Context, b domain.WorkerBuild, pri
 		return e
 	}
 	if job.Status.Failed > 0 {
-		return w.FailBuild(ctx, b.ID, "Builder failed", private.Log+w.Kube.BuildLog(ctx, b.Job))
+		return w.FailBuild(ctx, b.ID, "Builder failed", repositoryBuildLog(b)+w.Kube.BuildLog(ctx, b.Job))
 	}
 	if job.Status.Succeeded == 0 {
-		return w.PublishBuildLog(ctx, b, private.Log+w.Kube.BuildLog(ctx, b.Job))
+		return w.PublishBuildLog(ctx, b, repositoryBuildLog(b)+w.Kube.BuildLog(ctx, b.Job))
 	}
 	artifact, e := w.FinalizeBuild(ctx, b)
 	if e != nil {
 		if errors.Is(e, storage.ErrArtifactBeingCollected) {
 			return nil
 		}
-		return w.FailBuild(ctx, b.ID, "Artifact validation failed: "+e.Error(), private.Log+w.Kube.BuildLog(ctx, b.Job))
+		return w.FailBuild(ctx, b.ID, "Artifact validation failed: "+e.Error(), repositoryBuildLog(b)+w.Kube.BuildLog(ctx, b.Job))
 	}
-	log := workerartifact.SafeWorkerLog(private.Log + w.Kube.BuildLog(ctx, b.Job))
+	log := workerartifact.SafeWorkerLog(repositoryBuildLog(b) + w.Kube.BuildLog(ctx, b.Job))
 
 	denied, e = w.AuthorizeActor(ctx, private.Actor, b.Service, b.Environment, "build.start")
 	if e != nil {
@@ -243,7 +243,7 @@ func (w *Controller) RunLocalBuild(b domain.WorkerBuild, private domain.WorkerBu
 		finishCtx, finishCancel = context.WithTimeout(context.Background(), 15*time.Second)
 	}
 	defer finishCancel()
-	log = private.Log + log
+	log = repositoryBuildLog(b) + log
 	select {
 	case <-leaseLost:
 
@@ -291,7 +291,7 @@ func (w *Controller) ExecuteLocalBuilder(ctx context.Context, b domain.WorkerBui
 		return "", e
 	}
 	return localbuilder.Execute(ctx, w.Config, b, source, upload, func(text string) {
-		_ = w.PublishBuildLog(ctx, b, private.Log+text)
+		_ = w.PublishBuildLog(ctx, b, repositoryBuildLog(b)+text)
 	})
 }
 
