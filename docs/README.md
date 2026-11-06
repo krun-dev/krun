@@ -1,5 +1,7 @@
 # krun 当前基线
 
+krun 是一个自托管应用平台，目标是提供类似 Cloudflare Workers、D1 和 R2 的计算与存储能力，并在此基础上支持多种应用运行时。当前能力和兼容范围见[项目介绍](../README.md)。
+
 本目录仅记录已实现行为、运行契约与复现方式。主配置以
 [config/example.yaml](../config/example.yaml) 为准，数据库以
 [internal/storage/schema.sql](../internal/storage/schema.sql) 为唯一建表定义。
