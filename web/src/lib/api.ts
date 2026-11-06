@@ -22,6 +22,7 @@ export async function api<T>(
   method = "GET",
   input?: unknown,
   signal?: AbortSignal,
+  onHeaders?: (headers: Headers) => void,
 ): Promise<T> {
   if (!path.startsWith("/api/")) {
     throw new APIError(
@@ -61,6 +62,7 @@ export async function api<T>(
     body: input === undefined ? undefined : JSON.stringify(input),
   });
   notifyAuthRequired(response.status);
+  if (response.ok) onHeaders?.(response.headers);
   if (response.status === 204) return undefined as T;
   const raw = await response.text();
   let data;

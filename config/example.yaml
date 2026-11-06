@@ -227,6 +227,9 @@ workers:
   secrets_keys:
     v1: ${KRUN_WORKERS_SECRETS_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
   s3_endpoint: https://s3.example.com
+  # 可选：浏览器/CLI 读取日志时可达的同一桶 S3 endpoint；不填沿用 s3_endpoint。
+  # 例如控制面上传走内网，而此处配置公网 endpoint；全内网使用时可省略。
+  s3_log_read_endpoint: ""
   # 可省略；分别用于 builder 上传和 runtime 下载时看到的同一个桶地址。
   s3_builder_endpoint: https://s3.builder.internal.example.com
   s3_runtime_endpoint: https://s3.runtime.internal.example.com

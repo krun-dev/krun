@@ -48,7 +48,7 @@ func validateServer(server string) error {
 	}
 	return nil
 }
-func (c *Client) requestOnce(ctx context.Context, method, path string, input any, output any, anonymous bool) error {
+func (c *Client) requestOnce(ctx context.Context, method, path string, input any, output any, anonymous bool, headers ...func(http.Header)) error {
 	if e := validateServer(c.Profile.Server); e != nil {
 		return e
 	}
@@ -96,6 +96,9 @@ func (c *Client) requestOnce(ctx context.Context, method, path string, input any
 			return fmt.Errorf("API returned HTTP %d", response.StatusCode)
 		}
 		return &responseError{response.StatusCode, envelope.Error.Code, envelope.Error.Message}
+	}
+	if len(headers) > 0 {
+		headers[0](response.Header)
 	}
 	if output != nil && response.StatusCode != 204 {
 		return json.Unmarshal(data, output)
@@ -235,6 +238,8 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		return nil
 	case "org", "orgs", "members", "groups", "roles", "keys", "services", "models":
 		return c.manage(ctx, command, rest)
+	case "build":
+		return c.buildLogs(ctx, rest)
 	case "check":
 		f := flags("check", errOut)
 		action := f.String("action", "", "Action")
@@ -573,6 +578,7 @@ const help = `krun — control-plane CLI
   krun keys show | revoke --id ID
   krun keys update --id ID --name NAME --policy FILE --revision N
   krun services|models list | create | get | update | delete --org ID [options]
+  krun build logs --org ID --service ID --build ID [--follow]
   krun check --action ACTION --kind KIND --id ID [--environment global]
   krun audit [--org ID] [--limit 50] [--cursor CURSOR]
   krun api --method METHOD --path /api/v1/... [--file FILE]

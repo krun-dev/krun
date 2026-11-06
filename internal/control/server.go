@@ -438,6 +438,13 @@ func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, b
 			http.Redirect(w, r, string(redirect), http.StatusFound)
 			return
 		}
+		if result, ok := out.(buildLogResponse); ok {
+			w.Header().Set("Cache-Control", "private, no-store")
+			if result.active {
+				w.Header().Set("X-Log-Poll-Interval", "10")
+			}
+			out = result.body
+		}
 		s.json(w, status, out)
 	}
 }

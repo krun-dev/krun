@@ -54,23 +54,25 @@ type WorkersConfig struct {
 	// SecretsKeys is a versioned ring of base64-encoded 32-byte AES keys used
 	// only by the control plane. Keep old versions while retained Versions
 	// reference them; new writes use SecretsActiveKey.
-	SecretsKeys       map[string]string `json:"secrets_keys"`
-	SecretsActiveKey  string            `json:"secrets_active_key"`
-	S3Endpoint        string            `json:"s3_endpoint"`
-	S3BuilderEndpoint string            `json:"s3_builder_endpoint"`
-	S3RuntimeEndpoint string            `json:"s3_runtime_endpoint"`
-	S3Region          string            `json:"s3_region"`
-	S3AddressingStyle string            `json:"s3_addressing_style"`
-	S3Prefix          string            `json:"s3_prefix"`
-	S3AccessMode      string            `json:"s3_access_mode"`
-	S3BucketMode      string            `json:"s3_bucket_mode"`
-	S3Bucket          string            `json:"s3_bucket"`
-	S3LocationID      string            `json:"s3_location_id"`
-	S3AccessKey       string            `json:"s3_access_key"`
-	S3SecretKey       string            `json:"s3_secret_key"`
-	PreviewLimit      int               `json:"preview_limit"`
-	StaticService     string            `json:"static_service"`
-	StaticServicePort int               `json:"static_service_port"`
+	SecretsKeys      map[string]string `json:"secrets_keys"`
+	SecretsActiveKey string            `json:"secrets_active_key"`
+	// S3LogReadEndpoint is the optional reader-visible address of the same bucket.
+	S3LogReadEndpoint string `json:"s3_log_read_endpoint"`
+	S3Endpoint        string `json:"s3_endpoint"`
+	S3BuilderEndpoint string `json:"s3_builder_endpoint"`
+	S3RuntimeEndpoint string `json:"s3_runtime_endpoint"`
+	S3Region          string `json:"s3_region"`
+	S3AddressingStyle string `json:"s3_addressing_style"`
+	S3Prefix          string `json:"s3_prefix"`
+	S3AccessMode      string `json:"s3_access_mode"`
+	S3BucketMode      string `json:"s3_bucket_mode"`
+	S3Bucket          string `json:"s3_bucket"`
+	S3LocationID      string `json:"s3_location_id"`
+	S3AccessKey       string `json:"s3_access_key"`
+	S3SecretKey       string `json:"s3_secret_key"`
+	PreviewLimit      int    `json:"preview_limit"`
+	StaticService     string `json:"static_service"`
+	StaticServicePort int    `json:"static_service_port"`
 	// ConfigBaseURL is the runtime-readable origin of config/latest.json and
 	// config/pools/<pool>/shards/*. Signed access works with any S3 provider.
 	ConfigBaseURL string `json:"config_base_url"`

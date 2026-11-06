@@ -216,17 +216,17 @@ func (s *Store) SetBuildSource(ctx context.Context, id, key string) error {
 	return s.registerGeneratedBuildSource(ctx, id, organization, key)
 }
 
-// finishBuild records a terminal build state together with its log. Only one
+// finishBuild records a terminal build state together with its final log object key. Only one
 // writer wins because the state transition is conditional.
-func (s *Store) FinishBuild(ctx context.Context, id, state, message, artifact, log string) error {
-	return s.finishBuildOwned(ctx, id, "", state, message, artifact, log)
+func (s *Store) FinishBuild(ctx context.Context, id, state, message, artifact, logKey string) error {
+	return s.finishBuildOwned(ctx, id, "", state, message, artifact, logKey)
 }
 
-func (s *Store) FinishClaimedBuild(ctx context.Context, id, replica, state, message, artifact, log string) error {
-	return s.finishBuildOwned(ctx, id, replica, state, message, artifact, log)
+func (s *Store) FinishClaimedBuild(ctx context.Context, id, replica, state, message, artifact, logKey string) error {
+	return s.finishBuildOwned(ctx, id, replica, state, message, artifact, logKey)
 }
 
-func (s *Store) finishBuildOwned(ctx context.Context, id, replica, state, message, artifact, log string) error {
+func (s *Store) finishBuildOwned(ctx context.Context, id, replica, state, message, artifact, logKey string) error {
 	if !workerBuildTerminal(state) {
 		return errors.New("finishBuild requires a terminal state")
 	}
@@ -245,7 +245,8 @@ func (s *Store) finishBuildOwned(ctx context.Context, id, replica, state, messag
 		build.Finished = &finished
 		s.memory.Workers.Builds[id] = build
 		private := s.memory.Workers.BuildPrivate[id]
-		private.Log = log
+		private.Log = ""
+		private.LogKey = logKey
 		s.memory.Workers.BuildPrivate[id] = private
 		return nil
 	}
@@ -271,7 +272,7 @@ func (s *Store) finishBuildOwned(ctx context.Context, id, replica, state, messag
 		WHERE service_id=$1`, service); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE krun_worker_build_private SET log=$2 WHERE build_id=$1`, id, log); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE krun_worker_build_private SET log='', log_key=$2 WHERE build_id=$1`, id, logKey); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -352,7 +353,7 @@ func (s *Store) ReserveBuildArtifact(ctx context.Context, id, replica string, ar
 	return tx.Commit(ctx)
 }
 
-func (s *Store) FinishClaimedBuildWithArtifact(ctx context.Context, id, replica, state, message string, artifact domain.WorkerArtifact, log string) error {
+func (s *Store) FinishClaimedBuildWithArtifact(ctx context.Context, id, replica, state, message string, artifact domain.WorkerArtifact, logKey string) error {
 	if !workerBuildTerminal(state) {
 		return errors.New("finishBuildWithArtifact requires a terminal state")
 	}
@@ -377,7 +378,8 @@ func (s *Store) FinishClaimedBuildWithArtifact(ctx context.Context, id, replica,
 		build.Finished = &finished
 		s.memory.Workers.Builds[id] = build
 		private := s.memory.Workers.BuildPrivate[id]
-		private.Log = log
+		private.Log = ""
+		private.LogKey = logKey
 		s.memory.Workers.BuildPrivate[id] = private
 		return nil
 	}
@@ -424,7 +426,7 @@ func (s *Store) FinishClaimedBuildWithArtifact(ctx context.Context, id, replica,
 		WHERE service_id=$1`, service); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE krun_worker_build_private SET log=$2 WHERE build_id=$1`, id, log); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE krun_worker_build_private SET log='', log_key=$2 WHERE build_id=$1`, id, logKey); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

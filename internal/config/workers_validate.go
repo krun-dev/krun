@@ -126,6 +126,14 @@ func (c *WorkersConfig) Validate() error {
 	if e != nil || u.Host == "" || u.Path != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return fmt.Errorf("invalid Workers S3 endpoint")
 	}
+	if c.S3LogReadEndpoint != "" {
+		u, e := url.Parse(c.S3LogReadEndpoint)
+		if e != nil || u.Host == "" || u.Path != "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("invalid Workers S3 log read endpoint")
+		}
+	} else {
+		c.S3LogReadEndpoint = c.S3Endpoint
+	}
 	if c.S3BuilderEndpoint != "" {
 		u, e := url.Parse(c.S3BuilderEndpoint)
 		if e != nil || u.Host == "" || u.Path != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
@@ -143,7 +151,7 @@ func (c *WorkersConfig) Validate() error {
 		c.S3RuntimeEndpoint = c.S3BuilderEndpoint
 	}
 	if c.S3AddressingStyle == "virtual" {
-		for _, endpoint := range []string{c.S3Endpoint, c.S3BuilderEndpoint, c.S3RuntimeEndpoint} {
+		for _, endpoint := range []string{c.S3Endpoint, c.S3BuilderEndpoint, c.S3RuntimeEndpoint, c.S3LogReadEndpoint} {
 			u, _ := url.Parse(endpoint)
 			if net.ParseIP(u.Hostname()) != nil {
 				return fmt.Errorf("Workers S3 virtual addressing requires a DNS endpoint")

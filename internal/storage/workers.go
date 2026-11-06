@@ -480,7 +480,7 @@ func writeBuilds(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) err
 				return err
 			}
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_build_private (build_id, actor_user_id, actor_key_id, actor_auth_version, source_key, files, log) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (build_id) DO UPDATE SET actor_user_id=excluded.actor_user_id, actor_key_id=excluded.actor_key_id, actor_auth_version=excluded.actor_auth_version, source_key=excluded.source_key, files=excluded.files, log=excluded.log`, id, p.Actor.User, p.Actor.Key, p.Actor.AuthVersion, p.SourceKey, files, p.Log); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_build_private (build_id, actor_user_id, actor_key_id, actor_auth_version, source_key, files, log, log_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (build_id) DO UPDATE SET actor_user_id=excluded.actor_user_id, actor_key_id=excluded.actor_key_id, actor_auth_version=excluded.actor_auth_version, source_key=excluded.source_key, files=excluded.files, log=excluded.log, log_key=excluded.log_key`, id, p.Actor.User, p.Actor.Key, p.Actor.AuthVersion, p.SourceKey, files, p.Log, p.LogKey); err != nil {
 			return err
 		}
 	}
@@ -519,7 +519,7 @@ func sameBuild(a, b domain.WorkerBuild) bool {
 }
 
 func sameBuildPrivate(a, b domain.WorkerBuildPrivate) bool {
-	return a.Actor == b.Actor && a.SourceKey == b.SourceKey && reflect.DeepEqual(a.Files, b.Files) && a.Log == b.Log
+	return a.Actor == b.Actor && a.SourceKey == b.SourceKey && reflect.DeepEqual(a.Files, b.Files) && a.Log == b.Log && a.LogKey == b.LogKey
 }
 
 // workerBuildPrivate fetches one potentially large source/log row. List and
@@ -531,9 +531,9 @@ func (s *Store) WorkerBuildPrivate(ctx context.Context, id string) (domain.Worke
 	}
 	var private domain.WorkerBuildPrivate
 	var files []byte
-	err := s.pool.QueryRow(ctx, `SELECT actor_user_id, actor_key_id, actor_auth_version, source_key, files, log
+	err := s.pool.QueryRow(ctx, `SELECT actor_user_id, actor_key_id, actor_auth_version, source_key, files, log, log_key
         FROM krun_worker_build_private WHERE build_id=$1`, id).
-		Scan(&private.Actor.User, &private.Actor.Key, &private.Actor.AuthVersion, &private.SourceKey, &files, &private.Log)
+		Scan(&private.Actor.User, &private.Actor.Key, &private.Actor.AuthVersion, &private.SourceKey, &files, &private.Log, &private.LogKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.WorkerBuildPrivate{}, false, nil
 	}

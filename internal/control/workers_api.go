@@ -121,7 +121,17 @@ func (s *Server) workerBuildGet(st *State, p Principal, r *http.Request) (any, i
 
 func (s *Server) workerBuildLogs(st *State, p Principal, r *http.Request) (any, int, error) {
 	out, outcome, err := s.workerApplication(r).WorkerBuildLogs(r.Context(), st, p, workerRef(r))
-	return out, workerHTTPStatus(outcome), err
+	if err != nil {
+		return out, workerHTTPStatus(outcome), err
+	}
+	response := out.(map[string]any)
+	state, _ := response["state"].(string)
+	return buildLogResponse{body: out, active: state != "succeeded" && state != "failed"}, workerHTTPStatus(outcome), nil
+}
+
+type buildLogResponse struct {
+	body   any
+	active bool
 }
 
 func (s *Server) workerBuildSource(st *State, p Principal, r *http.Request) (any, int, error) {

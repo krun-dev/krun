@@ -14,6 +14,32 @@ import (
 	"github.com/krun-dev/krun/internal/configfile"
 )
 
+func TestBuildLogs(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/log-object" {
+			if r.Header.Get("Authorization") != "" {
+				t.Error("credentials leaked to object storage")
+			}
+			_, _ = w.Write([]byte("build complete\n"))
+			return
+		}
+		if r.URL.Path != "/api/v1/orgs/org/services/svc/workers/builds/bld/logs" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"state": "succeeded", "download_url": server.URL + "/log-object"})
+	}))
+	defer server.Close()
+	var out bytes.Buffer
+	c := Client{Profile: Profile{Server: server.URL, Token: "krun_cli_test"}, Out: &out, Err: &out}
+	if err := c.buildLogs(context.Background(), []string{"logs", "--org", "org", "--service", "svc", "--build", "bld", "--follow"}); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "build complete\n" {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
 func TestTokenLoginPermissionsAndLogout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/me" || r.Header.Get("Authorization") != "Bearer krun_key_test" {

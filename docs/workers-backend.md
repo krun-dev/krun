@@ -161,7 +161,7 @@ controller 默认对业务 pool 的 Ready serving Pod 调用 `/validate`，配�
 | `POST /builds` | 提交源码包（或内联 `files`）与入口，返回 202 Build |
 | `GET /builds` | 按可见环境过滤构建历史 |
 | `GET /builds/{id}` | 构建状态和 Artifact 引用 |
-| `GET /builds/{id}/logs` | 构建完成后的日志，需 `log.read` |
+| `GET /builds/{id}/logs` | 统一日志入口，需 `log.read`；返回 `download_url`，浏览器/CLI 直接从 TOS/S3 读取。进行中带 `X-Log-Poll-Interval: 10`，终态不带 |
 | `GET /builds/{id}/source` | 源码包下载 URL（或内联文件表），需 `source.read` |
 | `GET /artifacts/{id}` | 当前服务可见 Build 关联的制品记录 |
 | `GET /environments` | 可见环境和配置 / Version revision |
@@ -239,3 +239,15 @@ header 与该 pool 独立 token，不能只信任 header：
 尚无跨构建依赖缓存、构建取消、运行日志 API 或独立消息队列。已有数据库租约队列轮转、有界并行协调、增量配置发布和共享网关路由，见 [规模边界与验证](performance-scaling.md)。完成 Job 30 分钟后由 TTL 清理，控制器按保留策略清理源码上传、日志、操作和无引用制品。实验部署采用开发登录和单节点 kind，不能直接视作生产部署模板。
 
 仓库来源构建、服务列表与管理员来源配置见 [仓库构建说明](workers-repositories.md)。内联源码 API 仍可用于小 Worker；新控制台从仓库发起构建。
+
+### 构建日志
+
+本地 builder 每 10 秒采集 stdout/stderr；Kubernetes builder 在控制器轮询时以 10 秒为间隔采集 Pod 日志。日志快照脱敏后最多 32 KiB，使用现有 S3 兼容客户端写入私有 `build-logs/` 对象前缀。每个快照有独立内容键，数据库只引用当前快照；构建结束后清空临时日志正文并保存最终对象键。租约条件更新阻止旧副本发布日志引用。
+
+`GET .../builds/{id}/logs` 返回 `build_id`、`state`、`download_url` 和 `expired`。预签名 GET URL 有效期 5 分钟；调用方不要保存或记录 URL。尚无快照或日志已过期时 URL 为空。成功响应有 `X-Log-Poll-Interval` 时按秒继续请求，没有时读取最终对象后停止；错误响应不代表构建结束。控制面响应和对象均禁用缓存。
+
+日志对象保留 7 天，由后台对象清理器分批清理（包括失去租约后产生的孤立快照）。主 YAML 的可选 `s3_log_read_endpoint` 决定浏览器/CLI 日志预签名 URL 的访问地址，不填时沿用 `s3_endpoint`。控制面上传及清理始终使用 `s3_endpoint`；两者可以分别配置为内网和公网 endpoint，但必须指向同一桶及对象前缀。选择地址由部署配置决定，不按访问者网络自动探测。HTTPS 控制台需使用 HTTPS 读取地址；TOS bucket 的 CORS 需允许控制台 origin 的 GET，浏览器请求不携带控制面 Cookie。构建和 runtime 的内部 endpoint 不用于浏览器日志 URL。
+
+CLI：`krun build logs --org ID --service ID --build ID [--follow]`。`--follow` 遵循相同轮询 Header，直接读取对象时不转发 API Token。
+
+DDL 新增 `log_key`，遵循基线 fingerprint 校验；已有专用开发/测试数据库需由开发者显式重建，不自动迁移或删除数据。

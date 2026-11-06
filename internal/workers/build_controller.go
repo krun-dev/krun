@@ -57,7 +57,11 @@ func (w *Controller) ProcessClaimedBuild(ctx context.Context, b domain.WorkerBui
 }
 
 func (w *Controller) FailBuild(ctx context.Context, id, message, log string) error {
-	return w.Service.Store.FinishClaimedBuild(ctx, id, w.Replica, "failed", message, "", workerartifact.SafeWorkerLog(log))
+	key, err := w.SaveBuildLog(ctx, id, w.Replica, log)
+	if err != nil {
+		return err
+	}
+	return w.Service.Store.FinishClaimedBuild(ctx, id, w.Replica, "failed", message, "", key)
 }
 
 func (w *Controller) ProcessBuild(ctx context.Context, b domain.WorkerBuild, private domain.WorkerBuildPrivate) error {
@@ -67,6 +71,14 @@ func (w *Controller) ProcessBuild(ctx context.Context, b domain.WorkerBuild, pri
 	}
 	if denied != nil {
 		return w.FailBuild(ctx, b.ID, "Build permission revoked", "")
+	}
+	if w.Config.BuilderMode == "local" {
+		w.localMu.Lock()
+		running := w.localBuilds[b.ID] != nil && w.localBuilds[b.ID].Running
+		w.localMu.Unlock()
+		if running {
+			return nil
+		}
 	}
 	started, startErr := w.Service.Store.WorkerExecutionStarted(ctx, "build", b.ID, b.Created)
 	if startErr != nil {
@@ -138,17 +150,17 @@ func (w *Controller) ProcessBuild(ctx context.Context, b domain.WorkerBuild, pri
 		return e
 	}
 	if job.Status.Failed > 0 {
-		return w.FailBuild(ctx, b.ID, "Builder failed", w.Kube.BuildLog(ctx, b.Job))
+		return w.FailBuild(ctx, b.ID, "Builder failed", private.Log+w.Kube.BuildLog(ctx, b.Job))
 	}
 	if job.Status.Succeeded == 0 {
-		return nil
+		return w.PublishBuildLog(ctx, b, private.Log+w.Kube.BuildLog(ctx, b.Job))
 	}
 	artifact, e := w.FinalizeBuild(ctx, b)
 	if e != nil {
 		if errors.Is(e, storage.ErrArtifactBeingCollected) {
 			return nil
 		}
-		return w.FailBuild(ctx, b.ID, "Artifact validation failed: "+e.Error(), w.Kube.BuildLog(ctx, b.Job))
+		return w.FailBuild(ctx, b.ID, "Artifact validation failed: "+e.Error(), private.Log+w.Kube.BuildLog(ctx, b.Job))
 	}
 	log := workerartifact.SafeWorkerLog(private.Log + w.Kube.BuildLog(ctx, b.Job))
 
@@ -159,7 +171,7 @@ func (w *Controller) ProcessBuild(ctx context.Context, b domain.WorkerBuild, pri
 	if denied != nil {
 		return w.FailBuild(ctx, b.ID, "Build permission revoked", log)
 	}
-	e = w.Service.Store.FinishClaimedBuildWithArtifact(ctx, b.ID, w.Replica, "succeeded", "", artifact, log)
+	e = w.FinishBuildArtifact(ctx, b, w.Replica, artifact, log)
 	if e == nil {
 		_ = w.S3.RemoveObject(ctx, w.Config.S3Bucket, WorkerUploadKey(b), objectstore.RemoveObjectOptions{})
 	}
@@ -224,6 +236,14 @@ func (w *Controller) RunLocalBuild(b domain.WorkerBuild, private domain.WorkerBu
 		}
 	}()
 	log, e := w.ExecuteLocalBuilder(ctx, b, private)
+	// Persist timeout diagnostics using an independent bounded cleanup context.
+	finishCtx := ctx
+	finishCancel := func() {}
+	if ctx.Err() != nil {
+		finishCtx, finishCancel = context.WithTimeout(context.Background(), 15*time.Second)
+	}
+	defer finishCancel()
+	log = private.Log + log
 	select {
 	case <-leaseLost:
 
@@ -231,30 +251,30 @@ func (w *Controller) RunLocalBuild(b domain.WorkerBuild, private domain.WorkerBu
 	default:
 	}
 	if e != nil {
-		_ = w.FailBuild(ctx, b.ID, "Builder failed", log)
+		_ = w.FailBuild(finishCtx, b.ID, "Builder failed", log)
 		return
 	}
-	artifact, e := w.FinalizeBuild(ctx, b)
+	artifact, e := w.FinalizeBuild(finishCtx, b)
 	if e != nil {
 		if errors.Is(e, storage.ErrArtifactBeingCollected) {
 			return
 		}
-		_ = w.FailBuild(ctx, b.ID, "Artifact validation failed: "+e.Error(), log)
+		_ = w.FailBuild(finishCtx, b.ID, "Artifact validation failed: "+e.Error(), log)
 		return
 	}
 
-	denied, e := w.AuthorizeActor(ctx, private.Actor, b.Service, b.Environment, "build.start")
+	denied, e := w.AuthorizeActor(finishCtx, private.Actor, b.Service, b.Environment, "build.start")
 	if e != nil {
-		_ = w.FailBuild(ctx, b.ID, "Build permission check unavailable", log)
+		_ = w.FailBuild(finishCtx, b.ID, "Build permission check unavailable", log)
 		return
 	}
 	if denied != nil {
-		_ = w.FailBuild(ctx, b.ID, "Build permission revoked", log)
+		_ = w.FailBuild(finishCtx, b.ID, "Build permission revoked", log)
 		return
 	}
-	e = w.Service.Store.FinishClaimedBuildWithArtifact(ctx, b.ID, w.Replica, "succeeded", "", artifact, workerartifact.SafeWorkerLog(private.Log+log))
+	e = w.FinishBuildArtifact(finishCtx, b, w.Replica, artifact, log)
 	if e == nil {
-		_ = w.S3.RemoveObject(ctx, w.Config.S3Bucket, WorkerUploadKey(b), objectstore.RemoveObjectOptions{})
+		_ = w.S3.RemoveObject(finishCtx, w.Config.S3Bucket, WorkerUploadKey(b), objectstore.RemoveObjectOptions{})
 	}
 }
 
@@ -270,7 +290,9 @@ func (w *Controller) ExecuteLocalBuilder(ctx context.Context, b domain.WorkerBui
 	if e != nil {
 		return "", e
 	}
-	return localbuilder.Execute(ctx, w.Config, b, source, upload)
+	return localbuilder.Execute(ctx, w.Config, b, source, upload, func(text string) {
+		_ = w.PublishBuildLog(ctx, b, private.Log+text)
+	})
 }
 
 var LocalBuilderEnvironment = localbuilder.LocalBuilderEnvironment

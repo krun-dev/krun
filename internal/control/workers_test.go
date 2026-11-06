@@ -46,6 +46,10 @@ func TestWorkerBuildPermissionScopeAndIdempotency(t *testing.T) {
 	}
 	var b WorkerBuild
 	_ = json.Unmarshal(first.Body.Bytes(), &b)
+	logs := request(s, "GET", base+"/builds/"+b.ID+"/logs", "krun_cli_admin", "")
+	if logs.Code != 200 || logs.Header().Get("X-Log-Poll-Interval") != "10" {
+		t.Fatalf("active build logs: status=%d header=%q body=%s", logs.Code, logs.Header().Get("X-Log-Poll-Interval"), logs.Body.String())
+	}
 	retry := request(s, "POST", base+"/builds", "krun_cli_admin", payload)
 	var same WorkerBuild
 	_ = json.Unmarshal(retry.Body.Bytes(), &same)
@@ -69,6 +73,18 @@ func TestWorkerBuildPermissionScopeAndIdempotency(t *testing.T) {
 		}
 		return nil
 	})
+	if err := store.FinishBuild(context.Background(), b.ID, "failed", "test failure", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	final := request(s, "GET", base+"/builds/"+b.ID+"/logs", "krun_cli_admin", "")
+	if final.Code != 200 || final.Header().Get("X-Log-Poll-Interval") != "" {
+		t.Fatal("terminal log requested another poll", final.Code)
+	}
+	denied := request(s, "GET", base+"/builds/missing/logs", "krun_cli_admin", "")
+	if denied.Code != 404 || denied.Header().Get("X-Log-Poll-Interval") != "" {
+		t.Fatal("error response included a poll interval")
+	}
+
 }
 
 func TestWorkerBuildUsesScopedJSONBodyLimit(t *testing.T) {

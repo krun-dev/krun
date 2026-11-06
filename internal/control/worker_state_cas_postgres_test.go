@@ -143,6 +143,12 @@ func TestPostgresStaleBuildOwnerCannotFinishAfterTakeover(t *testing.T) {
 	if claimed, err := store.ClaimBuild(ctx, "build-owner", "replica-new"); err != nil || !claimed {
 		t.Fatalf("takeover: claimed=%t err=%v", claimed, err)
 	}
+	if err := store.SetClaimedBuildLogKey(ctx, "build-owner", "replica-old", "stale-log"); err == nil {
+		t.Fatal("stale owner published log")
+	}
+	if err := store.SetClaimedBuildLogKey(ctx, "build-owner", "replica-new", "live-log"); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.FinishClaimedBuild(ctx, "build-owner", "replica-old", "failed", "stale", "", "stale"); err != nil {
 		t.Fatal(err)
 	}
