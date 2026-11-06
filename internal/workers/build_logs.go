@@ -2,6 +2,8 @@ package workers
 
 import (
 	"context"
+	"errors"
+	"io"
 	"time"
 
 	"github.com/krun-dev/krun/internal/adapters/objectstore"
@@ -66,4 +68,27 @@ func (w *Controller) BuildLogURL(ctx context.Context, key string) (string, error
 		return "", err
 	}
 	return u.String(), nil
+}
+
+func (w *Controller) ReadBuildLog(ctx context.Context, key string) (string, error) {
+	if key == "" {
+		return "", nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	obj, err := w.S3.GetObject(ctx, w.Config.S3Bucket, key, objectstore.GetObjectOptions{})
+	if err != nil {
+		return "", err
+	}
+	defer obj.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(obj, 32769))
+	if err != nil {
+		return "", err
+	}
+	if len(raw) > 32768 {
+		return "", errors.New("build log exceeds size limit")
+	}
+	return string(raw), nil
 }
