@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && cp dist/console/index.html dist/console/docs && ./scripts/build-cli-downloads.sh",
     "check": "tsc -b",
     "test": "go test ./...",
     "test:permissions": "node --experimental-strip-types --test web/src/lib/permissions.test.mjs",
@@ -19,6 +19,7 @@
     "clsx": "^2.1.1",
     "i18next": "^26.4.2",
     "lucide-react": "^0.468.0",
+    "marked": "^18.1.3",
     "radix-ui": "^1.7.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

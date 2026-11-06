@@ -5,6 +5,8 @@
 [internal/storage/schema.sql](../internal/storage/schema.sql) 为唯一建表定义。
 项目尚未上线；模型变化直接更新完整基线，不维护升级链或旧格式兼容。
 
+面向用户的入门文档位于 [Quick Start](../web/public/quickstart.md)，控制台通过 `/docs` 提供可复制版本。
+
 | 内容 | 入口 |
 | --- | --- |
 | 代码分层与模块边界 | [架构](architecture.md) |
