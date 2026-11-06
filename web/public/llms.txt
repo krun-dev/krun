@@ -1,8 +1,0 @@
-# krun
-
-> krun 是用于团队管理身份、资源与 Workers 的控制台。
-
-## 用户文档
-
-- [Quick Start](/quickstart.md): 登录控制台、安装并连接 CLI，以及理解 krun 的基础概念。
-- [交互式 Quick Start](/docs): 带有当前控制台地址和复制功能的入门文档。

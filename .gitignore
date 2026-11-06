@@ -16,3 +16,5 @@ config/development.yml
 config/local*.yaml
 playwright-report/
 test-results/
+
+/user-docs/.astro/

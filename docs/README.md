@@ -5,8 +5,14 @@
 [internal/storage/schema.sql](../internal/storage/schema.sql) 为唯一建表定义。
 项目尚未上线；模型变化直接更新完整基线，不维护升级链或旧格式兼容。
 
-面向用户的入门文档位于 [Quick Start](../web/public/quickstart.md)，控制台通过 `/docs` 提供可复制版本。
+面向用户的文档使用 Starlight，源码位于 [`user-docs/src/content/docs/`](../user-docs/src/content/docs/)。
+`npm run build` 将文档静态构建并合并到控制台产物；`npm run docs:dev` 可单独预览
+文档，完整的同源路由和 CLI 下载请使用构建产物预览。
 
+Quick Start 位于 `docs.md`，访问入口为 `/docs`。新增文档放在 `guides/`，使用
+Markdown 和 Starlight 的标题 frontmatter，导航、章节目录、搜索和 `llms.txt` 自动生成。
+文中 `{{KRUN_ORIGIN}}` 在浏览器显示和复制时替换为当前 origin，Markdown 原文保留
+占位符。Go 和 OSS 部署时不需要文档服务进程。
 | 内容 | 入口 |
 | --- | --- |
 | 代码分层与模块边界 | [架构](architecture.md) |
