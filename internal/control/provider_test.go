@@ -72,6 +72,7 @@ func TestOIDCVerifiesSignatureIssuerAudienceExpiryAndNonce(t *testing.T) {
 	issuer := ""
 	audience := "client"
 	nonce := "nonce"
+	emailVerified := true
 	expires := time.Now().Add(time.Hour).Unix()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -81,7 +82,7 @@ func TestOIDCVerifiesSignatureIssuerAudienceExpiryAndNonce(t *testing.T) {
 		case "/jwks":
 			_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &key.PublicKey, KeyID: "test", Algorithm: "RS256", Use: "sig"}}})
 		case "/token":
-			payload, _ := json.Marshal(map[string]any{"iss": issuer, "sub": "stable-subject", "aud": audience, "exp": expires, "iat": time.Now().Unix(), "nonce": nonce, "name": "OIDC User"})
+			payload, _ := json.Marshal(map[string]any{"iss": issuer, "sub": "stable-subject", "aud": audience, "exp": expires, "iat": time.Now().Unix(), "nonce": nonce, "name": "OIDC User", "email": "person@example.com", "email_verified": emailVerified})
 			signed, _ := signer.Sign(payload)
 			token, _ := signed.CompactSerialize()
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "token", "token_type": "Bearer", "id_token": token})
@@ -97,8 +98,13 @@ func TestOIDCVerifiesSignatureIssuerAudienceExpiryAndNonce(t *testing.T) {
 	}
 	p := &identityprovider.Provider{Config: appconfig.ProviderConfig{ID: "oidc", Type: "oidc", ClientID: "client"}, Client: upstream.Client(), Oidc: idp, Oauth: &oauth2.Config{ClientID: "client", ClientSecret: "secret", Endpoint: oauth2.Endpoint{AuthURL: issuer + "/authorize", TokenURL: issuer + "/token", AuthStyle: oauth2.AuthStyleInParams}}}
 	identity, e := p.Complete(context.Background(), "code", "verifier", "nonce")
-	if e != nil || identity.Subject != "stable-subject" {
+	if e != nil || identity.Subject != "stable-subject" || !identity.EmailVerified || identity.Email != "person@example.com" {
 		t.Fatal(identity, e)
+	}
+	emailVerified = false
+	identity, e = p.Complete(context.Background(), "code", "verifier", "nonce")
+	if e != nil || identity.EmailVerified {
+		t.Fatal("unverified OIDC email trusted", identity, e)
 	}
 	nonce = "wrong"
 	if _, e = p.Complete(context.Background(), "code", "verifier", "nonce"); e == nil {

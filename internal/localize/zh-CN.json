@@ -243,5 +243,19 @@
   "Unknown object access operation": "未知的对象访问操作",
   "CDN delivery is not configured for this bucket": "此桶尚未配置 CDN 分发",
   "CDN paths cannot contain empty segments": "CDN 路径不能包含空段",
-  "Object changed": "对象已更改"
+  "Object changed": "对象已更改",
+  "Invitation role must be member or viewer": "邀请角色只能为成员或只读",
+  "Invitation limit must be between 1 and 100": "最多加入人数必须在 1–100 之间",
+  "Choose one invitation recipient": "只能选择一种定向邀请对象",
+  "Existing active invitation recipient required": "受邀用户必须是已存在的活跃账号",
+  "Valid invitation email required": "请填写有效的受邀邮箱",
+  "Invitation link is unavailable": "邀请链接已失效，请联系管理员获取新链接",
+  "Account identity source is not allowed by this organization": "当前账号的身份来源不被此组织允许，请切换账号",
+  "Current account is not the invitation recipient": "当前账号不是指定受邀对象，请使用指定账号或已验证邮箱登录",
+  "A new invitation is required after membership removal": "你已被移出组织，请联系管理员发送新邀请",
+  "Revoke unused invitation links before creating another": "有效邀请链接已达上限，请先撤销不用的链接",
+  "Invitation changed": "邀请状态已变化，请重试",
+  "Invitation changed; retry the request": "邀请状态已变化，请重试",
+  "Invitation page limit must be between 1 and 100": "邀请列表每页数量必须在 1–100 之间",
+  "Invalid invitation cursor": "邀请列表游标无效"
 }

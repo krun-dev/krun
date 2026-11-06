@@ -163,13 +163,14 @@ func (p *Provider) Complete(ctx context.Context, code, verifier, nonce string) (
 			return Identity{}, errors.New("invalid ID token")
 		}
 		var claims struct {
-			Name  string `json:"name"`
-			Email string `json:"email"`
+			Name          string `json:"name"`
+			Email         string `json:"email"`
+			EmailVerified bool   `json:"email_verified"`
 		}
 		if e = verified.Claims(&claims); e != nil {
 			return Identity{}, e
 		}
-		return Identity{Subject: verified.Subject, Name: claims.Name, Email: claims.Email}, nil
+		return Identity{Subject: verified.Subject, Name: claims.Name, Email: claims.Email, EmailVerified: claims.EmailVerified}, nil
 	}
 	endpointURL, e := url.Parse(p.Config.UserInfoURL)
 	if e != nil {

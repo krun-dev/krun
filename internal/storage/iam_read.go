@@ -13,7 +13,7 @@ import (
 // rather than a sequence of queries.
 func (s *Store) loadIAM(ctx context.Context, st *domain.State) error {
 	batch := &pgx.Batch{}
-	queueStateRead(ctx, batch, `SELECT user_id, source, subject, name, email, status, auth_version FROM krun_users`)
+	queueStateRead(ctx, batch, `SELECT user_id, source, subject, name, email, email_verified, status, auth_version FROM krun_users`)
 	queueStateRead(ctx, batch, `SELECT org_id, name, revision FROM krun_organizations`)
 	queueStateRead(ctx, batch, `SELECT org_id, source FROM krun_org_sources ORDER BY source`)
 	queueStateRead(ctx, batch, `SELECT org_id, user_id FROM krun_members`)
@@ -77,7 +77,7 @@ func readUsers(results pgx.BatchResults, st *domain.State) error {
 	defer rows.Close()
 	for rows.Next() {
 		var u domain.User
-		if err = rows.Scan(&u.ID, &u.Source, &u.Subject, &u.Name, &u.Email, &u.Status, &u.AuthVersion); err != nil {
+		if err = rows.Scan(&u.ID, &u.Source, &u.Subject, &u.Name, &u.Email, &u.EmailVerified, &u.Status, &u.AuthVersion); err != nil {
 			return err
 		}
 		st.Users[u.ID] = u

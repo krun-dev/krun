@@ -5,13 +5,14 @@ import (
 )
 
 type User struct {
-	ID          string `json:"user_id"`
-	Source      string `json:"source_id"`
-	Subject     string `json:"subject"`
-	Name        string `json:"name"`
-	Email       string `json:"email,omitempty"`
-	Status      string `json:"status"`
-	AuthVersion int    `json:"auth_version"`
+	ID            string `json:"user_id"`
+	Source        string `json:"source_id"`
+	Subject       string `json:"subject"`
+	Name          string `json:"name"`
+	Email         string `json:"email,omitempty"`
+	EmailVerified bool   `json:"email_verified"`
+	Status        string `json:"status"`
+	AuthVersion   int    `json:"auth_version"`
 }
 
 type Organization struct {

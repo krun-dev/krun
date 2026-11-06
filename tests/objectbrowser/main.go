@@ -106,6 +106,22 @@ func run() error {
 			Name:         "只读成员测试登录",
 			Registration: "jit",
 		},
+		{
+			ID:           "ui-invitee",
+			Source:       "ui-invitee",
+			Type:         "dev",
+			ClientID:     "replace-me-ui-invitee",
+			Name:         "邀请成员测试登录",
+			Registration: "jit",
+		},
+		{
+			ID:           "ui-outsider",
+			Source:       "ui-outsider",
+			Type:         "dev",
+			ClientID:     "replace-me-ui-outsider",
+			Name:         "邀请边界测试登录",
+			Registration: "jit",
+		},
 	}
 	cfg.StaticDir, _ = filepath.Abs("dist/console")
 	store, err := control.OpenStore(ctx, cfg.DB)

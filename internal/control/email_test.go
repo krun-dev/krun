@@ -105,7 +105,7 @@ func TestEmailLoginIdentitySessionAndReplay(t *testing.T) {
 		User  User
 		Admin bool `json:"system_admin"`
 	}
-	if err := json.Unmarshal(me.Body.Bytes(), &data); err != nil || me.Code != 200 || data.User.Email != "person@example.com" || data.User.Subject != data.User.Email || data.Admin {
+	if err := json.Unmarshal(me.Body.Bytes(), &data); err != nil || me.Code != 200 || data.User.Email != "person@example.com" || !data.User.EmailVerified || data.User.Subject != data.User.Email || data.Admin {
 		t.Fatal(me.Code, me.Body.String(), err)
 	}
 	if err := store.Update(context.Background(), PartitionAll, func(st *State) error {

@@ -75,6 +75,11 @@ const OAuthConsent = lazy(() =>
 const Login = lazy(() =>
   import("@/components/login").then((module) => ({ default: module.Login })),
 );
+const OrganizationInvitationJoin = lazy(() =>
+  import("@/components/organization-invitation-join").then((module) => ({
+    default: module.OrganizationInvitationJoin,
+  })),
+);
 const IAMPage = lazy(() =>
   import("@/components/management").then((module) => ({
     default: module.IAMPage,
@@ -211,6 +216,11 @@ export default function App() {
   const oauthLogin =
     new URLSearchParams(window.location.search).has("oauth") ||
     new URLSearchParams(window.location.search).has("oauth_device");
+  const [joining] = useState(
+    () =>
+      new URLSearchParams(window.location.search).get("page") === "join" ||
+      new URLSearchParams(window.location.hash.slice(1)).has("invite"),
+  );
   const notify = useCallback((message: string) => setNotice(message), []);
   const reload = useCallback(() => setRefresh((x) => x + 1), []);
   useEffect(() => {
@@ -244,7 +254,7 @@ export default function App() {
   // previous page's parameters behind, so refreshing or sharing a link reopened
   // the wrong page.
   useEffect(() => {
-    if (oauthLogin || !me) {
+    if (oauthLogin || joining || !me) {
       return;
     }
     const url = new URL(location.href);
@@ -266,7 +276,7 @@ export default function App() {
     if (scope) url.searchParams.set("workspace", scope);
     else url.searchParams.delete("workspace");
     if (url.toString() !== location.href) history.replaceState(null, "", url);
-  }, [section, scope, system, me, oauthLogin]);
+  }, [section, scope, system, me, oauthLogin, joining]);
   useEffect(() => {
     let active = true;
     Promise.all([
@@ -373,10 +383,11 @@ export default function App() {
   const permissionsReady =
     orgsLoaded && (system || !org || permissions?.organization_id === org.id);
   useEffect(() => {
-    if (me && permissionsReady && !canOpen(section)) {
+    if (!joining && me && permissionsReady && !canOpen(section)) {
       setSection(system ? "orgs" : "overview");
     }
   }, [
+    joining,
     me,
     permissionsReady,
     permissions,
@@ -426,6 +437,12 @@ export default function App() {
           {t("重试")}
         </Button>
       </div>
+    );
+  if (joining)
+    return (
+      <Suspense fallback={<Loading />}>
+        <OrganizationInvitationJoin me={me} providers={providers} development={development} />
+      </Suspense>
     );
   if (oauthLogin)
     return (
@@ -878,6 +895,11 @@ export default function App() {
               base={base}
               scope={scope}
               system={system}
+              canInvite={
+                !system &&
+                permissions?.actions["member.manage"] === true &&
+                permissions?.actions["iam.grant"] === true
+              }
               notify={notify}
               refresh={refresh}
               reload={reload}

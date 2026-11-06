@@ -68,6 +68,7 @@ func (s *Service) CommitLogin(ctx context.Context, in LoginInput) error {
 			}
 			user.Name = id.Name
 			user.Email = id.Email
+			user.EmailVerified = id.EmailVerified
 			st.Users[user.ID] = user
 			st.Revision++
 			session.User = user.ID

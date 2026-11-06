@@ -95,7 +95,7 @@ func (s *Server) emailVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	if e := s.finishEmailLogin(r.Context(), r, p, browserHash, challenge.Generation, identityprovider.Identity{Subject: challenge.Email, Name: challenge.Email, Email: challenge.Email}, sessionToken, key); e != nil {
+	if e := s.finishEmailLogin(r.Context(), r, p, browserHash, challenge.Generation, identityprovider.Identity{Subject: challenge.Email, Name: challenge.Email, Email: challenge.Email, EmailVerified: true}, sessionToken, key); e != nil {
 		s.recordAnonymousAudit(r, p, "auth.login.failed."+e.Error())
 		s.writeError(w, r, e)
 		return
