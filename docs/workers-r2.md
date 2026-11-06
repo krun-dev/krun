@@ -199,8 +199,10 @@ runtime 只缓存完成的普通凭据数据，授权租约为 5 分钟；STS �
 禁用桶立即阻止服务端的新签发；runtime 已缓存的租约最多还能签名约 5 分钟。
 已发 STS、签名或在途数据请求不受本地删缓存的即时撤销保证。
 
-validator 只有派生或显式配置的独立 token，不挂载 serving token，也没有对象传输
-Fetcher；其签名入口始终拒绝存储操作。候选代码不能借验证写生产对象。
+候选校验使用独立的 loader 和缓存命名空间，即使运行在 serving Pod 中，签名入口也会
+根据可信父 Worker 的 validation props 拒绝凭据获取，绑定的对象传输 Fetcher 同样禁用。
+独立 validator 只挂载派生或显式配置的 validator token，不挂载 serving token。
+候选代码不能借验证写生产对象。
 trusted entrypoint 开启 request signal 以转发断开事件；业务模块的 compatibility flags
 继续来自原始 manifest。
 签名控制调用使用 runtime 内的 Fetcher，消息上限 32 KiB，不包含对象数据；不要求业务

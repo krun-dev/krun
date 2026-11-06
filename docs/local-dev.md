@@ -40,7 +40,8 @@ SSH 隧道或 `dev-*.sh` 启动生产。两者共用 `internal/adapters/runtimeb
 - `builder_mode: local`：builder 在本机以 `node workers/builder/build-worker.mjs` 运行，不创建 Kubernetes Job。Wrangler/custom build 会执行仓库代码，因此此模式只用于开发者自己的可信仓库；面向不可信租户必须使用 Kubernetes builder，并建议配置 `builder_runtime_class` 为 gVisor/Kata 等强隔离运行时。
 - `gateways` / `domains`：网关实例与域名清单。每个域名绑定一个网关，并带一个只用于展示的 `label`；服务从中选择要用哪些域名。
 - 网关的 `base`（如 `http://127.0.0.1:38080`）：控制台 invoke 经 SSH 隧道打到对应的集群网关实例。
-- `runtime_pools[].validator_service: runtime-validator-default`：候选只在独立 validator 中加载，不进入 serving runtime。
+- `validator_pool: default`：local-first 隧道脚本显式选择独立校验模式；通用部署默认为业务 Pod 校验。
+- `runtime_pools[].validator_service: runtime-validator-default`：此 local-first 配置的候选在独立 validator 中加载。
 - `runtime_pools[].validator_management_base: http://127.0.0.1:38084`：local-first 控制面通过隧道访问 validator；生产集群内通常留空，直接访问 Pod IP。
 - 使用本地 MinIO 时，`s3_endpoint` 和 `s3_builder_endpoint` 指向开发机（通常是 `http://127.0.0.1:9000`）；本地 builder 使用同一地址。
 - `s3_runtime_endpoint` 是 runtime 下载制品和静态文件所见的地址。本地 MinIO 使用

@@ -192,6 +192,31 @@ func TestWorkerSecretPutCreatesAndDeploysImmutableVersion(t *testing.T) {
 		t.Fatalf("runtime secret response is cacheable: %q", authorized.Header().Get("Cache-Control"))
 	}
 
+	// Selecting a shared validator must not grant its token read access to the
+	// source pool's secrets, even if it forges the source pool header.
+	validator := appconfig.WorkerRuntimePool{
+		ID:             "validation",
+		ValidatorToken: strings.Repeat("v", 24),
+	}
+	server.Config.Workers.RuntimePools = append(server.Config.Workers.RuntimePools, validator)
+	server.Config.Workers.ValidatorPool = validator.ID
+	for _, test := range []struct {
+		pool   string
+		status int
+	}{
+		{validator.ID, http.StatusNotFound},
+		{"default", http.StatusForbidden},
+	} {
+		response := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/internal/workers/versions/"+version.ID+"/secrets", nil)
+		req.Header.Set("Authorization", "Bearer "+validator.ValidatorToken)
+		req.Header.Set("X-Runtime-Pool", test.pool)
+		server.serveInternal(response, req)
+		if response.Code != test.status || strings.Contains(response.Body.String(), "secret-value-never-return") {
+			t.Fatalf("shared validator secret access for pool %s: %d", test.pool, response.Code)
+		}
+	}
+
 	// Model convergence so a delete can create the next immutable version.
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
 		service := st.Workers.Services["svc-a"]

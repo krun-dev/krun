@@ -94,21 +94,57 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 		return w.NoteOperation(ctx, op.ID, "Waiting for Gateway and HTTPRoute confirmation")
 	}
 	if op.State != "committed" {
-		validators, validationErr := w.Kube.ValidatorMembers(ctx, pool.ID, pool.ValidatorService)
-		if validationErr != nil {
-			return validationErr
+		validationPool := pool
+		members := pods
+		base := ""
+		role := "runtime"
+		if w.Config.ValidatorPool != "" {
+			var found bool
+			validationPool, found = w.Config.RuntimePool(w.Config.ValidatorPool)
+			if !found {
+				return w.FailOperation(ctx, op.ID, "Validation pool unavailable")
+			}
+			members, e = w.Kube.ValidatorMembers(ctx, validationPool.ID, validationPool.ValidatorService)
+			if e != nil {
+				return e
+			}
+			base = validationPool.ValidatorManagementBase
+			role = "validator"
 		}
-		if len(validators) == 0 {
-			return w.NoteOperation(ctx, op.ID, "Waiting for isolated validator members")
+		if len(members) == 0 {
+			return w.NoteOperation(ctx, op.ID, "Waiting for validation members")
 		}
+		candidate := members[0]
 
-		candidate := validators[0]
+		// Older serving images also expose /validate, but do not isolate its
+		// loader and bindings. Check capability before executing any candidate.
+		ready, status, err := w.Management(ctx, validationPool, candidate, base, "/ready", nil)
+		readyMatches := ready["validation_protocol"] == float64(1) &&
+			ready["role"] == role &&
+			ready["pool"] == validationPool.ID
+		readyUIDMatches := base != "" || ready["pod_uid"] == candidate.UID
+		if err != nil || status != 200 || !readyMatches || !readyUIDMatches {
+			return w.NoteOperation(ctx, op.ID, "Waiting for a runtime image supporting isolated validation")
+		}
+		secrets, err := w.validationSecrets(ctx, version, pool.ID)
+		if err != nil {
+			return w.NoteOperation(ctx, op.ID, "Candidate secrets unavailable")
+		}
 
 		signed, e := w.DownloadURL(ctx, artifact)
 		if e != nil {
 			return w.NoteOperation(ctx, op.ID, "Artifact URL unavailable")
 		}
-		result, status, e := w.Management(ctx, pool, candidate, pool.ValidatorManagementBase, "/validate", map[string]any{"version": version, "artifact": map[string]any{"download_url": signed, "size": artifact.Size, "archive_sha256": artifact.ArchiveDigest}})
+		payload := map[string]any{
+			"version": version,
+			"secrets": secrets,
+			"artifact": map[string]any{
+				"download_url":   signed,
+				"size":           artifact.Size,
+				"archive_sha256": artifact.ArchiveDigest,
+			},
+		}
+		result, status, e := w.Management(ctx, validationPool, candidate, base, "/validate", payload)
 		if e != nil {
 			return w.NoteOperation(ctx, op.ID, "Runtime validation temporarily unavailable")
 		}
@@ -116,22 +152,27 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 			if result["code"] == "DEPENDENCY_UNAVAILABLE" {
 				return w.NoteOperation(ctx, op.ID, "Candidate dependency unavailable")
 			}
-			return w.FailOperation(ctx, op.ID, "Candidate validation failed on isolated validator "+candidate.Name)
+			return w.FailOperation(ctx, op.ID, "Candidate validation failed on member "+candidate.Name)
 		}
 
 		uidMatches := result["pod_uid"] == candidate.UID
-		if pool.ValidatorManagementBase != "" {
+		if base != "" {
 			uidMatches = true
 		}
 		if !uidMatches || result["version_id"] != version.ID || result["archive_sha256"] != version.ArchiveDigest {
 			return w.FailOperation(ctx, op.ID, fmt.Sprintf("Candidate identity mismatch (pod %s uid %s vs %s, version %s vs %s, archive %s vs %s)", candidate.Name, candidate.UID, result["pod_uid"], version.ID, result["version_id"], version.ArchiveDigest, result["archive_sha256"]))
 		}
-		after, e := w.Kube.ValidatorMembers(ctx, pool.ID, pool.ValidatorService)
+		var after []kubernetes.WorkerPod
+		if w.Config.ValidatorPool == "" {
+			after, e = w.Kube.RuntimeMembers(ctx, pool.ID, pool.RuntimeService)
+		} else {
+			after, e = w.Kube.ValidatorMembers(ctx, validationPool.ID, validationPool.ValidatorService)
+		}
 		if e != nil {
 			return e
 		}
-		if WorkerMemberIDs(after) != WorkerMemberIDs(validators) {
-			return w.NoteOperation(ctx, op.ID, "Validator membership changed; validating again")
+		if WorkerMemberIDs(after) != WorkerMemberIDs(members) {
+			return w.NoteOperation(ctx, op.ID, "Validation membership changed; validating again")
 		}
 
 		actor := state.OperationPrivate[op.ID].Actor
@@ -191,4 +232,28 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 		}
 	}
 	return w.Service.Store.ConfirmOperation(ctx, op)
+}
+
+// Only this candidate's secrets travel to the selected member; a shared
+// validator never receives another pool's serving token or general read access.
+func (w *Controller) validationSecrets(ctx context.Context, version domain.WorkerVersion, pool string) (map[string]any, error) {
+	values := map[string]string{}
+	if version.SecretDigest != "" {
+		digest, encrypted, err := w.Service.Store.EncryptedVersionSecrets(ctx, version.ID, pool)
+		if err != nil {
+			return nil, err
+		}
+		if digest != version.SecretDigest {
+			return nil, fmt.Errorf("candidate secret binding mismatch")
+		}
+		values, err = DecryptWorkerSecrets(w.Config, digest, encrypted)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return map[string]any{
+		"version_id":    version.ID,
+		"secret_digest": version.SecretDigest,
+		"values":        values,
+	}, nil
 }

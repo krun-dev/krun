@@ -44,6 +44,9 @@ workers:
       labels:
         exposure: internal
       default: true
+  # 默认从业务 pool 的 Ready serving Pod 校验候选，不额外部署 validator。
+  # 需要进程隔离时填一个 pool ID，所有业务 pool 共用该池的独立 validator。
+  validator_pool: ""
   runtime_pools:
     - id: internal-a
       access: [private]

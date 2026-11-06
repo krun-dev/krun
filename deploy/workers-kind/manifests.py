@@ -55,6 +55,7 @@ workers:
   npm_registry: https://git-mock/npm/
   s3_location_id: primary
   clone_directory: /workdir
+  validator_pool: default
   runtime_pools:
     - id: default
       access: [public, private]

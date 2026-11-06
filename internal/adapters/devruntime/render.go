@@ -94,6 +94,9 @@ func newRenderOptions(c config.Config, controlHost string) (renderOptions, error
 			break
 		}
 	}
+	if c.Workers.ValidatorPool != "default" {
+		return options, errors.New("local-first tunnel scripts require validator_pool: default")
+	}
 	if options.pool.ID != "default" {
 		return options, errors.New("local-first runtime renderer requires the default pool id default")
 	}

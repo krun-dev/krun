@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -78,11 +79,20 @@ func TestCatalogValidationAndDefaults(t *testing.T) {
 	}
 }
 
-func TestRuntimePoolRequiresIsolatedValidatorService(t *testing.T) {
+func TestRuntimePoolOptionalValidatorService(t *testing.T) {
 	missing := catalogConfig()
 	missing.RuntimePools[0].ValidatorService = ""
+	if err := missing.Validate(); err != nil {
+		t.Fatal("serving validation should not require a validator service", err)
+	}
+	missing.ValidatorPool = "default"
 	if err := missing.Validate(); err == nil {
-		t.Fatal("runtime pool without validator service was accepted")
+		t.Fatal("dedicated validation accepted a missing service")
+	}
+	unknown := catalogConfig()
+	unknown.ValidatorPool = "unknown"
+	if err := unknown.Validate(); err == nil {
+		t.Fatal("unknown validator pool accepted")
 	}
 	same := catalogConfig()
 	same.RuntimePools[0].ValidatorService = same.RuntimePools[0].RuntimeService
@@ -781,85 +791,203 @@ func TestKubernetesClientReloadsRotatedBearerToken(t *testing.T) {
 	}
 }
 
-func TestProcessOperationStopsAfterCommitCASConflict(t *testing.T) {
-	s, store, _ := workerTestServer(t)
-	raw := workerArchive(t, []string{"manifest.json", "modules/index.js"}, "export default {}", false)
-	code, manifest, err := workerartifact.ParseWorkerArchive(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s3Server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
-		w.Header().Set("ETag", `"archive"`)
-		w.Header().Set("Last-Modified", now().UTC().Format(http.TimeFormat))
-		if r.Method == http.MethodHead {
-			return
-		}
-		_, _ = w.Write(raw)
-	}))
-	defer s3Server.Close()
-
-	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/pods"):
-			validator := strings.Contains(r.URL.Query().Get("labelSelector"), "role=krun-validator")
-			name, uid := "runtime-0", "runtime-pod-1"
-			if validator {
-				name, uid = "validator-0", "validator-pod-1"
+func TestProcessOperationValidationMembers(t *testing.T) {
+	for _, mode := range []string{"serving", "dedicated", "dedicated-public", "no-validator", "old-image", "membership-change", "no-members", "bad-identity", "candidate-invalid"} {
+		t.Run(mode, func(t *testing.T) {
+			s, store, _ := workerTestServer(t)
+			raw := workerArchive(t, []string{"manifest.json", "modules/index.js"}, "export default {}", false)
+			code, manifest, err := workerartifact.ParseWorkerArchive(raw)
+			if err != nil {
+				t.Fatal(err)
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
-				"metadata": map[string]any{"name": name, "uid": uid},
-				"status":   map[string]any{"podIP": "127.0.0.1", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}},
-			}}})
-		case strings.HasSuffix(r.URL.Path, "/endpointslices"):
-			uid := "runtime-pod-1"
-			if strings.Contains(r.URL.Query().Get("labelSelector"), "runtime-validator-default") {
-				uid = "validator-pod-1"
-			}
-			ready := true
-			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{"endpoints": []any{map[string]any{
-				"addresses": []string{"127.0.0.1"}, "conditions": map[string]any{"ready": ready}, "targetRef": map[string]any{"uid": uid},
-			}}}}})
-		case r.URL.Path == "/validate":
-			_ = json.NewEncoder(w).Encode(map[string]any{"pod_uid": "validator-pod-1", "version_id": "rel-cas", "archive_sha256": code.ArchiveDigest})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer apiServer.Close()
+			s3Server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
+				w.Header().Set("ETag", `"archive"`)
+				w.Header().Set("Last-Modified", now().UTC().Format(http.TimeFormat))
+				if r.Method == http.MethodHead {
+					return
+				}
+				_, _ = w.Write(raw)
+			}))
+			defer s3Server.Close()
 
-	c := testWorkersConfig()
-	c.S3Endpoint, c.S3BuilderEndpoint = s3Server.URL, s3Server.URL
-	c.S3Bucket, c.S3AccessKey, c.S3SecretKey, c.S3LocationID = "artifacts", "access", "secret", "test"
-	c.RuntimePools[0].ValidatorManagementBase = apiServer.URL
-	c.RuntimePools[0].ManagementToken = strings.Repeat("m", 24)
-	s.Config.Workers = c
-	s3, err := workerapp.NewWorkerS3(c)
+			validated := 0
+			podReads := 0
+			expectedUID := "runtime-pod-1"
+			expectedPool := "default"
+			expectedRole := "runtime"
+			expectedToken := strings.Repeat("m", 24)
+			if strings.HasPrefix(mode, "dedicated") || mode == "no-validator" {
+				expectedUID = "validator-pod-1"
+				expectedPool = "validation"
+				expectedRole = "validator"
+				expectedToken = strings.Repeat("v", 24)
+			}
+			apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/pods"):
+					podReads++
+					if mode == "no-members" {
+						_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{}})
+						return
+					}
+					if mode == "membership-change" && validated > 0 {
+						_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{}})
+						return
+					}
+					validator := strings.Contains(r.URL.Query().Get("labelSelector"), "role=krun-validator")
+					name, uid := "runtime-0", "runtime-pod-1"
+					if validator {
+						if mode == "no-validator" {
+							_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{}})
+							return
+						}
+						if !strings.Contains(r.URL.Query().Get("labelSelector"), "pool=validation") {
+							t.Error("dedicated validator was selected from the business pool")
+						}
+						name, uid = "validator-0", "validator-pod-1"
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
+						"metadata": map[string]any{"name": name, "uid": uid},
+						"status":   map[string]any{"podIP": "127.0.0.1", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}},
+					}}})
+				case strings.HasSuffix(r.URL.Path, "/endpointslices"):
+					uid := "runtime-pod-1"
+					if strings.Contains(r.URL.Query().Get("labelSelector"), "runtime-validator-default") {
+						uid = "validator-pod-1"
+					}
+					ready := true
+					_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{"endpoints": []any{map[string]any{
+						"addresses": []string{"127.0.0.1"}, "conditions": map[string]any{"ready": ready}, "targetRef": map[string]any{"uid": uid},
+					}}}}})
+				case r.URL.Path == "/ready":
+					if r.Header.Get("Authorization") != "Bearer "+expectedToken {
+						t.Error("management used the wrong pool credential")
+					}
+					protocol := 1
+					if mode == "old-image" {
+						protocol = 0
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"pod_uid": expectedUID, "role": expectedRole, "pool": expectedPool, "validation_protocol": protocol})
+				case r.URL.Path == "/validate":
+					validated++
+					if r.Header.Get("Authorization") != "Bearer "+expectedToken {
+						t.Error("validation used the wrong pool credential")
+					}
+					var payload struct {
+						Secrets struct {
+							Version string            `json:"version_id"`
+							Digest  string            `json:"secret_digest"`
+							Values  map[string]string `json:"values"`
+						} `json:"secrets"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+						t.Error(err)
+					}
+					if payload.Secrets.Version != "rel-cas" || payload.Secrets.Values["API_SECRET"] != "candidate-only" || payload.Secrets.Digest == "" {
+						t.Error("immutable candidate secrets were not supplied")
+					}
+					uid := expectedUID
+					if mode == "bad-identity" {
+						uid = "different-pod"
+					}
+					if mode == "candidate-invalid" {
+						w.WriteHeader(http.StatusServiceUnavailable)
+						_ = json.NewEncoder(w).Encode(map[string]any{"code": "CANDIDATE_INVALID"})
+						return
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"pod_uid": uid, "version_id": "rel-cas", "archive_sha256": code.ArchiveDigest})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer apiServer.Close()
+
+			c := testWorkersConfig()
+			c.S3Endpoint, c.S3BuilderEndpoint = s3Server.URL, s3Server.URL
+			c.S3Bucket, c.S3AccessKey, c.S3SecretKey, c.S3LocationID = "artifacts", "access", "secret", "test"
+			c.SecretsActiveKey = "v1"
+			c.SecretsKeys = map[string]string{"v1": "ERERERERERERERERERERERERERERERERERERERERERE="}
+			if strings.HasPrefix(mode, "dedicated") || mode == "no-validator" {
+				c.ValidatorPool = "validation"
+				c.RuntimePools = append(c.RuntimePools, appconfig.WorkerRuntimePool{
+					ID: "validation", RuntimeService: "runtime-validation", ValidatorService: "runtime-validator-default",
+					ManagementToken: expectedToken,
+				})
+			}
+			sourcePool := "default"
+			if mode == "dedicated-public" {
+				sourcePool = "public"
+				c.RuntimePools[0].ID = sourcePool
+			}
+			c.RuntimePools[0].ManagementToken = strings.Repeat("m", 24)
+			s.Config.Workers = c
+			s3, err := workerapp.NewWorkerS3(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			controller := &workerapp.Controller{
+				Service: s.workerApplication(nil), Config: c, S3: s3, S3Builder: s3, S3Runtime: s3,
+				Kube: &kubernetes.Client{Base: apiServer.URL, Namespace: c.Namespace, Client: apiServer.Client()},
+				Http: &http.Client{Transport: validationTransport{target: apiServer.URL, base: apiServer.Client().Transport}}, AssetCache: map[string]workerapp.WorkerCachedAssets{}, Replica: "test",
+			}
+			version := WorkerVersion{ID: "rel-cas", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-cas", ArchiveDigest: code.ArchiveDigest, ModuleDigest: code.Digest}
+			artifact := WorkerArtifact{ID: "art-cas", Organization: "org-a", State: "finalized", Profile: code.Profile, ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: code.CompatibilityFlags, Size: len(raw), ObjectKey: "v1/org-a/archive.tar.gz", StorageLocation: "test", Bucket: "artifacts", Created: now()}
+			op := WorkerOperation{ID: "op-cas", Kind: "publish", Service: "svc-a", Organization: "org-a", Environment: "production", State: "validating", Version: version.ID, ExpectedRevision: 99, Created: now()}
+			encrypted, err := workerapp.EncryptWorkerSecret(c, "org-a", "svc-a", "production", "API_SECRET", "admin", "candidate-only")
+			if err != nil {
+				t.Fatal(err)
+			}
+			version.SecretVersions = map[string]string{"API_SECRET": encrypted.Version.ID}
+			version.SecretDigest = workerapp.WorkerSecretsDigest(version.SecretVersions)
+			state := WorkerState{
+				Placements: map[string]WorkerPlacement{"svc-a\x00" + sourcePool: {Service: "svc-a", Organization: "org-a", Pool: sourcePool, Role: "primary", State: "active"}},
+				Versions:   map[string]WorkerVersion{version.ID: version}, Artifacts: map[string]WorkerArtifact{artifact.ID: artifact},
+				Operations: map[string]WorkerOperation{op.ID: op}, OperationPrivate: map[string]WorkerOperationPrivate{op.ID: {Actor: WorkerActor{User: "admin", AuthVersion: 1}}},
+			}
+			if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
+				st.Workers.Versions[version.ID] = version
+				st.Workers.Placements = state.Placements
+				st.PendingWorkerSecrets = map[string]encryptedWorkerSecret{encrypted.Version.ID: encrypted}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := controller.ProcessOperation(context.Background(), op, state, true); err != nil {
+				t.Fatal(err)
+			}
+			latest, _, err := store.ConfigState(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if latest != 0 {
+				t.Fatalf("uncommitted operation published edge config revision %d", latest)
+			}
+			expectedCalls := 1
+			if mode == "old-image" || mode == "no-members" || mode == "no-validator" {
+				expectedCalls = 0
+			}
+			if validated != expectedCalls || podReads == 0 {
+				t.Fatalf("validation calls=%d, pod reads=%d", validated, podReads)
+			}
+		})
+	}
+}
+
+type validationTransport struct {
+	target string
+	base   http.RoundTripper
+}
+
+func (v validationTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	target, err := url.Parse(v.target)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
-	controller := &workerapp.Controller{
-		Service: s.workerApplication(nil), Config: c, S3: s3, S3Builder: s3, S3Runtime: s3,
-		Kube: &kubernetes.Client{Base: apiServer.URL, Namespace: c.Namespace, Client: apiServer.Client()},
-		Http: apiServer.Client(), AssetCache: map[string]workerapp.WorkerCachedAssets{}, Replica: "test",
-	}
-	version := WorkerVersion{ID: "rel-cas", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-cas", ArchiveDigest: code.ArchiveDigest, ModuleDigest: code.Digest}
-	artifact := WorkerArtifact{ID: "art-cas", Organization: "org-a", State: "finalized", Profile: code.Profile, ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: code.CompatibilityFlags, Size: len(raw), ObjectKey: "v1/org-a/archive.tar.gz", StorageLocation: "test", Bucket: "artifacts", Created: now()}
-	op := WorkerOperation{ID: "op-cas", Kind: "publish", Service: "svc-a", Organization: "org-a", Environment: "production", State: "validating", Version: version.ID, ExpectedRevision: 99, Created: now()}
-	state := WorkerState{
-		Versions: map[string]WorkerVersion{version.ID: version}, Artifacts: map[string]WorkerArtifact{artifact.ID: artifact},
-		Operations: map[string]WorkerOperation{op.ID: op}, OperationPrivate: map[string]WorkerOperationPrivate{op.ID: {Actor: WorkerActor{User: "admin", AuthVersion: 1}}},
-	}
-	if err := controller.ProcessOperation(context.Background(), op, state, true); err != nil {
-		t.Fatal(err)
-	}
-	latest, _, err := store.ConfigState(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if latest != 0 {
-		t.Fatalf("commit CAS conflict still published edge config revision %d", latest)
-	}
+	clone := req.Clone(req.Context())
+	clone.URL.Scheme = target.Scheme
+	clone.URL.Host = target.Host
+	return v.base.RoundTrip(clone)
 }
 
 func TestStaticRoutesFollowDomainGatewayBinding(t *testing.T) {

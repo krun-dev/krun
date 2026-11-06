@@ -19,6 +19,7 @@ func TestExternalRenderSeparatesRuntimeCredentialsAndEnablesVerifiedTLS(t *testi
 	cfg := config.Config{
 		InternalListen: "0.0.0.0:9001",
 		Workers: &config.WorkersConfig{
+			ValidatorPool:     "default",
 			S3RuntimeEndpoint: "https://storage.example.com",
 			S3BucketMode:      "external",
 			S3Region:          "cn-beijing",
@@ -115,6 +116,7 @@ func TestRenderStorageModes(t *testing.T) {
 			cfg := config.Config{
 				InternalListen: "0.0.0.0:9001",
 				Workers: &config.WorkersConfig{
+					ValidatorPool:     "default",
 					S3RuntimeEndpoint: test.endpoint,
 					S3AccessMode:      test.accessMode,
 					S3BucketMode:      test.bucketMode,

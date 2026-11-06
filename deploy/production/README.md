@@ -1,7 +1,7 @@
 # 公司内网部署
 
 交付物面向已有 Kubernetes + Gateway API/kgateway 的单地域试用版。默认示例使用一个
-private pool、一个业务 domain 和一个已存在 Gateway。前端在 OSS；Go、serving workerd 和独立 validator 在专用 namespace，builder 按需创建 Job。数据库、对象桶、
+private pool、一个业务 domain 和一个已存在 Gateway。前端在 OSS；Go、serving workerd 和可选独立 validator 在专用 namespace，builder 按需创建 Job。数据库、对象桶、
 SSO、TLS/内网入口、镜像仓库和 Gateway 由公司基础设施提供。本目录不创建数据库、
 云账号、桶策略、公网 LB 或证书，也不运行 kind/dev SSH 脚本。
 
@@ -13,7 +13,7 @@ flowchart LR
     Edge -->|控制台静态路径| OSS[OSS 静态站点]
     Gateway -->|Worker 域名| Serving[serving workerd]
     Go --> PG[(PostgreSQL)]
-    Go --> Validator[独立 validator]
+    Go -. validator_pool 可选 .-> Validator[共享独立 validator]
     Go -->|创建/协调| Builder[builder Jobs]
     Go -->|授权 / STS| TOS[对象存储]
     Serving -->|对象与制品数据| TOS
@@ -92,7 +92,7 @@ base64url 编码并去掉 `=`。密钥只在密钥平台或 gitignored 主配置
 
 渲染器拒绝开发模式、local builder、`Never` 拉取策略、managed/匿名制品存储、SSH
 管理地址、示例凭据、全零加密 key，以及共享系统 namespace。多个 pool 会各自生成
-serving/validator 与网络策略；多个 Gateway 时必须在 `deployment.console_gateway` 指定
+serving、可选共享 validator 与网络策略；多个 Gateway 时必须在 `deployment.console_gateway` 指定
 控制台使用的 Gateway ID，所有 Gateway 都要通过预检。每个业务 domain 必须经 Profile 唯一选择一个运行池。
 
 ## 构建与打包
@@ -192,7 +192,8 @@ pool ID、域名或存储 prefix 也需要显式规划；不要原地把稳定 I
 
 `config/test.example.yaml` 引用现有 `kgateway-system/krun-internal`、`krun-office`、
 `krun-public`，listener 均为 `http:80`。模板分别使用 `internal-a`、`office-a`、
-`public-a` 三个池及独立 validator，`pool_selector` 和 `domain_selector` 按 exposure
+`public-a` 三个池，默认复用业务 Pod 校验；设置 `workers.validator_pool: office-a`
+可共用一个独立 validator。`pool_selector` 和 `domain_selector` 按 exposure
 匹配。Office 使用 private 访问类型。控制台 API 通过 `deployment.console_gateway: office`
 仅挂在 Office Gateway；业务 HTTPRoute 在控制面运行后协调产生。
 
@@ -211,3 +212,8 @@ Gateway 的 base 是同名 Service 的预期集群地址。渲染器不会创建
 `workers.kubernetes_context`，用于本地/集群外控制面；配置方式见
 [本地开发](../../docs/local-dev.md#显式-kubeconfig)。本目录的标准集群内渲染器仍要求
 ServiceAccount 凭证，不读取或打包操作者的 kubeconfig。
+
+候选校验默认复用业务 pool 的 Ready Pod，不额外渲染 validator。需要进程隔离时在主配置
+设置 `workers.validator_pool` 为已有 pool ID，所有业务 pool 共用该池的独立 validator。
+升级期间暂停发布，先升级 runtime 镜像再升级控制面后恢复发布；旧镜像不支持 `validation_protocol: 1` 时会等待。
+切换模式不自动删除旧 validator 资源；确认新模式可发布后显式清理。
