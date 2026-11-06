@@ -99,7 +99,7 @@
   "系统空间没有组织成员": "System scope has no organization members",
   "在系统用户中管理账号，在系统用户组和角色授权中管理系统管理员。": "Manage accounts in System users and administrators through system groups and role assignments.",
   "暂无{{v0}}": "No {{v0}} yet",
-  "成员": "Members",
+  "成员": "Member",
   "未提供邮箱": "No email provided",
   "本地用户 ID": "Local user ID",
   "身份来源": "Identity source",
@@ -341,13 +341,10 @@
   "开发": "Development",
   "预发布": "Staging",
   "生产": "Production",
-  "查看者": "Viewer",
-  "开发者": "Developer",
   "组织管理员": "Organization administrator",
   "用户权限未允许": "User permissions do not allow this action",
   "密钥策略未允许": "The key policy does not allow this action",
   "权限已允许": "Access allowed",
-  "发布者": "Publisher",
   "登录已过期或已被新的请求替代，请重新登录。": "This sign-in expired or was replaced by a newer request. Sign in again.",
   "身份来源拒绝了登录请求。": "The identity provider denied the sign-in request.",
   "身份来源登录失败，请重试或联系管理员。": "Identity provider sign-in failed. Try again or contact your administrator.",
@@ -731,5 +728,6 @@
   "删除会影响所有使用此对象的 Worker，且无法撤销。": "Deletion affects every Worker using this object and cannot be undone.",
   "存储": "Storage",
   "对象": "Object",
-  "写入": "Write"
+  "写入": "Write",
+  "桶": "Bucket"
 }

@@ -39,7 +39,7 @@ func wantCode(t *testing.T, err error, code string) {
 
 func TestMemberRemovalRevokesOnlyItsOrganization(t *testing.T) {
 	svc, st, user := fixture()
-	st.Assignments["direct"] = domain.Assignment{ID: "direct", SubjectKind: "user", SubjectID: user.ID, Role: "developer", ScopeKind: "service", ScopeID: "service-a"}
+	st.Assignments["direct"] = domain.Assignment{ID: "direct", SubjectKind: "user", SubjectID: user.ID, Role: "member", ScopeKind: "service", ScopeID: "service-a"}
 	if err := svc.DeleteMember(st, target("a"), user.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestMemberRemovalRevokesOnlyItsOrganization(t *testing.T) {
 
 func TestAssignmentsValidateMembershipAndScopeBeforeMutation(t *testing.T) {
 	svc, st, user := fixture()
-	input := iam.AssignmentInput{SubjectKind: "group", SubjectID: "group-b", Role: "developer", ScopeKind: "service", ScopeID: "service-a"}
+	input := iam.AssignmentInput{SubjectKind: "group", SubjectID: "group-b", Role: "member", ScopeKind: "service", ScopeID: "service-a"}
 	_, err := svc.WriteAssignment(st, target("a"), "", input, false)
 	wantCode(t, err, "POLICY_INVALID")
 	input.SubjectKind, input.SubjectID, input.ScopeID = "user", user.ID, "service-b"

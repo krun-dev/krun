@@ -127,12 +127,13 @@ func compileUser(st *domain.State, u domain.User) (*cedar.PolicySet, error) {
 			}
 			if a.Role == "org_admin" {
 				for action, kinds := range actions {
-					if !strings.HasPrefix(action, "system.") && action != "organization.create" && !slices.Contains(kinds, "system") {
-						list = append(list, action)
+					if strings.HasPrefix(action, "system.") || action == "organization.create" {
+						continue
 					}
-					if action == "apiKey.create" {
-						list = append(list, action)
+					if len(kinds) == 1 && kinds[0] == "system" {
+						continue
 					}
+					list = append(list, action)
 				}
 			} else {
 				list = roleActions[a.Role]

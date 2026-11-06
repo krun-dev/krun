@@ -32,11 +32,15 @@ import { Empty, Field, Loading, PageHeader } from "@/components/common";
 export function BucketObjects({
   base,
   bucket,
+  canWrite,
+  canDelete,
   back,
   notify,
 }: {
   base: string;
   bucket: WorkerBucket;
+  canWrite: boolean;
+  canDelete: boolean;
   back: () => void;
   notify: (message: string) => void;
 }) {
@@ -121,7 +125,7 @@ export function BucketObjects({
   }
 
   async function upload(files: File[]) {
-    if (!files.length || activeUpload.current) {
+    if (!canWrite || !files.length || activeUpload.current) {
       return;
     }
     const controller = new AbortController();
@@ -160,7 +164,7 @@ export function BucketObjects({
   }
 
   async function deleteObject() {
-    if (!remove) {
+    if (!canDelete || !remove) {
       return;
     }
     setBusy(true);
@@ -203,23 +207,29 @@ export function BucketObjects({
         title={bucket.name}
         description={t("上传下载直连存储。引用文件时保存桶和对象 key，短期链接到期后需重新获取。")}
         action={
-          <Button disabled={Boolean(transfer)} onClick={() => input.current?.click()}>
-            <Upload size={16} />
-            {t("上传文件")}
-          </Button>
+          canWrite ? (
+            <Button disabled={Boolean(transfer)} onClick={() => input.current?.click()}>
+              <Upload size={16} />
+              {t("上传文件")}
+            </Button>
+          ) : undefined
         }
       />
-      <input
-        ref={input}
-        type="file"
-        multiple
-        className="sr-only"
-        aria-label={t("上传文件")}
-        onChange={(event) => void upload(Array.from(event.target.files || []))}
-      />
-      <p className="mb-4 text-xs text-muted-foreground">
-        {t("同名对象将被覆盖；上传会保留 R2 binding 所需的元数据。")}
-      </p>
+      {canWrite ? (
+        <input
+          ref={input}
+          type="file"
+          multiple
+          className="sr-only"
+          aria-label={t("上传文件")}
+          onChange={(event) => void upload(Array.from(event.target.files || []))}
+        />
+      ) : null}
+      {canWrite ? (
+        <p className="mb-4 text-xs text-muted-foreground">
+          {t("同名对象将被覆盖；上传会保留 R2 binding 所需的元数据。")}
+        </p>
+      ) : null}
       <div className="mb-4 flex flex-wrap items-center gap-1" aria-label={t("对象目录")}>
         <Button variant="ghost" size="sm" onClick={() => navigate("")}>
           {t("根目录")}
@@ -338,7 +348,12 @@ export function BucketObjects({
                             {t("下载")}
                           </a>
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => setRemove(object)}>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={!canDelete}
+                          onClick={() => setRemove(object)}
+                        >
                           {t("删除")}
                         </Button>
                       </div>

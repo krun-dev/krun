@@ -25,8 +25,10 @@
 | `GET <base>/download?key=...` | 身份校验后 302 到带 attachment 的预签名 GET | `storage.object.read` |
 
 三个对象权限独立作用于组织资源。`organization.read` 只允许看桶目录，不允许读取对象。
-system_admin 和本组织 org_admin 可以管理对象；viewer/developer/publisher 默认没有对象
-权限，可通过自定义角色和 API Key 的权限交集显式授予。当前 IAM 以组织为授权粒度，
+system_admin、本组织 org_admin 和 member 可以管理对象；viewer 可以浏览和下载，
+不能上传或删除。逻辑桶创建和状态修改分别要求 `storage.bucket.create`、
+`storage.bucket.update`，同样仅管理员和 member 拥有，不授予组织设置修改权限。
+API Key 的权限仍与持有者当前角色取交集。当前 IAM 以组织为授权粒度，
 不提供逐逻辑桶、逐 key 的 IAM 选择器。STS 云端会话仍限制到当前逻辑桶的固定 prefix
 及本次 read/write/delete/list 操作。禁用桶、跨组织请求不能签发新链接。
 

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { t, locale, savedLanguage, setLanguage } from "./i18n.ts";
+import { t, locale, savedLanguage, setLanguage, roleLabel } from "./i18n.ts";
 import { actionLabel, buildPolicy, initialSelections } from "./permissions.ts";
 
 test("Chinese is the default, including unavailable or invalid storage", () => {
@@ -38,6 +38,23 @@ test("catalogs have matching keys and interpolation parameters", () => {
     );
     assert.ok(!/[\u3400-\u9fff]/.test(en[key]), key);
   }
+});
+
+test("organization roles have three clear labels in both languages", async () => {
+  await setLanguage("zh-CN");
+  assert.deepEqual(["org_admin", "member", "viewer"].map(roleLabel), [
+    "组织管理员",
+    "成员",
+    "只读",
+  ]);
+  await setLanguage("en");
+  assert.deepEqual(["org_admin", "member", "viewer"].map(roleLabel), [
+    "Organization administrator",
+    "Member",
+    "Read only",
+  ]);
+  assert.equal(roleLabel("system_admin"), "System administrator");
+  await setLanguage("zh-CN");
 });
 
 test("language switches persist, interpolate data safely, and preserve policy identifiers", async () => {

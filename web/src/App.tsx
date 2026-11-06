@@ -914,6 +914,10 @@ export default function App() {
               key={scope}
               base={base}
               system={system}
+              canCreate={permissions?.actions["storage.bucket.create"] === true}
+              canUpdate={permissions?.actions["storage.bucket.update"] === true}
+              canWrite={permissions?.actions["storage.object.write"] === true}
+              canDelete={permissions?.actions["storage.object.delete"] === true}
               notify={notify}
             />
           ) : section === "resources" ? (

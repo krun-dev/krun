@@ -78,6 +78,35 @@ Session Cookie：生产 `__Host-krun_session`，Secure/HttpOnly/SameSite=Lax/Pat
 
 ## 管理 API
 
+### 组织角色
+
+组织提供三个固定角色，`GET /api/v1/roles` 同时返回独立的 `system_admin` 系统角色：
+
+| 能力 | 组织管理员 `org_admin` | 成员 `member` | 只读 `viewer` |
+| --- | --- | --- | --- |
+| 查看资源、版本、源码与日志 | 是 | 是 | 是 |
+| 创建、修改、删除服务与模型元数据 | 是 | 是 | 否 |
+| Workers 构建、创建版本、发布、回滚和调用 | 是 | 是 | 否 |
+| 创建、启用与停用逻辑桶 | 是 | 是 | 否 |
+| 浏览、下载存储对象 | 是 | 是 | 是 |
+| 上传、覆盖、删除存储对象 | 是 | 是 | 否 |
+| 管理组织设置、成员、用户组和角色授权 | 是 | 否 | 否 |
+| 查看本组织审计 | 是 | 否 | 否 |
+| 管理全平台用户、系统角色及全平台审计 | 否 | 否 | 否 |
+
+`member` 同时具有开发与发布权限。组织授权只接受表中的三个角色，非法角色在授予或
+更新时返回 `POLICY_INVALID`；未知角色不产生资源权限，不做启动回填或隐式角色映射。
+
+`system_admin` 在全平台范围管理系统和组织；创建组织只会授予创建者该组织的
+`org_admin`。加入组织本身仍不等于获得业务角色，添加成员与角色授权使用已有独立接口。
+每个成员都可以管理自己的 API Key，实际访问始终取当前角色与 Key 策略的交集。
+
+上表为整个组织、全部环境授权。`member` / `viewer` 也可限定到指定服务或模型及环境；
+`org_admin` 必须是整组织范围且不能附加环境条件。成员关系、账号状态、身份来源约束、
+Key 范围和撤权检查逐请求生效。模型执行相关动作仍是预留目录，不代表存在执行接口。
+
+### 接口目录
+
 前缀 `/api/v1`。浏览器与浏览器批准的 CLI Session 都可以使用 S 接口；API Key 只可以使用 K 接口。
 
 | 方法与路径 | 凭据 | 行为 |
@@ -116,7 +145,7 @@ JSON DTO 拒绝未知字段和重复键，正文上限 1 MiB。资源/组/Key/As
 例：组织范围角色授予：
 
 ```json
-{"subject_kind":"group","subject_id":"grp_xxx","role_id":"developer","scope_kind":"organization","scope_id":"org_xxx","conditions":{}}
+{"subject_kind":"group","subject_id":"grp_xxx","role_id":"member","scope_kind":"organization","scope_id":"org_xxx","conditions":{}}
 ```
 
 Key 创建：`{name, expires_in, policy}`。`expires_in` 必填，`0` 表示长期有效，返回 `expires_at: null`；正数为 60 秒至 90 天，有限期限到期后拒绝认证与策略更新。撤销、禁用用户、身份来源限制及实时角色检查同样适用于长期有效 Key。策略见 `config/key-policy.example.yaml`。只读资源、列表、版本、发布、删除分别授权，不存在 `write` 或隐式超级 Key。精确 Key 列表发现可显式加入组织选择器上的 service.list / model.list；返回条目仍逐资源过滤。

@@ -153,6 +153,7 @@ export function parseSelections(
 const names: Record<string, string> = {
   storage: "存储",
   object: "对象",
+  bucket: "桶",
   organization: "组织",
   member: "成员",
   iam: "角色",

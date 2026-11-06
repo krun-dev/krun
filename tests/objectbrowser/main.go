@@ -28,6 +28,7 @@ func run() error {
 	defer stop()
 	configPath := flag.String("config", "", "Existing main YAML; the application database is never modified")
 	endpointFlag := flag.String("endpoint", "", "Disposable loopback MinIO endpoint")
+	databaseURL := flag.String("database-url", "", "Optional disposable PostgreSQL URI for this test fixture")
 	flag.Parse()
 	if *configPath == "" || *endpointFlag == "" {
 		return fmt.Errorf("-config and -endpoint are required")
@@ -35,6 +36,9 @@ func run() error {
 	cfg, err := config.LoadConfig(*configPath)
 	if err != nil {
 		return fmt.Errorf("load main configuration failed")
+	}
+	if *databaseURL != "" {
+		cfg.DB = *databaseURL
 	}
 	db, err := pgx.Connect(ctx, cfg.DB)
 	if err != nil {

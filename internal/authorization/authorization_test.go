@@ -99,14 +99,14 @@ func TestKeyIntersectionExplicitDenyAndRevocation(t *testing.T) {
 func TestGroupsAndIndependentSources(t *testing.T) {
 	st, _, viewer := fixture()
 	delete(st.Assignments, "viewer")
-	st.Groups["publishers"] = Group{ID: "publishers", ScopeKind: "organization", ScopeID: "org-a", Members: []string{viewer.ID}}
-	st.Assignments["publish"] = Assignment{ID: "publish", SubjectKind: "group", SubjectID: "publishers", Role: "publisher", ScopeKind: "service", ScopeID: "svc-a", Conditions: Conditions{Environments: []string{"version-candidate"}}}
+	st.Groups["operators"] = Group{ID: "operators", ScopeKind: "organization", ScopeID: "org-a", Members: []string{viewer.ID}}
+	st.Assignments["publish"] = Assignment{ID: "publish", SubjectKind: "group", SubjectID: "operators", Role: "member", ScopeKind: "service", ScopeID: "svc-a", Conditions: Conditions{Environments: []string{"version-candidate"}}}
 	target, _ := Resolve(st, "service", "svc-a", "version-candidate")
 	d, e := Authorize(st, Principal{User: viewer}, "service.publish", target)
 	if e != nil || !d.Allowed {
 		t.Fatalf("group scoped role failed %+v %v", d, e)
 	}
-	g := st.Groups["publishers"]
+	g := st.Groups["operators"]
 	g.Members = nil
 	st.Groups[g.ID] = g
 	d, e = Authorize(st, Principal{User: viewer}, "service.publish", target)

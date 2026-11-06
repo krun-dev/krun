@@ -83,7 +83,7 @@ func TestExactTemplatesUseLiveUserPermissions(t *testing.T) {
 		}
 	}
 	check(false)
-	st.Assignments["publisher"] = Assignment{ID: "publisher", SubjectKind: "user", SubjectID: viewer.ID, Role: "publisher", ScopeKind: "service", ScopeID: "svc-a"}
+	st.Assignments["publisher"] = Assignment{ID: "publisher", SubjectKind: "user", SubjectID: viewer.ID, Role: "member", ScopeKind: "service", ScopeID: "svc-a"}
 	check(true)
 	org := st.Organizations["org-a"]
 	org.Sources = []string{"another-source"}

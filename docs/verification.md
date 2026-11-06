@@ -44,6 +44,9 @@ bash scripts/test-object-browser.sh .data/dev.yaml
 授权、设备码、取消和失效流程；不使用浏览器 API mock。Wrangler 发布与实际
 workerd 构建发布仍由上述完整 kind 验收覆盖。
 
+需要使用独立测试实例时，可在上述命令前设置 `KRUN_TEST_POSTGRES_URL="$TEST_DATABASE_URL"`；
+它仅覆盖测试工具的数据库连接，不写主配置，测试仍创建并校验隔离 schema。
+
 每次运行的结果、日志和截图保存在 gitignored 的 `.data/`、`test-results/` 或
 `evidence/`，不把带日期的验收快照作为接口或部署文档。
 
@@ -54,7 +57,7 @@ workerd 构建发布仍由上述完整 kind 验收覆盖。
 | 认证 | 开发登录、OAuth2 授权码与 PKCE、OIDC 签名及 issuer / audience / nonce / expiry 校验、Session 与 CSRF、受信任跳转 |
 | 来源隔离 | 身份来源命名空间不可替换；相同邮箱不自动合并不同来源身份；禁用来源后现有凭据失效 |
 | 邮箱登录 | SMTP 协议、中文与英文邮件、验证码过期、错误次数、单次消费、浏览器绑定、发送限流、数据库重启与并发消费 |
-| 授权 | 组织成员与角色、用户组、来源白名单、Cedar allow / deny、权限撤销及时生效 |
+| 授权 | 管理员 / 成员 / 只读三种组织角色、用户组、来源白名单、Cedar allow / deny、权限撤销及时生效；成员可开发和发布，不能管理组织与成员 |
 | API Key | 用户权限与 Key 范围取交集、普通用户通配符、跨组织隔离、永久有效与到期 / 撤销、可视化权限选择 |
 | CLI | 浏览器确认、确认码与凭据隔离、组织及资源操作、英文输出、YAML profile / 输入 |
 | 审计 | 最近 7 天保留、后台清理、稳定游标分页、排序、每页权限检查、非法与跨范围游标拒绝 |
