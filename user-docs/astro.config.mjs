@@ -43,7 +43,11 @@ export default defineConfig({
         { label: "开始使用", items: ["index", "guides/concepts"] },
         {
           label: "组件",
-          items: ["guides/component-workers", "guides/component-object-storage"],
+          items: [
+            "guides/component-workers",
+            "guides/component-object-storage",
+            "guides/workers-runtime-compatibility",
+          ],
         },
         {
           label: "命令行工具",
