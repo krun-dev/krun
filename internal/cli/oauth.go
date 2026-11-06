@@ -35,10 +35,10 @@ type oauthTokens struct {
 }
 
 func (c *Client) oauthForm(ctx context.Context, path string, values url.Values, out any) error {
-	if err := validateServer(c.Profile.Server); err != nil {
+	if err := validateEndpoint(c.Profile.Endpoint); err != nil {
 		return err
 	}
-	r, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.Profile.Server, "/")+cliOAuthPath+path, strings.NewReader(values.Encode()))
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.Profile.Endpoint, "/")+cliOAuthPath+path, strings.NewReader(values.Encode()))
 	if err != nil {
 		return err
 	}
@@ -133,7 +133,7 @@ func openLoginBrowser(target string) {
 	}
 }
 func (c *Client) browserLogin(ctx context.Context, browser bool, port int, scope string) error {
-	if err := validateServer(c.Profile.Server); err != nil {
+	if err := validateEndpoint(c.Profile.Endpoint); err != nil {
 		return err
 	}
 	if port < 0 || port > 65535 {
@@ -149,7 +149,7 @@ func (c *Client) browserLogin(ctx context.Context, browser bool, port int, scope
 	hash := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(hash[:])
 	query := url.Values{"response_type": {"code"}, "client_id": {cliOAuthClient}, "redirect_uri": {redirect}, "scope": {scope}, "state": {state}, "code_challenge": {challenge}, "code_challenge_method": {"S256"}}
-	target := strings.TrimRight(c.Profile.Server, "/") + cliOAuthPath + "/authorize?" + query.Encode()
+	target := strings.TrimRight(c.Profile.Endpoint, "/") + cliOAuthPath + "/authorize?" + query.Encode()
 	type callback struct {
 		code string
 		err  error
@@ -228,7 +228,7 @@ func (c *Client) deviceLogin(ctx context.Context, browser bool, scope string) er
 	if err := c.oauthForm(ctx, "/device/auth", url.Values{"client_id": {cliOAuthClient}, "scope": {scope}}, &device); err != nil {
 		return err
 	}
-	base, _ := url.Parse(c.Profile.Server)
+	base, _ := url.Parse(c.Profile.Endpoint)
 	target, err := url.Parse(device.URL)
 	if err != nil || target.Scheme != base.Scheme || target.Host != base.Host {
 		return errors.New("invalid verification URL")

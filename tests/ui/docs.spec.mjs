@@ -21,7 +21,7 @@ test("quick start is public and uses the current origin", async ({ page, context
   await expect(page.getByRole("button", { name: "已复制" })).toBeVisible();
   const markdown = await page.evaluate(() => navigator.clipboard.readText());
   expect(markdown).toContain(`${new URL(page.url()).origin}/downloads/krun-darwin-arm64`);
-  expect(markdown).toContain(`krun login --server ${new URL(page.url()).origin}`);
+  expect(markdown).toContain(`krun config set endpoint ${new URL(page.url()).origin}`);
   expect((await page.request.get("/docs/llms.txt")).status()).toBe(200);
   await expect(page.getByRole("link", { name: "基础概念", exact: true })).toHaveAttribute(
     "href",
@@ -34,7 +34,7 @@ test("quick start is public and uses the current origin", async ({ page, context
   expect(await raw.text()).toContain("{{KRUN_ORIGIN}}");
   expect(markdown).not.toContain("{{KRUN_ORIGIN}}");
   await expect(page.locator(".sl-markdown-content")).toContainText(
-    `krun login --server ${new URL(page.url()).origin}`,
+    `krun config set endpoint ${new URL(page.url()).origin}`,
   );
   expect(apiRequests).toEqual([]);
 });
@@ -76,7 +76,7 @@ test("Starlight works with the control plane content security policy", async ({
   await page.getByRole("button", { name: "复制 Markdown" }).click();
   await expect(page.getByRole("button", { name: "已复制" })).toBeVisible();
   const content = await page.evaluate(() => navigator.clipboard.readText());
-  expect(content).toContain(`krun login --server ${new URL(page.url()).origin}`);
+  expect(content).toContain(`krun config set endpoint ${new URL(page.url()).origin}`);
   await page.getByRole("button", { name: /搜索/ }).first().click();
   const dialog = page.getByRole("dialog", { name: "搜索" });
   await expect(dialog).toBeVisible();

@@ -48,4 +48,4 @@ case ":$PATH:" in
       'For future terminals, add the same line to ~/.zshrc (zsh) or ~/.bashrc (bash).'
     ;;
 esac
-echo "Run: krun login --server $origin"
+echo "Run: krun login --endpoint $origin"
