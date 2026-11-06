@@ -6,7 +6,10 @@ export function LanguageSwitch() {
   useTranslation();
   return (
     <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-      <Languages size={15} aria-hidden="true" />
+      <Languages
+        size={15}
+        aria-hidden="true"
+      />
       <select
         aria-label={t("语言")}
         className="h-8 rounded-md border bg-card px-2 text-foreground"

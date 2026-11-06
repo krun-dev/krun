@@ -185,6 +185,15 @@ fingerprint；已有库与基线不一致时拒绝启动，由开发者显式重
 - 测试中的 Worker 源码也保持可读的多行格式，不写成一长串字符串。
 - Go 使用 `gofmt`；Workers JavaScript 使用仓库 Prettier 配置，运行
   `npm run format:workers` 和 `npm run check:workers-format`。格式化不替代人工检查逻辑分段。
+- 前端 `web/src/` 的 TypeScript、TSX、JavaScript 测试、CSS 和 JSON 使用仓库安装的 Prettier。
+  `npm run format:web` 统一格式化，`npm run check:web-format` 检查格式；后者接入 CI 和 `make test`。
+- JSX 多个属性按 `singleAttributePerLine` 配置分行，格式以 Prettier 输出为准；`printWidth`
+  是排版目标，长文案和字符串不强行拆分。VS Code 使用推荐的 Prettier 扩展，保存时自动格式化。
+- 修改前端后，先用 `npx prettier --write <本次修改的文件>` 格式化，再运行
+  `npm run check:web-format`、`npm run check` 和 `npm --prefix web test`。不得通过
+  `prettier-ignore`、缩小检查范围或关闭检查来规避格式要求。
+- 组件按职责组织；复杂状态计算和业务流程提取为具名函数或业务 Hook，重复的界面抽成组件。
+  简单事件处理、翻译调用和 Tailwind 类名可以留在 JSX 中，不为拆文件而拆分。
 
 ## 12. 使用 Git worktree 隔离功能开发
 

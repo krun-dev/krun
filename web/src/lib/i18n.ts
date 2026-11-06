@@ -19,9 +19,7 @@ void i18next.use(initReactI18next).init({
     en: {
       translation: {
         ...en,
-        ...Object.fromEntries(
-          Object.keys(runtimeMessages).map((key) => [key, key]),
-        ),
+        ...Object.fromEntries(Object.keys(runtimeMessages).map((key) => [key, key])),
       },
     },
   },
@@ -38,15 +36,11 @@ export function locale(): Language {
   return i18next.resolvedLanguage === "en" ? "en" : "zh-CN";
 }
 export function t(message: string, values?: Record<string, unknown>): string {
-  const key = i18next.exists(message)
-    ? message
-    : (originalMessages.get(message) ?? message);
+  const key = i18next.exists(message) ? message : (originalMessages.get(message) ?? message);
   return i18next.t(key, values);
 }
 const originalMessages = new Map(
-  [...Object.entries(en), ...Object.entries(runtimeMessages)].map(
-    ([key, value]) => [value, key],
-  ),
+  [...Object.entries(en), ...Object.entries(runtimeMessages)].map(([key, value]) => [value, key]),
 );
 function updateDocument() {
   if (typeof document === "undefined") return;

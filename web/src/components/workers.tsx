@@ -1,8 +1,5 @@
 import { useCollectionPage } from "@/lib/collection-page";
-import {
-  CollectionToolbar,
-  CollectionPagination,
-} from "@/components/collection-controls";
+import { CollectionToolbar, CollectionPagination } from "@/components/collection-controls";
 import { readBuildLog } from "../lib/build-logs";
 import { BuildInspector, type BuildArtifact } from "./workers/build-inspector";
 import { PreviewBasePanel } from "./workers/preview-base";
@@ -57,26 +54,11 @@ import {
   TableBody,
   TableCell,
 } from "@/components/ui/table";
-import {
-  Empty,
-  Field,
-  Loading,
-  PageHeader,
-  SelectField,
-} from "@/components/common";
+import { Empty, Field, Loading, PageHeader, SelectField } from "@/components/common";
 import { cn } from "@/lib/utils";
-import {
-  RepositoryBuild,
-  RepositorySettings,
-} from "@/components/workers-repository";
+import { RepositoryBuild, RepositorySettings } from "@/components/workers-repository";
 
-import {
-  Status,
-  artifactColors,
-  artifactIcons,
-  idempotency,
-  workerURL,
-} from "./workers/shared";
+import { Status, artifactColors, artifactIcons, idempotency, workerURL } from "./workers/shared";
 import { OperationPanel, VersionSummary } from "./workers/version";
 import { WorkerDomains } from "./workers/domains";
 import { EnvironmentSettings, Invocation } from "./workers/environment";
@@ -109,9 +91,7 @@ export function WorkersPage({
   );
   const workers = collection.items;
   const error = worker ? detailError : collection.error;
-  const [networkProfiles, setNetworkProfiles] = useState<
-    WorkerNetworkProfile[]
-  >([]);
+  const [networkProfiles, setNetworkProfiles] = useState<WorkerNetworkProfile[]>([]);
   const [networkProfile, setNetworkProfile] = useState("");
   useEffect(() => {
     if (system || !canCreate) {
@@ -244,7 +224,10 @@ export function WorkersPage({
         !detailError ? (
           <Loading />
         ) : (
-          <Button variant="outline" onClick={() => openWorker("")}>
+          <Button
+            variant="outline"
+            onClick={() => openWorker("")}
+          >
             {t("返回Worker列表")}
           </Button>
         )
@@ -274,9 +257,7 @@ export function WorkersPage({
       ) : workers.length === 0 ? (
         <Empty
           title={
-            collection.search || collection.hasPrevious
-              ? t("没有匹配结果")
-              : t("还没有 Worker")
+            collection.search || collection.hasPrevious ? t("没有匹配结果") : t("还没有 Worker")
           }
           description={
             collection.search || collection.hasPrevious
@@ -291,16 +272,10 @@ export function WorkersPage({
               <TableHeader>
                 <TableRow>
                   <TableHead>{t("Worker名称")}</TableHead>
-                  <TableHead className="hidden md:table-cell">
-                    {t("代码仓库")}
-                  </TableHead>
+                  <TableHead className="hidden md:table-cell">{t("代码仓库")}</TableHead>
                   <TableHead>{t("环境状态")}</TableHead>
-                  <TableHead className="hidden md:table-cell">
-                    {t("创建时间")}
-                  </TableHead>
-                  <TableHead className="hidden w-28 md:table-cell">
-                    {t("操作")}
-                  </TableHead>
+                  <TableHead className="hidden md:table-cell">{t("创建时间")}</TableHead>
+                  <TableHead className="hidden w-28 md:table-cell">{t("操作")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -313,15 +288,15 @@ export function WorkersPage({
                       >
                         {item.name}
                       </button>
-                      <p className="mt-1 font-mono text-xs text-muted-foreground">
-                        {item.id}
-                      </p>
+                      <p className="mt-1 font-mono text-xs text-muted-foreground">{item.id}</p>
                       <p className="mt-1 text-xs text-muted-foreground md:hidden">
-                        {t("创建时间")} ·{" "}
-                        {new Date(item.created_at).toLocaleString()}
+                        {t("创建时间")} · {new Date(item.created_at).toLocaleString()}
                       </p>
                       {item.network_profile?.name ? (
-                        <Badge variant="outline" className="mt-2">
+                        <Badge
+                          variant="outline"
+                          className="mt-2"
+                        >
                           {item.network_profile.name}
                         </Badge>
                       ) : null}
@@ -334,28 +309,27 @@ export function WorkersPage({
                             {item.repository_source.repository}
                           </span>
                           <p className="text-xs text-muted-foreground">
-                            {item.repository_source.ref} ·{" "}
-                            {item.repository_source.root_directory}
+                            {item.repository_source.ref} · {item.repository_source.root_directory}
                           </p>
                         </div>
                       ) : (
-                        <span className="text-sm text-muted-foreground">
-                          {t("未关联仓库")}
-                        </span>
+                        <span className="text-sm text-muted-foreground">{t("未关联仓库")}</span>
                       )}
                     </TableCell>
                     <TableCell>
                       <div className="flex flex-wrap gap-2">
                         {item.environments.length ? (
                           item.environments.map((env) => (
-                            <Badge key={env.name} variant="outline">
+                            <Badge
+                              key={env.name}
+                              variant="outline"
+                            >
                               {env.name} ·{" "}
                               {t(
                                 !env.enabled
                                   ? "未启用"
                                   : env.version_id
-                                    ? env.version_id ===
-                                      env.confirmed_version_id
+                                    ? env.version_id === env.confirmed_version_id
                                       ? "已发布"
                                       : "生效中"
                                     : "未发布",
@@ -363,9 +337,7 @@ export function WorkersPage({
                             </Badge>
                           ))
                         ) : (
-                          <span className="text-xs text-muted-foreground">
-                            {t("尚未构建")}
-                          </span>
+                          <span className="text-xs text-muted-foreground">{t("尚未构建")}</span>
                         )}
                       </div>
                     </TableCell>
@@ -390,7 +362,10 @@ export function WorkersPage({
         </Card>
       )}
       {!worker ? <CollectionPagination page={collection} /> : null}
-      <Dialog open={create} onOpenChange={setCreate}>
+      <Dialog
+        open={create}
+        onOpenChange={setCreate}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t("创建 Worker")}</DialogTitle>
@@ -407,14 +382,10 @@ export function WorkersPage({
                 const r = await api<Resource>(base + "/workers", "POST", {
                   name,
                 });
-                await api(
-                  base + "/workers/" + r.id + "/network-profile",
-                  "PUT",
-                  {
-                    network_profile: networkProfile,
-                    expected_revision: 0,
-                  },
-                );
+                await api(base + "/workers/" + r.id + "/network-profile", "PUT", {
+                  network_profile: networkProfile,
+                  expected_revision: 0,
+                });
                 openWorker(r.id);
                 setRevision((v) => v + 1);
                 setCreate(false);
@@ -450,13 +421,10 @@ export function WorkersPage({
                         networkProfile === profile.id
                           ? "border-primary bg-primary/5 ring-1 ring-primary/15"
                           : "hover:border-primary/40",
-                        profile.approval_required &&
-                          "cursor-not-allowed opacity-55",
+                        profile.approval_required && "cursor-not-allowed opacity-55",
                       )}
                     >
-                      <span className="text-sm font-medium">
-                        {profile.name}
-                      </span>
+                      <span className="text-sm font-medium">{profile.name}</span>
                       {profile.description ? (
                         <span className="mt-1 block text-xs text-muted-foreground">
                           {profile.description}
@@ -472,7 +440,10 @@ export function WorkersPage({
                 </div>
               </Field>
             ) : null}
-            <Button type="submit" disabled={busy || !networkProfile}>
+            <Button
+              type="submit"
+              disabled={busy || !networkProfile}
+            >
               {t("创建 Worker")}
             </Button>
           </form>
@@ -502,18 +473,8 @@ function WorkerDetail({
   useEffect(() => {
     const controller = new AbortController();
     void Promise.allSettled([
-      api<RepositoryBinding>(
-        base + "/repository",
-        "GET",
-        undefined,
-        controller.signal,
-      ),
-      api<WorkerRouting>(
-        base + "/domains",
-        "GET",
-        undefined,
-        controller.signal,
-      ),
+      api<RepositoryBinding>(base + "/repository", "GET", undefined, controller.signal),
+      api<WorkerRouting>(base + "/domains", "GET", undefined, controller.signal),
     ]).then(([repository, network]) => {
       if (repository.status === "fulfilled") setBinding(repository.value);
       if (network.status === "fulfilled") setRouting(network.value);
@@ -552,9 +513,7 @@ function WorkerDetail({
   const [publish, setPublish] = useState<Build | null>(null);
   const [busy, setBusy] = useState(false);
   const [selectedOperation, setSelectedOperation] = useState("");
-  const [acceptedOperation, setAcceptedOperation] = useState<Operation | null>(
-    null,
-  );
+  const [acceptedOperation, setAcceptedOperation] = useState<Operation | null>(null);
   const [buildInfo, setBuildInfo] = useState<{
     build: Build;
     log: string;
@@ -606,28 +565,19 @@ function WorkerDetail({
   const [previewDialog, setPreviewDialog] = useState(false);
   const [previewName, setPreviewName] = useState("");
   const [previewDelete, setPreviewDelete] = useState<string | null>(null);
-  const env =
-    data?.environments.find((e) => e.name === environment) ||
-    data?.environments[0];
+  const env = data?.environments.find((e) => e.name === environment) || data?.environments[0];
   const domains: WorkerDomain[] = routing?.catalog || [];
   const operations =
-    acceptedOperation &&
-    !data?.operations.some((o) => o.id === acceptedOperation.id)
+    acceptedOperation && !data?.operations.some((o) => o.id === acceptedOperation.id)
       ? [acceptedOperation, ...(data?.operations || [])]
       : data?.operations || [];
   const operation =
-    operations.find(
-      (o) => o.id === selectedOperation && o.environment === env?.name,
-    ) || operations.find((o) => o.environment === env?.name);
+    operations.find((o) => o.id === selectedOperation && o.environment === env?.name) ||
+    operations.find((o) => o.environment === env?.name);
   const rollbackBusy = operations.some(
-    (o) =>
-      o.environment === env?.name &&
-      pending(o.state) &&
-      o.state !== "committed",
+    (o) => o.environment === env?.name && pending(o.state) && o.state !== "committed",
   );
-  const active = operations.some(
-    (o) => o.environment === env?.name && pending(o.state),
-  );
+  const active = operations.some((o) => o.environment === env?.name && pending(o.state));
   async function createPreview() {
     setBusy(true);
     try {
@@ -645,10 +595,7 @@ function WorkerDetail({
     if (!previewDelete) return;
     setBusy(true);
     try {
-      await api(
-        base + "/environments/" + encodeURIComponent(previewDelete),
-        "DELETE",
-      );
+      await api(base + "/environments/" + encodeURIComponent(previewDelete), "DELETE");
       if (environment === previewDelete) setEnvironment("production");
       setPreviewDelete(null);
       reload();
@@ -662,15 +609,11 @@ function WorkerDetail({
     if (!env) return;
     setBusy(true);
     try {
-      const op = await api<Operation>(
-        base + "/environments/" + env.name + "/deployments",
-        "POST",
-        {
-          build_id: build.id,
-          expected_revision: env.deployment_revision,
-          idempotency_key: idempotency(),
-        },
-      );
+      const op = await api<Operation>(base + "/environments/" + env.name + "/deployments", "POST", {
+        build_id: build.id,
+        expected_revision: env.deployment_revision,
+        idempotency_key: idempotency(),
+      });
       setAcceptedOperation(op);
       setSelectedOperation(op.id);
       setPublish(null);
@@ -712,9 +655,16 @@ function WorkerDetail({
   }
   if (!data)
     return error ? (
-      <p role="alert" className="text-destructive">
+      <p
+        role="alert"
+        className="text-destructive"
+      >
         {error}
-        <Button variant="outline" onClick={reload} className="ml-3">
+        <Button
+          variant="outline"
+          onClick={reload}
+          className="ml-3"
+        >
           {t("重试")}
         </Button>
       </p>
@@ -734,9 +684,7 @@ function WorkerDetail({
           <code className="text-xs text-muted-foreground">{worker.id}</code>
           <p className="mt-2 text-xs text-muted-foreground">
             {t("创建时间")} ·{" "}
-            <time dateTime={worker.created_at}>
-              {new Date(worker.created_at).toLocaleString()}
-            </time>
+            <time dateTime={worker.created_at}>{new Date(worker.created_at).toLocaleString()}</time>
           </p>
         </div>
         <div className="flex gap-2">
@@ -761,9 +709,7 @@ function WorkerDetail({
       ) : null}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span>
-            {t("基线环境常驻对外服务；预览环境用于验证，可随时删除。")}
-          </span>
+          <span>{t("基线环境常驻对外服务；预览环境用于验证，可随时删除。")}</span>
         </div>
         <Button
           variant="outline"
@@ -792,9 +738,7 @@ function WorkerDetail({
               <Badge
                 variant="outline"
                 className={cn(
-                  e.enabled &&
-                    e.version_id === e.confirmed_version_id &&
-                    e.version_id
+                  e.enabled && e.version_id === e.confirmed_version_id && e.version_id
                     ? "border-primary/40 text-primary"
                     : e.enabled && e.version_id !== e.confirmed_version_id
                       ? "border-amber-500/40 text-amber-600 dark:text-amber-500"
@@ -812,9 +756,7 @@ function WorkerDetail({
             </div>
             <div className="my-3 text-sm">
               {t("Version")} r{e.deployment_revision}{" "}
-              <span className="text-muted-foreground">
-                · {shortID(e.version_id)}
-              </span>
+              <span className="text-muted-foreground">· {shortID(e.version_id)}</span>
             </div>
             <div className="grid gap-1">
               {(e.hosts || []).map((host, i) => {
@@ -830,7 +772,10 @@ function WorkerDetail({
                     onClick={(event) => event.stopPropagation()}
                   >
                     {text}
-                    <ArrowUpRight size={11} className="shrink-0" />
+                    <ArrowUpRight
+                      size={11}
+                      className="shrink-0"
+                    />
                   </a>
                 ) : (
                   <code
@@ -866,7 +811,11 @@ function WorkerDetail({
         ))}
       </div>
       {env ? (
-        <Tabs value={tab} onValueChange={setTab} className="min-w-0">
+        <Tabs
+          value={tab}
+          onValueChange={setTab}
+          className="min-w-0"
+        >
           <div className="max-w-full overflow-x-auto">
             <TabsList>
               <TabsTrigger value="delivery">{t("构建与发布")}</TabsTrigger>
@@ -878,13 +827,14 @@ function WorkerDetail({
               <TabsTrigger value="invoke">{t("调用测试")}</TabsTrigger>
             </TabsList>
           </div>
-          <TabsContent value="delivery" className="mt-5 grid gap-5">
+          <TabsContent
+            value="delivery"
+            className="mt-5 grid gap-5"
+          >
             {!binding?.source ? (
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-primary/25 bg-primary/5 px-4 py-3 text-sm">
                 <p className="text-muted-foreground">
-                  {t(
-                    "此Worker尚未绑定代码仓库；绑定后可直接从分支或 Tag 构建版本。",
-                  )}
+                  {t("此Worker尚未绑定代码仓库；绑定后可直接从分支或 Tag 构建版本。")}
                 </p>
                 <Button
                   variant="outline"
@@ -899,10 +849,7 @@ function WorkerDetail({
               {Object.entries(artifactIcons).map(([label, Icon]) => (
                 <span
                   key={label}
-                  className={cn(
-                    "inline-flex items-center gap-1.5",
-                    artifactColors[label],
-                  )}
+                  className={cn("inline-flex items-center gap-1.5", artifactColors[label])}
                 >
                   <Icon size={14} />
                   {t(label)}
@@ -925,24 +872,19 @@ function WorkerDetail({
                       <TableCell>
                         <code className="text-xs">{shortID(b.id)}</code>
                         <p className="mt-1 text-xs text-muted-foreground">
-                          {b.entrypoint} ·{" "}
-                          {new Date(b.created_at).toLocaleString()}
+                          {b.entrypoint} · {new Date(b.created_at).toLocaleString()}
                         </p>
                         {b.repository_source ? (
                           <p className="mt-1 text-xs text-muted-foreground">
-                            {b.repository_source.repository} ·{" "}
-                            {b.repository_source.ref} ·{" "}
-                            {b.repository_source.commit?.slice(0, 12) ||
-                              t("等待解析 Commit")}
+                            {b.repository_source.repository} · {b.repository_source.ref} ·{" "}
+                            {b.repository_source.commit?.slice(0, 12) || t("等待解析 Commit")}
                           </p>
                         ) : null}
                       </TableCell>
                       <TableCell>
                         <Status state={b.state} />
                         {b.error ? (
-                          <p className="mt-1 max-w-xs text-xs text-destructive">
-                            {b.error}
-                          </p>
+                          <p className="mt-1 max-w-xs text-xs text-destructive">{b.error}</p>
                         ) : null}
                       </TableCell>
                       <TableCell>
@@ -962,20 +904,19 @@ function WorkerDetail({
                             onClick={() => void inspectBuild(b)}
                           >
                             {inspectingBuild === b.id ? (
-                              <LoaderCircle size={14} className="animate-spin" />
+                              <LoaderCircle
+                                size={14}
+                                className="animate-spin"
+                              />
                             ) : (
                               <FileText size={14} />
                             )}
-                            {inspectingBuild === b.id
-                              ? t("加载中…")
-                              : t("日志与制品")}
+                            {inspectingBuild === b.id ? t("加载中…") : t("日志与制品")}
                           </Button>
                           <Button
                             size="sm"
                             className="shadow-none"
-                            disabled={
-                              b.state !== "succeeded" || active || !env.enabled
-                            }
+                            disabled={b.state !== "succeeded" || active || !env.enabled}
                             onClick={() => setPublish(b)}
                           >
                             <Rocket size={14} />
@@ -1005,9 +946,7 @@ function WorkerDetail({
             {operation ? (
               <OperationPanel
                 operation={operation}
-                operations={operations.filter(
-                  (o) => o.environment === env.name,
-                )}
+                operations={operations.filter((o) => o.environment === env.name)}
                 select={setSelectedOperation}
               />
             ) : null}
@@ -1017,9 +956,7 @@ function WorkerDetail({
                   {env.name} · {t("发布历史")}
                 </h3>
                 {(data.histories[env.name] || []).length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    {t("尚无成功生效的发布。")}
-                  </p>
+                  <p className="text-sm text-muted-foreground">{t("尚无成功生效的发布。")}</p>
                 ) : (
                   (data.histories[env.name] || []).map((h) => (
                     <div
@@ -1028,9 +965,7 @@ function WorkerDetail({
                     >
                       <div>
                         <span className="font-medium">r{h.revision}</span>{" "}
-                        <code className="ml-2 text-xs">
-                          {shortID(h.version_id)}
-                        </code>
+                        <code className="ml-2 text-xs">{shortID(h.version_id)}</code>
                         <p className="mt-1 text-xs text-muted-foreground">
                           {h.kind} · {new Date(h.time).toLocaleString()}
                         </p>
@@ -1038,11 +973,7 @@ function WorkerDetail({
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={
-                          rollbackBusy ||
-                          !env.enabled ||
-                          env.version_id === h.version_id
-                        }
+                        disabled={rollbackBusy || !env.enabled || env.version_id === h.version_id}
                         onClick={() =>
                           setRollback({
                             id: h.version_id,
@@ -1058,14 +989,20 @@ function WorkerDetail({
               </CardContent>
             </Card>
           </TabsContent>
-          <TabsContent value="preview-base" className="mt-5">
+          <TabsContent
+            value="preview-base"
+            className="mt-5"
+          >
             <PreviewBasePanel
               base={base}
               organizationBase={organizationBase}
               notify={notify}
             />
           </TabsContent>
-          <TabsContent value="versions" className="mt-5">
+          <TabsContent
+            value="versions"
+            className="mt-5"
+          >
             <VersionsPanel
               base={base}
               env={env}
@@ -1082,10 +1019,11 @@ function WorkerDetail({
               }}
             />
           </TabsContent>
-          <TabsContent value="source" className="mt-5 grid gap-3">
-            <h3 className="flex items-center gap-2 text-sm font-medium">
-              {t("代码仓库")}
-            </h3>
+          <TabsContent
+            value="source"
+            className="mt-5 grid gap-3"
+          >
+            <h3 className="flex items-center gap-2 text-sm font-medium">{t("代码仓库")}</h3>
             <RepositorySettings
               base={base}
               organizationBase={organizationBase}
@@ -1095,7 +1033,10 @@ function WorkerDetail({
               notify={notify}
             />
           </TabsContent>
-          <TabsContent value="routing" className="mt-5 grid gap-5">
+          <TabsContent
+            value="routing"
+            className="mt-5 grid gap-5"
+          >
             <WorkerDomains
               base={base}
               domains={domains}
@@ -1108,7 +1049,10 @@ function WorkerDetail({
               notify={notify}
             />
           </TabsContent>
-          <TabsContent value="settings" className="mt-5 grid gap-6">
+          <TabsContent
+            value="settings"
+            className="mt-5 grid gap-6"
+          >
             <EnvironmentSettings
               key={env.name}
               base={base}
@@ -1121,19 +1065,27 @@ function WorkerDetail({
               notify={notify}
             />
           </TabsContent>
-          <TabsContent value="invoke" className="mt-5">
-            <Invocation key={env.name} base={base} env={env} />
+          <TabsContent
+            value="invoke"
+            className="mt-5"
+          >
+            <Invocation
+              key={env.name}
+              base={base}
+              env={env}
+            />
           </TabsContent>
         </Tabs>
       ) : null}
-      <Dialog open={previewDialog} onOpenChange={setPreviewDialog}>
+      <Dialog
+        open={previewDialog}
+        onOpenChange={setPreviewDialog}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t("创建预览环境")}</DialogTitle>
             <DialogDescription>
-              {t(
-                "预览环境是临时的验证场所，验证通过后可将同一制品晋升到基线。",
-              )}
+              {t("预览环境是临时的验证场所，验证通过后可将同一制品晋升到基线。")}
             </DialogDescription>
           </DialogHeader>
           <Field
@@ -1229,11 +1181,17 @@ function WorkerDetail({
             </DialogDescription>
           </DialogHeader>
           <Field label={t("目标环境")}>
-            <SelectField value={env?.name || ""} onChange={setEnvironment}>
+            <SelectField
+              value={env?.name || ""}
+              onChange={setEnvironment}
+            >
               {data.environments
                 .filter((e) => e.enabled)
                 .map((e) => (
-                  <option key={e.name} value={e.name}>
+                  <option
+                    key={e.name}
+                    value={e.name}
+                  >
                     {e.name}
                   </option>
                 ))}

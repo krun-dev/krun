@@ -12,12 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type {
-  Build,
-  RepositoryBinding,
-  RepositoryProvider,
-  RepositorySource,
-} from "@/lib/workers";
+import type { Build, RepositoryBinding, RepositoryProvider, RepositorySource } from "@/lib/workers";
 
 const emptySource: RepositorySource = {
   provider_id: "",
@@ -76,13 +71,8 @@ export function RepositorySettings({
   notify: (message: string) => void;
 }) {
   const { t } = useTranslation();
-  const { providers, setProviders, error, setError } = useProviders(
-    organizationBase,
-    true,
-  );
-  const [source, setSource] = useState<RepositorySource>(
-    bound || emptySource,
-  );
+  const { providers, setProviders, error, setError } = useProviders(organizationBase, true);
+  const [source, setSource] = useState<RepositorySource>(bound || emptySource);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     setSource(bound || emptySource);
@@ -105,18 +95,13 @@ export function RepositorySettings({
         );
         setProviders((previous) =>
           previous
-            ? previous.map((p) =>
-                p.id === provider.id ? { ...p, connected: false } : p,
-              )
+            ? previous.map((p) => (p.id === provider.id ? { ...p, connected: false } : p))
             : previous,
         );
         notify(t("已断开仓库账号连接。"));
       } else {
         const { authorization_url } = await api<{ authorization_url: string }>(
-          organizationBase +
-            "/worker-repositories/" +
-            encodeURIComponent(provider.id) +
-            "/connect",
+          organizationBase + "/worker-repositories/" + encodeURIComponent(provider.id) + "/connect",
           "POST",
         );
         window.location.assign(authorization_url);
@@ -161,15 +146,14 @@ export function RepositorySettings({
     }
   }
   if (providers !== null && providers.length === 0)
-    return (
-      <p className="text-sm text-muted-foreground">
-        {t("管理员尚未启用代码仓库来源。")}
-      </p>
-    );
+    return <p className="text-sm text-muted-foreground">{t("管理员尚未启用代码仓库来源。")}</p>;
   return (
     <div className="grid gap-4">
       {error ? (
-        <p role="alert" className="text-sm text-destructive">
+        <p
+          role="alert"
+          className="text-sm text-destructive"
+        >
           {error}
         </p>
       ) : null}
@@ -184,17 +168,26 @@ export function RepositorySettings({
               onChange={(value) => update("provider_id", value)}
             >
               {!source.provider_id ? (
-                <option value="" disabled>
+                <option
+                  value=""
+                  disabled
+                >
                   {t("选择仓库平台")}
                 </option>
               ) : null}
               {!provider && source.provider_id ? (
-                <option value={source.provider_id} disabled>
+                <option
+                  value={source.provider_id}
+                  disabled
+                >
                   {t("当前仓库来源已停用")}
                 </option>
               ) : null}
               {providers.map((p) => (
-                <option key={p.id} value={p.id}>
+                <option
+                  key={p.id}
+                  value={p.id}
+                >
                   {p.name}
                 </option>
               ))}
@@ -270,12 +263,15 @@ export function RepositorySettings({
             ) : null}
             <Button
               type="button"
-              disabled={
-                busy || !provider || !source.repository
-              }
+              disabled={busy || !provider || !source.repository}
               onClick={() => void save()}
             >
-              {busy ? <LoaderCircle size={16} className="animate-spin" /> : null}
+              {busy ? (
+                <LoaderCircle
+                  size={16}
+                  className="animate-spin"
+                />
+              ) : null}
               {t("保存仓库配置")}
             </Button>
           </div>
@@ -361,13 +357,14 @@ export function RepositoryBuild({
             {t("从仓库构建")}
           </DialogTitle>
           <DialogDescription>
-            {bound
-              ? `${bound.provider_id} · ${bound.repository}`
-              : t("先在设置中绑定仓库。")}
+            {bound ? `${bound.provider_id} · ${bound.repository}` : t("先在设置中绑定仓库。")}
           </DialogDescription>
         </DialogHeader>
         {error ? (
-          <p role="alert" className="text-sm text-destructive">
+          <p
+            role="alert"
+            className="text-sm text-destructive"
+          >
             {error}
           </p>
         ) : null}
@@ -386,18 +383,22 @@ export function RepositoryBuild({
               <Input
                 aria-label={t("分支 / Tag / Commit")}
                 value={ref}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setRef(e.target.value)
-                }
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setRef(e.target.value)}
                 placeholder="HEAD"
                 maxLength={200}
                 disabled={busy}
               />
             </Field>
             <div className="flex justify-end">
-              <Button type="submit" disabled={busy}>
+              <Button
+                type="submit"
+                disabled={busy}
+              >
                 {busy ? (
-                  <LoaderCircle size={16} className="animate-spin" />
+                  <LoaderCircle
+                    size={16}
+                    className="animate-spin"
+                  />
                 ) : (
                   <GitBranch size={16} />
                 )}

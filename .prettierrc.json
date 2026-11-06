@@ -2,5 +2,13 @@
   "printWidth": 100,
   "tabWidth": 2,
   "singleQuote": false,
-  "trailingComma": "all"
+  "trailingComma": "all",
+  "overrides": [
+    {
+      "files": "web/src/**/*.tsx",
+      "options": {
+        "singleAttributePerLine": true
+      }
+    }
+  ]
 }

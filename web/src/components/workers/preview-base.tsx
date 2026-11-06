@@ -88,7 +88,11 @@ export function PreviewBasePanel({
         {t("新建 Preview 复制这里的变量、Secret 和 R2 绑定；已有 Preview 保持不变。")}
       </p>
       <Field label={t("普通变量 JSON")}>
-        <Textarea value={variables} onChange={(e) => setVariables(e.target.value)} rows={6} />
+        <Textarea
+          value={variables}
+          onChange={(e) => setVariables(e.target.value)}
+          rows={6}
+        />
       </Field>
       <Field label={t("版本元数据绑定")}>
         <Input
@@ -109,7 +113,10 @@ export function PreviewBasePanel({
         />
       </div>
       <div>
-        <Button disabled={busy || !config} onClick={() => void save(false)}>
+        <Button
+          disabled={busy || !config}
+          onClick={() => void save(false)}
+        >
           {t("保存预览基础配置")}
         </Button>
       </div>
@@ -117,7 +124,11 @@ export function PreviewBasePanel({
         {t("已有 Secret")}：{config?.secret_names?.join(", ") || "—"}
       </p>
       <Field label={t("Secret 名称")}>
-        <Input value={name} onChange={(e) => setName(e.target.value)} autoComplete="off" />
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          autoComplete="off"
+        />
       </Field>
       <Field label={t("Secret 值")}>
         <Input
@@ -128,7 +139,10 @@ export function PreviewBasePanel({
         />
       </Field>
       <div>
-        <Button disabled={busy || !config || !name} onClick={() => void save(true)}>
+        <Button
+          disabled={busy || !config || !name}
+          onClick={() => void save(true)}
+        >
           {t("保存预览基础 Secret")}
         </Button>
       </div>

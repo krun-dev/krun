@@ -25,13 +25,7 @@ import {
   UsersRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -41,20 +35,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  api,
-  APIError,
-  type List,
-  type Me,
-  type Organization,
-  type Provider,
-} from "@/lib/api";
+import { api, APIError, type List, type Me, type Organization, type Provider } from "@/lib/api";
 import { AUTH_REQUIRED_EVENT } from "@/lib/auth-required";
-import {
-  canOpenSection,
-  type OrganizationPermissions,
-  type Section,
-} from "@/lib/navigation";
+import { canOpenSection, type OrganizationPermissions, type Section } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 import {
   Empty,
@@ -75,9 +58,7 @@ const OAuthConsent = lazy(() =>
 const Login = lazy(() =>
   import("@/components/login").then((module) => ({ default: module.Login })),
 );
-const Home = lazy(() =>
-  import("@/components/home").then((module) => ({ default: module.Home })),
-);
+const Home = lazy(() => import("@/components/home").then((module) => ({ default: module.Home })));
 const OrganizationInvitationJoin = lazy(() =>
   import("@/components/organization-invitation-join").then((module) => ({
     default: module.OrganizationInvitationJoin,
@@ -208,8 +189,7 @@ export default function App() {
     () => new URLSearchParams(window.location.search).get("view") === "system",
   );
   const system = systemView && Boolean(me?.system_admin);
-  const [permissions, setPermissions] =
-    useState<OrganizationPermissions | null>(null);
+  const [permissions, setPermissions] = useState<OrganizationPermissions | null>(null);
   const [permissionsError, setPermissionsError] = useState("");
   const [orgCatalog, setOrgCatalog] = useState<Organization[]>([]);
   const [orgDialog, setOrgDialog] = useState(false),
@@ -317,10 +297,7 @@ export default function App() {
     if (!me || oauthLogin) return;
     let active = true;
     setOrganizationsError("");
-    Promise.all([
-      api<List<Organization>>("/api/v1/orgs"),
-      api<Me>("/api/auth/me"),
-    ])
+    Promise.all([api<List<Organization>>("/api/v1/orgs"), api<Me>("/api/auth/me")])
       .then(([data, currentMe]) => {
         if (active) {
           setMe(currentMe);
@@ -328,9 +305,7 @@ export default function App() {
           setOrgCatalog(data.items);
           setOrgsLoaded(true);
           setScope((current) =>
-            data.items.some((o) => o.id === current)
-              ? current
-              : (data.items[0]?.id ?? ""),
+            data.items.some((o) => o.id === current) ? current : (data.items[0]?.id ?? ""),
           );
         }
       })
@@ -355,7 +330,7 @@ export default function App() {
     }
     // Revalidate the same organization without unmounting its page and losing
     // unsaved forms. A different organization remains closed until its reply.
-    setPermissions((current) => current?.organization_id === org.id ? current : null);
+    setPermissions((current) => (current?.organization_id === org.id ? current : null));
     const controller = new AbortController();
     api<OrganizationPermissions>(
       `/api/v1/orgs/${encodeURIComponent(org.id)}/permissions`,
@@ -456,10 +431,16 @@ export default function App() {
           <Logo />
           <LanguageSwitch />
         </div>
-        <p role="alert" className="mt-8">
+        <p
+          role="alert"
+          className="mt-8"
+        >
           {t(fatal)}
         </p>
-        <Button className="mt-4" onClick={() => window.location.reload()}>
+        <Button
+          className="mt-4"
+          onClick={() => window.location.reload()}
+        >
           {t("重试")}
         </Button>
       </div>
@@ -467,7 +448,11 @@ export default function App() {
   if (joining)
     return (
       <Suspense fallback={<Loading />}>
-        <OrganizationInvitationJoin me={me} providers={providers} development={development} />
+        <OrganizationInvitationJoin
+          me={me}
+          providers={providers}
+          development={development}
+        />
       </Suspense>
     );
   if (oauthLogin)
@@ -487,24 +472,17 @@ export default function App() {
         <Login
           providers={providers}
           development={development}
-          error={
-            new URLSearchParams(window.location.search).get("error") ??
-            undefined
-          }
+          error={new URLSearchParams(window.location.search).get("error") ?? undefined}
         />
       </Suspense>
     );
-  const base = system
-    ? "/api/v1/system"
-    : `/api/v1/orgs/${encodeURIComponent(scope)}`;
+  const base = system ? "/api/v1/system" : `/api/v1/orgs/${encodeURIComponent(scope)}`;
   return (
     <div className="min-h-screen lg:pl-[232px]">
       <aside
         className={cn(
           "fixed inset-y-0 left-0 z-30 w-[232px] flex-col border-r bg-card px-3 py-5 transition-transform lg:translate-x-0",
-          menu
-            ? "flex translate-x-0 shadow-lg"
-            : "hidden -translate-x-full lg:flex",
+          menu ? "flex translate-x-0 shadow-lg" : "hidden -translate-x-full lg:flex",
         )}
       >
         <div className="px-3">
@@ -528,11 +506,17 @@ export default function App() {
                 setMenu(false);
               }}
             >
-              <option value="" disabled>
+              <option
+                value=""
+                disabled
+              >
                 {t("选择组织")}
               </option>
               {orgs.map((o) => (
-                <option key={o.id} value={o.id}>
+                <option
+                  key={o.id}
+                  value={o.id}
+                >
                   {o.name}
                 </option>
               ))}
@@ -582,7 +566,10 @@ export default function App() {
               ]
                 .filter((n) => canOpen(n.id))
                 .map((n, index, all) => (
-                  <div key={n.id} className="contents">
+                  <div
+                    key={n.id}
+                    className="contents"
+                  >
                     {index > 0 && n.group !== all[index - 1].group && (
                       <div className="mt-5 px-3 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/80">
                         {n.group === "" ? t("通用") : t(n.group)}
@@ -609,9 +596,7 @@ export default function App() {
                           : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
                       )}
                     >
-                      {n.group === "" ? null : (
-                        <span className="w-[17px] shrink-0" />
-                      )}
+                      {n.group === "" ? null : <span className="w-[17px] shrink-0" />}
                       <n.icon size={17} />
                       {t(n.name)}
                       {section === n.id && (
@@ -625,7 +610,10 @@ export default function App() {
         )}
         <div className="mt-auto pt-8">
           <div className="rounded-md border bg-background/50 p-4">
-            <Terminal size={19} className="text-primary" />
+            <Terminal
+              size={19}
+              className="text-primary"
+            />
             <p className="mt-3 text-sm font-medium">{t("连接终端")}</p>
             <p className="my-2 text-xs leading-relaxed text-muted-foreground">
               {t("通过浏览器登录，安全地管理你的组织。")}
@@ -636,8 +624,16 @@ export default function App() {
           </div>
           <div className="mt-4 flex items-center gap-2 px-3 text-xs text-muted-foreground">
             <CircleHelp size={13} />
-            <a href="/docs/" className="hover:text-foreground">{t("使用文档")}</a>{" "}
-            <Badge variant="outline" className="ml-auto text-[9px]">
+            <a
+              href="/docs/"
+              className="hover:text-foreground"
+            >
+              {t("使用文档")}
+            </a>{" "}
+            <Badge
+              variant="outline"
+              className="ml-auto text-[9px]"
+            >
               v0.1
             </Badge>
           </div>
@@ -661,10 +657,16 @@ export default function App() {
           >
             <PanelLeft size={18} />
           </Button>
-          <nav aria-label={t("面包屑")} className="min-w-0">
+          <nav
+            aria-label={t("面包屑")}
+            className="min-w-0"
+          >
             <ol className="flex min-w-0 items-center gap-3">
               <li className="hidden shrink-0 text-sm text-muted-foreground sm:block">
-                <a href={homeHref} className="hover:text-foreground hover:underline">
+                <a
+                  href={homeHref}
+                  className="hover:text-foreground hover:underline"
+                >
                   {system ? t("平台管理") : t("组织")}
                 </a>
               </li>
@@ -675,7 +677,10 @@ export default function App() {
                 /
               </li>
               <li className="min-w-0 text-sm font-medium">
-                <a href={homeHref} className="block truncate hover:underline">
+                <a
+                  href={homeHref}
+                  className="block truncate hover:underline"
+                >
                   {scopeName}
                 </a>
               </li>
@@ -692,9 +697,8 @@ export default function App() {
                   className="hover:text-foreground hover:underline"
                 >
                   {t(
-                    (system ? adminNavigation : navigation).find(
-                      (n) => n.id === section,
-                    )?.name ?? "概览",
+                    (system ? adminNavigation : navigation).find((n) => n.id === section)?.name ??
+                      "概览",
                   )}
                 </a>
               </li>
@@ -713,21 +717,15 @@ export default function App() {
               }}
             >
               <ShieldCheck size={15} />
-              <span className="hidden sm:inline">
-                {system ? t("返回组织") : t("平台管理")}
-              </span>
+              <span className="hidden sm:inline">{system ? t("返回组织") : t("平台管理")}</span>
             </Button>
           ) : null}
           <LanguageSwitch />
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label={
-              theme === "dark" ? t("切换浅色主题") : t("切换深色主题")
-            }
-            onClick={() =>
-              setTheme((value) => (value === "dark" ? "light" : "dark"))
-            }
+            aria-label={theme === "dark" ? t("切换浅色主题") : t("切换深色主题")}
+            onClick={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
           >
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
           </Button>
@@ -742,9 +740,7 @@ export default function App() {
           <div className="flex size-8 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
             {me.user.name.slice(0, 1).toUpperCase() || "K"}
           </div>
-          <span className="hidden max-w-28 truncate text-sm xl:inline">
-            {me.user.name}
-          </span>
+          <span className="hidden max-w-28 truncate text-sm xl:inline">{me.user.name}</span>
           <Button
             size="icon"
             variant="ghost"
@@ -766,10 +762,18 @@ export default function App() {
         </div>
       </header>
       <main className="mx-auto max-w-[1440px] px-5 py-7 md:px-9 md:py-8">
-        {notice && <Notice message={notice} close={() => setNotice("")} />}
+        {notice && (
+          <Notice
+            message={notice}
+            close={() => setNotice("")}
+          />
+        )}
         <Suspense fallback={<Loading />}>
           {organizationsError || (permissionsError && !system) ? (
-            <div role="alert" className="grid justify-items-start gap-4">
+            <div
+              role="alert"
+              className="grid justify-items-start gap-4"
+            >
               <p>{organizationsError || permissionsError}</p>
               <Button onClick={reload}>{t("重试")}</Button>
             </div>
@@ -826,9 +830,7 @@ export default function App() {
                 <Card className="gap-0 shadow-none">
                   <CardHeader className="border-b pb-5">
                     <CardTitle className="text-base">{t("我的组织")}</CardTitle>
-                    <CardDescription>
-                      {t("协作与权限隔离的组织")}
-                    </CardDescription>
+                    <CardDescription>{t("协作与权限隔离的组织")}</CardDescription>
                   </CardHeader>
                   <CardContent className="pt-5">
                     {orgs.length ? (
@@ -862,9 +864,7 @@ export default function App() {
                         description={
                           me.system_admin
                             ? t("创建组织后即可管理成员与权限。")
-                            : t(
-                                "把下方的本地用户 ID 提供给管理员，申请组织成员资格与角色。",
-                              )
+                            : t("把下方的本地用户 ID 提供给管理员，申请组织成员资格与角色。")
                         }
                       />
                     )}
@@ -873,9 +873,7 @@ export default function App() {
                 <Card className="gap-0 shadow-none">
                   <CardHeader className="border-b pb-5">
                     <CardTitle className="text-base">{t("快速开始")}</CardTitle>
-                    <CardDescription>
-                      {t("把权限配置成团队需要的样子")}
-                    </CardDescription>
+                    <CardDescription>{t("把权限配置成团队需要的样子")}</CardDescription>
                   </CardHeader>
                   <CardContent className="grid gap-3 pt-5">
                     {canOpen("groups") && (
@@ -893,13 +891,9 @@ export default function App() {
                       />
                     )}
                     <div className="mt-1 rounded-lg bg-secondary/70 p-4">
-                      <p className="text-xs text-muted-foreground">
-                        {t("你的本地用户 ID")}
-                      </p>
+                      <p className="text-xs text-muted-foreground">{t("你的本地用户 ID")}</p>
                       <div className="mt-2 flex items-center gap-2">
-                        <code className="min-w-0 break-all text-xs">
-                          {me.user.user_id}
-                        </code>
+                        <code className="min-w-0 break-all text-xs">{me.user.user_id}</code>
                         <Button
                           size="icon"
                           className="ml-auto shrink-0"
@@ -907,11 +901,7 @@ export default function App() {
                           aria-label={t("复制用户 ID")}
                           onClick={copyID}
                         >
-                          {copied ? (
-                            <Check size={14} />
-                          ) : (
-                            <Clipboard size={14} />
-                          )}
+                          {copied ? <Check size={14} /> : <Clipboard size={14} />}
                         </Button>
                       </div>
                       <p className="mt-1 text-[11px] text-muted-foreground">
@@ -933,7 +923,11 @@ export default function App() {
               }}
             />
           ) : section === "users" ? (
-            <UsersPage notify={notify} refresh={refresh} reload={reload} />
+            <UsersPage
+              notify={notify}
+              refresh={refresh}
+              reload={reload}
+            />
           ) : !scope && !system ? (
             <NoOrganization
               canCreate={canCreateOrg}
@@ -970,9 +964,7 @@ export default function App() {
             me.workers_configured === false ? (
               <Empty
                 title={t("Workers 未配置")}
-                description={t(
-                  "请在控制面配置 workers: 段并重启服务，然后刷新此页面。",
-                )}
+                description={t("请在控制面配置 workers: 段并重启服务，然后刷新此页面。")}
               />
             ) : (
               <WorkersPage
@@ -1004,32 +996,36 @@ export default function App() {
               reload={reload}
             />
           ) : section === "check" ? (
-            <CheckPage scope={scope} system={system} />
+            <CheckPage
+              scope={scope}
+              system={system}
+            />
           ) : (
-            <AuditPage key={base} base={base} refresh={refresh} />
+            <AuditPage
+              key={base}
+              base={base}
+              refresh={refresh}
+            />
           )}
         </Suspense>
       </main>
-      <Dialog open={orgDialog} onOpenChange={setOrgDialog}>
+      <Dialog
+        open={orgDialog}
+        onOpenChange={setOrgDialog}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t("创建组织")}</DialogTitle>
-            <DialogDescription>
-              {t("组织是团队成员与资源权限的隔离边界。")}
-            </DialogDescription>
+            <DialogDescription>{t("组织是团队成员与资源权限的隔离边界。")}</DialogDescription>
           </DialogHeader>
           <form
             className="grid gap-5"
             onSubmit={async (e) => {
               e.preventDefault();
               await mutate(async () => {
-                const organization = await api<Organization>(
-                  "/api/v1/orgs",
-                  "POST",
-                  {
-                    name: orgName,
-                  },
-                );
+                const organization = await api<Organization>("/api/v1/orgs", "POST", {
+                  name: orgName,
+                });
                 setScope(organization.id);
                 setOrgDialog(false);
                 setOrgName("");
@@ -1045,7 +1041,10 @@ export default function App() {
                 placeholder={t("例如：Platform Engineering")}
               />
             </Field>
-            <Button type="submit" disabled={saving}>
+            <Button
+              type="submit"
+              disabled={saving}
+            >
               {t("创建组织")}
             </Button>
           </form>
@@ -1073,18 +1072,17 @@ function NoOrganization({
         <div className="mx-auto w-fit rounded-lg bg-secondary p-3 text-muted-foreground">
           <Building2 size={22} />
         </div>
-        <h2 className="mt-4 text-lg font-semibold">
-          {t("你还没有加入任何组织")}
-        </h2>
+        <h2 className="mt-4 text-lg font-semibold">{t("你还没有加入任何组织")}</h2>
         <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
           {canCreate
             ? t("组织是团队协作与权限隔离的边界。创建一个组织开始使用。")
-            : t(
-                "组织是团队协作与权限隔离的边界。请联系管理员邀请你加入现有组织。",
-              )}
+            : t("组织是团队协作与权限隔离的边界。请联系管理员邀请你加入现有组织。")}
         </p>
         {canCreate ? (
-          <Button className="mt-5" onClick={onCreate}>
+          <Button
+            className="mt-5"
+            onClick={onCreate}
+          >
             <Plus size={16} />
             {t("创建组织")}
           </Button>
@@ -1128,7 +1126,10 @@ function OrgCatalogPage({
         </div>
       </div>
       {orgs.length === 0 ? (
-        <Empty title={t("暂无组织")} description={t("还没有任何组织。")} />
+        <Empty
+          title={t("暂无组织")}
+          description={t("还没有任何组织。")}
+        />
       ) : (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {orgs.map((o) => (
@@ -1144,9 +1145,7 @@ function OrgCatalogPage({
                   className="shrink-0 text-muted-foreground"
                 />
               </div>
-              <code className="mt-2 block break-all text-[11px] text-muted-foreground">
-                {o.id}
-              </code>
+              <code className="mt-2 block break-all text-[11px] text-muted-foreground">{o.id}</code>
             </button>
           ))}
         </div>

@@ -99,7 +99,10 @@ export function OrganizationInvitationDialog({ base, notify, reload }: Invitatio
         <UserPlus size={16} />
         {t("邀请成员")}
       </Button>
-      <Dialog open={open} onOpenChange={changeOpen}>
+      <Dialog
+        open={open}
+        onOpenChange={changeOpen}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{created ? t("邀请链接已生成") : t("邀请成员")}</DialogTitle>
@@ -116,7 +119,11 @@ export function OrganizationInvitationDialog({ base, notify, reload }: Invitatio
                 {t("最多 {{count}} 人加入", { count: created.invitation.max_uses })}
               </p>
               <Field label={t("邀请链接")}>
-                <Input ref={urlInput} readOnly value={created.invite_url} />
+                <Input
+                  ref={urlInput}
+                  readOnly
+                  value={created.invite_url}
+                />
               </Field>
               <p className="text-xs leading-relaxed text-muted-foreground">
                 {t("请仅分享给受邀者。撤销链接不会移除已经加入的成员。")}
@@ -134,7 +141,10 @@ export function OrganizationInvitationDialog({ base, notify, reload }: Invitatio
                 void create();
               }}
             >
-              <fieldset className="grid gap-3" disabled={busy}>
+              <fieldset
+                className="grid gap-3"
+                disabled={busy}
+              >
                 <legend className="mb-3 text-sm font-medium">{t("加入后的角色")}</legend>
                 {(["member", "viewer"] as const).map((value) => (
                   <label
@@ -215,17 +225,26 @@ export function OrganizationInvitationDialog({ base, notify, reload }: Invitatio
                 </div>
               </details>
               <p className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
-                <Link size={15} className="shrink-0" />
+                <Link
+                  size={15}
+                  className="shrink-0"
+                />
                 {t("7 天有效，最多 {{count}} 人加入。管理员身份需加入后单独授予。", {
                   count: Number(maxUses) || 1,
                 })}
               </p>
               {error ? (
-                <p role="alert" className="text-sm text-destructive">
+                <p
+                  role="alert"
+                  className="text-sm text-destructive"
+                >
                   {error}
                 </p>
               ) : null}
-              <Button type="submit" disabled={busy}>
+              <Button
+                type="submit"
+                disabled={busy}
+              >
                 {busy ? t("生成中…") : t("生成邀请链接")}
               </Button>
             </form>
@@ -293,7 +312,10 @@ export function OrganizationInvitationList({
   return (
     <>
       {error ? (
-        <p role="alert" className="mb-4 text-sm text-destructive">
+        <p
+          role="alert"
+          className="mb-4 text-sm text-destructive"
+        >
           {error}
         </p>
       ) : null}
@@ -335,7 +357,11 @@ export function OrganizationInvitationList({
                   </TableCell>
                   <TableCell>
                     {canManage && !item.revoked_at ? (
-                      <Button variant="outline" size="sm" onClick={() => setTarget(item)}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setTarget(item)}
+                      >
                         {t("撤销")}
                       </Button>
                     ) : null}
@@ -346,16 +372,25 @@ export function OrganizationInvitationList({
           </Table>
         </div>
       ) : !error ? (
-        <Empty title={t("暂无邀请链接")} description={t("点击邀请成员，生成链接并分享给同事。")} />
+        <Empty
+          title={t("暂无邀请链接")}
+          description={t("点击邀请成员，生成链接并分享给同事。")}
+        />
       ) : null}
       <div className="mt-4 flex justify-end gap-2">
         {cursor ? (
-          <Button variant="outline" onClick={() => setCursor("")}>
+          <Button
+            variant="outline"
+            onClick={() => setCursor("")}
+          >
             {t("返回最新")}
           </Button>
         ) : null}
         {page?.next_cursor ? (
-          <Button variant="outline" onClick={() => setCursor(page.next_cursor)}>
+          <Button
+            variant="outline"
+            onClick={() => setCursor(page.next_cursor)}
+          >
             {t("下一页")}
           </Button>
         ) : null}
@@ -373,7 +408,11 @@ export function OrganizationInvitationList({
               {t("撤销后，不能再通过此链接加入组织。已加入的成员与角色不受影响。")}
             </DialogDescription>
           </DialogHeader>
-          <Button variant="destructive" disabled={busy || !canManage} onClick={() => void revoke()}>
+          <Button
+            variant="destructive"
+            disabled={busy || !canManage}
+            onClick={() => void revoke()}
+          >
             {t("确认撤销")}
           </Button>
         </DialogContent>

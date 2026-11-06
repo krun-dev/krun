@@ -38,13 +38,7 @@ import {
   type Selection,
 } from "@/lib/permissions";
 import { Empty, Field, Loading, PageHeader, SelectField } from "./common";
-import {
-  Confirm,
-  DataTable,
-  ErrorState,
-  useData,
-  type Props,
-} from "./management";
+import { Confirm, DataTable, ErrorState, useData, type Props } from "./management";
 
 const presets: { id: Preset; label: string }[] = [
   { id: "all", label: "全部 API" },
@@ -54,9 +48,7 @@ const presets: { id: Preset; label: string }[] = [
 ];
 const statusLabels = { active: "有效", expired: "已过期", revoked: "已撤销" };
 function expiryLabel(key: APIKey) {
-  return key.expires_at
-    ? new Date(key.expires_at).toLocaleDateString(locale())
-    : t("长期有效");
+  return key.expires_at ? new Date(key.expires_at).toLocaleDateString(locale()) : t("长期有效");
 }
 function PolicySummary({ policy }: { policy: Policy }) {
   useTranslation();
@@ -69,10 +61,7 @@ function PolicySummary({ policy }: { policy: Policy }) {
           className="font-normal text-muted-foreground"
         >
           {s.effect === "deny" ? t("拒绝 · ") : ""}
-          {t(
-            resourceKinds.find((k) => k.kind === s.resource.kind)?.label ??
-              "全部资源",
-          )}
+          {t(resourceKinds.find((k) => k.kind === s.resource.kind)?.label ?? "全部资源")}
           {s.resource.all_in_system || s.resource.all_in_organization
             ? " *"
             : t(" · {{v0}} 个资源", {
@@ -95,14 +84,8 @@ function PolicySummary({ policy }: { policy: Policy }) {
 
 export function KeysPage(p: Props) {
   useTranslation();
-  const { data, error, loading } = useData<List<APIKey>>(
-    p.base + "/api-keys",
-    p.refresh,
-  );
-  const registry = useData<{ actions: Record<string, string[]> }>(
-    "/api/v1/roles",
-    0,
-  );
+  const { data, error, loading } = useData<List<APIKey>>(p.base + "/api-keys", p.refresh);
+  const registry = useData<{ actions: Record<string, string[]> }>("/api/v1/roles", 0);
   const [open, setOpen] = useState(false),
     [secret, setSecret] = useState(""),
     [busy, setBusy] = useState(false),
@@ -125,17 +108,12 @@ export function KeysPage(p: Props) {
       .filter(([, kinds]) => kinds.includes(kind))
       .map(([action]) => action)
       .sort();
-  const selectedCount = Object.values(selections).reduce(
-    (sum, s) => sum + s.actions.length,
-    0,
-  );
+  const selectedCount = Object.values(selections).reduce((sum, s) => sum + s.actions.length, 0);
   const items = data?.items ?? [];
   const visible = items.filter(
     (key) =>
       (status === "all" || keyState(key) === status) &&
-      `${key.name} ${key.id} ${key.prefix}`
-        .toLowerCase()
-        .includes(search.toLowerCase()),
+      `${key.name} ${key.id} ${key.prefix}`.toLowerCase().includes(search.toLowerCase()),
   );
   function update(kind: string, patch: Partial<Selection>) {
     setSelections((current) => ({
@@ -169,27 +147,14 @@ export function KeysPage(p: Props) {
   function switchMode(mode: string) {
     setCreateError("");
     if (mode === "json") {
-      setRaw(
-        JSON.stringify(
-          buildPolicy(selections, envs, p.scope, p.system),
-          null,
-          2,
-        ),
-      );
+      setRaw(JSON.stringify(buildPolicy(selections, envs, p.scope, p.system), null, 2));
       setAdvanced(true);
     } else {
       try {
-        const parsed = parseSelections(
-          JSON.parse(raw),
-          catalog,
-          p.scope,
-          p.system,
-        );
+        const parsed = parseSelections(JSON.parse(raw), catalog, p.scope, p.system);
         if (!parsed)
           throw new Error(
-            t(
-              "该策略包含可视化表单无法表达的规则，请继续在 JSON 中编辑，以保留全部限制。",
-            ),
+            t("该策略包含可视化表单无法表达的规则，请继续在 JSON 中编辑，以保留全部限制。"),
           );
         setSelections(parsed.selections);
         setEnvs(parsed.envs);
@@ -203,17 +168,11 @@ export function KeysPage(p: Props) {
     setBusy(true);
     setCreateError("");
     try {
-      const response = await api<{ key: string }>(
-        p.base + "/api-keys",
-        "POST",
-        {
-          name,
-          expires_in: Number(expiry),
-          policy: advanced
-            ? JSON.parse(raw)
-            : buildPolicy(selections, envs, p.scope, p.system),
-        },
-      );
+      const response = await api<{ key: string }>(p.base + "/api-keys", "POST", {
+        name,
+        expires_in: Number(expiry),
+        policy: advanced ? JSON.parse(raw) : buildPolicy(selections, envs, p.scope, p.system),
+      });
       setSecret(response.key);
       setCopied(false);
       setOpen(false);
@@ -248,7 +207,10 @@ export function KeysPage(p: Props) {
       />
       <div className="mb-7 flex flex-wrap items-center gap-x-6 gap-y-3 border-b pb-4 text-sm">
         <span className="flex items-center gap-2 font-medium">
-          <KeyRound size={15} className="text-primary" />
+          <KeyRound
+            size={15}
+            className="text-primary"
+          />
           {t("访问密钥")}
           <Badge variant="secondary">{items.length}</Badge>
         </span>
@@ -296,7 +258,10 @@ export function KeysPage(p: Props) {
           title={t("创建你的第一个 API Key")}
           description={t("选择所需的 API 和资源范围，连接你的自动化工作流。")}
           action={
-            <Button variant="outline" onClick={startCreate}>
+            <Button
+              variant="outline"
+              onClick={startCreate}
+            >
               <Plus size={15} />
               {t("创建 API Key")}
             </Button>
@@ -323,9 +288,7 @@ export function KeysPage(p: Props) {
                     <KeyRound size={16} />
                   </div>
                   <div>
-                    <p className="text-sm font-medium hover:text-primary">
-                      {key.name}
-                    </p>
+                    <p className="text-sm font-medium hover:text-primary">{key.name}</p>
                     <code className="mt-1 block text-[11px] text-muted-foreground">
                       {key.prefix}••••••
                     </code>
@@ -381,9 +344,7 @@ export function KeysPage(p: Props) {
                   <Confirm
                     label={t("撤销")}
                     disabled={key.revoked}
-                    description={t(
-                      "此 Key 将无法再用于新的 API 请求，此操作不能恢复。",
-                    )}
+                    description={t("此 Key 将无法再用于新的 API 请求，此操作不能恢复。")}
                     onConfirm={() => revoke(key.id)}
                   />
                 </div>
@@ -393,15 +354,16 @@ export function KeysPage(p: Props) {
         />
       )}
       <div className="mt-7 grid gap-4 rounded-lg border bg-card/40 p-5 sm:grid-cols-[auto_1fr]">
-        <Terminal size={18} className="mt-0.5 text-muted-foreground" />
+        <Terminal
+          size={18}
+          className="mt-0.5 text-muted-foreground"
+        />
         <div>
           <p className="text-sm font-medium">{t("在终端中使用")}</p>
           <p className="mt-1 text-xs leading-6 text-muted-foreground">
             {t("通过标准输入登录，或在自动化环境中设置 KRUN_TOKEN。")}
           </p>
-          <code className="mt-2 block text-xs text-muted-foreground">
-            krun login --token-stdin
-          </code>
+          <code className="mt-2 block text-xs text-muted-foreground">krun login --token-stdin</code>
         </div>
       </div>
       <Dialog
@@ -413,13 +375,14 @@ export function KeysPage(p: Props) {
         <DialogContent className="flex max-h-[92dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
           <DialogHeader className="border-b px-6 py-5">
             <DialogTitle className="flex items-center gap-2">
-              <KeyRound size={18} className="text-primary" />
+              <KeyRound
+                size={18}
+                className="text-primary"
+              />
               {t("创建 API Key")}
             </DialogTitle>
             <DialogDescription>
-              {t(
-                "选择自动化所需权限。所有资源类型直接展开，支持一次配置多种资源。",
-              )}
+              {t("选择自动化所需权限。所有资源类型直接展开，支持一次配置多种资源。")}
             </DialogDescription>
           </DialogHeader>
           <form
@@ -475,7 +438,10 @@ export function KeysPage(p: Props) {
                   <TabsTrigger value="builder">{t("选择权限")}</TabsTrigger>
                   <TabsTrigger value="json">{t("策略 JSON")}</TabsTrigger>
                 </TabsList>
-                <TabsContent value="builder" className="space-y-4">
+                <TabsContent
+                  value="builder"
+                  className="space-y-4"
+                >
                   {registry.loading ? (
                     <Loading />
                   ) : registry.error ? (
@@ -545,10 +511,7 @@ export function KeysPage(p: Props) {
                                         : false
                                   }
                                   onCheckedChange={(value) =>
-                                    choose(
-                                      value === true ? "all" : "clear",
-                                      group.kind,
-                                    )
+                                    choose(value === true ? "all" : "clear", group.kind)
                                   }
                                 />
                                 <div>
@@ -575,9 +538,7 @@ export function KeysPage(p: Props) {
                                     type="button"
                                     variant="ghost"
                                     size="xs"
-                                    onClick={() =>
-                                      choose("readwrite", group.kind)
-                                    }
+                                    onClick={() => choose("readwrite", group.kind)}
                                   >
                                     {t("读写")}
                                   </Button>
@@ -595,9 +556,7 @@ export function KeysPage(p: Props) {
                                     <Checkbox
                                       aria-label={`${t(group.label)} ${action}`}
                                       className="mt-0.5"
-                                      checked={selection.actions.includes(
-                                        action,
-                                      )}
+                                      checked={selection.actions.includes(action)}
                                       onCheckedChange={(value) =>
                                         setSelections((current) => ({
                                           ...current,
@@ -607,14 +566,11 @@ export function KeysPage(p: Props) {
                                               value === true
                                                 ? [
                                                     ...new Set([
-                                                      ...current[group.kind]
-                                                        .actions,
+                                                      ...current[group.kind].actions,
                                                       action,
                                                     ]),
                                                   ]
-                                                : current[
-                                                    group.kind
-                                                  ].actions.filter(
+                                                : current[group.kind].actions.filter(
                                                     (a) => a !== action,
                                                   ),
                                           },
@@ -622,9 +578,7 @@ export function KeysPage(p: Props) {
                                       }
                                     />
                                     <span>
-                                      <span className="block text-xs">
-                                        {actionLabel(action)}
-                                      </span>
+                                      <span className="block text-xs">{actionLabel(action)}</span>
                                       <code className="mt-1 block break-all text-[10px] text-muted-foreground">
                                         {action}
                                       </code>
@@ -714,26 +668,24 @@ export function KeysPage(p: Props) {
                       </span>
                     </p>
                     <div className="flex flex-wrap gap-5">
-                      {["global", "development", "test", "staging", "production"].map(
-                        (env) => (
-                          <label
-                            key={env}
-                            className="flex items-center gap-2 text-xs"
-                          >
-                            <Checkbox
-                              checked={envs.includes(env)}
-                              onCheckedChange={(value) =>
-                                setEnvs((current) =>
-                                  value === true
-                                    ? [...current, env]
-                                    : current.filter((e) => e !== env),
-                                )
-                              }
-                            />
-                            {environmentLabel(env)}
-                          </label>
-                        ),
-                      )}
+                      {["global", "development", "test", "staging", "production"].map((env) => (
+                        <label
+                          key={env}
+                          className="flex items-center gap-2 text-xs"
+                        >
+                          <Checkbox
+                            checked={envs.includes(env)}
+                            onCheckedChange={(value) =>
+                              setEnvs((current) =>
+                                value === true
+                                  ? [...current, env]
+                                  : current.filter((e) => e !== env),
+                              )
+                            }
+                          />
+                          {environmentLabel(env)}
+                        </label>
+                      ))}
                     </div>
                     <p className="text-[11px] text-muted-foreground">
                       {t("全局详情读取需要 global。")}
@@ -775,13 +727,14 @@ export function KeysPage(p: Props) {
                 <Button
                   type="submit"
                   disabled={
-                    busy ||
-                    (!advanced &&
-                      (!selectedCount || registry.loading || !!registry.error))
+                    busy || (!advanced && (!selectedCount || registry.loading || !!registry.error))
                   }
                 >
                   {busy ? (
-                    <LoaderCircle size={15} className="animate-spin" />
+                    <LoaderCircle
+                      size={15}
+                      className="animate-spin"
+                    />
                   ) : (
                     <Plus size={15} />
                   )}
@@ -804,7 +757,10 @@ export function KeysPage(p: Props) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <CheckCircle2 size={20} className="text-primary" />
+              <CheckCircle2
+                size={20}
+                className="text-primary"
+              />
               {t("API Key 已创建")}
             </DialogTitle>
             <DialogDescription>
@@ -854,21 +810,16 @@ export function KeysPage(p: Props) {
                 </div>
                 <div>
                   <dt className="text-muted-foreground">{t("所属用户")}</dt>
-                  <dd className="mt-1 break-all font-mono">
-                    {detail.owner_user_id}
-                  </dd>
+                  <dd className="mt-1 break-all font-mono">{detail.owner_user_id}</dd>
                 </div>
                 <div>
                   <dt className="text-muted-foreground">{t("有效期")}</dt>
                   <dd className="mt-1">{expiryLabel(detail)}</dd>
                 </div>
                 <div>
-                  <dt className="text-muted-foreground">
-                    {t("状态 / 策略修订")}
-                  </dt>
+                  <dt className="text-muted-foreground">{t("状态 / 策略修订")}</dt>
                   <dd className="mt-1">
-                    {t(statusLabels[keyState(detail)])} /{" "}
-                    {detail.policy_revision}
+                    {t(statusLabels[keyState(detail)])} / {detail.policy_revision}
                   </dd>
                 </div>
               </dl>

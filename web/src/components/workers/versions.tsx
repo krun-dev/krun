@@ -214,7 +214,10 @@ export function VersionsPanel({
                 )}
               >
                 {awaitingDeployment ? (
-                  <p role="status" className="flex items-center gap-2 text-sm text-primary">
+                  <p
+                    role="status"
+                    className="flex items-center gap-2 text-sm text-primary"
+                  >
                     <Check size={16} />
                     {t("待部署版本已创建，线上部署未改变。")}
                   </p>
@@ -222,7 +225,10 @@ export function VersionsPanel({
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <code title={version.id} className="text-sm">
+                      <code
+                        title={version.id}
+                        className="text-sm"
+                      >
                         {shortID(version.id)}
                       </code>
                       {version.tag ? (
@@ -284,7 +290,10 @@ export function VersionsPanel({
                   </div>
                   <div>
                     <dt>{t("制品")}</dt>
-                    <dd title={version.artifact_id} className="mt-1 break-all font-mono">
+                    <dd
+                      title={version.artifact_id}
+                      className="mt-1 break-all font-mono"
+                    >
                       {shortID(version.artifact_id)}
                     </dd>
                   </div>
@@ -311,7 +320,10 @@ export function VersionsPanel({
       ) : null}
       <h3 className="font-medium">{t("部署记录与固定地址")}</h3>
       {deploymentsError ? (
-        <p role="alert" className="text-sm text-destructive">
+        <p
+          role="alert"
+          className="text-sm text-destructive"
+        >
           {deploymentsError}
         </p>
       ) : null}
@@ -324,7 +336,10 @@ export function VersionsPanel({
       {deployments
         .filter((deployment) => deployment.environment === env.name)
         .map((deployment) => (
-          <div key={deployment.id} className="grid gap-2 rounded-md border p-3 text-sm">
+          <div
+            key={deployment.id}
+            className="grid gap-2 rounded-md border p-3 text-sm"
+          >
             <div className="flex flex-wrap items-center gap-2">
               <code title={deployment.id}>
                 {shortID(deployment.id)} · {shortID(deployment.version_id)}
@@ -353,7 +368,10 @@ export function VersionsPanel({
           if (!open && !busy) setConfirmation(null);
         }}
       >
-        <DialogContent className="max-h-[85dvh] overflow-y-auto" showCloseButton={!busy}>
+        <DialogContent
+          className="max-h-[85dvh] overflow-y-auto"
+          showCloseButton={!busy}
+        >
           <DialogHeader>
             <DialogTitle>{t("部署已保存版本")}</DialogTitle>
             <DialogDescription>
@@ -374,19 +392,33 @@ export function VersionsPanel({
             </>
           ) : null}
           {error ? (
-            <p role="alert" className="text-sm text-destructive">
+            <p
+              role="alert"
+              className="text-sm text-destructive"
+            >
               {error}
             </p>
           ) : null}
           <div className="flex justify-end gap-2">
-            <Button variant="outline" disabled={busy} onClick={() => setConfirmation(null)}>
+            <Button
+              variant="outline"
+              disabled={busy}
+              onClick={() => setConfirmation(null)}
+            >
               {t("取消")}
             </Button>
             <Button
               disabled={busy || active || stale || !env.enabled}
               onClick={() => void deploy()}
             >
-              {busy ? <LoaderCircle size={14} className="animate-spin" /> : <Rocket size={14} />}
+              {busy ? (
+                <LoaderCircle
+                  size={14}
+                  className="animate-spin"
+                />
+              ) : (
+                <Rocket size={14} />
+              )}
               {busy ? t("提交中…") : t("确认部署")}
             </Button>
           </div>

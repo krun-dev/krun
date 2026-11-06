@@ -22,20 +22,12 @@ test("Chinese is the default, including unavailable or invalid storage", () => {
 });
 
 test("catalogs have matching keys and interpolation parameters", () => {
-  const zh = JSON.parse(
-    fs.readFileSync(new URL("../locales/zh-CN.json", import.meta.url)),
-  );
-  const en = JSON.parse(
-    fs.readFileSync(new URL("../locales/en.json", import.meta.url)),
-  );
+  const zh = JSON.parse(fs.readFileSync(new URL("../locales/zh-CN.json", import.meta.url)));
+  const en = JSON.parse(fs.readFileSync(new URL("../locales/en.json", import.meta.url)));
   assert.deepEqual(Object.keys(zh).sort(), Object.keys(en).sort());
   for (const key of Object.keys(zh)) {
     assert.equal(typeof en[key], "string", key);
-    assert.deepEqual(
-      zh[key].match(/{{\w+}}/g)?.sort(),
-      en[key].match(/{{\w+}}/g)?.sort(),
-      key,
-    );
+    assert.deepEqual(zh[key].match(/{{\w+}}/g)?.sort(), en[key].match(/{{\w+}}/g)?.sort(), key);
     assert.ok(!/[\u3400-\u9fff]/.test(en[key]), key);
   }
 });
@@ -72,17 +64,13 @@ test("language switches persist, interpolate data safely, and preserve policy id
   assert.equal(t("创建组织"), "Create organization");
   assert.equal(t("{{count}} 个密钥", { count: 1 }), "1 key");
   assert.equal(t("{{count}} 个密钥", { count: 2 }), "2 keys");
-  assert.equal(
-    t("通过 {{name}} 登录", { name: "团队 <script>" }),
-    "Sign in with 团队 <script>",
-  );
+  assert.equal(t("通过 {{name}} 登录", { name: "团队 <script>" }), "Sign in with 团队 <script>");
   assert.equal(actionLabel("worker.version.read"), "Read Worker Version");
   assert.equal(t("Permission denied"), "Permission denied");
   const selections = initialSelections();
   selections.worker.actions = ["worker.read"];
   assert.deepEqual(
-    buildPolicy(selections, ["production"], "org_测试", false).statements[0]
-      .actions,
+    buildPolicy(selections, ["production"], "org_测试", false).statements[0].actions,
     ["worker.read"],
   );
   await setLanguage("zh-CN");
@@ -100,19 +88,11 @@ test("language switches persist, interpolate data safely, and preserve policy id
 
 test("all literal translation keys are cataloged", async () => {
   const ts = await import("typescript");
-  const zh = JSON.parse(
-    fs.readFileSync(new URL("../locales/zh-CN.json", import.meta.url)),
-  );
+  const zh = JSON.parse(fs.readFileSync(new URL("../locales/zh-CN.json", import.meta.url)));
   const runtime = JSON.parse(
-    fs.readFileSync(
-      new URL("../../../internal/localize/zh-CN.json", import.meta.url),
-    ),
+    fs.readFileSync(new URL("../../../internal/localize/zh-CN.json", import.meta.url)),
   );
-  const keys = new Set([
-    ...Object.keys(zh),
-    ...Object.keys(runtime),
-    ...Object.values(runtime),
-  ]);
+  const keys = new Set([...Object.keys(zh), ...Object.keys(runtime), ...Object.values(runtime)]);
   const files = [
     "../App.tsx",
     "../components/common.tsx",
@@ -158,10 +138,7 @@ test("all literal translation keys are cataloged", async () => {
         node.expression.text === "t" &&
         ts.isStringLiteral(node.arguments[0])
       ) {
-        assert.ok(
-          keys.has(node.arguments[0].text),
-          `${file}: ${node.arguments[0].text}`,
-        );
+        assert.ok(keys.has(node.arguments[0].text), `${file}: ${node.arguments[0].text}`);
       }
       ts.forEachChild(node, walk);
     };

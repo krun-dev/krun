@@ -198,7 +198,10 @@ export function BucketObjects({
   const segments = prefix.split("/").filter(Boolean);
   return (
     <>
-      <Button variant="ghost" onClick={back}>
+      <Button
+        variant="ghost"
+        onClick={back}
+      >
         <ArrowLeft size={16} />
         {t("返回桶列表")}
       </Button>
@@ -208,7 +211,10 @@ export function BucketObjects({
         description={t("上传下载直连存储。引用文件时保存桶和对象 key，短期链接到期后需重新获取。")}
         action={
           canWrite ? (
-            <Button disabled={Boolean(transfer)} onClick={() => input.current?.click()}>
+            <Button
+              disabled={Boolean(transfer)}
+              onClick={() => input.current?.click()}
+            >
               <Upload size={16} />
               {t("上传文件")}
             </Button>
@@ -234,8 +240,15 @@ export function BucketObjects({
           {t("同名对象将被覆盖；上传会保留 R2 binding 所需的元数据。")}
         </p>
       ) : null}
-      <div className="mb-4 flex flex-wrap items-center gap-1" aria-label={t("对象目录")}>
-        <Button variant="ghost" size="sm" onClick={() => navigate("")}>
+      <div
+        className="mb-4 flex flex-wrap items-center gap-1"
+        aria-label={t("对象目录")}
+      >
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => navigate("")}
+        >
           {t("根目录")}
         </Button>
         {segments.map((segment, index) => (
@@ -262,7 +275,10 @@ export function BucketObjects({
           value={path}
           onChange={(event) => setPath(event.target.value)}
         />
-        <Button variant="outline" type="submit">
+        <Button
+          variant="outline"
+          type="submit"
+        >
           {t("打开目录")}
         </Button>
         <Button
@@ -275,23 +291,36 @@ export function BucketObjects({
         </Button>
       </form>
       {transfer ? (
-        <div role="status" className="mb-4 flex items-center gap-3 rounded border p-3 text-sm">
+        <div
+          role="status"
+          className="mb-4 flex items-center gap-3 rounded border p-3 text-sm"
+        >
           <span className="min-w-0 flex-1 break-all">
             {transfer} — {percent}%
           </span>
-          <Button size="sm" variant="outline" onClick={() => activeUpload.current?.abort()}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => activeUpload.current?.abort()}
+          >
             {t("取消上传")}
           </Button>
         </div>
       ) : null}
       {error ? (
-        <p role="alert" className="mb-4 text-sm text-destructive">
+        <p
+          role="alert"
+          className="mb-4 text-sm text-destructive"
+        >
           {error}
         </p>
       ) : !page ? (
         <Loading />
       ) : !page.objects.length && !page.delimited_prefixes.length ? (
-        <Empty title={t("目录为空")} description={t("上传文件，或打开其他路径前缀。")} />
+        <Empty
+          title={t("目录为空")}
+          description={t("上传文件，或打开其他路径前缀。")}
+        />
       ) : (
         <Card className="py-0 shadow-none">
           <CardContent className="p-0">
@@ -341,7 +370,11 @@ export function BucketObjects({
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-2">
-                        <Button variant="outline" size="sm" asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          asChild
+                        >
                           <a
                             href={
                               endpoint + "/download?" + new URLSearchParams({ key: object.key })
@@ -385,7 +418,10 @@ export function BucketObjects({
           {t("下一页")}
         </Button>
       </div>
-      <Dialog open={Boolean(detail)} onOpenChange={(open) => !open && setDetail(null)}>
+      <Dialog
+        open={Boolean(detail)}
+        onOpenChange={(open) => !open && setDetail(null)}
+      >
         <DialogContent className="max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{t("对象详情")}</DialogTitle>
@@ -422,7 +458,10 @@ export function BucketObjects({
                 </pre>
               </Field>
               {page?.delivery_available ? (
-                <Button variant="outline" onClick={() => void copyDelivery(detail.key)}>
+                <Button
+                  variant="outline"
+                  onClick={() => void copyDelivery(detail.key)}
+                >
                   {t("复制短期 CDN 链接")}
                 </Button>
               ) : null}
@@ -430,7 +469,10 @@ export function BucketObjects({
           ) : null}
         </DialogContent>
       </Dialog>
-      <Dialog open={Boolean(remove)} onOpenChange={(open) => !busy && !open && setRemove(null)}>
+      <Dialog
+        open={Boolean(remove)}
+        onOpenChange={(open) => !busy && !open && setRemove(null)}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t("删除对象")}</DialogTitle>
@@ -439,7 +481,11 @@ export function BucketObjects({
             </DialogDescription>
           </DialogHeader>
           <p className="break-all font-mono text-sm">{remove?.key}</p>
-          <Button variant="destructive" disabled={busy} onClick={() => void deleteObject()}>
+          <Button
+            variant="destructive"
+            disabled={busy}
+            onClick={() => void deleteObject()}
+          >
             {t("确认删除")}
           </Button>
         </DialogContent>

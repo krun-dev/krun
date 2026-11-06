@@ -138,9 +138,7 @@ export function OAuthConsent({
               },
             ]
           : []),
-        ...(info?.scopes.some((s) =>
-          ["workers:write", "workers_scripts:write"].includes(s),
-        )
+        ...(info?.scopes.some((s) => ["workers:write", "workers_scripts:write"].includes(s))
           ? [
               {
                 icon: Code2,
@@ -162,7 +160,10 @@ export function OAuthConsent({
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-6 md:px-10">
-        <a href="/" aria-label={t("返回控制台")}>
+        <a
+          href="/"
+          aria-label={t("返回控制台")}
+        >
           <Logo />
         </a>
         <LanguageSwitch />
@@ -188,9 +189,7 @@ export function OAuthConsent({
               <div className="flex size-16 items-center justify-center rounded-2xl border border-border bg-muted">
                 <AppIcon
                   size={27}
-                  className={
-                    isWrangler ? "text-orange-500" : "text-primary"
-                  }
+                  className={isWrangler ? "text-orange-500" : "text-primary"}
                 />
               </div>
               <div className="flex flex-1 items-center text-primary/40">
@@ -199,7 +198,10 @@ export function OAuthConsent({
                 <span className="h-px flex-1 bg-current" />
               </div>
               <div className="grid size-16 place-items-center rounded-2xl border border-primary/25 bg-primary/10">
-                <Terminal size={27} className="text-primary" />
+                <Terminal
+                  size={27}
+                  className="text-primary"
+                />
               </div>
             </div>
           </div>
@@ -212,9 +214,7 @@ export function OAuthConsent({
               <div>
                 <p className="text-sm font-medium">{t("权限始终由你掌握")}</p>
                 <p className="mt-2 text-xs leading-6 text-muted-foreground">
-                  {t(
-                    "工具只能执行你本来就有权执行的操作。退出终端登录后，本次授权随即撤销。",
-                  )}
+                  {t("工具只能执行你本来就有权执行的操作。退出终端登录后，本次授权随即撤销。")}
                 </p>
               </div>
             </div>
@@ -227,11 +227,12 @@ export function OAuthConsent({
           {!request ? (
             <>
               <div className="mb-6 grid size-12 place-items-center rounded-2xl border bg-card">
-                <KeyRound size={22} className="text-primary" />
+                <KeyRound
+                  size={22}
+                  className="text-primary"
+                />
               </div>
-              <h2 className="text-2xl font-semibold tracking-tight">
-                {t("连接你的终端")}
-              </h2>
+              <h2 className="text-2xl font-semibold tracking-tight">{t("连接你的终端")}</h2>
               <p className="mt-3 text-sm leading-6 text-muted-foreground">
                 {t("输入终端显示的确认码，继续登录。")}
               </p>
@@ -244,7 +245,10 @@ export function OAuthConsent({
                   );
                 }}
               >
-                <label className="text-sm font-medium" htmlFor="terminal-code">
+                <label
+                  className="text-sm font-medium"
+                  htmlFor="terminal-code"
+                >
                   {t("终端确认码")}
                 </label>
                 <Input
@@ -256,22 +260,24 @@ export function OAuthConsent({
                   required
                   maxLength={15}
                 />
-                <Button type="submit" className="h-11 w-full">
+                <Button
+                  type="submit"
+                  className="h-11 w-full"
+                >
                   {t("继续")}
                   <ArrowRight size={16} />
                 </Button>
               </form>
             </>
           ) : done ? (
-            <div role="status" className="py-8">
+            <div
+              role="status"
+              className="py-8"
+            >
               <div
                 className={`mb-6 grid size-14 place-items-center rounded-full ${done === "approved" ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}
               >
-                {done === "approved" ? (
-                  <CheckCheck size={26} />
-                ) : (
-                  <X size={26} />
-                )}
+                {done === "approved" ? <CheckCheck size={26} /> : <X size={26} />}
               </div>
               <h2 className="text-3xl font-semibold tracking-tight">
                 {done === "approved" ? t("连接已确认") : t("已取消授权")}
@@ -281,7 +287,11 @@ export function OAuthConsent({
                   ? t("返回终端继续工作。现在可以关闭这个页面。")
                   : t("没有向终端授予访问权限。你可以关闭这个页面。")}
               </p>
-              <Button variant="outline" className="mt-7" asChild>
+              <Button
+                variant="outline"
+                className="mt-7"
+                asChild
+              >
                 <a href="/">
                   {t("返回控制台")}
                   <ChevronRight size={15} />
@@ -290,16 +300,18 @@ export function OAuthConsent({
             </div>
           ) : !info ? (
             <>
-              <h2 className="text-2xl font-semibold">
-                {t("此授权请求已失效")}
-              </h2>
+              <h2 className="text-2xl font-semibold">{t("此授权请求已失效")}</h2>
               <p
                 role="alert"
                 className="mt-4 text-sm leading-7 text-muted-foreground"
               >
                 {t("请在终端重新运行登录命令，获取新的授权链接。")}
               </p>
-              <Button variant="outline" className="mt-7 w-fit" asChild>
+              <Button
+                variant="outline"
+                className="mt-7 w-fit"
+                asChild
+              >
                 <a href="/">
                   <ArrowLeft size={15} />
                   {t("返回控制台")}
@@ -315,9 +327,7 @@ export function OAuthConsent({
                   <AppIcon size={23} />
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">
-                    {t("正在连接")}
-                  </p>
+                  <p className="text-xs text-muted-foreground">{t("正在连接")}</p>
                   <p className="mt-1 font-semibold">{app}</p>
                 </div>
               </div>
@@ -332,9 +342,7 @@ export function OAuthConsent({
                   {(me?.user.name || "K").slice(0, 1).toUpperCase()}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold">
-                    {me?.user.name}
-                  </p>
+                  <p className="truncate text-sm font-semibold">{me?.user.name}</p>
                   <p className="mt-1 truncate text-xs text-muted-foreground">
                     {me?.user.email || me?.user.user_id}
                   </p>
@@ -358,9 +366,7 @@ export function OAuthConsent({
               </div>
               {info.device_code && (
                 <div className="mt-5 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
-                  <p className="text-xs text-muted-foreground">
-                    {t("请与终端上的确认码核对")}
-                  </p>
+                  <p className="text-xs text-muted-foreground">{t("请与终端上的确认码核对")}</p>
                   <p className="mt-2 font-mono text-xl font-semibold tracking-widest">
                     {info.device_code}
                   </p>
@@ -368,16 +374,17 @@ export function OAuthConsent({
               )}
               <div className="mt-7 space-y-5">
                 {permissions.map(({ icon: Icon, title, text }) => (
-                  <div className="flex gap-3" key={title}>
+                  <div
+                    className="flex gap-3"
+                    key={title}
+                  >
                     <Icon
                       size={18}
                       className="mt-1 shrink-0 text-muted-foreground"
                     />
                     <div>
                       <p className="text-sm font-medium">{title}</p>
-                      <p className="mt-1 text-xs leading-6 text-muted-foreground">
-                        {text}
-                      </p>
+                      <p className="mt-1 text-xs leading-6 text-muted-foreground">{text}</p>
                     </div>
                   </div>
                 ))}
@@ -390,9 +397,7 @@ export function OAuthConsent({
                     <div>
                       <p className="text-sm font-medium">{t("保持终端登录")}</p>
                       <p className="mt-1 text-xs leading-6 text-muted-foreground">
-                        {t(
-                          "无需反复登录；可随时通过终端退出，授权最长保留 30 天。",
-                        )}
+                        {t("无需反复登录；可随时通过终端退出，授权最长保留 30 天。")}
                       </p>
                     </div>
                   </div>
@@ -421,7 +426,10 @@ export function OAuthConsent({
                   onClick={() => void decide(true)}
                 >
                   {busy ? (
-                    <LoaderCircle size={17} className="animate-spin" />
+                    <LoaderCircle
+                      size={17}
+                      className="animate-spin"
+                    />
                   ) : (
                     <Check size={17} />
                   )}{" "}

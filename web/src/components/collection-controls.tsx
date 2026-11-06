@@ -37,7 +37,10 @@ export function CollectionToolbar({ page, label }: { page: CollectionPage; label
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
         />
-        <Button type="submit" variant="outline">
+        <Button
+          type="submit"
+          variant="outline"
+        >
           {t("搜索")}
         </Button>
         {draft || page.search ? (
@@ -62,7 +65,10 @@ export function CollectionToolbar({ page, label }: { page: CollectionPage; label
           onChange={(event) => page.resize(Number(event.target.value))}
         >
           {[20, 50, 100].map((size) => (
-            <option key={size} value={size}>
+            <option
+              key={size}
+              value={size}
+            >
               {size}
             </option>
           ))}
@@ -75,7 +81,10 @@ export function CollectionToolbar({ page, label }: { page: CollectionPage; label
 export function CollectionPagination({ page }: { page: CollectionPage }) {
   useTranslation();
   return (
-    <nav aria-label={t("列表分页")} className="my-4 flex flex-wrap items-center justify-end gap-3">
+    <nav
+      aria-label={t("列表分页")}
+      className="my-4 flex flex-wrap items-center justify-end gap-3"
+    >
       <span className="text-sm text-muted-foreground">
         {t("第 {{page}} 页", { page: page.pageNumber })}
       </span>
@@ -86,7 +95,11 @@ export function CollectionPagination({ page }: { page: CollectionPage }) {
       >
         {t("上一页")}
       </Button>
-      <Button variant="outline" disabled={page.loading || !page.hasNext} onClick={page.next}>
+      <Button
+        variant="outline"
+        disabled={page.loading || !page.hasNext}
+        onClick={page.next}
+      >
         {t("下一页")}
       </Button>
     </nav>

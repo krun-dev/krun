@@ -1,13 +1,7 @@
 import { t } from "@/lib/i18n";
 import { useTranslation } from "react-i18next";
 import type { ReactNode } from "react";
-import {
-  ArrowUpRight,
-  LoaderCircle,
-  ShieldCheck,
-  Terminal,
-  X,
-} from "lucide-react";
+import { ArrowUpRight, LoaderCircle, ShieldCheck, Terminal, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -46,11 +40,7 @@ export function Field({
     <Label className="grid items-start gap-2 text-sm font-medium">
       <span className="leading-5">{label}</span>
       {children}
-      {hint && (
-        <span className="text-xs font-normal leading-4 text-muted-foreground">
-          {hint}
-        </span>
-      )}
+      {hint && <span className="text-xs font-normal leading-4 text-muted-foreground">{hint}</span>}
     </Label>
   );
 }
@@ -117,7 +107,10 @@ export function Loading() {
       role="status"
       className="flex min-h-52 items-center justify-center gap-2 text-muted-foreground"
     >
-      <LoaderCircle className="animate-spin" size={18} />
+      <LoaderCircle
+        className="animate-spin"
+        size={18}
+      />
       {t("加载中…")}
     </div>
   );
@@ -166,9 +159,7 @@ export function Metric({
           {label}
           {icon}
         </div>
-        <div className="my-3 text-3xl font-semibold tracking-tight">
-          {value}
-        </div>
+        <div className="my-3 text-3xl font-semibold tracking-tight">{value}</div>
         <p className="text-xs text-muted-foreground">{note}</p>
       </CardContent>
     </Card>
@@ -179,29 +170,14 @@ export function StatusBadge({ active }: { active: boolean }) {
   return (
     <Badge
       variant="outline"
-      className={
-        active
-          ? "border-primary/25 bg-primary/10 text-primary"
-          : "text-muted-foreground"
-      }
+      className={active ? "border-primary/25 bg-primary/10 text-primary" : "text-muted-foreground"}
     >
-      <span
-        className={cn(
-          "mr-1 size-1.5 rounded-full",
-          active ? "bg-primary" : "bg-gray-400",
-        )}
-      />
+      <span className={cn("mr-1 size-1.5 rounded-full", active ? "bg-primary" : "bg-gray-400")} />
       {active ? t("有效") : t("已停用")}
     </Badge>
   );
 }
-export function Notice({
-  message,
-  close,
-}: {
-  message: string;
-  close: () => void;
-}) {
+export function Notice({ message, close }: { message: string; close: () => void }) {
   useTranslation();
   return (
     <div
@@ -239,7 +215,10 @@ export function QuickLink({
         <p className="text-sm font-medium">{title}</p>
         <p className="mt-1 text-xs text-muted-foreground">{description}</p>
       </div>
-      <ArrowUpRight size={16} className="text-muted-foreground" />
+      <ArrowUpRight
+        size={16}
+        className="text-muted-foreground"
+      />
     </button>
   );
 }

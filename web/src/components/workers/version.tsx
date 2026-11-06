@@ -37,9 +37,7 @@ export function VersionSummary({
   return (
     <div className="flex flex-wrap gap-1.5">
       {deployed.length === 0 ? (
-        <span className="text-xs italic text-muted-foreground">
-          {t("未部署到任何环境")}
-        </span>
+        <span className="text-xs italic text-muted-foreground">{t("未部署到任何环境")}</span>
       ) : (
         deployed.map((e) => {
           const s = stateOf(e);
@@ -91,14 +89,26 @@ export function OperationPanel({
         </div>
         <div className="grid gap-4 sm:grid-cols-4">
           {op.steps.map((s) => (
-            <div key={s.name} className="border-l-2 pl-3">
+            <div
+              key={s.name}
+              className="border-l-2 pl-3"
+            >
               <div className="flex items-center gap-2 text-sm">
                 {s.state === "done" ? (
-                  <Check size={14} className="text-primary" />
+                  <Check
+                    size={14}
+                    className="text-primary"
+                  />
                 ) : s.state === "running" ? (
-                  <LoaderCircle size={14} className="animate-spin" />
+                  <LoaderCircle
+                    size={14}
+                    className="animate-spin"
+                  />
                 ) : (
-                  <Circle size={14} className="text-muted-foreground" />
+                  <Circle
+                    size={14}
+                    className="text-muted-foreground"
+                  />
                 )}
                 {t(stepNames[s.name] || s.name)}
               </div>
@@ -109,7 +119,10 @@ export function OperationPanel({
           ))}
         </div>
         {op.error ? (
-          <p role="alert" className="mt-4 text-sm text-destructive">
+          <p
+            role="alert"
+            className="mt-4 text-sm text-destructive"
+          >
             {op.error}
           </p>
         ) : null}
@@ -120,9 +133,11 @@ export function OperationPanel({
             onChange={select}
           >
             {operations.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.environment} · {o.kind} · {shortID(o.id)} ·{" "}
-                {t(states[o.state] || o.state)}
+              <option
+                key={o.id}
+                value={o.id}
+              >
+                {o.environment} · {o.kind} · {shortID(o.id)} · {t(states[o.state] || o.state)}
               </option>
             ))}
           </SelectField>

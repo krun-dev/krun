@@ -144,7 +144,10 @@ export function EnvironmentSettings({
           disabled={busy || active || stale}
         />
         {stale ? (
-          <p role="alert" className="text-sm text-destructive">
+          <p
+            role="alert"
+            className="text-sm text-destructive"
+          >
             {t("配置已被更新，请先加载最新配置。")}
           </p>
         ) : null}
@@ -341,7 +344,11 @@ export function Invocation({ base, env }: { base: string; env: Environment }) {
         >
           <div className="flex gap-3">
             <div className="w-28">
-              <SelectField label={t("请求方法")} value={method} onChange={setMethod}>
+              <SelectField
+                label={t("请求方法")}
+                value={method}
+                onChange={setMethod}
+              >
                 {["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((m) => (
                   <option key={m}>{m}</option>
                 ))}
@@ -376,13 +383,19 @@ export function Invocation({ base, env }: { base: string; env: Environment }) {
           <p className="text-sm text-muted-foreground">{t("先发布到此环境，再发送请求。")}</p>
         ) : null}
         {error ? (
-          <p role="alert" className="text-sm text-destructive">
+          <p
+            role="alert"
+            className="text-sm text-destructive"
+          >
             {error}
           </p>
         ) : null}
         {result ? (
           <div className="grid gap-3">
-            <Badge variant="outline" className="w-fit">
+            <Badge
+              variant="outline"
+              className="w-fit"
+            >
               HTTP {result.status}
             </Badge>
             <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-md bg-secondary p-4 text-xs">

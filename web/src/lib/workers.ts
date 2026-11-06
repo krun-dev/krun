@@ -182,10 +182,7 @@ export function useWorkerData(base: string, revision: number) {
           environments: overview.environments.map((entry) => entry.environment),
           operations: overview.operations,
           histories: Object.fromEntries(
-            overview.environments.map((entry) => [
-              entry.environment.name,
-              entry.history,
-            ]),
+            overview.environments.map((entry) => [entry.environment.name, entry.history]),
           ),
           versions: overview.versions,
           domainsRevision: overview.domains_revision,

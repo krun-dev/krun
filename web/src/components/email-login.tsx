@@ -9,7 +9,11 @@ import { errorMessage, t } from "@/lib/i18n";
 
 type Challenge = { challenge_id: string; expires_in: number; retry_after: number };
 
-export function EmailLogin({ provider, busy, onBusy }: {
+export function EmailLogin({
+  provider,
+  busy,
+  onBusy,
+}: {
   provider: string;
   busy: boolean;
   onBusy: (value: boolean) => void;
@@ -37,7 +41,10 @@ export function EmailLogin({ provider, busy, onBusy }: {
     setFailed("");
     try {
       const returnTo = `/${window.location.search}`;
-      const result = await api<Challenge>(`${endpoint}/code`, "POST", { email, return_to: returnTo });
+      const result = await api<Challenge>(`${endpoint}/code`, "POST", {
+        email,
+        return_to: returnTo,
+      });
       setChallenge(result);
       setCode("");
       setRetryAt(Date.now() + result.retry_after * 1000);
@@ -53,7 +60,10 @@ export function EmailLogin({ provider, busy, onBusy }: {
     onBusy(true);
     setFailed("");
     try {
-      const result = await api<{ redirect_url: string }>(`${endpoint}/verify`, "POST", { challenge_id: challenge.challenge_id, code });
+      const result = await api<{ redirect_url: string }>(`${endpoint}/verify`, "POST", {
+        challenge_id: challenge.challenge_id,
+        code,
+      });
       window.location.assign(result.redirect_url);
     } catch (error) {
       setFailed(errorMessage(error));
@@ -62,49 +72,100 @@ export function EmailLogin({ provider, busy, onBusy }: {
   }
 
   return (
-    <form className="grid gap-4 rounded-lg border bg-card p-4" onSubmit={(event) => {
-      event.preventDefault();
-      if (!busy) void (challenge ? verify() : sendCode());
-    }}>
+    <form
+      className="grid gap-4 rounded-lg border bg-card p-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!busy) void (challenge ? verify() : sendCode());
+      }}
+    >
       <div className="flex items-center gap-2 text-sm font-medium">
-        <Mail size={17} className="text-primary" />
+        <Mail
+          size={17}
+          className="text-primary"
+        />
         {t("邮箱登录")}
       </div>
       <div className="grid gap-2">
         <Label htmlFor={`${id}-email`}>{t("邮箱地址")}</Label>
-        <Input id={`${id}-email`} type="email" autoComplete="email" required maxLength={254}
-          value={email} disabled={busy || !!challenge} onChange={(event) => setEmail(event.target.value)}
-          placeholder="you@example.com" />
+        <Input
+          id={`${id}-email`}
+          type="email"
+          autoComplete="email"
+          required
+          maxLength={254}
+          value={email}
+          disabled={busy || !!challenge}
+          onChange={(event) => setEmail(event.target.value)}
+          placeholder="you@example.com"
+        />
       </div>
       {challenge && (
         <>
-          <p role="status" className="text-xs leading-relaxed text-muted-foreground">
+          <p
+            role="status"
+            className="text-xs leading-relaxed text-muted-foreground"
+          >
             {t("验证码已发送至 {{email}}，10 分钟内有效。", { email })}
           </p>
           <div className="grid gap-2">
             <Label htmlFor={`${id}-code`}>{t("邮箱验证码")}</Label>
-            <Input id={`${id}-code`} inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}"
-              required maxLength={6} value={code} disabled={busy} autoFocus
+            <Input
+              id={`${id}-code`}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              pattern="[0-9]{6}"
+              required
+              maxLength={6}
+              value={code}
+              disabled={busy}
+              autoFocus
               onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
-              placeholder={t("输入 6 位验证码")} />
+              placeholder={t("输入 6 位验证码")}
+            />
           </div>
         </>
       )}
-      {failed && <p role="alert" className="text-sm text-destructive">{t(failed)}</p>}
-      <Button type="submit" disabled={busy} className="w-full justify-between">
+      {failed && (
+        <p
+          role="alert"
+          className="text-sm text-destructive"
+        >
+          {t(failed)}
+        </p>
+      )}
+      <Button
+        type="submit"
+        disabled={busy}
+        className="w-full justify-between"
+      >
         {busy ? t("请稍候…") : challenge ? t("验证并登录") : t("发送验证码")}
         <ArrowRight size={16} />
       </Button>
       {challenge ? (
         <div className="flex items-center justify-between">
-          <Button type="button" variant="ghost" size="sm" disabled={busy || remaining > 0} onClick={() => void sendCode()}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={busy || remaining > 0}
+            onClick={() => void sendCode()}
+          >
             {remaining > 0 ? t("{{seconds}} 秒后重新发送", { seconds: remaining }) : t("重新发送")}
           </Button>
-          <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => {
-            setChallenge(null);
-            setCode("");
-            setFailed("");
-          }}>{t("更换邮箱")}</Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => {
+              setChallenge(null);
+              setCode("");
+              setFailed("");
+            }}
+          >
+            {t("更换邮箱")}
+          </Button>
         </div>
       ) : (
         <p className="text-xs text-muted-foreground">{t("无需密码，验证邮箱即可登录。")}</p>

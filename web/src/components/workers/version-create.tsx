@@ -21,7 +21,12 @@ export function BuildVersionMenu({ disabled, create }: { disabled: boolean; crea
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label={t("更多构建操作")} disabled={disabled}>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={t("更多构建操作")}
+          disabled={disabled}
+        >
           <Ellipsis size={16} />
         </Button>
       </DropdownMenu.Trigger>
@@ -119,7 +124,10 @@ export function CreateVersionDialog({
         if (!open && !busy) close();
       }}
     >
-      <DialogContent className="max-h-[85dvh] overflow-y-auto" showCloseButton={!busy}>
+      <DialogContent
+        className="max-h-[85dvh] overflow-y-auto"
+        showCloseButton={!busy}
+      >
         <DialogHeader>
           <DialogTitle>{t("创建待部署版本")}</DialogTitle>
           <DialogDescription>
@@ -163,16 +171,33 @@ export function CreateVersionDialog({
           />
         </Field>
         {error ? (
-          <p role="alert" className="text-sm text-destructive">
+          <p
+            role="alert"
+            className="text-sm text-destructive"
+          >
             {error}
           </p>
         ) : null}
         <div className="flex justify-end gap-2">
-          <Button variant="outline" disabled={busy} onClick={close}>
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={close}
+          >
             {t("取消")}
           </Button>
-          <Button disabled={busy || stale} onClick={() => void submit()}>
-            {busy ? <LoaderCircle size={14} className="animate-spin" /> : <PackagePlus size={14} />}
+          <Button
+            disabled={busy || stale}
+            onClick={() => void submit()}
+          >
+            {busy ? (
+              <LoaderCircle
+                size={14}
+                className="animate-spin"
+              />
+            ) : (
+              <PackagePlus size={14} />
+            )}
             {busy ? t("创建中…") : t("创建待部署版本")}
           </Button>
         </div>

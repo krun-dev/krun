@@ -114,7 +114,11 @@ export function OrganizationInvitationJoin({
       <>
         <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-card px-6 py-3 text-sm">
           <span>{t("登录后返回组织邀请，再确认是否加入。")}</span>
-          <Button variant="ghost" size="sm" onClick={() => setLogin(false)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setLogin(false)}
+          >
             {t("返回邀请")}
           </Button>
         </div>
@@ -155,7 +159,10 @@ export function OrganizationInvitationJoin({
               </div>
             ) : null}
             {invitation.error ? (
-              <p role="alert" className="mt-5 text-sm text-destructive">
+              <p
+                role="alert"
+                className="mt-5 text-sm text-destructive"
+              >
                 {invitation.error === "storage"
                   ? t("无法在此浏览器保存邀请，请允许当前标签页存储后重新打开链接。")
                   : t("邀请链接缺失或无效，请联系管理员获取新链接。")}
@@ -210,7 +217,10 @@ export function OrganizationInvitationJoin({
               </>
             ) : null}
             {error ? (
-              <p role="alert" className="my-5 break-words text-sm text-destructive">
+              <p
+                role="alert"
+                className="my-5 break-words text-sm text-destructive"
+              >
                 {error}
               </p>
             ) : null}

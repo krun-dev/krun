@@ -1,10 +1,4 @@
-import {
-  errorMessage,
-  t,
-  environmentLabel,
-  roleLabel,
-  resourceLabel,
-} from "@/lib/i18n";
+import { errorMessage, t, environmentLabel, roleLabel, resourceLabel } from "@/lib/i18n";
 import { useTranslation } from "react-i18next";
 import { useEffect, useState, type ReactNode } from "react";
 import {
@@ -21,13 +15,7 @@ import {
   OrganizationInvitationDialog,
   OrganizationInvitationList,
 } from "./organization-invitations";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -55,14 +43,7 @@ import {
   type Resource,
   type User,
 } from "@/lib/api";
-import {
-  Empty,
-  Field,
-  Loading,
-  PageHeader,
-  SelectField,
-  StatusBadge,
-} from "./common";
+import { Empty, Field, Loading, PageHeader, SelectField, StatusBadge } from "./common";
 
 export type Props = {
   canInvite?: boolean;
@@ -126,7 +107,10 @@ export function DataTable<T>({
         <TableHeader>
           <TableRow>
             {columns.map((c) => (
-              <TableHead key={c.title} className="h-11 bg-secondary/30 text-xs">
+              <TableHead
+                key={c.title}
+                className="h-11 bg-secondary/30 text-xs"
+              >
                 {c.title}
               </TableHead>
             ))}
@@ -136,7 +120,10 @@ export function DataTable<T>({
           {rows.map((row) => (
             <TableRow key={getKey(row)}>
               {columns.map((c) => (
-                <TableCell key={c.title} className="py-4">
+                <TableCell
+                  key={c.title}
+                  className="py-4"
+                >
                   {c.render(row)}
                 </TableCell>
               ))}
@@ -149,9 +136,7 @@ export function DataTable<T>({
 }
 export function ID({ value }: { value: string }) {
   useTranslation();
-  return (
-    <code className="break-all text-[11px] text-muted-foreground">{value}</code>
-  );
+  return <code className="break-all text-[11px] text-muted-foreground">{value}</code>;
 }
 export function Confirm({
   label,
@@ -179,14 +164,20 @@ export function Confirm({
         <Trash2 size={14} />
         {label}
       </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog
+        open={open}
+        onOpenChange={setOpen}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{label}</DialogTitle>
             <DialogDescription>{description}</DialogDescription>
           </DialogHeader>
           <div className="mt-3 flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => setOpen(false)}
+            >
               {t("取消")}
             </Button>
             <Button
@@ -212,10 +203,7 @@ export function Confirm({
   );
 }
 
-export function IAMPage({
-  section,
-  ...p
-}: Props & { section: "members" | "groups" | "roles" }) {
+export function IAMPage({ section, ...p }: Props & { section: "members" | "groups" | "roles" }) {
   useTranslation();
   const { data, error, loading } = useData<List<User | Group | Assignment>>(
     p.base + "/" + (section === "roles" ? "role-assignments" : section),
@@ -245,9 +233,7 @@ export function IAMPage({
     },
     roles: {
       title: t("角色授权"),
-      description: t(
-        "为用户或用户组分配固定角色，并明确组织、资源与环境范围。",
-      ),
+      description: t("为用户或用户组分配固定角色，并明确组织、资源与环境范围。"),
       action: t("授予角色"),
     },
   };
@@ -266,8 +252,7 @@ export function IAMPage({
   }
   async function submit() {
     await run(async () => {
-      if (section === "members")
-        await api(p.base + "/members", "POST", { user_id: user });
+      if (section === "members") await api(p.base + "/members", "POST", { user_id: user });
       if (section === "groups") await api(p.base + "/groups", "POST", { name });
       if (section === "roles")
         await api(p.base + "/role-assignments", "POST", {
@@ -275,10 +260,7 @@ export function IAMPage({
           subject_id: user,
           role_id: role,
           scope_kind: scopeKind,
-          scope_id:
-            scopeKind === "organization" || scopeKind === "system"
-              ? p.scope
-              : scopeID,
+          scope_id: scopeKind === "organization" || scopeKind === "system" ? p.scope : scopeID,
           conditions: {
             environments: envs ? envs.split(",").map((s) => s.trim()) : [],
           },
@@ -292,9 +274,7 @@ export function IAMPage({
     return (
       <Empty
         title={t("系统空间没有组织成员")}
-        description={t(
-          "在系统用户中管理账号，在系统用户组和角色授权中管理系统管理员。",
-        )}
+        description={t("在系统用户中管理账号，在系统用户组和角色授权中管理系统管理员。")}
       />
     );
   return (
@@ -306,7 +286,11 @@ export function IAMPage({
         action={
           <div className="flex flex-wrap gap-2">
             {section === "members" && p.canInvite ? (
-              <OrganizationInvitationDialog base={p.base} notify={p.notify} reload={p.reload} />
+              <OrganizationInvitationDialog
+                base={p.base}
+                notify={p.notify}
+                reload={p.reload}
+              />
             ) : null}
             <Button
               variant={section === "members" ? "outline" : "default"}
@@ -319,7 +303,11 @@ export function IAMPage({
         }
       />
       {section === "members" ? (
-        <Tabs value={membersView} onValueChange={setMembersView} className="mb-5">
+        <Tabs
+          value={membersView}
+          onValueChange={setMembersView}
+          className="mb-5"
+        >
           <TabsList>
             <TabsTrigger value="members">{t("成员")}</TabsTrigger>
             <TabsTrigger value="invitations">{t("邀请链接")}</TabsTrigger>
@@ -342,7 +330,10 @@ export function IAMPage({
         <Empty
           title={t("暂无{{v0}}", { v0: l.title })}
           action={
-            <Button variant="outline" onClick={() => setOpen(true)}>
+            <Button
+              variant="outline"
+              onClick={() => setOpen(true)}
+            >
               {l.action}
             </Button>
           }
@@ -357,9 +348,7 @@ export function IAMPage({
               render: (u) => (
                 <div>
                   <p className="font-medium">{u.name || u.user_id}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {u.email || t("未提供邮箱")}
-                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">{u.email || t("未提供邮箱")}</p>
                 </div>
               ),
             },
@@ -384,10 +373,7 @@ export function IAMPage({
                     "移除成员会同时清理本组织用户组成员关系和直接角色授权。已有 Key 将失去对应权限。",
                   )}
                   onConfirm={() =>
-                    run(
-                      () => api(p.base + "/members/" + u.user_id, "DELETE"),
-                      t("成员已移除。"),
-                    )
+                    run(() => api(p.base + "/members/" + u.user_id, "DELETE"), t("成员已移除。"))
                   }
                 />
               ),
@@ -397,7 +383,10 @@ export function IAMPage({
       ) : section === "groups" ? (
         <div className="grid gap-5 md:grid-cols-2">
           {(data.items as Group[]).map((g) => (
-            <Card key={g.id} className="gap-0 shadow-none">
+            <Card
+              key={g.id}
+              className="gap-0 shadow-none"
+            >
               <CardHeader className="pb-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
@@ -418,10 +407,7 @@ export function IAMPage({
                     label={t("删除")}
                     description={t("此组关联的角色授权也将删除。")}
                     onConfirm={() =>
-                      run(
-                        () => api(p.base + "/groups/" + g.id, "DELETE"),
-                        t("用户组已删除。"),
-                      )
+                      run(() => api(p.base + "/groups/" + g.id, "DELETE"), t("用户组已删除。"))
                     }
                   />
                 </div>
@@ -437,16 +423,10 @@ export function IAMPage({
                       <ID value={u} />
                       <Confirm
                         label={t("移出")}
-                        description={t(
-                          "用户将失去通过此组取得的权限，其他直接角色授权保留。",
-                        )}
+                        description={t("用户将失去通过此组取得的权限，其他直接角色授权保留。")}
                         onConfirm={() =>
                           run(
-                            () =>
-                              api(
-                                `${p.base}/groups/${g.id}/members/${u}`,
-                                "DELETE",
-                              ),
+                            () => api(`${p.base}/groups/${g.id}/members/${u}`, "DELETE"),
                             t("成员已移出。"),
                           )
                         }
@@ -473,11 +453,7 @@ export function IAMPage({
                     disabled={busy || group !== g.id || !user}
                     onClick={() =>
                       run(async () => {
-                        await api(
-                          `${p.base}/groups/${g.id}/members/${user}`,
-                          "PUT",
-                          {},
-                        );
+                        await api(`${p.base}/groups/${g.id}/members/${user}`, "PUT", {});
                         setUser("");
                       }, t("成员已加入用户组。"))
                     }
@@ -498,7 +474,10 @@ export function IAMPage({
               title: t("主体"),
               render: (a) => (
                 <div>
-                  <Badge variant="outline" className="mb-1">
+                  <Badge
+                    variant="outline"
+                    className="mb-1"
+                  >
                     {a.subject_kind === "group" ? t("用户组") : t("用户")}
                   </Badge>
                   <div>
@@ -531,9 +510,7 @@ export function IAMPage({
               title: t("环境"),
               render: (a) => (
                 <span className="text-xs">
-                  {a.conditions.environments
-                    ?.map(environmentLabel)
-                    .join(", ") || t("全部环境")}
+                  {a.conditions.environments?.map(environmentLabel).join(", ") || t("全部环境")}
                 </span>
               ),
             },
@@ -545,11 +522,7 @@ export function IAMPage({
                   description={t("撤销后，下一次请求立即使用新的授权状态。")}
                   onConfirm={() =>
                     run(
-                      () =>
-                        api(
-                          p.base + "/role-assignments/" + a.assignment_id,
-                          "DELETE",
-                        ),
+                      () => api(p.base + "/role-assignments/" + a.assignment_id, "DELETE"),
                       t("角色授权已撤销。"),
                     )
                   }
@@ -559,7 +532,10 @@ export function IAMPage({
           ]}
         />
       )}
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog
+        open={open}
+        onOpenChange={setOpen}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{l.action}</DialogTitle>
@@ -586,7 +562,10 @@ export function IAMPage({
               <>
                 {section === "roles" && (
                   <Field label={t("授权主体")}>
-                    <SelectField value={subjectKind} onChange={setSubjectKind}>
+                    <SelectField
+                      value={subjectKind}
+                      onChange={setSubjectKind}
+                    >
                       <option value="user">{t("用户")}</option>
                       <option value="group">{t("用户组")}</option>
                     </SelectField>
@@ -598,9 +577,7 @@ export function IAMPage({
                       ? t("用户组 ID")
                       : t("本地用户 ID")
                   }
-                  hint={t(
-                    "使用平台生成的准确 ID，邮箱和显示名不作为身份凭据。",
-                  )}
+                  hint={t("使用平台生成的准确 ID，邮箱和显示名不作为身份凭据。")}
                 >
                   <Input
                     required
@@ -612,15 +589,20 @@ export function IAMPage({
                 {section === "roles" && (
                   <>
                     <Field label={t("角色")}>
-                      <SelectField value={role} onChange={setRole}>
-                        {(p.system
-                          ? ["system_admin"]
-                          : ["org_admin", "member", "viewer"]
-                        ).map((r) => (
-                          <option key={r} value={r}>
-                            {roleLabel(r)} ({r})
-                          </option>
-                        ))}
+                      <SelectField
+                        value={role}
+                        onChange={setRole}
+                      >
+                        {(p.system ? ["system_admin"] : ["org_admin", "member", "viewer"]).map(
+                          (r) => (
+                            <option
+                              key={r}
+                              value={r}
+                            >
+                              {roleLabel(r)} ({r})
+                            </option>
+                          ),
+                        )}
                       </SelectField>
                     </Field>
                     {!p.system && (
@@ -630,9 +612,7 @@ export function IAMPage({
                             value={scopeKind}
                             onChange={setScopeKind}
                           >
-                            <option value="organization">
-                              {t("整个组织")}
-                            </option>
+                            <option value="organization">{t("整个组织")}</option>
                             <option value="worker">{t("指定Worker")}</option>
                             <option value="model">{t("指定模型")}</option>
                           </SelectField>
@@ -664,8 +644,16 @@ export function IAMPage({
                 )}
               </>
             )}
-            <Button type="submit" disabled={busy}>
-              {busy && <LoaderCircle size={16} className="animate-spin" />}
+            <Button
+              type="submit"
+              disabled={busy}
+            >
+              {busy && (
+                <LoaderCircle
+                  size={16}
+                  className="animate-spin"
+                />
+              )}
               {t("保存")}
             </Button>
           </form>
@@ -675,19 +663,11 @@ export function IAMPage({
   );
 }
 
-export function CheckPage({
-  scope,
-  system,
-}: {
-  scope: string;
-  system: boolean;
-}) {
+export function CheckPage({ scope, system }: { scope: string; system: boolean }) {
   useTranslation();
   const [kind, setKind] = useState(system ? "system" : "organization"),
     [id, setID] = useState(scope),
-    [action, setAction] = useState(
-      system ? "system.role.read" : "organization.read",
-    ),
+    [action, setAction] = useState(system ? "system.role.read" : "organization.read"),
     [environment, setEnvironment] = useState("global"),
     [decision, setDecision] = useState<Decision | null>(null),
     [error, setError] = useState(""),
@@ -703,17 +683,13 @@ export function CheckPage({
       <PageHeader
         eyebrow={t("Permission explorer")}
         title={t("权限检查")}
-        description={t(
-          "检查当前登录身份对指定资源与环境的访问能力。实际操作仍会重新授权。",
-        )}
+        description={t("检查当前登录身份对指定资源与环境的访问能力。实际操作仍会重新授权。")}
       />
       <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
         <Card className="shadow-none">
           <CardHeader>
             <CardTitle className="text-base">{t("构造检查请求")}</CardTitle>
-            <CardDescription>
-              {t("资源的组织归属由服务端解析。")}
-            </CardDescription>
+            <CardDescription>{t("资源的组织归属由服务端解析。")}</CardDescription>
           </CardHeader>
           <CardContent>
             <form
@@ -740,15 +716,15 @@ export function CheckPage({
               }}
             >
               <Field label={t("资源类型")}>
-                <SelectField value={kind} onChange={setKind}>
-                  {[
-                    "system",
-                    "organization",
-                    "worker",
-                    "model",
-                    "api_key",
-                  ].map((k) => (
-                    <option key={k} value={k}>
+                <SelectField
+                  value={kind}
+                  onChange={setKind}
+                >
+                  {["system", "organization", "worker", "model", "api_key"].map((k) => (
+                    <option
+                      key={k}
+                      value={k}
+                    >
                       {resourceLabel(k)} ({k})
                     </option>
                   ))}
@@ -770,21 +746,24 @@ export function CheckPage({
                 />
               </Field>
               <Field label={t("目标环境")}>
-                <SelectField value={environment} onChange={setEnvironment}>
-                  {[
-                    "global",
-                    "development",
-                    "test",
-                    "staging",
-                    "production",
-                  ].map((env) => (
-                    <option key={env} value={env}>
+                <SelectField
+                  value={environment}
+                  onChange={setEnvironment}
+                >
+                  {["global", "development", "test", "staging", "production"].map((env) => (
+                    <option
+                      key={env}
+                      value={env}
+                    >
                       {environmentLabel(env)}
                     </option>
                   ))}
                 </SelectField>
               </Field>
-              <Button disabled={busy} type="submit">
+              <Button
+                disabled={busy}
+                type="submit"
+              >
                 {t("检查权限")}
                 <ArrowRight size={16} />
               </Button>
@@ -794,9 +773,7 @@ export function CheckPage({
         <Card className="shadow-none">
           <CardHeader>
             <CardTitle className="text-base">{t("决策结果")}</CardTitle>
-            <CardDescription>
-              {t("默认拒绝 · 用户与凭据分别求值")}
-            </CardDescription>
+            <CardDescription>{t("默认拒绝 · 用户与凭据分别求值")}</CardDescription>
           </CardHeader>
           <CardContent>
             {error ? (
@@ -807,39 +784,35 @@ export function CheckPage({
                   className={`mb-6 rounded-lg border p-6 ${decision.allowed ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50"}`}
                 >
                   {decision.allowed ? (
-                    <ShieldCheck className="mb-3 text-emerald-600" size={28} />
+                    <ShieldCheck
+                      className="mb-3 text-emerald-600"
+                      size={28}
+                    />
                   ) : (
-                    <ShieldAlert className="mb-3 text-red-600" size={28} />
+                    <ShieldAlert
+                      className="mb-3 text-red-600"
+                      size={28}
+                    />
                   )}
                   <h3 className="text-xl font-semibold">
                     {decision.allowed ? t("允许访问") : t("拒绝访问")}
                   </h3>
                   <p className="mt-2 font-mono text-xs text-muted-foreground">
-                    {t(
-                      decision.reason === "ALLOWED"
-                        ? "权限已允许"
-                        : "没有访问权限",
-                    )}{" "}
-                    ({decision.reason})
+                    {t(decision.reason === "ALLOWED" ? "权限已允许" : "没有访问权限")} (
+                    {decision.reason})
                   </p>
                 </div>
                 <div className="grid gap-4 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">
-                      {t("用户角色检查")}
-                    </span>
+                    <span className="text-muted-foreground">{t("用户角色检查")}</span>
                     <span>{decision.user_allowed ? t("允许") : t("拒绝")}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">
-                      {t("凭据限制检查")}
-                    </span>
+                    <span className="text-muted-foreground">{t("凭据限制检查")}</span>
                     <span>{decision.key_allowed ? t("通过") : t("拒绝")}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">
-                      {t("权限修订")}
-                    </span>
+                    <span className="text-muted-foreground">{t("权限修订")}</span>
                     <code>{decision.revision}</code>
                   </div>
                 </div>
@@ -866,18 +839,13 @@ export function UsersPage({
   reload: () => void;
 }) {
   useTranslation();
-  const { data, error, loading } = useData<List<User>>(
-    "/api/v1/system/users",
-    refresh,
-  );
+  const { data, error, loading } = useData<List<User>>("/api/v1/system/users", refresh);
   return (
     <>
       <PageHeader
         eyebrow={t("System administration")}
         title={t("系统用户")}
-        description={t(
-          "不同来源的账号独立保存权限。停用用户会撤销已有会话并阻止其 Key 访问。",
-        )}
+        description={t("不同来源的账号独立保存权限。停用用户会撤销已有会话并阻止其 Key 访问。")}
       />
       {loading ? (
         <Loading />
@@ -903,9 +871,7 @@ export function UsersPage({
               render: (u) => (
                 <div>
                   <Badge variant="outline">{u.source_id}</Badge>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {u.subject}
-                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">{u.subject}</p>
                 </div>
               ),
             },
@@ -941,13 +907,7 @@ export function UsersPage({
     </>
   );
 }
-export function ResourcesPage({
-  base,
-  system,
-  notify,
-  refresh,
-  reload,
-}: Omit<Props, "scope">) {
+export function ResourcesPage({ base, system, notify, refresh, reload }: Omit<Props, "scope">) {
   useTranslation();
   const [kind, setKind] = useState("workers"),
     [open, setOpen] = useState(false),
@@ -975,9 +935,7 @@ export function ResourcesPage({
       <PageHeader
         eyebrow={t("Resource catalog")}
         title={t("资源目录")}
-        description={t(
-          "管理Worker与模型元数据；Workers 构建与发布可从 Workers 页面操作。",
-        )}
+        description={t("管理Worker与模型元数据；Workers 构建与发布可从 Workers 页面操作。")}
         action={
           <Button onClick={() => setOpen(true)}>
             <Plus size={16} />
@@ -985,7 +943,11 @@ export function ResourcesPage({
           </Button>
         }
       />
-      <Tabs value={kind} onValueChange={setKind} className="mb-5">
+      <Tabs
+        value={kind}
+        onValueChange={setKind}
+        className="mb-5"
+      >
         <TabsList>
           <TabsTrigger value="workers">{t("Worker")}</TabsTrigger>
           <TabsTrigger value="models">{t("模型")}</TabsTrigger>
@@ -1055,16 +1017,17 @@ export function ResourcesPage({
           </Button>
         </div>
       ) : null}
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog
+        open={open}
+        onOpenChange={setOpen}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
               {t("创建")}
               {kind === "workers" ? t("Worker") : t("模型")}
             </DialogTitle>
-            <DialogDescription>
-              {t("资源创建后获得不可复用的稳定 ID。")}
-            </DialogDescription>
+            <DialogDescription>{t("资源创建后获得不可复用的稳定 ID。")}</DialogDescription>
           </DialogHeader>
           <form
             className="grid gap-5"
@@ -1091,7 +1054,10 @@ export function ResourcesPage({
                 maxLength={128}
               />
             </Field>
-            <Button disabled={busy} type="submit">
+            <Button
+              disabled={busy}
+              type="submit"
+            >
               {t("创建资源")}
             </Button>
           </form>

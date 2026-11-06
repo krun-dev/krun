@@ -76,7 +76,10 @@ export function Status({ state }: { state: string }) {
       )}
     >
       {pending(state) ? (
-        <LoaderCircle size={12} className="animate-spin" />
+        <LoaderCircle
+          size={12}
+          className="animate-spin"
+        />
       ) : null}
       {t(states[state] || state)}
     </Badge>

@@ -66,7 +66,10 @@ export function Login({
   return (
     <div className="grid min-h-screen lg:grid-cols-[1.05fr_1fr]">
       <div className="relative hidden flex-col overflow-hidden bg-[#151515] p-14 text-white lg:flex">
-        <a href="/" aria-label={t("RUN 首页")}>
+        <a
+          href="/"
+          aria-label={t("RUN 首页")}
+        >
           <Logo dark />
         </a>
         <div className="absolute right-[-110px] top-[18%] size-[500px] rounded-full border border-white/5" />
@@ -97,7 +100,10 @@ export function Login({
               const I = Icon as typeof ShieldCheck;
               return (
                 <div key={String(text)}>
-                  <I size={20} className="mb-3 text-emerald-300" />
+                  <I
+                    size={20}
+                    className="mb-3 text-emerald-300"
+                  />
                   <p className="text-sm text-slate-300">{String(text)}</p>
                 </div>
               );
@@ -108,11 +114,19 @@ export function Login({
       <main className="flex items-center justify-center p-6 md:p-12">
         <div className="w-full max-w-sm">
           <div className="mb-6 flex justify-end">
-            <a href="/docs/" className="mr-4 text-sm text-muted-foreground hover:text-foreground">{t("使用文档")}</a>
+            <a
+              href="/docs/"
+              className="mr-4 text-sm text-muted-foreground hover:text-foreground"
+            >
+              {t("使用文档")}
+            </a>
             <LanguageSwitch />
           </div>
           <div className="mb-12 lg:hidden">
-            <a href="/" aria-label={t("RUN 首页")}>
+            <a
+              href="/"
+              aria-label={t("RUN 首页")}
+            >
               <Logo />
             </a>
           </div>
@@ -133,66 +147,66 @@ export function Login({
               role="alert"
               className="mt-6 rounded-md border border-destructive/25 bg-destructive/10 p-3 text-sm text-destructive"
             >
-              {error
-                ? t("登录失败：{{v0}}", { v0: authError(error) })
-                : t(failed)}
+              {error ? t("登录失败：{{v0}}", { v0: authError(error) }) : t(failed)}
             </p>
           )}
           <div className="mt-8 grid gap-3">
-            {providers.map((p) => p.type === "email" ? (
-              <EmailLogin key={p.id} provider={p.id} busy={busy} onBusy={setBusy} />
-            ) : (
-              <form
-                key={p.id}
-                method="post"
-                action={`/api/auth/${encodeURIComponent(p.id)}/login`}
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void begin(p.id);
-                }}
-              >
-                <input
-                  type="hidden"
-                  name="return_to"
-                  value={`/${window.location.search}`}
+            {providers.map((p) =>
+              p.type === "email" ? (
+                <EmailLogin
+                  key={p.id}
+                  provider={p.id}
+                  busy={busy}
+                  onBusy={setBusy}
                 />
-                <Button
-                  type="submit"
-                  variant="outline"
-                  className="h-12 w-full justify-between bg-card font-medium"
-                  disabled={busy}
+              ) : (
+                <form
+                  key={p.id}
+                  method="post"
+                  action={`/api/auth/${encodeURIComponent(p.id)}/login`}
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void begin(p.id);
+                  }}
                 >
-                  <span className="flex items-center gap-3">
-                    {p.type === "github" ? (
-                      <Github size={18} />
-                    ) : (
-                      <ShieldCheck size={18} />
-                    )}
-                    {t("通过 {{name}} 登录", {
-                      name:
-                        p.type === "dev"
-                          ? t("本地开发登录")
-                          : p.name === "阿里云 IDaaS"
-                            ? t("阿里云 IDaaS")
-                            : p.name,
-                    })}
-                  </span>
-                  <ArrowRight size={16} className="text-muted-foreground" />
-                </Button>
-              </form>
-            ))}
+                  <input
+                    type="hidden"
+                    name="return_to"
+                    value={`/${window.location.search}`}
+                  />
+                  <Button
+                    type="submit"
+                    variant="outline"
+                    className="h-12 w-full justify-between bg-card font-medium"
+                    disabled={busy}
+                  >
+                    <span className="flex items-center gap-3">
+                      {p.type === "github" ? <Github size={18} /> : <ShieldCheck size={18} />}
+                      {t("通过 {{name}} 登录", {
+                        name:
+                          p.type === "dev"
+                            ? t("本地开发登录")
+                            : p.name === "阿里云 IDaaS"
+                              ? t("阿里云 IDaaS")
+                              : p.name,
+                      })}
+                    </span>
+                    <ArrowRight
+                      size={16}
+                      className="text-muted-foreground"
+                    />
+                  </Button>
+                </form>
+              ),
+            )}
           </div>
           {providers.length === 0 && (
-            <p className="mt-6 text-sm text-muted-foreground">
-              {t("管理员尚未配置登录来源。")}
-            </p>
+            <p className="mt-6 text-sm text-muted-foreground">{t("管理员尚未配置登录来源。")}</p>
           )}
           {development && providers.some((p) => p.type === "dev") && (
             <Card className="mt-6 gap-0 border-primary/20 bg-primary/5 py-0 shadow-none">
               <CardContent className="p-4 text-xs leading-relaxed text-muted-foreground">
-                {t(
-                  "当前为本地开发环境。开发身份仅供联调，生产配置会拒绝启用此登录方式。",
-                )}
+                {t("当前为本地开发环境。开发身份仅供联调，生产配置会拒绝启用此登录方式。")}
               </CardContent>
             </Card>
           )}
