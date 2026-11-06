@@ -49,6 +49,7 @@ export function SelectField({
   onChange,
   children,
   label,
+  ariaLabel,
   hideLabel = false,
   disabled,
 }: {
@@ -56,13 +57,14 @@ export function SelectField({
   onChange: (value: string) => void;
   children: ReactNode;
   label?: string;
+  ariaLabel?: string;
   hideLabel?: boolean;
   disabled?: boolean;
 }) {
   useTranslation();
   const select = (
     <select
-      aria-label={label}
+      aria-label={ariaLabel ?? label}
       className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20"
       value={value}
       disabled={disabled}

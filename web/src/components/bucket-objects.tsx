@@ -237,7 +237,7 @@ export function BucketObjects({
       ) : null}
       {canWrite ? (
         <p className="mb-4 text-xs text-muted-foreground">
-          {t("同名对象将被覆盖；上传会保留 R2 binding 所需的元数据。")}
+          {t("同名对象将被覆盖；上传会保留 Worker 读取对象所需的元数据。")}
         </p>
       ) : null}
       <div
@@ -440,11 +440,11 @@ export function BucketObjects({
               <Field label="ETag">
                 <code className="break-all">{detail.etag}</code>
               </Field>
-              <Field label={t("R2 元数据")}>
+              <Field label={t("Worker 读取元数据")}>
                 <span>
                   {detail.r2_compatible
                     ? t("兼容")
-                    : t("缺少 R2 元数据，Worker binding 无法读取此对象。")}
+                    : t("缺少读取元数据，Worker 无法通过对象存储绑定读取此对象。")}
                 </span>
               </Field>
               <Field label={t("HTTP 元数据")}>

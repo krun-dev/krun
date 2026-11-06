@@ -11,11 +11,15 @@ export function R2BindingsEditor({
   rows,
   onChange,
   disabled = false,
+  previewBase = false,
+  children,
 }: {
   organizationBase: string;
   rows: R2BindingRow[];
   onChange: (rows: R2BindingRow[]) => void;
   disabled?: boolean;
+  previewBase?: boolean;
+  children?: React.ReactNode;
 }) {
   const [buckets, setBuckets] = useState<WorkerBucket[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,11 +52,11 @@ export function R2BindingsEditor({
   }
   return (
     <section
-      aria-label={t("R2 存储绑定")}
+      aria-label={t("对象存储")}
       className="grid gap-3 border-t pt-4"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-medium">{t("R2 存储绑定")}</h3>
+        <h3 className="text-sm font-medium">{t("对象存储")}</h3>
         <Button
           variant="ghost"
           size="sm"
@@ -63,7 +67,9 @@ export function R2BindingsEditor({
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">
-        {t("选择本组织的桶，业务通过 env.绑定名称 访问。保存后在下一次发布时生效。")}
+        {previewBase
+          ? t("选择本组织的桶，代码通过 env.绑定名称 访问。保存后仅影响新建 Preview。")
+          : t("选择本组织的桶，业务通过 env.绑定名称 访问。保存后在下一次发布时生效。")}
       </p>
       {error ? (
         <p
@@ -79,7 +85,7 @@ export function R2BindingsEditor({
         </p>
       ) : null}
       {rows.length === 0 ? (
-        <p className="text-xs text-muted-foreground">{t("尚未配置 R2 绑定。")}</p>
+        <p className="text-xs text-muted-foreground">{t("尚未配置对象存储绑定。")}</p>
       ) : null}
       {rows.map((row, index) => (
         <div
@@ -88,7 +94,7 @@ export function R2BindingsEditor({
         >
           <Field label={t("绑定名称")}>
             <Input
-              aria-label={t("R2 绑定名称 {{index}}", { index: index + 1 })}
+              aria-label={t("对象存储绑定名称 {{index}}", { index: index + 1 })}
               value={row.name}
               placeholder="BUCKET"
               disabled={disabled}
@@ -96,7 +102,8 @@ export function R2BindingsEditor({
             />
           </Field>
           <SelectField
-            label={t("R2 桶 {{index}}", { index: index + 1 })}
+            label={t("存储桶")}
+            ariaLabel={t("存储桶 {{index}}", { index: index + 1 })}
             value={row.bucket}
             disabled={disabled || loading}
             onChange={(bucket) => update(row.id, { bucket })}
@@ -121,7 +128,7 @@ export function R2BindingsEditor({
           <Button
             variant="outline"
             disabled={disabled}
-            aria-label={t("移除 R2 绑定 {{index}}", { index: index + 1 })}
+            aria-label={t("移除对象存储绑定 {{index}}", { index: index + 1 })}
             onClick={() => onChange(rows.filter((item) => item.id !== row.id))}
           >
             {t("移除")}
@@ -136,9 +143,10 @@ export function R2BindingsEditor({
           }
           onClick={() => onChange([...rows, { id: crypto.randomUUID(), name: "", bucket: "" }])}
         >
-          {t("添加 R2 绑定")}
+          {t("添加对象存储绑定")}
         </Button>
       </div>
+      {children}
     </section>
   );
 }

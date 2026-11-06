@@ -11,6 +11,9 @@ import { Field, SelectField } from "@/components/common";
 import { workerURL } from "./shared";
 import { R2BindingsEditor } from "./r2-bindings";
 import { bindingRows, bindingInput } from "@/lib/object-storage";
+import { variableRows, variableInput } from "@/lib/worker-variables";
+import { VariablesEditor, VersionMetadataField } from "./variables";
+import { SecretsEditor } from "./secrets";
 
 export function EnvironmentSettings({
   base,
@@ -31,21 +34,33 @@ export function EnvironmentSettings({
   reload: () => void;
   notify: (s: string) => void;
 }) {
-  const [variables, setVariables] = useState(JSON.stringify(env.variables, null, 2));
+  const [variables, setVariables] = useState(() => variableRows(env.variables));
   const [versionMetadata, setVersionMetadata] = useState(env.version_metadata || "");
   const [r2Bindings, setR2Bindings] = useState(() => bindingRows(env.r2_buckets));
   const [revision, setRevision] = useState(env.configuration_revision);
-  const [secretName, setSecretName] = useState("");
-  const [secretValue, setSecretValue] = useState("");
   const [busy, setBusy] = useState(false);
   const domainLabel = (id: string) =>
     domains.find((d) => d.id === id)?.label || domains.find((d) => d.id === id)?.domain || id;
   const current = env.version_id ? data.versions[env.version_id] : undefined;
   const stale = revision !== env.configuration_revision;
-  async function save(input: unknown) {
+  async function save(section: "variables" | "r2") {
     setBusy(true);
     try {
-      const result = await api<Environment>(base + "/environments/" + env.name, "PATCH", input);
+      const input =
+        section === "variables"
+          ? { variables: variableInput(variables), version_metadata: versionMetadata }
+          : {
+              r2_buckets: bindingInput(
+                r2Bindings,
+                env.variables,
+                env.secret_names || [],
+                env.version_metadata || "",
+              ),
+            };
+      const result = await api<Environment>(base + "/environments/" + env.name, "PATCH", {
+        ...input,
+        expected_revision: revision,
+      });
       setRevision(result.configuration_revision);
       reload();
       notify(t("环境配置已保存，下次发布时生效。"));
@@ -68,8 +83,6 @@ export function EnvironmentSettings({
           idempotency_key: crypto.randomUUID(),
         },
       );
-      setSecretName("");
-      setSecretValue("");
       reload();
       notify(
         !env.version_id
@@ -78,9 +91,11 @@ export function EnvironmentSettings({
             ? t("Secret 已保存，正在自动发布新版本。")
             : t("Secret 已删除，正在自动发布新版本。"),
       );
+      return true;
     } catch (e) {
       notify(errorMessage(e));
       reload();
+      return false;
     } finally {
       setBusy(false);
     }
@@ -115,34 +130,48 @@ export function EnvironmentSettings({
             {t("域名由Worker的“路由与域名”页统一选择，此处只展示当前环境的地址。")}
           </p>
         </div>
-        <Field
-          label={t("下一次发布使用的变量")}
-          hint={t("普通变量以 JSON 对象填写，保存配置不会修改正在运行的版本。请勿填入 Secret。")}
+        <section
+          aria-label={t("环境变量")}
+          className="grid gap-3 border-t pt-4"
         >
-          <Textarea
-            aria-label={t("环境变量 JSON")}
-            className="min-h-40 font-mono text-xs"
-            value={variables}
-            onChange={(e) => setVariables(e.target.value)}
+          <h3 className="text-sm font-medium">{t("环境变量")}</h3>
+          <p className="text-xs text-muted-foreground">
+            {t("保存后在下一次发布时生效，不会修改正在运行的版本。")}
+          </p>
+          <VariablesEditor
+            rows={variables}
+            onChange={setVariables}
+            disabled={busy || active || stale}
           />
-        </Field>
-        <Field
-          label={t("版本元数据绑定")}
-          hint={t("将版本 ID、标签和创建时间注入此变量；留空关闭。")}
-        >
-          <Input
-            aria-label={t("版本元数据绑定")}
+          <VersionMetadataField
             value={versionMetadata}
-            placeholder="CF_VERSION_METADATA"
-            onChange={(e) => setVersionMetadata(e.target.value)}
+            onChange={setVersionMetadata}
+            disabled={busy || active || stale}
           />
-        </Field>
+          <div>
+            <Button
+              disabled={busy || active || stale}
+              onClick={() => void save("variables")}
+            >
+              {t("保存环境变量")}
+            </Button>
+          </div>
+        </section>
         <R2BindingsEditor
           organizationBase={organizationBase}
           rows={r2Bindings}
           onChange={setR2Bindings}
           disabled={busy || active || stale}
-        />
+        >
+          <div>
+            <Button
+              disabled={busy || active || stale}
+              onClick={() => void save("r2")}
+            >
+              {t("保存对象存储绑定")}
+            </Button>
+          </div>
+        </R2BindingsEditor>
         {stale ? (
           <p
             role="alert"
@@ -153,35 +182,10 @@ export function EnvironmentSettings({
         ) : null}
         <div className="flex gap-2">
           <Button
-            disabled={busy || active || stale}
-            onClick={() => {
-              try {
-                const parsed: unknown = JSON.parse(variables);
-                if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-                  throw new Error(t("变量必须是 JSON 对象。"));
-                const r2_buckets = bindingInput(
-                  r2Bindings,
-                  parsed,
-                  env.secret_names || [],
-                  versionMetadata,
-                );
-                void save({
-                  expected_revision: revision,
-                  variables: parsed,
-                  version_metadata: versionMetadata,
-                  r2_buckets,
-                });
-              } catch (e) {
-                notify(errorMessage(e));
-              }
-            }}
-          >
-            {t("保存配置")}
-          </Button>
-          <Button
             variant="outline"
+            disabled={busy || active}
             onClick={() => {
-              setVariables(JSON.stringify(env.variables, null, 2));
+              setVariables(variableRows(env.variables));
               setVersionMetadata(env.version_metadata || "");
               setR2Bindings(bindingRows(env.r2_buckets));
               setRevision(env.configuration_revision);
@@ -190,74 +194,15 @@ export function EnvironmentSettings({
             {t("加载最新配置")}
           </Button>
         </div>
-        <div className="grid gap-3 border-t pt-4">
-          <div>
-            <p className="text-sm font-medium">{t("Secrets")}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t(
-                "Secret 值加密保存且不可读取。新增、轮换或删除会复用当前 Artifact 自动发布，不会重新构建代码。",
-              )}
-            </p>
-          </div>
-          {(env.secret_names || []).length > 0 ? (
-            <div className="grid gap-2">
-              {(env.secret_names || []).map((name) => (
-                <div
-                  key={name}
-                  className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
-                >
-                  <code className="text-xs">{name}</code>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={busy || active}
-                    onClick={() => {
-                      if (window.confirm(t("确定删除这个 Secret 并立即发布吗？")))
-                        void changeSecret("DELETE", name);
-                    }}
-                  >
-                    {t("删除")}
-                  </Button>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-xs text-muted-foreground">{t("当前环境还没有 Secret。")}</p>
-          )}
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label={t("Secret 名称")}>
-              <Input
-                autoComplete="off"
-                placeholder="API_TOKEN"
-                value={secretName}
-                onChange={(e) => setSecretName(e.target.value)}
-              />
-            </Field>
-            <Field label={t("Secret 值")}>
-              <Input
-                type="password"
-                autoComplete="new-password"
-                value={secretValue}
-                onChange={(e) => setSecretValue(e.target.value)}
-              />
-            </Field>
-          </div>
-          <div>
-            <Button
-              disabled={
-                busy ||
-                active ||
-                !/^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/.test(secretName) ||
-                secretName.startsWith("KRUN_")
-              }
-              onClick={() => void changeSecret("PUT", secretName, secretValue)}
-            >
-              {t("保存并发布 Secret")}
-            </Button>
-          </div>
-        </div>
+        <SecretsEditor
+          names={env.secret_names || []}
+          disabled={busy || active}
+          published={Boolean(env.version_id)}
+          onSave={(name, value) => changeSecret("PUT", name, value)}
+          onDelete={(name) => changeSecret("DELETE", name)}
+        />
         <div className="border-t pt-4">
-          <p className="mb-2 text-sm text-muted-foreground">{t("当前 Version 使用的 R2 绑定")}</p>
+          <p className="mb-2 text-sm text-muted-foreground">{t("当前版本使用的对象存储绑定")}</p>
           <pre className="mb-4 overflow-auto rounded-md bg-secondary p-3 text-xs">
             {JSON.stringify(
               Object.fromEntries(
