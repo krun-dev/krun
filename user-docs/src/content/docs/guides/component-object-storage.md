@@ -53,3 +53,15 @@ export default {
 分页时根据 `truncated` 和返回的 `cursor` 继续请求，不要假设一次列出所有对象。Range 支持单段 offset/length、suffix 或单段 HTTP bytes range；条件读取支持单个 ETag 或日期条件，条件写入支持 If-Match 或 If-None-Match `*`。不要使用 `startAfter`、SSE-C、PUT checksum、组合条件或其他条件写入；不要依赖 `checksums.md5`。key 不使用点路径段或反斜线。
 
 分片编号为 1–10000；除最后一片外，各片必须等大且至少 5 MiB，单片最多 5 GiB。`uploadId` 是 krun 的 opaque token，不能与原生 S3 multipart upload ID 混用。对象需通过 krun R2 binding 写入；直接通过 S3 写入且缺少平台元数据的对象不能作为兼容对象读取。
+
+## 官方使用参考
+
+**以下官方文档用于理解绑定关系和代码写法，krun 仅支持本页明确列出的 API、参数及用法。** 不要将 Cloudflare 的完整 R2 能力或部署流程直接套用到 krun。
+
+| 内容 | 开发者阅读 | LLM 读取官方 Markdown |
+| --- | --- | --- |
+| binding、资源与 `env` 的关系 | [Bindings](https://developers.cloudflare.com/workers/runtime-apis/bindings/#what-is-a-binding) | [Bindings 原文](https://developers.cloudflare.com/workers/runtime-apis/bindings/index.md) |
+| 桶绑定、`binding` / `bucket_name` 和对象读写 | [Use R2 from Workers](https://developers.cloudflare.com/r2/api/workers/workers-api-usage/) | [使用指南原文](https://developers.cloudflare.com/r2/api/workers/workers-api-usage/index.md) |
+| R2 方法的参数和返回值 | [Workers API reference](https://developers.cloudflare.com/r2/api/workers/workers-api-reference/) | [API 参考原文](https://developers.cloudflare.com/r2/api/workers/workers-api-reference/index.md) |
+
+Agent 先读取本页确认可用范围，再按任务读取上面的官方 Markdown；无需读取 Cloudflare 全量 `llms.txt`。完整的开发者阅读列表和可复制 Agent 指令见 [Workers 代码兼容范围](/docs/guides/workers-runtime-compatibility.html)。
