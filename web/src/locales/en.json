@@ -784,5 +784,6 @@
   "邀请链接已撤销，已加入的成员与角色不变。": "Invitation revoked. Existing members and roles are unchanged.",
   "邀请链接已生成": "Invitation link generated",
   "邀请链接缺失或无效，请联系管理员获取新链接。": "Invitation link missing or invalid. Ask an administrator for a new link.",
-  "使用文档": "Documentation"
+  "使用文档": "Documentation",
+  "面包屑": "Breadcrumb"
 }
