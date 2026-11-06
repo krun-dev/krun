@@ -4,7 +4,7 @@ import path from "node:path";
 import { parse, serialize } from "parse5";
 
 const source = "dist/starlight";
-const destination = "dist/console";
+const destination = "dist/console/docs";
 const assetDir = path.join(destination, "_astro", "csp");
 const digest = (value) => createHash("sha256").update(value).digest("hex").slice(0, 20);
 await mkdir(assetDir, { recursive: true });
@@ -43,7 +43,7 @@ async function hardenHtml(html) {
         ) {
           const name = `${digest(body)}.js`;
           await writeFile(path.join(assetDir, name), body);
-          node.attrs.push({ name: "src", value: `/_astro/csp/${name}` });
+          node.attrs.push({ name: "src", value: `/docs/_astro/csp/${name}` });
           node.childNodes = [];
         }
       }
@@ -72,7 +72,7 @@ async function hardenHtml(html) {
     namespaceURI: "http://www.w3.org/1999/xhtml",
     attrs: [
       { name: "rel", value: "stylesheet" },
-      { name: "href", value: `/_astro/csp/${stylesheet}` },
+      { name: "href", value: `/docs/_astro/csp/${stylesheet}` },
     ],
     childNodes: [],
     parentNode: head,
@@ -88,12 +88,11 @@ async function copyOutput(relative = "") {
       await mkdir(path.join(destination, item), { recursive: true });
       await copyOutput(item);
     } else if (entry.isFile()) {
-      if (["404.html", "index.html"].includes(item) || item.startsWith("sitemap")) continue;
+      if (item === "404.html" || item.startsWith("sitemap")) continue;
       const target = path.join(destination, item);
       if (item.endsWith(".html")) {
         const html = await hardenHtml(await readFile(path.join(source, item), "utf8"));
         await writeFile(target, html);
-        if (item === "docs.html") await writeFile(path.join(destination, "docs"), html);
       } else if (item.startsWith("llms") && item.endsWith(".txt")) {
         const text = await readFile(path.join(source, item), "utf8");
         await writeFile(target, text.replaceAll("https://krun.invalid/", "/"));
@@ -106,5 +105,3 @@ async function copyOutput(relative = "") {
   }
 }
 await copyOutput();
-// Preserve the original Quick Start Markdown URL.
-await cp(path.join(destination, "docs.md"), path.join(destination, "quickstart.md"));

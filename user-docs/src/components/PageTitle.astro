@@ -1,9 +1,16 @@
 ---
 import DefaultPageTitle from "@astrojs/starlight/components/PageTitle.astro";
-const id = Astro.locals.starlightRoute.entry.id.replace(/\.(md|mdx)$/, "");
-const source = `/${id}.md${import.meta.env.DEV ? "" : ".txt"}`;
+const id = Astro.locals.starlightRoute.entry.id.replace(/\.(md|mdx)$/, "") || "index";
+const source = `/docs/${id}.md${import.meta.env.DEV ? "" : ".txt"}`;
+const section = ["guides/krun-cli", "guides/cloudflare-workers"].includes(id)
+  ? "命令行工具"
+  : ["guides/component-workers", "guides/component-object-storage"].includes(id)
+    ? "组件"
+    : id === "guides/workers-runtime-compatibility"
+      ? "组件"
+      : "开始使用";
 ---
-<div class="krun-breadcrumb">文档 <span>/</span> 开始使用 <span>/</span> {Astro.locals.starlightRoute.entry.data.title}</div>
+<div class="krun-breadcrumb">文档 <span>/</span> {section} <span>/</span> {Astro.locals.starlightRoute.entry.data.title}</div>
 <div class="krun-title-row">
   <div>
     <div class="krun-eyebrow">● GETTING STARTED</div>

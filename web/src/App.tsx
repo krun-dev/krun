@@ -610,7 +610,7 @@ export default function App() {
           </div>
           <div className="mt-4 flex items-center gap-2 px-3 text-xs text-muted-foreground">
             <CircleHelp size={13} />
-            <a href="/docs" className="hover:text-foreground">{t("使用文档")}</a>{" "}
+            <a href="/docs/" className="hover:text-foreground">{t("使用文档")}</a>{" "}
             <Badge variant="outline" className="ml-auto text-[9px]">
               v0.1
             </Badge>

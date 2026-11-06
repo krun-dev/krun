@@ -54,9 +54,9 @@ Set-Cookie；`/api/*` 不得缓存。每一层代理都应把自己的直接下�
 `X-Forwarded-For`；最外层 CDN 应清洗公网传入的同名头。Go 会从右向左剥离
 `trusted_proxy_cidrs`，并采用遇到的第一个不可信地址作为客户端地址。
 
-Starlight 的页面、搜索索引、Markdown 原文和客户端资源均随构建输出为静态文件。`/docs` 是无扩展名的静态 HTML 对象，上传 OSS 时必须设置其 `Content-Type` 为 `text/html; charset=utf-8`；它与 `/llms.txt`、`/guides/*` 和 CLI 下载文件均无需登录，必须随静态产物一起上传。
+Starlight 的页面、搜索索引、Markdown 原文和客户端资源均随构建输出到 `/docs/`，无需登录。文档入口为 `/docs/`，静态托管需将目录默认文档设为 `index.html`；CLI 下载文件也需随静态产物一起上传。
 
-`index.html` 和 `/docs` 必须 `no-store`（或至少每次重新验证），带内容哈希的 `/assets/*` 才能
+`index.html` 和 `/docs/` 必须 `no-store`（或至少每次重新验证），带内容哈希的 `/assets/*` 才能
 长期 immutable 缓存。静态入口还应下发 CSP、`nosniff`、点击劫持和 Referrer-Policy
 等浏览器安全头；Nginx 模板给出了与当前纯静态前端兼容的基线。
 

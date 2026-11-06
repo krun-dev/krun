@@ -108,7 +108,7 @@ export function Login({
       <main className="flex items-center justify-center p-6 md:p-12">
         <div className="w-full max-w-sm">
           <div className="mb-6 flex justify-end">
-            <a href="/docs" className="mr-4 text-sm text-muted-foreground hover:text-foreground">{t("使用文档")}</a>
+            <a href="/docs/" className="mr-4 text-sm text-muted-foreground hover:text-foreground">{t("使用文档")}</a>
             <LanguageSwitch />
           </div>
           <div className="mb-12 lg:hidden">
