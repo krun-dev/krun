@@ -6,6 +6,9 @@ them in an isolated job, and converts the result into krun's
 `workerd-bundle-v2` artifact. This document covers Wrangler inside the builder. The separate public Workers
 protocol adapter and browser sign-in are described in [Cloudflare API](cloudflare-api.md).
 
+The field-by-field configuration contract, including repository builds versus
+direct Wrangler deployment, is documented in [Wrangler 配置兼容范围](../user-docs/src/content/docs/guides/wrangler-configuration.md).
+
 ## Scope
 
 The JavaScript build profile supports:

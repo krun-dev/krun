@@ -18,6 +18,7 @@ krun 基于 workerd 运行模块格式的 JavaScript / TypeScript Worker。代�
 | 开始编写前 | [计算 · Workers](/docs/guides/component-workers.html) | 请求入口、变量、Secret、静态资产、Cache API 和网络限制 |
 | 使用对象存储时 | [存储 · 对象存储](/docs/guides/component-object-storage.html) | R2 binding 的可用方法、参数、分页和分片上传限制 |
 | 构建和发布时 | [使用 Wrangler 部署 Workers](/docs/guides/cloudflare-workers.html) | 项目配置、构建、发布和目标环境验证 |
+| 迁移或修改项目配置时 | [Wrangler 配置兼容范围](/docs/guides/wrangler-configuration.html) | 配置文件、字段、binding 和仓库构建与直接部署的差异 |
 | 首次编写入口时 | [Cloudflare Fetch Handler](https://developers.cloudflare.com/workers/runtime-apis/handlers/fetch/) | 模块入口、接收 Request、通过 env 读取 binding、返回 Response |
 | 处理请求时 | [Cloudflare Request](https://developers.cloudflare.com/workers/runtime-apis/request/) | 标准请求属性、请求头和 body 读取 |
 | 生成响应时 | [Cloudflare Response](https://developers.cloudflare.com/workers/runtime-apis/response/) | 状态码、响应头、响应 body 和重定向 |
@@ -57,6 +58,7 @@ krun 基于 workerd 运行模块格式的 JavaScript / TypeScript Worker。代�
 - 学习桶绑定和读写：[Cloudflare Use R2 from Workers](https://developers.cloudflare.com/r2/api/workers/workers-api-usage/index.md)，参考 binding / bucket_name 和代码写法；资源创建和发布遵循 krun 流程。
 - 查询 R2 方法：[Cloudflare R2 Workers API reference](https://developers.cloudflare.com/r2/api/workers/workers-api-reference/index.md)，先读 krun 对象存储文档，再查询其中明确支持的方法和参数。
 - 构建和发布：[krun Wrangler 部署流程]({{KRUN_ORIGIN}}/docs/guides/cloudflare-workers.md)。
+- 配置项目：[krun Wrangler 配置兼容范围]({{KRUN_ORIGIN}}/docs/guides/wrangler-configuration.md)，按实际发布方式选择配置；仓库构建不会自动导入 vars、R2 binding 或 env 配置段。
 
 ## 编码约束
 
