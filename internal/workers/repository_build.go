@@ -118,19 +118,6 @@ func (w *Controller) PrepareRepositoryBuild(ctx context.Context, build domain.Wo
 	build.State = "fetching"
 	private.Files = nil
 	private.SourceKey = sourceKey
-	private.Log = fmt.Sprintf("Repository: %s/%s\nRef: %s\nCommit: %s\nProject: %s\nLoaded %d project files\n", source.ProviderID, source.Repository, source.Ref, source.Commit, source.RootDirectory, len(files))
-	if wranglerFile != "" {
-		private.Log += fmt.Sprintf("Config: %s (entrypoint %s", wranglerFile, entrypoint)
-		if resolvedAssets.Directory != "" {
-			private.Log += fmt.Sprintf(", assets %s", resolvedAssets.Directory)
-		}
-		private.Log += ")\n"
-	}
-	private.Log += fmt.Sprintf("Compatibility: %s", build.CompatibilityDate)
-	if len(build.CompatibilityFlags) > 0 {
-		private.Log += fmt.Sprintf(" (%v)", build.CompatibilityFlags)
-	}
-	private.Log += "\n"
 	// Authorization needs the IAM partition, so it runs before the Workers write.
 	denied, authErr := w.AuthorizeActor(ctx, private.Actor, build.Worker, build.Environment, "build.start")
 	if authErr != nil {
@@ -141,4 +128,27 @@ func (w *Controller) PrepareRepositoryBuild(ctx context.Context, build domain.Wo
 	}
 	err = w.Service.Store.StoreClaimedRepositoryBuild(ctx, build.ID, w.Replica, build, private)
 	return build, private, err
+}
+
+// Repository diagnostics are derived from durable build metadata; log bodies
+// live only in object storage, including after a controller lease takeover.
+func repositoryBuildLog(build domain.WorkerBuild) string {
+	if build.Repository == nil {
+		return ""
+	}
+	source := build.Repository
+	text := fmt.Sprintf("Repository: %s/%s\nRef: %s\nCommit: %s\nProject: %s\n",
+		source.ProviderID, source.Repository, source.Ref, source.Commit, source.RootDirectory)
+	if source.ConfigPath != "" {
+		text += fmt.Sprintf("Config: %s (entrypoint %s", source.ConfigPath, build.Entrypoint)
+		if build.Assets != nil && build.Assets.Directory != "" {
+			text += fmt.Sprintf(", assets %s", build.Assets.Directory)
+		}
+		text += ")\n"
+	}
+	text += fmt.Sprintf("Compatibility: %s", build.CompatibilityDate)
+	if len(build.CompatibilityFlags) > 0 {
+		text += fmt.Sprintf(" (%v)", build.CompatibilityFlags)
+	}
+	return text + "\n"
 }

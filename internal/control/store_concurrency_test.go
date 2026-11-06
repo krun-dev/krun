@@ -532,7 +532,7 @@ func TestPostgresWorkersSnapshotExcludesSecretsAndBuildBlobs(t *testing.T) {
 			appconfig.WorkerBaseline: {Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]any{}},
 		}}
 		st.Workers.Builds["build-private"] = WorkerBuild{ID: "build-private", Organization: "org", Worker: "worker", Environment: "production", State: "queued", Created: now()}
-		st.Workers.BuildPrivate["build-private"] = WorkerBuildPrivate{Actor: WorkerActor{User: "user"}, Files: map[string]string{"index.js": "secret source"}, Log: "large log"}
+		st.Workers.BuildPrivate["build-private"] = WorkerBuildPrivate{Actor: WorkerActor{User: "user"}, Files: map[string]string{"index.js": "secret source"}, LogKey: "build-logs/log"}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -550,7 +550,7 @@ func TestPostgresWorkersSnapshotExcludesSecretsAndBuildBlobs(t *testing.T) {
 		t.Fatalf("generic Workers snapshot loaded sensitive rows: private=%d connections=%d", len(state.Workers.BuildPrivate), len(state.RepositoryConnections))
 	}
 	private, ok, err := store.WorkerBuildPrivate(ctx, "build-private")
-	if err != nil || !ok || private.Log != "large log" || private.Files["index.js"] != "secret source" {
+	if err != nil || !ok || private.LogKey != "build-logs/log" || private.Files["index.js"] != "secret source" {
 		t.Fatalf("keyed private-row lookup failed: ok=%v private=%+v err=%v", ok, private, err)
 	}
 	got, ok, err := store.RepositoryConnection(ctx, "user", "github")

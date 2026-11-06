@@ -557,7 +557,7 @@ func TestPostgresRetentionPrunesBuildsAndSessions(t *testing.T) {
 		for i := 0; i < 5; i++ {
 			id := "bld-" + string(rune('a'+i))
 			st.Workers.Builds[id] = WorkerBuild{ID: id, Organization: "o", Worker: "s", Environment: "production", State: "succeeded", Created: old.Add(time.Duration(i) * time.Minute)}
-			st.Workers.BuildPrivate[id] = WorkerBuildPrivate{Actor: WorkerActor{User: "u"}, Log: "log"}
+			st.Workers.BuildPrivate[id] = WorkerBuildPrivate{Actor: WorkerActor{User: "u"}, LogKey: "build-logs/log"}
 		}
 		st.Workers.Artifacts["art-old"] = WorkerArtifact{ID: "art-old", Organization: "o", State: "finalized", ArchiveDigest: "archive-old", ObjectKey: "v1/o/old.tar.gz", StorageLocation: "test", Bucket: "test", Created: old}
 		st.Workers.Versions["rel-old"] = WorkerVersion{ID: "rel-old", Organization: "o", Worker: "s", Environment: "production", Artifact: "art-old", ArchiveDigest: "archive-old", Created: old}

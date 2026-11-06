@@ -117,12 +117,12 @@ func TestPostgresBuildRetentionUsesStableTieBreakAndRemovesPrivateOrphans(t *tes
 			t.Fatal(err)
 		}
 		if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_worker_build_private
-			(build_id, actor_user_id, actor_auth_version, log) VALUES ($1,'actor',1,'log')`, id); err != nil {
+			(build_id, actor_user_id, actor_auth_version, log_key) VALUES ($1,'actor',1,'build-logs/log')`, id); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_worker_build_private
-		(build_id, actor_user_id, actor_auth_version, log) VALUES ('retention-orphan','actor',1,'orphan')`); err != nil {
+		(build_id, actor_user_id, actor_auth_version, log_key) VALUES ('retention-orphan','actor',1,'build-logs/orphan')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.RetainExpired(ctx); err != nil {

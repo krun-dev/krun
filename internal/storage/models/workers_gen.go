@@ -134,7 +134,6 @@ type BuildPrivate struct {
 	ActorAuthVersion int             `bun:"actor_auth_version"`
 	SourceKey        string          `bun:"source_key"`
 	Files            json.RawMessage `bun:"files,type:jsonb"`
-	Log              string          `bun:"log"`
 	LogKey           string          `bun:"log_key"`
 }
 

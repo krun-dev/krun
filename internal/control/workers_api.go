@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"net/http"
 
 	appconfig "github.com/krun-dev/krun/internal/config"
@@ -121,13 +122,20 @@ func (s *Server) workerBuildGet(st *State, p Principal, r *http.Request) (any, i
 }
 
 func (s *Server) workerBuildLogs(st *State, p Principal, r *http.Request) (any, int, error) {
-	out, outcome, err := s.workerApplication(r).WorkerBuildLogs(r.Context(), st, p, workerRef(r))
+	service := s.workerApplication(r)
+	read, err := service.ResolveWorkerBuildLog(r.Context(), st, p, workerRef(r))
 	if err != nil {
-		return out, workerHTTPStatus(outcome), err
+		return nil, http.StatusOK, err
 	}
-	response := out.(map[string]any)
-	state, _ := response["state"].(string)
-	return buildLogResponse{body: out, active: state != "succeeded" && state != "failed"}, workerHTTPStatus(outcome), nil
+	inline := r.URL.Query().Get("inline") == "true"
+	return deferredResponse{run: func(ctx context.Context) (any, int, error) {
+		out, err := service.ReadWorkerBuildLog(ctx, read, inline)
+		if err != nil {
+			return nil, http.StatusOK, err
+		}
+		active := out.State != "succeeded" && out.State != "failed"
+		return buildLogResponse{body: out, active: active}, http.StatusOK, nil
+	}}, http.StatusOK, nil
 }
 
 type buildLogResponse struct {

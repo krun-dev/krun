@@ -125,7 +125,7 @@ func (s *Store) SetClaimedBuildRepository(ctx context.Context, id, replica strin
 }
 
 // storeClaimedRepositoryBuild atomically persists the fetched source metadata,
-// source reservation and private log while this replica still owns an active
+// source reservation while this replica still owns an active
 // build. A terminal transition or lease takeover makes the whole write a no-op
 // with errBuildClaimLost instead of restoring stale state.
 func (s *Store) StoreClaimedRepositoryBuild(ctx context.Context, id, replica string, build domain.WorkerBuild, private domain.WorkerBuildPrivate) error {
@@ -195,9 +195,9 @@ func (s *Store) StoreClaimedRepositoryBuild(ctx context.Context, id, replica str
 	}
 	if _, err = tx.Exec(ctx, `UPDATE krun_worker_build_private
 		SET actor_user_id=$2, actor_key_id=$3, actor_auth_version=$4,
-		    source_key=$5, files=$6, log=$7 WHERE build_id=$1`, id,
+		    source_key=$5, files=$6 WHERE build_id=$1`, id,
 		private.Actor.User, private.Actor.Key, private.Actor.AuthVersion,
-		private.SourceKey, files, private.Log); err != nil {
+		private.SourceKey, files); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -245,7 +245,6 @@ func (s *Store) finishBuildOwned(ctx context.Context, id, replica, state, messag
 		build.Finished = &finished
 		s.memory.Workers.Builds[id] = build
 		private := s.memory.Workers.BuildPrivate[id]
-		private.Log = ""
 		private.LogKey = logKey
 		s.memory.Workers.BuildPrivate[id] = private
 		return nil
@@ -272,7 +271,7 @@ func (s *Store) finishBuildOwned(ctx context.Context, id, replica, state, messag
 		WHERE worker_id=$1`, worker); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE krun_worker_build_private SET log='', log_key=$2 WHERE build_id=$1`, id, logKey); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE krun_worker_build_private SET log_key=$2 WHERE build_id=$1`, id, logKey); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -378,7 +377,6 @@ func (s *Store) FinishClaimedBuildWithArtifact(ctx context.Context, id, replica,
 		build.Finished = &finished
 		s.memory.Workers.Builds[id] = build
 		private := s.memory.Workers.BuildPrivate[id]
-		private.Log = ""
 		private.LogKey = logKey
 		s.memory.Workers.BuildPrivate[id] = private
 		return nil
@@ -426,7 +424,7 @@ func (s *Store) FinishClaimedBuildWithArtifact(ctx context.Context, id, replica,
 		WHERE worker_id=$1`, worker); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE krun_worker_build_private SET log='', log_key=$2 WHERE build_id=$1`, id, logKey); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE krun_worker_build_private SET log_key=$2 WHERE build_id=$1`, id, logKey); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

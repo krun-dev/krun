@@ -36,6 +36,8 @@ IAM 与 Workers 是两套独立分区，**不共享事务**：
 | 组织邀请（类型化方法，不进入 State） | `krun_org_invitation_links`、`krun_org_invitation_redemptions`；邀请、名额、成员和直接角色在有界 IAM 事务内提交 |
 | 旁路 | `krun_audits`、`worker_config_revisions`、`worker_config_routes`、`worker_config_versions`、`worker_config_ops`、`worker_config_dirty`、`worker_config_checkpoints`、`worker_asset_objects`、`worker_retention_scopes`、`worker_runtime_acks` |
 
+构建日志正文仅存于对象存储；`krun_worker_build_private` 只保留 `log_key` 引用，不含日志正文列。
+
 完整 DDL 在 `internal/storage/schema.sql`，由同目录 `schema.go` 通过 `go:embed` 原样嵌入。新库直接初始化；已有库校验 `schema_baseline` fingerprint，匹配时不重复执行 DDL。
 
 ## 读路径

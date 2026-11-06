@@ -402,7 +402,6 @@ CREATE TABLE IF NOT EXISTS krun_worker_build_private (
 	actor_auth_version integer NOT NULL,
 	source_key         text NOT NULL DEFAULT '',
 	files              jsonb,
-	log                text NOT NULL DEFAULT '',
 	log_key            text NOT NULL DEFAULT ''
 );
 

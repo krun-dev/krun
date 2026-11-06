@@ -202,14 +202,29 @@ func (s *Service) WorkerBuildGet(ctx context.Context, st *domain.State, p author
 
 }
 
-func (s *Service) WorkerBuildLogs(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
+type WorkerBuildLogRead struct {
+	BuildID string
+	State   string
+	Key     string
+	Expired bool
+}
+
+type WorkerBuildLogsResult struct {
+	BuildID     string  `json:"build_id"`
+	State       string  `json:"state"`
+	DownloadURL string  `json:"download_url"`
+	Expired     bool    `json:"expired"`
+	Log         *string `json:"log,omitempty"`
+}
+
+func (s *Service) ResolveWorkerBuildLog(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (WorkerBuildLogRead, error) {
 	b, e := s.WorkerGetBuild(st, p, ref, "log.read")
 	if e != nil {
-		return nil, Read, e
+		return WorkerBuildLogRead{}, e
 	}
 	private, ok, e := s.Store.WorkerBuildPrivate(ctx, b.ID)
 	if e != nil {
-		return nil, Read, e
+		return WorkerBuildLogRead{}, e
 	}
 	if !ok {
 		private = domain.WorkerBuildPrivate{}
@@ -218,12 +233,24 @@ func (s *Service) WorkerBuildLogs(ctx context.Context, st *domain.State, p autho
 	if expired {
 		private.LogKey = ""
 	}
-	download, err := s.Controller.BuildLogURL(ctx, private.LogKey)
-	if err != nil {
-		return nil, Read, domain.Problem(503, "LOG_UNAVAILABLE", "Log storage unavailable")
-	}
-	return map[string]any{"build_id": b.ID, "state": b.State, "download_url": download, "expired": expired}, Read, nil
+	return WorkerBuildLogRead{BuildID: b.ID, State: b.State, Key: private.LogKey, Expired: expired}, nil
+}
 
+// ReadWorkerBuildLog runs after the caller releases its state snapshot or transaction.
+func (s *Service) ReadWorkerBuildLog(ctx context.Context, in WorkerBuildLogRead, inline bool) (WorkerBuildLogsResult, error) {
+	out := WorkerBuildLogsResult{BuildID: in.BuildID, State: in.State, Expired: in.Expired}
+	var err error
+	if inline {
+		var text string
+		text, err = s.Controller.ReadBuildLog(ctx, in.Key)
+		out.Log = &text
+	} else {
+		out.DownloadURL, err = s.Controller.BuildLogURL(ctx, in.Key)
+	}
+	if err != nil {
+		return WorkerBuildLogsResult{}, domain.Problem(503, "LOG_UNAVAILABLE", "Log storage unavailable")
+	}
+	return out, nil
 }
 
 func (s *Service) WorkerBuildSource(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {

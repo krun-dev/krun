@@ -69,7 +69,7 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 		for id := range state.Builds {
 			ids = append(ids, id)
 		}
-		rows, err = s.pool.Query(ctx, `SELECT build_id, actor_user_id, actor_key_id, actor_auth_version, source_key, files, log, log_key
+		rows, err = s.pool.Query(ctx, `SELECT build_id, actor_user_id, actor_key_id, actor_auth_version, source_key, files, log_key
 			FROM krun_worker_build_private WHERE build_id = ANY($1)`, ids)
 		if err != nil {
 			return state, err
@@ -155,7 +155,7 @@ func readWorkerBuildPrivateRows(rows pgx.Rows, state *domain.WorkerState) error 
 		var id string
 		var p domain.WorkerBuildPrivate
 		var files []byte
-		if err := rows.Scan(&id, &p.Actor.User, &p.Actor.Key, &p.Actor.AuthVersion, &p.SourceKey, &files, &p.Log, &p.LogKey); err != nil {
+		if err := rows.Scan(&id, &p.Actor.User, &p.Actor.Key, &p.Actor.AuthVersion, &p.SourceKey, &files, &p.LogKey); err != nil {
 			return err
 		}
 		if len(files) > 0 {

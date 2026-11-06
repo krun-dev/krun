@@ -48,7 +48,7 @@ func (s *Store) RetainExpired(ctx context.Context) error {
 		{`DELETE FROM krun_invitations WHERE expires_at <= $1`, []any{at}},
 		{`DELETE FROM krun_worker_idempotency WHERE created_at <= $1`, []any{at.Add(-workerIdempotencyRetain)}},
 		{`DELETE FROM krun_worker_operations WHERE state IN ('succeeded','failed','available','superseded') AND created_at <= $1`, []any{at.Add(-workerOperationRetain)}},
-		{`UPDATE krun_worker_build_private SET log='', log_key='' WHERE build_id IN (SELECT p.build_id FROM krun_worker_build_private p JOIN krun_worker_builds b ON b.build_id=p.build_id WHERE b.created_at<=$1 AND (length(p.log)>0 OR length(p.log_key)>0) ORDER BY b.created_at LIMIT 1000)`, []any{at.Add(-workerBuildLogRetain)}},
+		{`UPDATE krun_worker_build_private SET log_key='' WHERE build_id IN (SELECT p.build_id FROM krun_worker_build_private p JOIN krun_worker_builds b ON b.build_id=p.build_id WHERE b.created_at<=$1 AND length(p.log_key)>0 ORDER BY b.created_at LIMIT 1000)`, []any{at.Add(-workerBuildLogRetain)}},
 		{`WITH victims AS MATERIALIZED (SELECT version_id FROM krun_worker_versions rel WHERE rel.created_at<=$1
  AND NOT EXISTS(SELECT 1 FROM krun_worker_environments e WHERE e.version_id=rel.version_id)
  AND NOT EXISTS(SELECT 1 FROM krun_worker_environments e WHERE e.confirmed_version_id=rel.version_id)

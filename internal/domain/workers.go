@@ -51,7 +51,6 @@ type WorkerBuildPrivate struct {
 	Actor     WorkerActor
 	SourceKey string
 	Files     map[string]string
-	Log       string
 	LogKey    string
 }
 
