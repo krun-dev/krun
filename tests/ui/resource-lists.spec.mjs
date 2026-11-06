@@ -21,7 +21,7 @@ test("Workers and R2 lists search across pages and keep details addressable", as
     expect(response.ok(), await response.text()).toBeTruthy();
     return response.json();
   }
-  await page.goto("/");
+  await page.goto("/?page=login");
   await page
     .getByRole("button", { name: /本地开发登录|kind 开发登录/ })
     .first()

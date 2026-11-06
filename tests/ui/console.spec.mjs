@@ -37,7 +37,7 @@ async function api(context, path, method = "GET", input) {
   return response.status() === 204 ? undefined : response.json();
 }
 async function login(page) {
-  await page.goto("/");
+  await page.goto("/?page=login");
   await page
     .getByRole("button", { name: /本地开发登录|kind 开发登录/ })
     .click();
@@ -122,6 +122,8 @@ test("static export, login, language persistence and logout", async ({
   const page = await context.newPage();
   const response = await page.goto("/");
   expect(response.status()).toBe(200);
+  await expect(page.getByRole("heading", { name: "Run anything." })).toBeVisible();
+  await page.getByRole("link", { name: "进入控制台" }).click();
   await expect(page.getByRole("heading", { name: "登录组织" })).toBeVisible();
   await page.getByRole("combobox", { name: "语言" }).selectOption("en");
   await page.reload();
@@ -131,6 +133,8 @@ test("static export, login, language persistence and logout", async ({
   await page.getByRole("combobox", { name: "Language" }).selectOption("zh-CN");
   await login(page);
   await page.getByRole("button", { name: "退出登录" }).click();
+  await expect(page.getByRole("heading", { name: "Run anything." })).toBeVisible();
+  await page.getByRole("link", { name: "进入控制台" }).click();
   await expect(page.getByRole("heading", { name: "登录组织" })).toBeVisible();
   await context.close();
 });

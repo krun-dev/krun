@@ -75,6 +75,9 @@ const OAuthConsent = lazy(() =>
 const Login = lazy(() =>
   import("@/components/login").then((module) => ({ default: module.Login })),
 );
+const Home = lazy(() =>
+  import("@/components/home").then((module) => ({ default: module.Home })),
+);
 const OrganizationInvitationJoin = lazy(() =>
   import("@/components/organization-invitation-join").then((module) => ({
     default: module.OrganizationInvitationJoin,
@@ -436,6 +439,13 @@ export default function App() {
     } catch {
       notify(t("复制失败，请手动选中用户 ID。"));
     }
+  }
+  if (!me && !joining && !oauthLogin && window.location.search === "") {
+    return (
+      <Suspense fallback={<Loading />}>
+        <Home />
+      </Suspense>
+    );
   }
   if (loading) return <Loading />;
   if (fatal)
