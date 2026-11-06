@@ -67,14 +67,7 @@ test("cross-workspace wildcards retain the selected resource kind", () => {
     kind: "worker",
     all_in_system: true,
   });
-  assert.ok(
-    parseSelections(
-      policy,
-      { "log.read": ["worker", "model"] },
-      "system",
-      true,
-    ),
-  );
+  assert.ok(parseSelections(policy, { "log.read": ["worker", "model"] }, "system", true));
 });
 test("JSON conversion refuses rules that would lose restrictions", () => {
   const selections = initialSelections();
@@ -103,9 +96,7 @@ test("JSON conversion refuses rules that would lose restrictions", () => {
     parseSelections(
       {
         ...policy,
-        statements: [
-          { ...policy.statements[0], conditions: { future_rule: true } },
-        ],
+        statements: [{ ...policy.statements[0], conditions: { future_rule: true } }],
       },
       registry,
       "org-a",

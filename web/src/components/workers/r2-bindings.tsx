@@ -25,12 +25,7 @@ export function R2BindingsEditor({
     const controller = new AbortController();
     setLoading(true);
     setError("");
-    void api<List<WorkerBucket>>(
-      organizationBase + "/buckets",
-      "GET",
-      undefined,
-      controller.signal,
-    )
+    void api<List<WorkerBucket>>(organizationBase + "/buckets", "GET", undefined, controller.signal)
       .then((result) => {
         if (!controller.signal.aborted) {
           setBuckets(result.items);
@@ -52,7 +47,10 @@ export function R2BindingsEditor({
     onChange(rows.map((row) => (row.id === id ? { ...row, ...value } : row)));
   }
   return (
-    <section aria-label={t("R2 存储绑定")} className="grid gap-3 border-t pt-4">
+    <section
+      aria-label={t("R2 存储绑定")}
+      className="grid gap-3 border-t pt-4"
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-medium">{t("R2 存储绑定")}</h3>
         <Button
@@ -68,7 +66,10 @@ export function R2BindingsEditor({
         {t("选择本组织的桶，业务通过 env.绑定名称 访问。保存后在下一次发布时生效。")}
       </p>
       {error ? (
-        <p role="alert" className="text-sm text-destructive">
+        <p
+          role="alert"
+          className="text-sm text-destructive"
+        >
           {error}
         </p>
       ) : null}
@@ -107,7 +108,11 @@ export function R2BindingsEditor({
               </option>
             ) : null}
             {buckets.map((bucket) => (
-              <option key={bucket.id} value={bucket.name} disabled={!bucket.enabled}>
+              <option
+                key={bucket.id}
+                value={bucket.name}
+                disabled={!bucket.enabled}
+              >
                 {bucket.name}
                 {bucket.enabled ? "" : " · " + t("已停用")}
               </option>

@@ -2,11 +2,7 @@ import { useState } from "react";
 import { ArrowUpRight, Plus } from "lucide-react";
 import { api } from "@/lib/api";
 import { errorMessage, t } from "@/lib/i18n";
-import {
-  type Environment,
-  type WorkerDomain,
-  type WorkerNetworkProfile,
-} from "@/lib/workers";
+import { type Environment, type WorkerDomain, type WorkerNetworkProfile } from "@/lib/workers";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -49,8 +45,7 @@ export function WorkerDomains({
   const [binding, setBinding] = useState(false);
   const [busy, setBusy] = useState(false);
   const [remove, setRemove] = useState<WorkerDomain | null>(null);
-  const describe = (d: WorkerDomain) =>
-    d.label ? `*.${d.domain}（${d.label}）` : `*.${d.domain}`;
+  const describe = (d: WorkerDomain) => (d.label ? `*.${d.domain}（${d.label}）` : `*.${d.domain}`);
 
   async function persist(next: string[]) {
     setBusy(true);
@@ -138,7 +133,10 @@ export function WorkerDomains({
                     <span className="flex items-center justify-between gap-2 text-sm font-medium">
                       {profile.name}
                       {profile.approval_required ? (
-                        <Badge variant="outline" className="text-[10px]">
+                        <Badge
+                          variant="outline"
+                          className="text-[10px]"
+                        >
                           {t("需要平台审批")}
                         </Badge>
                       ) : null}
@@ -167,7 +165,9 @@ export function WorkerDomains({
               <div>
                 <h3 className="font-medium">{t("访问域名后缀")}</h3>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {t("这里展示的是地址后缀，不是可直接访问的地址。平台会为每个环境生成独立子域名，实际地址见下方。")}
+                  {t(
+                    "这里展示的是地址后缀，不是可直接访问的地址。平台会为每个环境生成独立子域名，实际地址见下方。",
+                  )}
                 </p>
               </div>
             </div>
@@ -185,9 +185,7 @@ export function WorkerDomains({
                         *.{d.domain}
                       </code>
                       {d.label ? (
-                        <span className="text-[11px] text-muted-foreground">
-                          {d.label}
-                        </span>
+                        <span className="text-[11px] text-muted-foreground">{d.label}</span>
                       ) : null}
                     </div>
                     <Button
@@ -241,30 +239,35 @@ export function WorkerDomains({
           </p>
           <div className="grid gap-3">
             {environments.map((e) => (
-              <div key={e.name} className="rounded-md border bg-secondary/20 p-3">
+              <div
+                key={e.name}
+                className="rounded-md border bg-secondary/20 p-3"
+              >
                 <div className="mb-2 flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium">{e.name}</span>
                   {e.name === "production" ? (
-                    <Badge variant="outline" className="text-[10px]">
+                    <Badge
+                      variant="outline"
+                      className="text-[10px]"
+                    >
                       {t("基线")}
                     </Badge>
                   ) : null}
                   {!e.enabled ? (
-                    <Badge variant="outline" className="text-[10px]">
+                    <Badge
+                      variant="outline"
+                      className="text-[10px]"
+                    >
                       {t("未启用")}
                     </Badge>
                   ) : null}
                 </div>
                 {e.hosts.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">
-                    {t("未绑定域名")}
-                  </p>
+                  <p className="text-xs text-muted-foreground">{t("未绑定域名")}</p>
                 ) : (
                   <div className="grid gap-1.5">
                     {e.hosts.map((host, i) => {
-                      const d = domains.find(
-                        (x) => x.id === (e.domains || [])[i],
-                      );
+                      const d = domains.find((x) => x.id === (e.domains || [])[i]);
                       return (
                         <div
                           key={host}
@@ -283,7 +286,10 @@ export function WorkerDomains({
                             className="inline-flex min-w-0 items-center gap-1 break-all rounded bg-background px-2 py-1 font-mono text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
                           >
                             {host}
-                            <ArrowUpRight size={11} className="shrink-0" />
+                            <ArrowUpRight
+                              size={11}
+                              className="shrink-0"
+                            />
                           </a>
                         </div>
                       );
@@ -295,7 +301,10 @@ export function WorkerDomains({
           </div>
         </CardContent>
       </Card>
-      <Dialog open={binding} onOpenChange={(v) => !busy && setBinding(v)}>
+      <Dialog
+        open={binding}
+        onOpenChange={(v) => !busy && setBinding(v)}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t("添加域名后缀")}</DialogTitle>
@@ -322,7 +331,10 @@ export function WorkerDomains({
           </div>
         </DialogContent>
       </Dialog>
-      <Dialog open={!!remove} onOpenChange={(v) => !v && !busy && setRemove(null)}>
+      <Dialog
+        open={!!remove}
+        onOpenChange={(v) => !v && !busy && setRemove(null)}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t("解绑域名后缀")}</DialogTitle>
@@ -330,9 +342,7 @@ export function WorkerDomains({
               {t("解绑后，该后缀下生成的所有环境访问地址会立即失效。已发布的版本不受影响。")}
             </DialogDescription>
           </DialogHeader>
-          {remove ? (
-            <code className="break-all text-sm">{describe(remove)}</code>
-          ) : null}
+          {remove ? <code className="break-all text-sm">{describe(remove)}</code> : null}
           <Button
             variant="destructive"
             disabled={busy}

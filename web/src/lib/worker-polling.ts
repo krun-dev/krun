@@ -4,10 +4,7 @@ const ERROR_BASE_DELAY_MS = 5000;
 const ERROR_MAX_DELAY_MS = 60000;
 
 /** Keep active deployments responsive without polling an idle Worker every few seconds. */
-export function nextWorkerPollDelay(
-  hasPendingWork: boolean,
-  consecutiveFailures: number,
-): number {
+export function nextWorkerPollDelay(hasPendingWork: boolean, consecutiveFailures: number): number {
   if (consecutiveFailures > 0) {
     return Math.min(
       ERROR_MAX_DELAY_MS,

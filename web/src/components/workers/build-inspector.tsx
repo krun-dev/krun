@@ -1,14 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  Check,
-  Copy,
-  Download,
-  FileCode2,
-  GitBranch,
-  Package,
-  Terminal,
-} from "lucide-react";
+import { Check, Copy, Download, FileCode2, GitBranch, Package, Terminal } from "lucide-react";
 import { t, errorMessage } from "@/lib/i18n";
 import { pending, type Build } from "@/lib/workers";
 import { Button } from "@/components/ui/button";
@@ -74,9 +66,7 @@ export function BuildInspector({
   }
 
   function downloadLog() {
-    const url = URL.createObjectURL(
-      new Blob([log], { type: "text/plain;charset=utf-8" }),
-    );
+    const url = URL.createObjectURL(new Blob([log], { type: "text/plain;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
     link.download = `${build.id}.log`;
@@ -123,8 +113,7 @@ export function BuildInspector({
               </span>
               {source ? (
                 <span className="mt-1 block font-mono text-xs text-muted-foreground">
-                  {source.ref} ·{" "}
-                  {source.commit?.slice(0, 12) || t("等待解析 Commit")}
+                  {source.ref} · {source.commit?.slice(0, 12) || t("等待解析 Commit")}
                 </span>
               ) : null}
             </Detail>
@@ -132,9 +121,7 @@ export function BuildInspector({
               <code className="text-xs">{build.entrypoint || "—"}</code>
             </Detail>
             <Detail label={t("创建时间")}>
-              <time dateTime={build.created_at}>
-                {new Date(build.created_at).toLocaleString()}
-              </time>
+              <time dateTime={build.created_at}>{new Date(build.created_at).toLocaleString()}</time>
             </Detail>
           </dl>
         </DialogHeader>
@@ -146,7 +133,10 @@ export function BuildInspector({
           >
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <h3 className="flex items-center gap-2 text-sm font-medium">
-                <Terminal size={16} className="text-muted-foreground" />
+                <Terminal
+                  size={16}
+                  className="text-muted-foreground"
+                />
                 {t("构建日志")}
               </h3>
               <div className="flex gap-1">
@@ -181,11 +171,7 @@ export function BuildInspector({
                         : "size-1.5 rounded-full bg-zinc-500"
                     }
                   />
-                  {info.pollSeconds
-                    ? t("自动更新中")
-                    : running
-                      ? t("等待日志")
-                      : t("日志已归档")}
+                  {info.pollSeconds ? t("自动更新中") : running ? t("等待日志") : t("日志已归档")}
                 </span>
               </div>
               <div
@@ -196,7 +182,10 @@ export function BuildInspector({
                 {lines.length ? (
                   <pre className="w-max min-w-full font-mono text-xs leading-6">
                     {lines.map((line, index) => (
-                      <div key={index} className="flex px-4 hover:bg-white/5">
+                      <div
+                        key={index}
+                        className="flex px-4 hover:bg-white/5"
+                      >
                         <span
                           aria-hidden="true"
                           className="mr-5 w-7 shrink-0 select-none text-right text-zinc-600"
@@ -211,9 +200,7 @@ export function BuildInspector({
                   <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-zinc-500">
                     <Terminal size={26} />
                     <p className="text-xs">
-                      {running
-                        ? t("构建进行中，等待日志输出。")
-                        : t("暂无构建日志。")}
+                      {running ? t("构建进行中，等待日志输出。") : t("暂无构建日志。")}
                     </p>
                   </div>
                 )}
@@ -235,7 +222,10 @@ export function BuildInspector({
 
           <aside className="min-w-0 border-t bg-secondary/15 p-5 sm:p-7 lg:border-t-0">
             <h3 className="mb-5 flex items-center gap-2 text-sm font-medium">
-              <Package size={16} className="text-muted-foreground" />
+              <Package
+                size={16}
+                className="text-muted-foreground"
+              />
               {t("构建制品")}
             </h3>
             {artifact ? (
@@ -244,9 +234,7 @@ export function BuildInspector({
                   <Package size={15} />
                   <span>{t("制品状态")}</span>
                   <span className="ml-auto font-mono">
-                    {artifact.state === "finalized"
-                      ? t("已就绪")
-                      : artifact.state}
+                    {artifact.state === "finalized" ? t("已就绪") : artifact.state}
                   </span>
                 </div>
                 <dl className="grid gap-5">
@@ -259,9 +247,7 @@ export function BuildInspector({
                         ? `${artifact.archive_size_bytes} B`
                         : `${(artifact.archive_size_bytes / 1024).toLocaleString(undefined, { maximumFractionDigits: 1 })} KB`}
                     </Detail>
-                    <Detail label={t("兼容日期")}>
-                      {artifact.compatibility_date}
-                    </Detail>
+                    <Detail label={t("兼容日期")}>{artifact.compatibility_date}</Detail>
                   </div>
                   <Detail label={t("运行配置")}>
                     <code className="text-xs">{artifact.profile}</code>
@@ -280,9 +266,7 @@ export function BuildInspector({
                   className="mx-auto mb-3 text-muted-foreground/50"
                 />
                 <p className="text-sm text-muted-foreground">
-                  {info.artifactError
-                    ? t("制品信息加载失败")
-                    : t("暂无构建制品")}
+                  {info.artifactError ? t("制品信息加载失败") : t("暂无构建制品")}
                 </p>
                 <p className="mt-2 text-xs leading-5 text-muted-foreground">
                   {info.artifactError ||

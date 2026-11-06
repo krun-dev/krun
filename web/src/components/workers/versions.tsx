@@ -71,8 +71,20 @@ export function VersionsPanel({
               className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"
             >
               <div className="min-w-0">
-                <div className="flex items-center gap-2"><code title={v.id}>{shortID(v.id)}</code>{v.tag ? <span title={v.tag} className="max-w-48 truncate rounded-md bg-primary/10 px-2 py-0.5 text-xs text-primary">{v.tag}</span> : null}</div>
-                {v.message ? <p className="mt-1 break-words text-xs text-muted-foreground">{v.message}</p> : null}
+                <div className="flex items-center gap-2">
+                  <code title={v.id}>{shortID(v.id)}</code>
+                  {v.tag ? (
+                    <span
+                      title={v.tag}
+                      className="max-w-48 truncate rounded-md bg-primary/10 px-2 py-0.5 text-xs text-primary"
+                    >
+                      {v.tag}
+                    </span>
+                  ) : null}
+                </div>
+                {v.message ? (
+                  <p className="mt-1 break-words text-xs text-muted-foreground">{v.message}</p>
+                ) : null}
               </div>
               <span className="text-xs">{shortID(v.artifact_id)}</span>
               <Button
@@ -89,7 +101,10 @@ export function VersionsPanel({
       {deployments
         .filter((d) => d.environment === env.name)
         .map((d) => (
-          <div key={d.id} className="grid gap-1 rounded-md border p-3 text-sm">
+          <div
+            key={d.id}
+            className="grid gap-1 rounded-md border p-3 text-sm"
+          >
             <code>
               {shortID(d.id)} · {shortID(d.version_id)} · {d.state}
             </code>

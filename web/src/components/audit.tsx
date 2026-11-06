@@ -1,26 +1,14 @@
 import { errorMessage, t, locale, credentialLabel } from "@/lib/i18n";
 import { useTranslation } from "react-i18next";
 import { useEffect, useState } from "react";
-import {
-  CalendarDays,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  RefreshCw,
-} from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, ChevronsLeft, RefreshCw } from "lucide-react";
 import { api, type AuditPageResponse } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Empty, Loading, PageHeader, SelectField } from "./common";
 import { DataTable, ErrorState, ID } from "./management";
 
-export function AuditPage({
-  base,
-  refresh,
-}: {
-  base: string;
-  refresh: number;
-}) {
+export function AuditPage({ base, refresh }: { base: string; refresh: number }) {
   useTranslation();
   const [limit, setLimit] = useState("50");
   const [cursors, setCursors] = useState([""]);
@@ -77,12 +65,17 @@ export function AuditPage({
       <PageHeader
         eyebrow={t("Activity log")}
         title={t("审计记录")}
-        description={t(
-          "查看最近 7 天的授权与管理记录，超过保留期的记录会自动清理。",
-        )}
+        description={t("查看最近 7 天的授权与管理记录，超过保留期的记录会自动清理。")}
         action={
-          <Button variant="outline" onClick={reset} disabled={loading}>
-            <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
+          <Button
+            variant="outline"
+            onClick={reset}
+            disabled={loading}
+          >
+            <RefreshCw
+              size={15}
+              className={loading ? "animate-spin" : ""}
+            />
             {t("刷新")}
           </Button>
         }
@@ -112,7 +105,10 @@ export function AuditPage({
               }}
             >
               {[25, 50, 100, 200, 500].map((size) => (
-                <option key={size} value={size}>
+                <option
+                  key={size}
+                  value={size}
+                >
                   {t("{{count}} 条", { count: size })}
                 </option>
               ))}
@@ -125,16 +121,17 @@ export function AuditPage({
       ) : result.error ? (
         <div className="space-y-3">
           <ErrorState error={result.error} />
-          <Button variant="outline" onClick={reset}>
+          <Button
+            variant="outline"
+            onClick={reset}
+          >
             {t("重新加载首页")}
           </Button>
         </div>
       ) : !data?.items.length ? (
         <Empty
           title={t("没有更多审计记录")}
-          description={t(
-            "仅展示最近 7 天内且当前身份有权访问的记录，可返回上一页或刷新。",
-          )}
+          description={t("仅展示最近 7 天内且当前身份有权访问的记录，可返回上一页或刷新。")}
         />
       ) : (
         <DataTable
@@ -152,9 +149,7 @@ export function AuditPage({
             },
             {
               title: t("动作"),
-              render: (entry) => (
-                <code className="text-xs">{entry.action}</code>
-              ),
+              render: (entry) => <code className="text-xs">{entry.action}</code>,
             },
             {
               title: t("主体"),
@@ -224,9 +219,7 @@ export function AuditPage({
           </Button>
           <span className="px-1 text-xs tabular-nums text-muted-foreground">
             {t("第 {{page}} 页", { page: page + 1 })}
-            {data && !loading
-              ? ` / ${Math.max(1, Math.ceil(data.total / Number(limit)))}`
-              : ""}
+            {data && !loading ? ` / ${Math.max(1, Math.ceil(data.total / Number(limit)))}` : ""}
           </span>
           <Button
             variant="outline"
@@ -241,10 +234,9 @@ export function AuditPage({
       </div>
       {data && !loading && (
         <p className="mt-4 text-[11px] leading-5 text-muted-foreground">
-          {t(
-            "按 {{date}} 的快照浏览；刷新可查看新记录。超过 7 天的记录不再保留。",
-            { date: new Date(data.as_of).toLocaleString(locale()) },
-          )}
+          {t("按 {{date}} 的快照浏览；刷新可查看新记录。超过 7 天的记录不再保留。", {
+            date: new Date(data.as_of).toLocaleString(locale()),
+          })}
         </p>
       )}
     </>

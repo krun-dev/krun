@@ -26,11 +26,22 @@ function WorkerPreview() {
 
   return (
     <div className="run-worker-preview">
-      <div className="run-preview-tabs" aria-label={t("Workers 示例")}>
-        <button type="button" aria-pressed={view === "code"} onClick={() => setView("code")}>
+      <div
+        className="run-preview-tabs"
+        aria-label={t("Workers 示例")}
+      >
+        <button
+          type="button"
+          aria-pressed={view === "code"}
+          onClick={() => setView("code")}
+        >
           <FileCode2 size={13} /> index.js
         </button>
-        <button type="button" aria-pressed={view === "assets"} onClick={() => setView("assets")}>
+        <button
+          type="button"
+          aria-pressed={view === "assets"}
+          onClick={() => setView("assets")}
+        >
           <Folder size={13} /> {t("静态资源")}
         </button>
       </div>
@@ -129,22 +140,35 @@ export function Home() {
 
   return (
     <div className="dark run-home">
-      <a className="run-skip-link" href="#main">
+      <a
+        className="run-skip-link"
+        href="#main"
+      >
         {t("跳到主要内容")}
       </a>
       <header className="run-header">
         <div className="run-container run-header-inner">
-          <a href="/" aria-label={t("RUN 首页")} className="run-brand">
+          <a
+            href="/"
+            aria-label={t("RUN 首页")}
+            className="run-brand"
+          >
             <Logo dark />
           </a>
-          <nav className="run-navigation" aria-label={t("首页导航")}>
+          <nav
+            className="run-navigation"
+            aria-label={t("首页导航")}
+          >
             <a href="#products">{t("产品")}</a>
             <a href="#workflow">{t("开发与部署")}</a>
             <a href="/docs/">{t("文档")}</a>
           </nav>
           <div className="run-header-actions">
             <LanguageSwitch />
-            <a className="run-button run-button-small run-button-secondary" href="/?page=login">
+            <a
+              className="run-button run-button-small run-button-secondary"
+              href="/?page=login"
+            >
               {t("进入控制台")}
               <ArrowUpRight size={14} />
             </a>
@@ -153,7 +177,10 @@ export function Home() {
       </header>
 
       <main id="main">
-        <section className="run-hero run-container" aria-labelledby="run-title">
+        <section
+          className="run-hero run-container"
+          aria-labelledby="run-title"
+        >
           <p className="run-eyebrow">
             <span />
             {t("从代码，到上线。")}
@@ -168,16 +195,25 @@ export function Home() {
             {t("让你的下一个想法，在 RUN 跑起来。")}
           </p>
           <div className="run-hero-actions">
-            <a className="run-button run-button-primary" href="/?page=workers">
+            <a
+              className="run-button run-button-primary"
+              href="/?page=workers"
+            >
               {t("开始构建")}
               <ArrowRight size={16} />
             </a>
-            <a className="run-button run-button-secondary" href="/docs/">
+            <a
+              className="run-button run-button-secondary"
+              href="/docs/"
+            >
               {t("阅读文档")}
               <ArrowUpRight size={15} />
             </a>
           </div>
-          <div className="run-hero-capabilities" aria-label={t("支持的应用类型")}>
+          <div
+            className="run-hero-capabilities"
+            aria-label={t("支持的应用类型")}
+          >
             <span>
               <FileCode2 size={14} />
               {t("静态网站")}
@@ -216,7 +252,10 @@ export function Home() {
                 {t("静态页面与服务端逻辑，一个 Worker 搞定。构建网站、编写 API，或部署完整应用。")}
               </p>
               <WorkerPreview />
-              <a className="run-card-link" href="/?page=workers">
+              <a
+                className="run-card-link"
+                href="/?page=workers"
+              >
                 {t("部署你的第一个应用")}
                 <ArrowRight size={16} />
               </a>
@@ -232,7 +271,10 @@ export function Home() {
                 {t("图片、文档与应用文件，放进存储桶。通过绑定，在 Worker 中直接读写。")}
               </p>
               <StoragePreview />
-              <a className="run-card-link" href="/?page=buckets">
+              <a
+                className="run-card-link"
+                href="/?page=buckets"
+              >
                 {t("管理你的文件")}
                 <ArrowRight size={16} />
               </a>
@@ -247,9 +289,15 @@ export function Home() {
               <p className="run-card-description">
                 {t("应用的数据，也将在这里安家。数据库能力即将加入 RUN。")}
               </p>
-              <div className="run-database-preview" aria-hidden="true">
+              <div
+                className="run-database-preview"
+                aria-hidden="true"
+              >
                 <div className="run-database-orbit">
-                  <Database size={46} strokeWidth={1} />
+                  <Database
+                    size={46}
+                    strokeWidth={1}
+                  />
                 </div>
                 <div className="run-database-table">
                   <span>id</span>
@@ -282,7 +330,10 @@ export function Home() {
                 "连接 Git 仓库，在控制台构建和发布；也可以使用 Wrangler，从终端部署。静态资源与 Worker 代码，一起交付。",
               )}
             </p>
-            <a className="run-text-link" href="/docs/guides/cloudflare-workers.html">
+            <a
+              className="run-text-link"
+              href="/docs/guides/cloudflare-workers.html"
+            >
               {t("查看部署指南")}
               <ArrowUpRight size={16} />
             </a>
@@ -358,7 +409,10 @@ export function Home() {
               <h2>{t("下一个想法，现在开跑。")}</h2>
               <p>{t("一个页面，一个 API，或者一个全新的应用。")}</p>
             </div>
-            <a className="run-button run-button-primary" href="/?page=workers">
+            <a
+              className="run-button run-button-primary"
+              href="/?page=workers"
+            >
               {t("开始构建")}
               <ArrowRight size={16} />
             </a>
@@ -367,7 +421,11 @@ export function Home() {
       </main>
 
       <footer className="run-container run-footer">
-        <a href="/" aria-label={t("RUN 首页")} className="run-brand">
+        <a
+          href="/"
+          aria-label={t("RUN 首页")}
+          className="run-brand"
+        >
           <Logo dark />
         </a>
         <span>Run anything.</span>

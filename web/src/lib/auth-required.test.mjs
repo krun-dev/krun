@@ -1,9 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  AUTH_REQUIRED_EVENT,
-  notifyAuthRequired,
-} from "./auth-required.ts";
+import { AUTH_REQUIRED_EVENT, notifyAuthRequired } from "./auth-required.ts";
 import { api, APIError } from "./api.ts";
 
 test("only unauthorized responses request a return to the login page", () => {
@@ -32,10 +29,10 @@ test("API 401 responses request login before returning the error", async () => {
   const browserWindow = new EventTarget();
   globalThis.window = browserWindow;
   globalThis.fetch = async () =>
-    new Response(
-      JSON.stringify({ error: { code: "UNAUTHENTICATED", message: "请先登录" } }),
-      { status: 401, headers: { "Content-Type": "application/json" } },
-    );
+    new Response(JSON.stringify({ error: { code: "UNAUTHENTICATED", message: "请先登录" } }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
   let events = 0;
   browserWindow.addEventListener(AUTH_REQUIRED_EVENT, () => events++);
 

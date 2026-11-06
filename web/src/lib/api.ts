@@ -5,12 +5,7 @@ export class APIError extends Error {
   code: string;
   requestID?: string;
 
-  constructor(
-    status: number,
-    code: string,
-    message: string,
-    requestID?: string,
-  ) {
+  constructor(status: number, code: string, message: string, requestID?: string) {
     super(message);
     this.status = status;
     this.code = code;
@@ -25,11 +20,7 @@ export async function api<T>(
   onHeaders?: (headers: Headers) => void,
 ): Promise<T> {
   if (!path.startsWith("/api/")) {
-    throw new APIError(
-      0,
-      "INVALID_API_PATH",
-      "Refusing a non-API request path",
-    );
+    throw new APIError(0, "INVALID_API_PATH", "Refusing a non-API request path");
   }
   signal = signal
     ? AbortSignal.any([signal, AbortSignal.timeout(20000)])
@@ -47,11 +38,7 @@ export async function api<T>(
     });
     notifyAuthRequired(response.status);
     if (!response.ok)
-      throw new APIError(
-        response.status,
-        "CSRF_UNAVAILABLE",
-        t("无法获取安全令牌"),
-      );
+      throw new APIError(response.status, "CSRF_UNAVAILABLE", t("无法获取安全令牌"));
     headers["X-CSRF-Token"] = (await response.json()).csrf_token;
   }
   const response = await fetch(path, {
@@ -69,11 +56,7 @@ export async function api<T>(
   try {
     data = raw ? JSON.parse(raw) : {};
   } catch {
-    throw new APIError(
-      response.status,
-      "INVALID_RESPONSE",
-      t("控制服务响应异常，请稍后刷新。"),
-    );
+    throw new APIError(response.status, "INVALID_RESPONSE", t("控制服务响应异常，请稍后刷新。"));
   }
   if (!response.ok)
     throw new APIError(

@@ -135,7 +135,10 @@ export function BucketsPage({
   }
   if (system) {
     return (
-      <Empty title={t("请选择组织")} description={t("对象存储按组织管理，请先进入一个组织。")} />
+      <Empty
+        title={t("请选择组织")}
+        description={t("对象存储按组织管理，请先进入一个组织。")}
+      />
     );
   }
   if (opened?.enabled) {
@@ -154,16 +157,26 @@ export function BucketsPage({
   if (selected) {
     return (
       <>
-        <Button variant="ghost" onClick={() => selectBucket("")}>
+        <Button
+          variant="ghost"
+          onClick={() => selectBucket("")}
+        >
           {t("返回桶列表")}
         </Button>
         {detailError ? (
-          <p role="alert" className="my-4 text-sm text-destructive">
+          <p
+            role="alert"
+            className="my-4 text-sm text-destructive"
+          >
             {detailError}
           </p>
         ) : opened ? (
           <>
-            <PageHeader eyebrow={t("对象存储")} title={opened.name} description={t("已停用")} />
+            <PageHeader
+              eyebrow={t("对象存储")}
+              title={opened.name}
+              description={t("已停用")}
+            />
             <p className="text-sm text-muted-foreground">
               {t("创建时间")} ·{" "}
               <time dateTime={opened.created_at}>
@@ -198,14 +211,24 @@ export function BucketsPage({
         }
       />
       {error ? (
-        <div role="alert" className="mb-4 flex items-center gap-3 text-sm text-destructive">
+        <div
+          role="alert"
+          className="mb-4 flex items-center gap-3 text-sm text-destructive"
+        >
           {error}
-          <Button variant="outline" size="sm" onClick={reload}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={reload}
+          >
             {t("重试")}
           </Button>
         </div>
       ) : null}
-      <CollectionToolbar page={collection} label={t("搜索桶名称或 ID")} />
+      <CollectionToolbar
+        page={collection}
+        label={t("搜索桶名称或 ID")}
+      />
       {(collection.loading || buckets === null) && !error ? (
         <Loading />
       ) : buckets?.length ? (
@@ -225,7 +248,10 @@ export function BucketsPage({
                   <TableRow key={bucket.id}>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        <Database size={16} className="text-muted-foreground" />
+                        <Database
+                          size={16}
+                          className="text-muted-foreground"
+                        />
                         <Button
                           variant="link"
                           className="h-auto p-0 font-medium"
@@ -310,7 +336,10 @@ export function BucketsPage({
               />
             </Field>
             {formError ? (
-              <p role="alert" className="text-sm text-destructive">
+              <p
+                role="alert"
+                className="text-sm text-destructive"
+              >
                 {formError}
               </p>
             ) : null}
@@ -341,7 +370,10 @@ export function BucketsPage({
             </DialogDescription>
           </DialogHeader>
           <p className="break-all font-mono text-sm">{target?.name}</p>
-          <Button disabled={busy} onClick={() => void toggleBucket()}>
+          <Button
+            disabled={busy}
+            onClick={() => void toggleBucket()}
+          >
             {t("确认")}
           </Button>
         </DialogContent>
