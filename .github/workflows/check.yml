@@ -27,6 +27,8 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - name: Check frontend formatting
+        run: npm run check:web-format
       - run: npm run test:permissions
       - run: npm run test:i18n
       - run: npm --prefix web test

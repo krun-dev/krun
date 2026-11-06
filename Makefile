@@ -21,6 +21,7 @@ test:
 	python3 scripts/gen-storage-models.py --check
 	./scripts/check-secrets.sh
 	python3 scripts/check-static-console.py
+	npm run check:web-format
 	go test -race ./...
 	go vet ./...
 	npm run check
