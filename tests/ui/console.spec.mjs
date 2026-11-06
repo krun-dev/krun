@@ -36,6 +36,27 @@ async function api(context, path, method = "GET", input) {
   ).toBeTruthy();
   return response.status() === 204 ? undefined : response.json();
 }
+async function fillVariables(page, variables) {
+  const section = page.getByRole("region", { name: "环境变量", exact: true });
+  while (await section.getByRole("button", { name: /移除变量/ }).count()) {
+    await section
+      .getByRole("button", { name: /移除变量/ })
+      .first()
+      .click();
+  }
+  let index = 0;
+  for (const [name, value] of Object.entries(variables)) {
+    index += 1;
+    await section.getByRole("button", { name: "添加变量", exact: true }).click();
+    await section.getByRole("textbox", { name: "变量名 " + index, exact: true }).fill(name);
+    await section
+      .getByRole("combobox", { name: "值类型 " + index, exact: true })
+      .selectOption(typeof value === "string" ? "text" : "json");
+    await section
+      .getByRole("textbox", { name: "变量值 " + index, exact: true })
+      .fill(typeof value === "string" ? value : JSON.stringify(value));
+  }
+}
 async function login(page) {
   await page.goto("/?page=login");
   await page
@@ -218,10 +239,8 @@ test("UI saves variables, publishes new configuration, and rolls back", async ({
 }) => {
   await page.goto(locationFor(workflow.id));
   await page.getByRole("tab", { name: "环境配置", exact: true }).click();
-  await page
-    .getByRole("textbox", { name: "环境变量 JSON" })
-    .fill(JSON.stringify({ UI_MARKER: "revision-two" }));
-  await page.getByRole("button", { name: "保存配置", exact: true }).click();
+  await fillVariables(page, { UI_MARKER: "revision-two" });
+  await page.getByRole("button", { name: "保存环境变量", exact: true }).click();
   await expect
     .poll(async () => (await currentEnvironment(context)).variables.UI_MARKER)
     .toBe("revision-two");
@@ -344,11 +363,12 @@ test("UI configures Previews Base without changing production", async ({
   await page.goto(locationFor(workflow.id));
   await page.getByRole("tab", { name: "预览基础配置", exact: true }).click();
   const production = await currentEnvironment(context);
+  await fillVariables(page, {
+    GREETING: "base-from-ui",
+    CONFIG: { nested: [1, true, null] },
+  });
   await page
-    .locator("textarea")
-    .fill(JSON.stringify({ GREETING: "base-from-ui", CONFIG: { nested: [1, true, null] } }));
-  await page
-    .getByRole("button", { name: "保存预览基础配置", exact: true })
+    .getByRole("button", { name: "保存环境变量", exact: true })
     .click();
   await expect(
     page.getByText("预览基础配置已保存，仅影响新建 Preview。", { exact: true }),
@@ -364,19 +384,38 @@ test("UI configures Previews Base without changing production", async ({
 });
 
 
-test("UI edits JSON values and metadata bindings, then displays immutable version tags", async ({page,context})=>{
- await context.addCookies(cookies);await page.goto(locationFor(workflow.id));
- await page.getByRole('tab',{name:'环境配置',exact:true}).click();
- await page.getByRole('textbox',{name:'环境变量 JSON'}).fill(JSON.stringify({CONFIG:{nested:[1,true,null]},COUNT:7,FLAG:false}));
- await page.getByRole('textbox',{name:'版本元数据绑定',exact:true}).fill('CF_VERSION_METADATA');
- await page.getByRole('button',{name:'保存配置',exact:true}).click();
- await expect.poll(async()=>(await currentEnvironment(context)).variables.CONFIG).toEqual({nested:[1,true,null]});
- expect((await currentEnvironment(context)).version_metadata).toBe('CF_VERSION_METADATA');
- const overview=await api(context,workerBase()+'/overview');
- const build=Object.values(overview.builds).find(b=>b.state==='succeeded');expect(build).toBeTruthy();
- const version=await api(context,workerBase()+'/environments/production/versions','POST',{build_id:build.id,tag:'ui-json-v1',message:'JSON configuration snapshot',idempotency_key:randomUUID()});
- expect(version.variables.COUNT).toBe(7);expect(version.variables.FLAG).toBe(false);expect(version.version_metadata).toBe('CF_VERSION_METADATA');
- await page.goto(locationFor(workflow.id));await page.getByRole('tab',{name:'版本与部署',exact:true}).click();
- await expect(page.getByText('ui-json-v1',{exact:true})).toBeVisible();await expect(page.getByText('JSON configuration snapshot',{exact:true})).toBeVisible();
- await page.screenshot({path:'.data/bindings/ui-json-version.png',fullPage:true});
+test("UI edits JSON values and metadata bindings, then displays immutable version tags", async ({
+  page,
+  context,
+}) => {
+  await context.addCookies(cookies);
+  await page.goto(locationFor(workflow.id));
+  await page.getByRole("tab", { name: "环境配置", exact: true }).click();
+  await fillVariables(page, { CONFIG: { nested: [1, true, null] }, COUNT: 7, FLAG: false });
+  await page.getByText("高级设置：在代码中读取版本信息", { exact: true }).click();
+  await page
+    .getByRole("textbox", { name: "版本信息变量名", exact: true })
+    .fill("CF_VERSION_METADATA");
+  await page.getByRole("button", { name: "保存环境变量", exact: true }).click();
+  await expect
+    .poll(async () => (await currentEnvironment(context)).variables.CONFIG)
+    .toEqual({ nested: [1, true, null] });
+  expect((await currentEnvironment(context)).version_metadata).toBe("CF_VERSION_METADATA");
+  const overview = await api(context, workerBase() + "/overview");
+  const build = Object.values(overview.builds).find((b) => b.state === "succeeded");
+  expect(build).toBeTruthy();
+  const version = await api(context, workerBase() + "/environments/production/versions", "POST", {
+    build_id: build.id,
+    tag: "ui-json-v1",
+    message: "JSON configuration snapshot",
+    idempotency_key: randomUUID(),
+  });
+  expect(version.variables.COUNT).toBe(7);
+  expect(version.variables.FLAG).toBe(false);
+  expect(version.version_metadata).toBe("CF_VERSION_METADATA");
+  await page.goto(locationFor(workflow.id));
+  await page.getByRole("tab", { name: "版本与部署", exact: true }).click();
+  await expect(page.getByText("ui-json-v1", { exact: true })).toBeVisible();
+  await expect(page.getByText("JSON configuration snapshot", { exact: true })).toBeVisible();
+  await page.screenshot({ path: ".data/bindings/ui-json-version.png", fullPage: true });
 });

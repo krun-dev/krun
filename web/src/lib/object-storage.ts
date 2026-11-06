@@ -113,14 +113,16 @@ export function bindingInput(
       ["__proto__", "prototype", "constructor"].includes(name)
     ) {
       throw new Error(
-        t("R2 绑定名称须为 1–64 位字母、数字或下划线，以字母或下划线开头，不能使用 KRUN_ 前缀。"),
+        t(
+          "对象存储绑定名称须为 1–64 位字母、数字或下划线，以字母或下划线开头，不能使用 KRUN_ 前缀。",
+        ),
       );
     }
     if (used.has(name)) {
-      throw new Error(t("R2 绑定名称重复，或与变量、Secret、版本元数据冲突。"));
+      throw new Error(t("对象存储绑定名称重复，或与变量、Secret、版本元数据冲突。"));
     }
     if (!row.bucket) {
-      throw new Error(t("请为每个 R2 绑定选择一个桶。"));
+      throw new Error(t("请为每个对象存储绑定选择一个桶。"));
     }
     used.add(name);
     result[name] = row.bucket;

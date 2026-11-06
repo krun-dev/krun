@@ -107,7 +107,7 @@ export function BucketsPage({
       setCreate(false);
       setName("");
       reload();
-      notify(t("桶已创建，可在 Worker 环境中添加 R2 绑定。"));
+      notify(t("桶已创建，可在 Worker 环境中添加对象存储绑定。"));
     } catch (cause) {
       setFormError(errorMessage(cause));
     } finally {
@@ -195,7 +195,7 @@ export function BucketsPage({
       <PageHeader
         eyebrow={t("存储服务")}
         title={t("对象存储")}
-        description={t("管理逻辑桶，并通过兼容 Cloudflare R2 的 binding 在 Worker 中使用。")}
+        description={t("管理存储桶，并在 Worker 中通过对象存储绑定使用。")}
         action={
           canCreate ? (
             <Button

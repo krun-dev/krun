@@ -672,10 +672,10 @@ function WorkerDetail({
       <Loading />
     );
   return (
-    <div className="grid gap-6">
+    <div className="grid min-w-0 gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-xl font-medium">{worker.name}</h2>
             {routing?.network_profile.name ? (
               <Badge variant="outline">{routing.network_profile.name}</Badge>
@@ -707,7 +707,7 @@ function WorkerDetail({
           {error}
         </p>
       ) : null}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <span>{t("基线环境常驻对外服务；预览环境用于验证，可随时删除。")}</span>
         </div>
@@ -727,7 +727,7 @@ function WorkerDetail({
             onClick={() => setEnvironment(e.name)}
             aria-pressed={env?.name === e.name}
             className={cn(
-              "rounded-lg border bg-card p-4 text-left",
+              "min-w-0 rounded-lg border bg-card p-4 text-left",
               env?.name === e.name
                 ? "border-primary ring-1 ring-primary/15"
                 : "hover:border-primary/40",
