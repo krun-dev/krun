@@ -17,7 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { api, type Me, type Provider } from "@/lib/api";
-import { t, errorMessage } from "@/lib/i18n";
+import { t, errorMessage, locale } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Logo } from "./common";
@@ -87,7 +87,12 @@ export function OAuthConsent({
           target.pathname !== "/oauth/callback"
         )
           throw new Error(t("授权回调地址无效"));
-        window.location.assign(result.redirect_url);
+        if (info?.client_id === "krun-cli") {
+          target.searchParams.set("lang", locale());
+          window.location.assign(target.toString());
+        } else {
+          window.location.assign(result.redirect_url);
+        }
       }
     } catch (e) {
       setFailed(errorMessage(e));

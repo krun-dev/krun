@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/krun-dev/krun/internal/localize"
 	"github.com/krun-dev/krun/internal/securetoken"
 )
 
@@ -181,7 +182,7 @@ func (c *Client) browserLogin(ctx context.Context, browser bool, port int, scope
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = io.WriteString(w, loginCallbackHTML)
+		_, _ = io.WriteString(w, loginCallbackPage(q.Get("lang"), r.Header.Get("Accept-Language")))
 		received <- result
 	})}
 	defer func() {
@@ -272,3 +273,19 @@ func (c *Client) deviceLogin(ctx context.Context, browser bool, scope string) er
 }
 
 const loginCallbackHTML = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>krun · Return to your terminal</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#111413;color:#f3f7f5;font:16px system-ui}main{margin:24px;max-width:440px;padding:48px;border:1px solid #303a35;border-radius:24px;background:#191e1b}b{color:#47db9e;letter-spacing:2px}h1{font-size:30px;letter-spacing:-1px}p{color:#a8b6ae;line-height:1.7}small{display:block;margin-top:32px;color:#789184}</style><main><b>krun.</b><h1>Return to your terminal</h1><p>Your browser has returned the authorization result. Your terminal will confirm when sign-in is complete.</p><small>You can close this tab.</small></main></html>`
+
+func loginCallbackPage(preferred, acceptLanguage string) string {
+	language := localize.RequestLanguage(acceptLanguage)
+	if preferred == "en" || preferred == "zh-CN" {
+		language = preferred
+	}
+	if language == localize.English {
+		return loginCallbackHTML
+	}
+	return strings.NewReplacer(
+		`lang="en"`, `lang="zh-CN"`,
+		"Return to your terminal", "返回终端",
+		"Your browser has returned the authorization result. Your terminal will confirm when sign-in is complete.", "浏览器已返回授权结果。登录完成后，终端会显示确认信息。",
+		"You can close this tab.", "现在可以关闭此页面。",
+	).Replace(loginCallbackHTML)
+}

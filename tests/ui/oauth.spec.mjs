@@ -142,7 +142,7 @@ test("krun browser login, automatic refresh and logout use the real issuer", asy
     const result = await proc.done;
     expect(result.code, result.stderr).toBe(0);
     await expect(
-      page.getByRole("heading", { name: "Return to your terminal" }),
+      page.getByRole("heading", { name: "返回终端" }),
     ).toBeVisible();
     expect(statSync(config).mode & 0o777).toBe(0o600);
     const before = readFileSync(config, "utf8");
