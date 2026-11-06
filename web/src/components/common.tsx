@@ -49,12 +49,14 @@ export function SelectField({
   onChange,
   children,
   label,
+  hideLabel = false,
   disabled,
 }: {
   value: string;
   onChange: (value: string) => void;
   children: ReactNode;
   label?: string;
+  hideLabel?: boolean;
   disabled?: boolean;
 }) {
   useTranslation();
@@ -71,7 +73,7 @@ export function SelectField({
   );
   // A bare select misaligns next to Field inputs inside grids; wrap with the
   // same label structure when a label is provided.
-  if (!label) return select;
+  if (!label || hideLabel) return select;
   return (
     <span className="flex flex-col items-start gap-2 self-start text-sm font-medium">
       <span className="leading-5">{label}</span>

@@ -195,7 +195,7 @@ export function KeysPage(p: Props) {
   return (
     <>
       <PageHeader
-        eyebrow={t("Access management")}
+        eyebrow={p.system ? t("Access management") : t("个人设置")}
         title={t("API Keys")}
         description={t("管理脚本、CLI 和自动化任务的访问凭据。")}
         action={
@@ -236,6 +236,7 @@ export function KeysPage(p: Props) {
         <div className="w-36">
           <SelectField
             label={t("密钥状态")}
+            hideLabel
             value={status}
             onChange={setStatus}
           >
@@ -403,20 +404,18 @@ export function KeysPage(p: Props) {
                     placeholder={t("例如 production-ci")}
                   />
                 </Field>
-                <Field label={t("有效期")}>
-                  <SelectField
-                    label={t("有效期")}
-                    value={expiry}
-                    onChange={setExpiry}
-                  >
-                    <option value="0">{t("长期有效")}</option>
-                    <option value="3600">{t("1 小时")}</option>
-                    <option value="86400">{t("1 天")}</option>
-                    <option value="604800">{t("7 天")}</option>
-                    <option value="2592000">{t("30 天")}</option>
-                    <option value="7776000">{t("90 天")}</option>
-                  </SelectField>
-                </Field>
+                <SelectField
+                  label={t("有效期")}
+                  value={expiry}
+                  onChange={setExpiry}
+                >
+                  <option value="0">{t("长期有效")}</option>
+                  <option value="3600">{t("1 小时")}</option>
+                  <option value="86400">{t("1 天")}</option>
+                  <option value="604800">{t("7 天")}</option>
+                  <option value="2592000">{t("30 天")}</option>
+                  <option value="7776000">{t("90 天")}</option>
+                </SelectField>
               </div>
               <div className="flex items-start gap-2.5 rounded-md border border-primary/20 bg-primary/5 px-3 py-3">
                 <ShieldCheck
