@@ -26,8 +26,15 @@
 | 接口 | 权限与行为 |
 | --- | --- |
 | `GET /api/v1/orgs/{org}/workers/buckets` | `organization.read`，列出该组织的逻辑桶 |
-| `POST /api/v1/orgs/{org}/workers/buckets` | `organization.update`，body 为 `{"name":"product-images"}` |
-| `PATCH /api/v1/orgs/{org}/workers/buckets/{id}` | `organization.update`，以 `{"enabled":false,"revision":1}` 禁用 |
+| `GET /api/v1/orgs/{org}/workers/buckets/{id}` | `organization.read`，读取本组织桶详情（含停用桶） |
+| `POST /api/v1/orgs/{org}/workers/buckets` | `storage.bucket.create`，body 为 `{"name":"product-images"}` |
+| `PATCH /api/v1/orgs/{org}/workers/buckets/{id}` | `storage.bucket.update`，以 `{"enabled":false,"revision":1}` 禁用 |
+
+列表传入 `q`、`limit` 或 `after` 时启用控制台分页：`q` 按名称或 ID 不区分大小写
+包含搜索，`limit` 为 1–200（默认 100），`after` 使用上次响应的 `next_after`，没有
+`next_after` 表示已到末页。游标按桶 ID 推进。未传这三个参数时仍返回按名称排序的完整
+组织桶列表，供绑定选择器使用。列表和单桶响应均包含 `created_at`；CF 兼容 R2 接口
+继续返回 `result.buckets` 与 `creation_date`，不受控制台分页影响。
 
 创建逻辑桶不创建物理桶；物理桶必须已由部署侧创建并授权。每组织最多 1000 个逻辑桶。
 同一组织内的名字唯一，物理路径使用稳定 bucket ID：
@@ -47,8 +54,9 @@ Preview Base 的相同字段会复制到新 Preview；需要隔离时明确使�
 ## 控制台操作
 
 组织侧导航的「对象存储」对应 `/?page=buckets&workspace=<organization_id>`，提供逻辑桶
-列表、创建、启用和停用。启停带 revision 并发校验；出现冲突后刷新当前状态，不覆盖
-其他管理员的修改。创建和启停需要 `organization.update`，列表需要 `organization.read`，
+列表、按名称或 ID 搜索、分页、创建、启用和停用；列表与桶详情均展示创建时间。
+启停带 revision 并发校验；出现冲突后刷新当前状态，不覆盖其他管理员的修改。创建和
+启停分别需要 `storage.bucket.create`、`storage.bucket.update`，列表需要 `organization.read`，
 最终权限由后端校验。点击已启用的桶可浏览对象、上传下载、查看详情和删除文件；对象权限
 独立，见 [文件与分发](bucket-objects.md)。不提供桶删除或批量数据清空。
 

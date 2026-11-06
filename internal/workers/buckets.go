@@ -30,6 +30,21 @@ func (s *Service) BucketList(st *domain.State, p authorization.Principal, organi
 	return out, nil
 }
 
+func (s *Service) BucketGet(st *domain.State, p authorization.Principal, organization, id string) (domain.WorkerBucket, error) {
+	target, err := s.orgTarget(st, ServiceRef{Organization: organization})
+	if err != nil {
+		return domain.WorkerBucket{}, err
+	}
+	if err := s.require(st, p, "organization.read", target); err != nil {
+		return domain.WorkerBucket{}, err
+	}
+	bucket, exists := st.Workers.Buckets[id]
+	if !exists || bucket.Organization != organization {
+		return domain.WorkerBucket{}, domain.NotFound()
+	}
+	return bucket, nil
+}
+
 func (s *Service) BucketCreate(st *domain.State, p authorization.Principal, organization, name string) (domain.WorkerBucket, error) {
 	target, err := s.orgTarget(st, ServiceRef{Organization: organization})
 	if err != nil {
@@ -64,7 +79,7 @@ func (s *Service) BucketCreate(st *domain.State, p authorization.Principal, orga
 		Store:        s.Config.Workers.ObjectStorage.DefaultStore,
 		Enabled:      true,
 		Revision:     1,
-		Created:      time.Now().UTC(),
+		Created:      time.Now().UTC().Truncate(time.Microsecond),
 	}
 	st.Workers.Buckets[bucket.ID] = bucket
 	s.audit(st, p, "workers.bucket.create", bucket.ID, true)

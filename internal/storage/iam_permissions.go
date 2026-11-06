@@ -40,12 +40,19 @@ func writeAssignments(ctx context.Context, tx ormTransaction, before, after map[
 func writeResources(ctx context.Context, tx ormTransaction, before, after map[string]domain.Resource) error {
 	for id, resource := range after {
 		previous, existed := before[id]
-		if existed && previous == resource {
+		if existed && sameResource(previous, resource) {
 			continue
 		}
-		row := models.Resource{ResourceID: id, Kind: resource.Kind, OrgID: resource.Organization, Name: resource.Name, Revision: resource.Revision}
+		row := models.Resource{
+			ResourceID: id,
+			Kind:       resource.Kind,
+			OrgID:      resource.Organization,
+			Name:       resource.Name,
+			Revision:   resource.Revision,
+			CreatedAt:  resource.Created,
+		}
 		if !existed {
-			if err := ormCAS(ctx, "Resource changed", tx.orm.NewInsert().Model(&row).Column("resource_id", "kind", "org_id", "name", "revision").On("CONFLICT (resource_id) DO NOTHING").Returning("NULL")); err != nil {
+			if err := ormCAS(ctx, "Resource changed", tx.orm.NewInsert().Model(&row).Column("resource_id", "kind", "org_id", "name", "revision", "created_at").On("CONFLICT (resource_id) DO NOTHING").Returning("NULL")); err != nil {
 				return err
 			}
 		} else if err := ormCAS(ctx, "Resource changed", tx.orm.NewUpdate().Model(&row).Column("kind", "org_id", "name", "revision").WherePK().Where("revision = ?", previous.Revision)); err != nil {
@@ -62,4 +69,9 @@ func writeResources(ctx context.Context, tx ormTransaction, before, after map[st
 		}
 	}
 	return nil
+}
+
+func sameResource(a, b domain.Resource) bool {
+	return a.ID == b.ID && a.Kind == b.Kind && a.Organization == b.Organization &&
+		a.Name == b.Name && a.Revision == b.Revision && a.Created.Equal(b.Created)
 }

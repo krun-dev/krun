@@ -215,6 +215,10 @@ export function BucketObjects({
           ) : undefined
         }
       />
+      <p className="mb-4 text-xs text-muted-foreground">
+        {t("创建时间")} ·{" "}
+        <time dateTime={bucket.created_at}>{new Date(bucket.created_at).toLocaleString()}</time>
+      </p>
       {canWrite ? (
         <input
           ref={input}

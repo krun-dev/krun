@@ -29,6 +29,7 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 		return protectWithBodyLimit(sessionOnly, apiJSONBodyMax, fn)
 	}
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/buckets", protect(false, s.workerBucketList))
+	m.HandleFunc("GET /api/v1/orgs/{org}/workers/buckets/{bucket}", protect(false, s.workerBucketGet))
 	m.HandleFunc("POST /api/v1/orgs/{org}/workers/buckets", protect(false, s.workerBucketCreate))
 	m.HandleFunc("PATCH /api/v1/orgs/{org}/workers/buckets/{bucket}", protect(false, s.workerBucketUpdate))
 	objects := "/api/v1/orgs/{org}/workers/buckets/{bucket}/objects"

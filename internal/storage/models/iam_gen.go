@@ -106,11 +106,12 @@ type Assignment struct {
 
 type Resource struct {
 	bun.BaseModel `bun:"table:krun_resources,alias:krun_resources"`
-	ResourceID    string `bun:"resource_id,pk"`
-	Kind          string `bun:"kind"`
-	OrgID         string `bun:"org_id"`
-	Name          string `bun:"name"`
-	Revision      int    `bun:"revision"`
+	ResourceID    string    `bun:"resource_id,pk"`
+	Kind          string    `bun:"kind"`
+	OrgID         string    `bun:"org_id"`
+	Name          string    `bun:"name"`
+	Revision      int       `bun:"revision"`
+	CreatedAt     time.Time `bun:"created_at"`
 }
 
 type APIKey struct {
