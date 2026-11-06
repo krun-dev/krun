@@ -472,8 +472,8 @@ func TestWorkerVersionAPIHidesRuntimePool(t *testing.T) {
 func TestWorkerStaticAssetRouteUsesWorkerIdentity(t *testing.T) {
 	s, _, _ := workerTestServer(t)
 	pool := s.Config.Workers.DefaultRuntimePool()
-	path := "/api/internal/workers/static-assets/pub/org-a/svc-a/" + strings.Repeat("a", 64) + "/index.html"
-	r := httptest.NewRequest(http.MethodGet, path, nil)
+	path := "/api/internal/workers/static-assets/pub/org-a/svc-a/" + strings.Repeat("a", 64) + "/credentials"
+	r := httptest.NewRequest(http.MethodPost, path, nil)
 	r.Header.Set("Authorization", "Bearer "+pool.RuntimeToken)
 	r.Header.Set("X-Runtime-Pool", pool.ID)
 	w := httptest.NewRecorder()

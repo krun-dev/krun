@@ -9,6 +9,7 @@ import {
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { prepareStorageRequest, createCursor, createMultipartToken } from "./storage/signer.js";
 import { cacheRequest } from "./cache.js";
+import { signRequest } from "./storage/signature.js";
 
 // Only completed plain data is cached across workerd requests. Each signing call gets
 // its own request context; no request-owned I/O object or promise is retained.
@@ -969,6 +970,62 @@ function ensureStarted(env, ctx) {
   }
 }
 
+// Only completed grants are retained across requests. The cloud session can
+// outlive this local authorization lease; renew through Go before new reads.
+const readGrants = new Map();
+
+function usableReadGrant(grant) {
+  return (
+    grant &&
+    grant.access_key_id &&
+    grant.secret_access_key &&
+    Date.parse(grant.lease_until) > Date.now() + 5000 &&
+    (!grant.expires_at || Date.parse(grant.expires_at) > Date.now() + 120000)
+  );
+}
+
+async function readGrant(env, key, endpoint, initial) {
+  const cached = readGrants.get(key);
+  if (usableReadGrant(cached)) {
+    lruPut(readGrants, key, cached, 1024);
+    return cached;
+  }
+  readGrants.delete(key);
+  const grant = usableReadGrant(initial)
+    ? initial
+    : await platform(env, endpoint, { method: "POST" });
+  if (!usableReadGrant(grant)) {
+    throw new Error("Runtime read grant unavailable");
+  }
+  lruPut(readGrants, key, grant, 1024);
+  return grant;
+}
+
+async function signedRead(grant, name, method = "GET") {
+  if (
+    !usableReadGrant(grant) ||
+    !safeModuleName(name, 240, "assets/") ||
+    (method !== "GET" && method !== "HEAD") ||
+    typeof grant.prefix !== "string" ||
+    !grant.prefix.endsWith("/") ||
+    grant.prefix
+      .split("/")
+      .slice(0, -1)
+      .some((part) => !part || part === "." || part === "..")
+  ) {
+    throw new Error("Invalid runtime read scope");
+  }
+  const signed = await signRequest(grant, method, grant.prefix + name, {
+    "response-content-encoding": "identity",
+  });
+  return fetch(signed.url, {
+    method: signed.method,
+    headers: signed.headers,
+    redirect: "manual",
+    signal: AbortSignal.timeout(15000),
+  });
+}
+
 // Asset manifests are immutable per version; skip re-fetching them per request.
 const manifests = new Map();
 const manifestFlights = new Map();
@@ -1010,6 +1067,7 @@ async function assetManifest(env, version) {
     // Build the path index once per immutable manifest, including ASSETS binding.
     m.index = new Map((m.files || []).map((file) => ["/" + file.path, file.path]));
     m.rules = compileRules(m.config || {});
+    m.metadata = new Map((m.files || []).map((file) => [file.path, file]));
     lruPut(manifests, version.id, m, 512);
 
     return m;
@@ -1051,7 +1109,7 @@ function cachePut(env, key, value) {
   }
 }
 
-async function assetBytes(env, version, path) {
+async function assetBytes(env, version, path, manifest) {
   const key = version.id + "\0" + path;
   const hit = cacheGet(key);
 
@@ -1060,14 +1118,17 @@ async function assetBytes(env, version, path) {
   }
 
   return coalesce(assetFlights, key, async () => {
-    const meta = await platform(
+    const meta = manifest.metadata.get(path);
+    if (!meta) {
+      throw new Error("Asset metadata unavailable");
+    }
+    const grant = await readGrant(
       env,
-      "/versions/" +
-        encodeURIComponent(version.id) +
-        "/assets/" +
-        path.split("/").map(encodeURIComponent).join("/"),
+      "version/" + version.id,
+      "/versions/" + encodeURIComponent(version.id) + "/assets/credentials",
+      manifest.storage,
     );
-    const response = await fetch(meta.download_url, { signal: AbortSignal.timeout(15000) });
+    const response = await signedRead(grant, path);
 
     if (!response.ok) {
       throw new Error("asset download failed (" + response.status + ")");
@@ -1094,7 +1155,7 @@ async function staticAssetResponse(env, version, request, manifest, binding = fa
   }
 
   if (hit.file) {
-    const value = await assetBytes(env, version, manifest.index.get(hit.file));
+    const value = await assetBytes(env, version, manifest.index.get(hit.file), manifest);
 
     return applyHeaders(
       assetResponse(request, hit.file, value, hit.status),
@@ -1158,12 +1219,11 @@ async function worker(env, ctx, d, artifact, validation) {
   return env.LOADER.get(
     `${d.organization_id}/${d.worker_id}/${d.environment}/${d.id}/${mode}/workerd-20260928/workerd-bundle-v2`,
     async () => {
-      // The platform hands out a short-lived URL; artifact bytes go straight from
-      // object storage to this Pod, never through the control plane. Candidate
-      // validation may supply the URL with the management request instead.
+      // Authorized storage metadata and a scoped read grant are delivered once;
+      // both serving and validation sign their own direct S3 download.
       const a =
         artifact || (await platform(env, "/artifacts/" + encodeURIComponent(d.artifact_id)));
-      const response = await fetch(a.download_url, { signal: AbortSignal.timeout(15000) });
+      const response = await signedRead(a.storage, a.object_key);
 
       if (!response.ok) {
         throw new Error("artifact download failed (" + response.status + ")");
@@ -1392,36 +1452,38 @@ async function staticDomainResponse(env, request, prefix) {
         return current;
       }
 
-      const metadata = await platformResponse(
+      const resource = [organization, service, digest].map(encodeURIComponent).join("/");
+      const grant = await readGrant(
         env,
-        "/static-assets/" + prefix + "/" + parts.map(encodeURIComponent).join("/"),
+        "static/" + prefix + "/" + resource,
+        "/static-assets/" + prefix + "/" + resource + "/credentials",
       );
-
-      if (metadata.status === 404) {
+      const response = await signedRead(grant, name);
+      if (response.status === 404) {
         return { missing: true };
       }
-
-      if (!metadata.ok) {
-        throw new Error("static asset metadata " + metadata.status);
-      }
-
-      const meta = await metadata.json();
-
-      if (meta.path !== name || meta.size_bytes < 0 || meta.size_bytes > 5 * 1024 * 1024) {
-        throw new Error("static asset metadata mismatch");
-      }
-
-      const response = await fetch(meta.download_url, { signal: AbortSignal.timeout(15000) });
-
       if (!response.ok) {
         throw new Error("static asset download " + response.status);
       }
-
+      const hash = response.headers.get("x-amz-meta-krun-sha256");
+      const size = Number(response.headers.get("content-length"));
+      if (
+        !/^[0-9a-f]{64}$/.test(hash || "") ||
+        !response.headers.has("content-length") ||
+        !Number.isSafeInteger(size) ||
+        size < 0 ||
+        size > 5 * 1024 * 1024
+      ) {
+        throw new Error("static asset metadata mismatch");
+      }
       const bytes = new Uint8Array(await response.arrayBuffer());
-
-      if (bytes.length !== meta.size_bytes || (await sha256(bytes)) !== meta.sha256) {
+      if (bytes.length !== size || (await sha256(bytes)) !== hash) {
         throw new Error("static asset integrity mismatch");
       }
+      const meta = {
+        sha256: hash,
+        content_type: response.headers.get("content-type") || "application/octet-stream",
+      };
 
       const loaded = { bytes, digest: meta.sha256, content_type: meta.content_type };
       cachePut(env, key, loaded);
@@ -1532,8 +1594,8 @@ export class Management extends WorkerEntrypoint {
           return json({ error: "version and artifact required" }, 400);
         }
 
-        // The controller supplies the immutable descriptor and a short-lived
-        // artifact URL; cold-load and run the KrunValidation RPC on this member.
+        // The controller supplies the immutable descriptor and a scoped read
+        // grant; cold-load and run the KrunValidation RPC on this member.
         await validate(this.env, this.ctx, input.version, input.artifact, input.secrets);
 
         return json({

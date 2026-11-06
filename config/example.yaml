@@ -242,6 +242,15 @@ workers:
   s3_location_id: primary
   s3_access_key: ${KRUN_S3_ACCESS:-replace-me}
   s3_secret_key: ${KRUN_S3_SECRET:-replace-me}
+  # Runtime 的制品与静态资产读取可通过 STS 获取只读临时凭据。
+  # 使用 TOS 时，s3_runtime_endpoint 配置为区域 HTTPS S3 端点，寻址使用 virtual。
+  # 省略本段时使用上面的 S3 静态凭据，供本地 MinIO 等不提供 STS 的环境使用。
+  # s3_runtime_credentials:
+  #   type: tos_assume_role
+  #   access_key_id: ${KRUN_S3_STS_ACCESS:-replace-me}
+  #   secret_access_key: ${KRUN_S3_STS_SECRET:-replace-me}
+  #   role_trn: ${KRUN_S3_STS_ROLE:-trn:iam::1000000000:role/replace-me}
+  #   sts_endpoint: https://sts.volcengineapi.com
   # 可选业务存储凭据；与上面的制品/配置存储分开。真实密钥只放主配置或环境变量。
   # object_storage:
   #   default_store: primary

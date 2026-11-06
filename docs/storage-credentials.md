@@ -73,6 +73,31 @@ static 可连接配置了 `path` 或 `virtual` 寻址的 S3 服务，只填
 `type: static`、`access_key_id`、`secret_access_key`，不能混入 role 或 STS 地址。
 static 返回的密钥拥有原有权限，不应提供给不可信业务代码。
 
+## 制品与静态资产的 Runtime 读取
+
+主配置 `workers.s3_runtime_credentials` 可选择同一个 `tos_assume_role` provider。
+它使用 `workers.s3_runtime_endpoint`、`s3_region`、`s3_bucket`、`s3_prefix` 和寻址设置，
+不与业务 R2 的 bucket 或读写权限混用。完整注释示例及环境变量引用见 `config/example.yaml`。
+TOS 需要区域 HTTPS S3 端点和 virtual 寻址。STS 失败不会降级到静态凭据。
+省略该段时使用 `s3_access_key` / `s3_secret_key`，供本地 MinIO 等环境使用；
+也可显式配置 `type: static`。static 不具备云端会话限权，不应当作 STS 隔离。
+
+Go 在签发前校验 Runtime 身份、pool、Version 或静态域可见性；临时凭据仅允许
+`GetObject`，范围为实际 `s3_prefix` 下的一个不可变制品目录或站点资产目录。
+不授予上传、删除、列举权限。签发复用有界 Manager，缓存最多 1024 个 scope，
+并发最多 8，超时 20 秒，会话请求期限 1 小时，提前 5 分钟刷新并附加抖动。
+
+内部响应使用 `Cache-Control: no-store`，凭据不进入公开资源、配置快照、持久化状态或业务 env。
+可信入口使用与 R2 相同的 SigV4 实现生成 60 秒有效的读取签名，并直接访问对象存储。
+本地授权租约为 5 分钟；回源时距会话过期不足 2 分钟或租约不足 5 秒则重新授权。
+授权缓存最多 1024 项，资产清单和字节缓存独立，续期失败不使用过期授权回源。
+已缓存的文件不要求续期；部署状态仍由路由配置控制。STS 云端会话直到到期仍可能有效，
+本地租约不能撤销已经签发的云端权限。
+
+独立 validator 只从候选验证管理请求获得对应制品的只读授权，不申请 serving 资产凭据，
+也不获得业务 R2 授权。配置快照的签名读取保持既有实现；构建上传、控制台对象下载和
+日志下载仍按各自 API 返回预签名 URL。
+
 ## 缓存与失效
 
 每个 store 有独立的有界 LRU 缓存，完整 scope 是缓存键。
@@ -124,3 +149,16 @@ go test ./internal/adapters/storagecredentials \
 不输出凭据和对象内容，不创建 bucket、不修改 IAM 或桶策略。
 
 TOS 凭据和前缀隔离通过，不等于 R2 API、流、分片或 Cloudflare 返回语义已经通过验收。
+
+制品与静态资产的真实 STS / workerd 验证：
+
+```sh
+go test ./internal/control -run '^TestConfiguredRuntimeReads$' -v -count=1 \
+  -args -runtime-storage-config=../../.data/dev.yaml
+```
+
+这项测试要求主配置显式选择 `s3_runtime_credentials.type: tos_assume_role`，不会回退到
+静态凭据。元数据使用内存测试夹具；权限 handler、生产模板生成的 serving / validator、
+STS 和对象存储均使用真实实现。测试仅在 `s3_prefix/integration-tests/<随机ID>/` 下创建
+配置头、制品、清单和资产，验证配置签名读取、静态响应与缓存、代码执行、凭据不进入
+业务 env，以及云端对写入、删除、列举、相邻目录读取的拒绝，结束后删除对象并确认不存在。

@@ -1,3 +1,4 @@
+import { fixtureRead, readObjectURL } from "./read-grant.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -197,7 +198,10 @@ const server = createServer((request, response) => {
       response.end();
       return;
     }
-    if (request.url === "/artifact") {
+    if (
+      readObjectURL(new URL(request.url, "http://" + request.headers.host), request.method)
+        .pathname === "/artifact"
+    ) {
       artifactDownloads++;
       response.writeHead(200, {
         "content-type": "application/gzip",
@@ -313,7 +317,7 @@ try {
     artifact_id: version.artifact_id,
     archive_sha256: version.archive_sha256,
     size: artifact.length,
-    download_url: `http://127.0.0.1:${platformPort}/artifact`,
+    ...fixtureRead(`http://127.0.0.1:${platformPort}/artifact`),
   };
   const privatePort = await freePort();
   const managementPort = await freePort();

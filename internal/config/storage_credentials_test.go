@@ -131,3 +131,67 @@ func TestObjectStorageExamplesLoadThroughMainConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestArtifactRuntimeCredentialsLoadThroughMainConfig(t *testing.T) {
+	t.Setenv("KRUN_DATABASE_URL", "postgres://test-only/krun_test")
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var section []string
+	active := false
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) == "# s3_runtime_credentials:" {
+			active = true
+		}
+		if !active {
+			continue
+		}
+		if !strings.HasPrefix(line, "  # ") {
+			break
+		}
+		text := strings.TrimPrefix(line, "  # ")
+		if len(section) > 0 && !strings.HasPrefix(text, " ") {
+			break
+		}
+		section = append(section, "  "+text)
+	}
+	if len(section) < 6 {
+		t.Fatal("missing runtime STS example")
+	}
+	content := strings.Replace(string(raw), "  repository_providers:", strings.Join(section, "\n")+"\n  repository_providers:", 1)
+	content = strings.Replace(content, "s3_runtime_endpoint: https://s3.runtime.internal.example.com", "s3_runtime_endpoint: https://tos-s3-cn-beijing.volces.com", 1)
+	content = strings.Replace(content, "s3_region: us-east-1", "s3_region: cn-beijing", 1)
+	content = strings.Replace(content, "s3_addressing_style: auto", "s3_addressing_style: virtual", 1)
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(file, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadConfig(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials := loaded.Workers.S3RuntimeCredentials
+	if credentials == nil || credentials.Type != "tos_assume_role" || credentials.STSEndpoint != "https://sts.volcengineapi.com" {
+		t.Fatal("runtime STS settings did not load")
+	}
+	for _, change := range []func(*WorkerStorageCredentialConfig){
+		func(c *WorkerStorageCredentialConfig) { c.STSEndpoint = "https://untrusted.example.com" },
+		func(c *WorkerStorageCredentialConfig) { c.RoleTrn = "" },
+		func(c *WorkerStorageCredentialConfig) { c.Type = "unknown" },
+		func(c *WorkerStorageCredentialConfig) { c.SecretAccessKey = "" },
+	} {
+		copy := *loaded.Workers
+		value := *credentials
+		copy.S3RuntimeCredentials = &value
+		change(&value)
+		if err := copy.Validate(); err == nil {
+			t.Fatal("invalid runtime STS settings accepted")
+		}
+	}
+	copy := *loaded.Workers
+	copy.S3RuntimeCredentials = &WorkerStorageCredentialConfig{Type: "static", AccessKeyID: "fixture-access", SecretAccessKey: "fixture-secret"}
+	if err := copy.Validate(); err != nil {
+		t.Fatal("explicit local static provider rejected", err)
+	}
+}

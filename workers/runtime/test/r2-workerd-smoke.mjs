@@ -1,3 +1,4 @@
+import { fixtureRead, readObjectURL } from "./read-grant.mjs";
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import { readFileSync, writeFileSync, appendFileSync, mkdtempSync, rmSync } from "node:fs";
@@ -293,6 +294,9 @@ const descriptor = {
   },
 };
 let grantRequests = 0;
+let staticGrantRequests = 0;
+let staticObjectRequests = 0;
+const staticBody = Buffer.from("<!doctype html><title>STS static fixture</title>");
 let secretRequests = 0;
 let servingRequests = 0;
 let firstStorageData;
@@ -511,9 +515,29 @@ const platform = http.createServer((request, response) => {
     secretRequests++;
   }
   response.setHeader("content-type", "application/json");
-  const url = new URL(request.url, "http://platform");
+  const url = readObjectURL(
+    new URL(request.url, "http://127.0.0.1:" + platform.address().port),
+    request.method,
+  );
   if (url.pathname.includes("/config/") || url.pathname.endsWith("/ack")) {
     servingRequests++;
+  }
+  if (url.pathname.includes("/static-assets/") && url.pathname.endsWith("/credentials")) {
+    staticGrantRequests++;
+    response.end(
+      JSON.stringify(
+        fixtureRead("http://127.0.0.1:" + platform.address().port + "/index.html").storage,
+      ),
+    );
+    return;
+  }
+  if (url.pathname === "/index.html" || url.pathname === "/about.html") {
+    staticObjectRequests++;
+    response.setHeader("content-type", "text/html; charset=utf-8");
+    response.setHeader("content-length", staticBody.length);
+    response.setHeader("x-amz-meta-krun-sha256", sha(staticBody));
+    response.end(staticBody);
+    return;
   }
   if (url.pathname === "/archive") {
     response.end(archive);
@@ -557,7 +581,7 @@ const platform = http.createServer((request, response) => {
   if (url.pathname.includes("/artifacts/")) {
     response.end(
       JSON.stringify({
-        download_url: "http://127.0.0.1:" + platform.address().port + "/archive",
+        ...fixtureRead("http://127.0.0.1:" + platform.address().port + "/archive"),
         size: archive.length,
         archive_sha256: sha(archive),
       }),
@@ -607,6 +631,7 @@ const protocol =
 const objectService =
   '(name="objects",external=(address=' + JSON.stringify(address) + "," + protocol + "))";
 const managementPort = await freePort();
+const staticDomains = JSON.stringify(JSON.stringify({ "static.fixture.test": "int" }));
 const objectBindings = sharedValidator
   ? '(name="VALIDATOR_ONLY",text="true")'
   : `(name="OBJECT_STORES",text=${JSON.stringify(JSON.stringify({ primary: { binding: "OBJECT_STORE_0" } }))}),(name="OBJECT_STORE_0",service="objects")`;
@@ -617,7 +642,7 @@ const config = `using W=import "/workerd/workerd.capnp";
 const config :W.Config=(services=[
  (name="entry",worker=(modules=[${modules}],compatibilityDate="2026-09-28",compatibilityFlags=["experimental","enable_ctx_exports","enable_request_signal","request_signal_passthrough"],bindings=[${sources},(name="CACHE_SOURCE",text=embed ${JSON.stringify(path.join(root, "cache.js"))}),
  (name="LOADER",workerLoader=(id="r2-smoke")),(name="PLATFORM",service="platform"),(name="POD_UID",text="uid"),(name="POD_NAME",text="pod"),(name="RUNTIME_POOL",text="${sharedValidator ? "validation" : "default"}"),(name="RUNTIME_TOKEN",text="${sharedValidator ? "validator-only-token" : "test"}"),(name="MANAGEMENT_TOKEN",text="test-management"),
- ${objectBindings}],globalOutbound="network")),
+ ${objectBindings},(name="STATIC_DOMAINS",text=${staticDomains})],globalOutbound="network")),
  (name="platform",external=(address="127.0.0.1:${platformPort}",http=())),
  ${sharedValidator ? "" : objectService + ","}
  (name="network",network=(allow=["127.0.0.1/32"]))],
@@ -645,7 +670,7 @@ const requestWorker = async (pathname, options = {}) => {
   const bytes = input.body ? Buffer.from(await input.arrayBuffer()) : null;
   return new Promise((resolve, reject) => {
     const headers = Object.fromEntries(input.headers);
-    headers.host = "fixture.test";
+    headers.host = input.headers.get("host") || "fixture.test";
     if (bytes) {
       headers["content-length"] = bytes.length;
     }
@@ -725,7 +750,7 @@ try {
         body: JSON.stringify({
           version: candidate,
           artifact: {
-            download_url: `http://127.0.0.1:${platformPort}/archive`,
+            ...fixtureRead(`http://127.0.0.1:${platformPort}/archive`),
             size: archive.length,
             archive_sha256: sha(archive),
           },
@@ -777,15 +802,31 @@ try {
         type: "text/plain",
       });
     }
+    const staticPath = "/org/worker/" + "a".repeat(64) + "/";
+    const staticOptions = { headers: { host: "static.fixture.test" } };
+    const firstStatic = await requestWorker(staticPath + "index.html", staticOptions);
+    assert.equal(firstStatic.status, 200, output);
+    assert.equal(await firstStatic.text(), staticBody.toString());
+    const secondStatic = await requestWorker(staticPath + "about.html", staticOptions);
+    assert.equal(secondStatic.status, 200, output);
+    assert.equal(await secondStatic.text(), staticBody.toString());
+    const cachedStatic = await requestWorker(staticPath + "index.html", staticOptions);
+    assert.equal(cachedStatic.status, 200, output);
+    assert.equal(staticGrantRequests, 1, "static files did not reuse the directory grant");
+    assert.equal(staticObjectRequests, 2, "static file cache did not survive requests");
     // Validate on an already-serving Pod with a cached storage grant. Candidate
     // bindings and loader state must remain separate from the serving instance.
     await requestWorker("/cache-fixture", { method: "POST" });
     const beforeValidation = await (await requestWorker("/validation-state")).json();
-    assert.deepEqual(beforeValidation, {
-      validationTouched: false,
-      secret: null,
-      cached: "0123456789",
-    });
+    assert.deepEqual(
+      beforeValidation,
+      {
+        validationTouched: false,
+        secret: null,
+        cached: "0123456789",
+      },
+      output,
+    );
     const prime = await requestWorker("/validation-storage-prime");
     assert.equal(prime.status, 200, await prime.text());
     const grantsBefore = grantRequests;
@@ -801,7 +842,7 @@ try {
         body: JSON.stringify({
           version,
           artifact: {
-            download_url: `http://127.0.0.1:${platformPort}/archive`,
+            ...fixtureRead(`http://127.0.0.1:${platformPort}/archive`),
             size: archive.length,
             archive_sha256: sha(archive),
           },

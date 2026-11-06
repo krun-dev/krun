@@ -38,7 +38,10 @@ finalize 生成独立的不可变 manifest 对象，按 Artifact 的 manifest di
 binding 不持平台 token；变量重名或平台保留名称会被拒绝。
 
 manifest 使用 single-flight 和有界 LRU，路径索引只构建一次；资产字节按文件按需下载，
-校验 digest 后放入有界 LRU。发布只切换 Version，不清空其他站点的资产缓存。
+校验 digest 后放入有界 LRU。清单同时携带本 Version 资产目录的只读授权；
+未缓存文件由可信入口 workerd 本地计算 S3 SigV4，不再逐文件向控制面领取预签名 URL。
+授权租约为 5 分钟，临时凭据提前 2 分钟刷新；只有需要回源时才续期，已缓存字节可继续服务。
+发布只切换 Version，不清空其他站点的资产缓存。
 
 ## 存储与缓存
 
@@ -49,7 +52,10 @@ manifest 使用 single-flight 和有界 LRU，路径索引只构建一次；资�
 | `int/<org>/<worker>/<digest>/` | 内网静态资产副本 | 通过绑定的内网静态域访问 |
 
 以上均为逻辑 key；配置 `s3_prefix` 后，实际对象在该前缀下隔离。外部私有桶不修改
-桶策略，静态域名由 runtime 使用签名 URL 读取，配置分发同样使用带鉴权的读取。
+桶策略。signed 静态域由 Runtime 按组织、Worker 和 digest 获取目录级只读授权，
+本地签名读取对象，并从 S3 对象元数据校验 SHA-256；direct 静态域仍由网关直达静态源站。
+Runtime 授权与文件缓存均有界；没有把静态字节传输移出 Runtime。
+STS 配置与本地静态凭据模式见 [存储凭据](storage-credentials.md)。
 
 HTML 使用可重新验证的缓存策略；带内容 hash 的静态文件允许 immutable 缓存。
 Runtime 支持 ETag / `If-None-Match`。静态域独立于 Worker 业务域，可接 CDN；

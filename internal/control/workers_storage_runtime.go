@@ -23,7 +23,7 @@ func (s *Server) workerRuntimeStorageCredentials(w http.ResponseWriter, r *http.
 		value := grant.Credentials.ExpiresAt
 		expiry = &value
 	}
-	// This is the only explicit credential serialization path. This DTO must
+	// This explicit business-storage credential transport must
 	// never enter ordinary resource responses or configuration snapshots.
 	s.json(w, 200, map[string]any{
 		"version_id":             r.PathValue("version"),

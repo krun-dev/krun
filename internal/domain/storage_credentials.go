@@ -14,8 +14,8 @@ const (
 	StorageAllAccess = StorageRead | StorageWrite | StorageDelete | StorageList | StorageMultipart
 )
 
-// StorageCredentialScope must be constructed after authorizing the runtime,
-// immutable version, binding and current bucket grant. It is also the complete
+// StorageCredentialScope must be constructed after authorizing the runtime
+// and its target resource (binding, artifact or static origin). It is the complete
 // cache identity; revisions prevent reuse after authorization changes.
 type StorageCredentialScope struct {
 	Organization          string
@@ -38,3 +38,15 @@ type StorageCredentials struct {
 
 func (StorageCredentials) String() string   { return "[storage credentials redacted]" }
 func (StorageCredentials) GoString() string { return "[storage credentials redacted]" }
+
+// StorageReadGrant stays inside trusted runtime transports. It is not part of
+// a persisted version, public API response or configuration snapshot.
+type StorageReadGrant struct {
+	Endpoint        string             `json:"-"`
+	Region          string             `json:"-"`
+	Bucket          string             `json:"-"`
+	Prefix          string             `json:"-"`
+	AddressingStyle string             `json:"-"`
+	LeaseUntil      time.Time          `json:"-"`
+	Credentials     StorageCredentials `json:"-"`
+}

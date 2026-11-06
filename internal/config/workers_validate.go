@@ -92,6 +92,7 @@ func (c *WorkersConfig) Validate() error {
 	if c.S3AddressingStyle != "auto" && c.S3AddressingStyle != "path" && c.S3AddressingStyle != "virtual" {
 		return fmt.Errorf("invalid Workers S3 addressing style")
 	}
+
 	if c.S3BucketMode == "" {
 		c.S3BucketMode = "managed"
 	}
@@ -108,7 +109,7 @@ func (c *WorkersConfig) Validate() error {
 		return fmt.Errorf("invalid Workers S3 access mode")
 	}
 	if c.S3Prefix != "" {
-		hasUnsafeCharacters := strings.ContainsAny(c.S3Prefix, "\\?#%") ||
+		hasUnsafeCharacters := strings.ContainsAny(c.S3Prefix, "\\?#%*[]") ||
 			strings.IndexFunc(c.S3Prefix, func(r rune) bool {
 				return r <= 32 || r == 127
 			}) >= 0
@@ -149,6 +150,25 @@ func (c *WorkersConfig) Validate() error {
 		}
 	} else {
 		c.S3RuntimeEndpoint = c.S3BuilderEndpoint
+	}
+	if c.S3RuntimeCredentials != nil {
+		runtimeEndpoint, _ := url.Parse(c.S3RuntimeEndpoint)
+		style := "path"
+		if c.S3UsesVirtualHost(*runtimeEndpoint, c.S3Bucket) {
+			style = "virtual"
+		}
+		store := WorkerObjectStore{
+			Endpoint:        c.S3RuntimeEndpoint,
+			Region:          c.S3Region,
+			Bucket:          c.S3Bucket,
+			RootPrefix:      "runtime",
+			AddressingStyle: style,
+			Credentials:     *c.S3RuntimeCredentials,
+		}
+		if err := store.validate(); err != nil {
+			return fmt.Errorf("invalid Workers s3_runtime_credentials: %w", err)
+		}
+		*c.S3RuntimeCredentials = store.Credentials
 	}
 	if c.S3AddressingStyle == "virtual" {
 		for _, endpoint := range []string{c.S3Endpoint, c.S3BuilderEndpoint, c.S3RuntimeEndpoint, c.S3LogReadEndpoint} {
