@@ -1,3 +1,8 @@
+import { useCollectionPage } from "@/lib/collection-page";
+import {
+  CollectionToolbar,
+  CollectionPagination,
+} from "@/components/collection-controls";
 import { readBuildLog } from "../lib/build-logs";
 import { PreviewBasePanel } from "./workers/preview-base";
 import { VersionsPanel } from "./workers/versions";
@@ -81,22 +86,22 @@ export function WorkersPage({
   notify: (message: string) => void;
 }) {
   useTranslation();
-  const [services, setServices] = useState<WorkerServiceSummary[] | null>(null);
-  const [pageAfter, setPageAfter] = useState("");
-  const [pageHistory, setPageHistory] = useState<string[]>([]);
-  const [nextAfter, setNextAfter] = useState("");
-  useEffect(() => {
-    setPageAfter("");
-    setPageHistory([]);
-  }, [base]);
   const [service, setService] = useState(
     () => new URLSearchParams(location.search).get("worker") || "",
   );
-  const [error, setError] = useState("");
+  const [detailError, setDetailError] = useState("");
+  const [selected, setSelected] = useState<WorkerServiceSummary | null>(null);
   const [create, setCreate] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
+  const collection = useCollectionPage<WorkerServiceSummary>(
+    base + "/workers/services",
+    !system && !service,
+    revision,
+  );
+  const services = collection.items;
+  const error = service ? detailError : collection.error;
   const [networkProfiles, setNetworkProfiles] = useState<
     WorkerNetworkProfile[]
   >([]);
@@ -128,53 +133,33 @@ export function WorkersPage({
     return () => c.abort();
   }, [base, system, canCreate]);
   useEffect(() => {
-    if (system) return;
-    const c = new AbortController();
-    void api<List<WorkerServiceSummary>>(
-      base + "/workers/services?after=" + encodeURIComponent(pageAfter),
-      "GET",
-      undefined,
-      c.signal,
-    )
-      .then((r) => {
-        setServices(r.items);
-        setNextAfter(r.next_after || "");
-        setError("");
-      })
-      .catch((e) => {
-        if (!c.signal.aborted) setError(errorMessage(e));
-      });
-    return () => c.abort();
-  }, [base, system, revision, pageAfter]);
-  useEffect(() => {
-    if (
-      system ||
-      !service ||
-      services === null ||
-      services.some((item) => item.id === service)
-    )
+    setSelected(null);
+    setDetailError("");
+    if (system || !service) {
       return;
-    const c = new AbortController();
+    }
+    const controller = new AbortController();
     void api<List<WorkerServiceSummary>>(
       base + "/workers/services?service_id=" + encodeURIComponent(service),
       "GET",
       undefined,
-      c.signal,
+      controller.signal,
     )
       .then((result) => {
-        if (c.signal.aborted) return;
-        if (result.items[0])
-          setServices((current) => [...(current || []), result.items[0]]);
-        else {
-          setError(t("服务不存在或无权访问"));
-          setService("");
+        if (!controller.signal.aborted) {
+          setSelected(result.items[0] || null);
+          if (!result.items[0]) {
+            setDetailError(t("服务不存在或无权访问"));
+          }
         }
       })
-      .catch((e) => {
-        if (!c.signal.aborted) setError(errorMessage(e));
+      .catch((cause) => {
+        if (!controller.signal.aborted) {
+          setDetailError(errorMessage(cause));
+        }
       });
-    return () => c.abort();
-  }, [base, system, service, services]);
+    return () => controller.abort();
+  }, [base, system, service, revision]);
   useEffect(() => {
     const onPopState = () => {
       const id = new URLSearchParams(location.search).get("worker") || "";
@@ -195,7 +180,6 @@ export function WorkersPage({
     setService(id);
     if (!id) setRevision((v) => v + 1);
   }
-  const selected = services?.find((s) => s.id === service);
   if (system)
     return (
       <Empty
@@ -228,17 +212,34 @@ export function WorkersPage({
         }
       />
       {error ? (
-        <p role="alert" className="mb-4 text-sm text-destructive">
+        <div
+          role="alert"
+          className="mb-4 flex items-center gap-3 text-sm text-destructive"
+        >
           {error}
-        </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setRevision((value) => value + 1)}
+          >
+            {t("重试")}
+          </Button>
+        </div>
       ) : null}
-      {services === null ? (
-        <Loading />
-      ) : services.length === 0 ? (
-        <Empty
-          title={t("还没有 Worker")}
-          description={t("创建一个服务，关联代码仓库后开始构建。")}
+      {!service ? (
+        <CollectionToolbar
+          page={collection}
+          label={t("搜索 Worker 名称或 ID")}
         />
+      ) : null}
+      {service && !selected ? (
+        !detailError ? (
+          <Loading />
+        ) : (
+          <Button variant="outline" onClick={() => openService("")}>
+            {t("返回服务列表")}
+          </Button>
+        )
       ) : selected ? (
         <>
           <Button
@@ -258,6 +259,23 @@ export function WorkersPage({
             notify={notify}
           />
         </>
+      ) : collection.loading || services === null ? (
+        !error ? (
+          <Loading />
+        ) : null
+      ) : services.length === 0 ? (
+        <Empty
+          title={
+            collection.search || collection.hasPrevious
+              ? t("没有匹配结果")
+              : t("还没有 Worker")
+          }
+          description={
+            collection.search || collection.hasPrevious
+              ? t("请调整搜索条件或返回上一页。")
+              : t("创建一个服务，关联代码仓库后开始构建。")
+          }
+        />
       ) : (
         <Card className="py-0 shadow-none">
           <CardContent className="p-0">
@@ -265,9 +283,16 @@ export function WorkersPage({
               <TableHeader>
                 <TableRow>
                   <TableHead>{t("服务名称")}</TableHead>
-                  <TableHead>{t("代码仓库")}</TableHead>
+                  <TableHead className="hidden md:table-cell">
+                    {t("代码仓库")}
+                  </TableHead>
                   <TableHead>{t("环境状态")}</TableHead>
-                  <TableHead className="w-28">{t("操作")}</TableHead>
+                  <TableHead className="hidden md:table-cell">
+                    {t("创建时间")}
+                  </TableHead>
+                  <TableHead className="hidden w-28 md:table-cell">
+                    {t("操作")}
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -283,13 +308,17 @@ export function WorkersPage({
                       <p className="mt-1 font-mono text-xs text-muted-foreground">
                         {item.id}
                       </p>
+                      <p className="mt-1 text-xs text-muted-foreground md:hidden">
+                        {t("创建时间")} ·{" "}
+                        {new Date(item.created_at).toLocaleString()}
+                      </p>
                       {item.network_profile?.name ? (
                         <Badge variant="outline" className="mt-2">
                           {item.network_profile.name}
                         </Badge>
                       ) : null}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       {item.repository_source ? (
                         <div className="text-sm">
                           <span className="inline-flex items-center gap-1">
@@ -332,7 +361,10 @@ export function WorkersPage({
                         )}
                       </div>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden whitespace-nowrap md:table-cell">
+                      {new Date(item.created_at).toLocaleString()}
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell">
                       <Button
                         variant="ghost"
                         size="sm"
@@ -349,30 +381,7 @@ export function WorkersPage({
           </CardContent>
         </Card>
       )}
-      {!selected && (pageHistory.length > 0 || nextAfter) ? (
-        <div className="my-4 flex justify-end gap-2">
-          <Button
-            variant="outline"
-            disabled={!pageHistory.length}
-            onClick={() => {
-              setPageAfter(pageHistory.at(-1) || "");
-              setPageHistory((p) => p.slice(0, -1));
-            }}
-          >
-            {t("上一页")}
-          </Button>
-          <Button
-            variant="outline"
-            disabled={!nextAfter}
-            onClick={() => {
-              setPageHistory((p) => [...p, pageAfter]);
-              setPageAfter(nextAfter);
-            }}
-          >
-            {t("下一页")}
-          </Button>
-        </div>
-      ) : null}
+      {!service ? <CollectionPagination page={collection} /> : null}
       <Dialog open={create} onOpenChange={setCreate}>
         <DialogContent>
           <DialogHeader>
@@ -649,7 +658,12 @@ function WorkerDetail({
           ? api(base + "/artifacts/" + b.artifact_id).catch(() => undefined)
           : Promise.resolve(undefined),
       ]);
-      setBuildInfo({ build: b, log: logs.log, artifact, pollSeconds: logs.pollSeconds });
+      setBuildInfo({
+        build: b,
+        log: logs.log,
+        artifact,
+        pollSeconds: logs.pollSeconds,
+      });
     } catch (e) {
       notify(errorMessage(e));
     }
@@ -676,6 +690,12 @@ function WorkerDetail({
             ) : null}
           </div>
           <code className="text-xs text-muted-foreground">{service.id}</code>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {t("创建时间")} ·{" "}
+            <time dateTime={service.created_at}>
+              {new Date(service.created_at).toLocaleString()}
+            </time>
+          </p>
         </div>
         <div className="flex gap-2">
           <Button

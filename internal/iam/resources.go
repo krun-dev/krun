@@ -1,6 +1,8 @@
 package iam
 
 import (
+	"time"
+
 	"github.com/krun-dev/krun/internal/authorization"
 	"github.com/krun-dev/krun/internal/domain"
 	"github.com/krun-dev/krun/internal/securetoken"
@@ -28,7 +30,14 @@ func (s Service) CreateResource(st *domain.State, t authorization.Target, kind s
 	if !nameValid(in.Name) {
 		return domain.Resource{}, domain.Problem(422, "INVALID_REQUEST", "Name required")
 	}
-	res := domain.Resource{ID: securetoken.NewID(kind), Kind: kind, Name: in.Name, Organization: t.ID, Revision: 1}
+	res := domain.Resource{
+		ID:           securetoken.NewID(kind),
+		Kind:         kind,
+		Name:         in.Name,
+		Organization: t.ID,
+		Revision:     1,
+		Created:      time.Now().UTC().Truncate(time.Microsecond),
+	}
 	st.Resources[res.ID] = res
 	st.Revision++
 	return res, nil
@@ -82,7 +91,14 @@ func (s Service) EnsureWorkerResource(st *domain.State, t authorization.Target, 
 		}
 		return old, nil
 	}
-	resource := domain.Resource{ID: id, Organization: t.ID, Kind: "service", Name: name, Revision: 1}
+	resource := domain.Resource{
+		ID:           id,
+		Organization: t.ID,
+		Kind:         "service",
+		Name:         name,
+		Revision:     1,
+		Created:      time.Now().UTC().Truncate(time.Microsecond),
+	}
 	st.Resources[id] = resource
 	st.Revision++
 	return resource, nil

@@ -11,6 +11,7 @@ import (
 // authorize every result against the actor's current grants.
 type ReadScope struct {
 	User, Key, Organization, Service, Kind, After string
+	Search                                        string
 	Limit                                         int
 	Summary                                       bool
 	ActorOnly, AllOrganizations                   bool
@@ -39,8 +40,8 @@ func queueStateRead(ctx context.Context, b *pgx.Batch, query string) {
 	split := strings.SplitN(query, " ORDER BY ", 2)
 	query = split[0]
 	table := query[strings.LastIndex(query, " FROM ")+6:]
-	args := []any{scope.User, scope.Organization, scope.Service, scope.Key, scope.Kind, scope.After, scope.Limit}
-	resources := `SELECT resource_id FROM krun_resources WHERE org_id=$2 AND kind=$5 AND ($3='' OR resource_id=$3) AND ($3<>'' OR resource_id>$6) ORDER BY resource_id LIMIT $7`
+	args := []any{scope.User, scope.Organization, scope.Service, scope.Key, scope.Kind, scope.After, scope.Limit, scope.Search}
+	resources := `SELECT resource_id FROM krun_resources WHERE org_id=$2 AND kind=$5 AND ($3='' OR resource_id=$3) AND ($3<>'' OR resource_id COLLATE "C">$6 COLLATE "C") AND ($8='' OR strpos(lower(name),lower($8))>0 OR strpos(lower(resource_id),lower($8))>0) ORDER BY resource_id COLLATE "C" LIMIT $7`
 	services := `service_id IN (` + resources + `)`
 	pred := "false"
 	switch table {
@@ -121,7 +122,7 @@ func queueStateRead(ctx context.Context, b *pgx.Batch, query string) {
 	}
 	// pgx rejects unused bind arguments. A typed VALUES row makes the common
 	// argument contract explicit, including for deliberately empty tables.
-	query = `WITH scope_args AS (SELECT $1::text,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int) ` + query
+	query = `WITH scope_args AS (SELECT $1::text,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::text) ` + query
 	b.Queue(query, args...)
 }
 

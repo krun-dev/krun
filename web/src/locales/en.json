@@ -786,5 +786,13 @@
   "邀请链接已生成": "Invitation link generated",
   "邀请链接缺失或无效，请联系管理员获取新链接。": "Invitation link missing or invalid. Ask an administrator for a new link.",
   "使用文档": "Documentation",
-  "面包屑": "Breadcrumb"
+  "面包屑": "Breadcrumb",
+  "搜索 Worker 名称或 ID": "Search Worker name or ID",
+  "搜索桶名称或 ID": "Search bucket name or ID",
+  "搜索": "Search",
+  "清除": "Clear",
+  "每页条数": "Items per page",
+  "列表分页": "List pagination",
+  "没有匹配结果": "No matching results",
+  "请调整搜索条件或返回上一页。": "Adjust your search or return to the previous page."
 }

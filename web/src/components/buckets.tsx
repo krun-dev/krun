@@ -1,6 +1,8 @@
+import { useCollectionPage } from "@/lib/collection-page";
+import { CollectionToolbar, CollectionPagination } from "@/components/collection-controls";
 import { useCallback, useEffect, useState } from "react";
 import { Database, Plus } from "lucide-react";
-import { api, type List } from "@/lib/api";
+import { api } from "@/lib/api";
 import { errorMessage, t } from "@/lib/i18n";
 import type { WorkerBucket } from "@/lib/object-storage";
 import { Button } from "@/components/ui/button";
@@ -42,8 +44,8 @@ export function BucketsPage({
   canDelete: boolean;
   notify: (message: string) => void;
 }) {
-  const [buckets, setBuckets] = useState<WorkerBucket[] | null>(null);
-  const [error, setError] = useState("");
+  const [detailError, setDetailError] = useState("");
+  const [opened, setOpened] = useState<WorkerBucket | null>(null);
   const [formError, setFormError] = useState("");
   const [name, setName] = useState("");
   const [create, setCreate] = useState(false);
@@ -53,6 +55,13 @@ export function BucketsPage({
   const [selected, setSelected] = useState(
     () => new URLSearchParams(location.search).get("bucket") || "",
   );
+  const collection = useCollectionPage<WorkerBucket>(
+    base + "/workers/buckets",
+    !system && !selected,
+    refresh,
+  );
+  const buckets = collection.items;
+  const error = selected ? detailError : collection.error;
   function selectBucket(id: string) {
     setSelected(id);
     const url = new URL(location.href);
@@ -66,24 +75,30 @@ export function BucketsPage({
   }
   const reload = useCallback(() => setRefresh((value) => value + 1), []);
   useEffect(() => {
-    if (system) {
+    setOpened(null);
+    setDetailError("");
+    if (system || !selected) {
       return;
     }
     const controller = new AbortController();
-    setError("");
-    void api<List<WorkerBucket>>(base + "/workers/buckets", "GET", undefined, controller.signal)
-      .then((result) => {
+    void api<WorkerBucket>(
+      base + "/workers/buckets/" + encodeURIComponent(selected),
+      "GET",
+      undefined,
+      controller.signal,
+    )
+      .then((bucket) => {
         if (!controller.signal.aborted) {
-          setBuckets(result.items);
+          setOpened(bucket);
         }
       })
       .catch((cause) => {
         if (!controller.signal.aborted) {
-          setError(errorMessage(cause));
+          setDetailError(errorMessage(cause));
         }
       });
     return () => controller.abort();
-  }, [base, system, refresh]);
+  }, [base, system, selected, refresh]);
   async function createBucket() {
     setBusy(true);
     setFormError("");
@@ -123,7 +138,6 @@ export function BucketsPage({
       <Empty title={t("请选择组织")} description={t("对象存储按组织管理，请先进入一个组织。")} />
     );
   }
-  const opened = buckets?.find((bucket) => bucket.id === selected);
   if (opened?.enabled) {
     return (
       <BucketObjects
@@ -135,6 +149,32 @@ export function BucketsPage({
         back={() => selectBucket("")}
         notify={notify}
       />
+    );
+  }
+  if (selected) {
+    return (
+      <>
+        <Button variant="ghost" onClick={() => selectBucket("")}>
+          {t("返回桶列表")}
+        </Button>
+        {detailError ? (
+          <p role="alert" className="my-4 text-sm text-destructive">
+            {detailError}
+          </p>
+        ) : opened ? (
+          <>
+            <PageHeader eyebrow={t("对象存储")} title={opened.name} description={t("已停用")} />
+            <p className="text-sm text-muted-foreground">
+              {t("创建时间")} ·{" "}
+              <time dateTime={opened.created_at}>
+                {new Date(opened.created_at).toLocaleString()}
+              </time>
+            </p>
+          </>
+        ) : (
+          <Loading />
+        )}
+      </>
     );
   }
   return (
@@ -165,7 +205,8 @@ export function BucketsPage({
           </Button>
         </div>
       ) : null}
-      {buckets === null && !error ? (
+      <CollectionToolbar page={collection} label={t("搜索桶名称或 ID")} />
+      {(collection.loading || buckets === null) && !error ? (
         <Loading />
       ) : buckets?.length ? (
         <Card className="py-0 shadow-none">
@@ -188,20 +229,25 @@ export function BucketsPage({
                         <Button
                           variant="link"
                           className="h-auto p-0 font-medium"
-                          disabled={!bucket.enabled}
                           onClick={() => selectBucket(bucket.id)}
                         >
                           {bucket.name}
                         </Button>
                       </div>
                       <code className="text-xs text-muted-foreground">{bucket.id}</code>
+                      <p className="mt-1 text-xs text-muted-foreground md:hidden">
+                        {t("创建时间")} ·{" "}
+                        <time dateTime={bucket.created_at}>
+                          {new Date(bucket.created_at).toLocaleString()}
+                        </time>
+                      </p>
                     </TableCell>
                     <TableCell>
                       <Badge variant={bucket.enabled ? "default" : "secondary"}>
                         {bucket.enabled ? t("已启用") : t("已停用")}
                       </Badge>
                     </TableCell>
-                    <TableCell className="hidden md:table-cell">
+                    <TableCell className="hidden whitespace-nowrap md:table-cell">
                       {new Date(bucket.created_at).toLocaleString()}
                     </TableCell>
                     <TableCell>
@@ -222,10 +268,15 @@ export function BucketsPage({
         </Card>
       ) : !error ? (
         <Empty
-          title={t("还没有桶")}
-          description={t("创建一个桶，然后在 Worker 的环境配置中添加绑定。")}
+          title={collection.search || collection.hasPrevious ? t("没有匹配结果") : t("还没有桶")}
+          description={
+            collection.search || collection.hasPrevious
+              ? t("请调整搜索条件或返回上一页。")
+              : t("创建一个桶，然后在 Worker 的环境配置中添加绑定。")
+          }
         />
       ) : null}
+      <CollectionPagination page={collection} />
       <Dialog
         open={create}
         onOpenChange={(open) => {

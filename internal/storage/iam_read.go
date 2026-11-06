@@ -20,7 +20,7 @@ func (s *Store) loadIAM(ctx context.Context, st *domain.State) error {
 	queueStateRead(ctx, batch, `SELECT group_id, scope_kind, scope_id, name, revision FROM krun_groups`)
 	queueStateRead(ctx, batch, `SELECT group_id, user_id FROM krun_group_members`)
 	queueStateRead(ctx, batch, `SELECT assignment_id, subject_kind, subject_id, role, scope_kind, scope_id, conditions, revision FROM krun_assignments`)
-	queueStateRead(ctx, batch, `SELECT resource_id, kind, org_id, name, revision FROM krun_resources`)
+	queueStateRead(ctx, batch, `SELECT resource_id, kind, org_id, name, revision, created_at FROM krun_resources`)
 	queueStateRead(ctx, batch, `SELECT key_id, owner_user_id, org_id, scope_kind, name, prefix, policy, expires_at, revoked, revision FROM krun_api_keys`)
 	queueStateRead(ctx, batch, `SELECT source, subject, expires_at FROM krun_invitations`)
 	queueStateRead(ctx, batch, `SELECT source, fingerprint FROM krun_identity_sources`)
@@ -201,9 +201,10 @@ func readResources(results pgx.BatchResults, st *domain.State) error {
 	defer rows.Close()
 	for rows.Next() {
 		var r domain.Resource
-		if err = rows.Scan(&r.ID, &r.Kind, &r.Organization, &r.Name, &r.Revision); err != nil {
+		if err = rows.Scan(&r.ID, &r.Kind, &r.Organization, &r.Name, &r.Revision, &r.Created); err != nil {
 			return err
 		}
+		r.Created = r.Created.UTC()
 		st.Resources[r.ID] = r
 	}
 	return rows.Err()

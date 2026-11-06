@@ -106,8 +106,11 @@ CREATE TABLE IF NOT EXISTS krun_resources (
 	kind        text NOT NULL,
 	org_id      text NOT NULL,
 	name        text NOT NULL,
-	revision    integer NOT NULL DEFAULT 1
+	revision    integer NOT NULL DEFAULT 1,
+	created_at  timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE INDEX IF NOT EXISTS krun_resources_org_kind_cursor ON krun_resources (org_id, kind, resource_id COLLATE "C");
 
 CREATE TABLE IF NOT EXISTS krun_api_keys (
 	key_id        text PRIMARY KEY,

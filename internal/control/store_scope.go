@@ -48,6 +48,18 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 	if scope.Service == "" && strings.HasSuffix(r.URL.Path, "/workers/services") {
 		scope.Service = r.URL.Query().Get("service_id")
 	}
+	if r.Pattern == "GET /api/v1/orgs/{org}/workers/services" {
+		options, err := workerListOptions(r)
+		if err != nil {
+			return r, err
+		}
+		scope.Search = options.search
+		scope.Limit = options.limit + 1
+		if scope.Service != "" {
+			scope.Search = ""
+			scope.After = ""
+		}
+	}
 	scope.Summary = scope.Service == "" || strings.HasSuffix(r.URL.Path, "/workers/services")
 	return r.WithContext(withStateScope(r.Context(), scope)), nil
 }

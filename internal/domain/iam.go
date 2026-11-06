@@ -52,11 +52,12 @@ type Assignment struct {
 }
 
 type Resource struct {
-	ID           string `json:"id"`
-	Kind         string `json:"kind"`
-	Organization string `json:"organization_id"`
-	Name         string `json:"name"`
-	Revision     int    `json:"revision"`
+	ID           string    `json:"id"`
+	Kind         string    `json:"kind"`
+	Organization string    `json:"organization_id"`
+	Name         string    `json:"name"`
+	Revision     int       `json:"revision"`
+	Created      time.Time `json:"created_at"`
 }
 
 type Selector struct {

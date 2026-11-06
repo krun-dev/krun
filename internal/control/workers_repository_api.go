@@ -22,7 +22,7 @@ func (s *Server) workerServiceList(st *State, p Principal, r *http.Request) (any
 	if err != nil {
 		return nil, 0, err
 	}
-	return resourcePageItems(st, r, out)
+	return workerServicePage(st, r, out.([]workerapp.WorkerServiceSummary))
 }
 
 func (s *Server) workerRepositoryProviders(st *State, p Principal, r *http.Request) (any, int, error) {
