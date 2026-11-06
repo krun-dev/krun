@@ -353,7 +353,7 @@ test("create, find after refresh, inspect and deploy a frozen version", async ({
   await expect(dialog.getByRole("button", { name: "创建中…", exact: true })).toBeDisabled();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeVisible();
-  expect(state.creates).toHaveLength(1);
+  await expect.poll(() => state.creates.length).toBe(1);
   release();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole("tab", { name: "版本与部署", exact: true })).toHaveAttribute(
