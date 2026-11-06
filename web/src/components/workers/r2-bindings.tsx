@@ -26,7 +26,7 @@ export function R2BindingsEditor({
     setLoading(true);
     setError("");
     void api<List<WorkerBucket>>(
-      organizationBase + "/workers/buckets",
+      organizationBase + "/buckets",
       "GET",
       undefined,
       controller.signal,

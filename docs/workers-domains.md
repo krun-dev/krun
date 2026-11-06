@@ -5,13 +5,13 @@
 
 ## 主机名
 
-每个服务、环境和选中域名生成一个地址：
+每个 Worker、环境和选中域名生成一个地址：
 
 ```text
-w-<service-hash>-<environment>.<domain-suffix>
+w-<worker-hash>-<environment>.<domain-suffix>
 ```
 
-service hash 来自组织与服务 ID；域名不包含运行池 ID。
+Worker hash 来自组织与Worker ID；域名不包含运行池 ID。
 production 和 preview 使用相同的服务 placement。主机名由一套公共推导函数产生，
 不会持久化在环境行中；控制台、invoke 和边缘配置均复用这个结果。
 

@@ -6,9 +6,9 @@ import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 
 const organization = process.env.KRUN_VERIFY_ORG;
-const service = process.env.KRUN_VERIFY_SERVICE;
+const worker = process.env.KRUN_VERIFY_WORKER;
 assert(organization, "KRUN_VERIFY_ORG is required");
-assert(service, "KRUN_VERIFY_SERVICE is required");
+assert(worker, "KRUN_VERIFY_WORKER is required");
 
 const control = new URL(process.env.KRUN_CONTROL_ORIGIN ?? "http://127.0.0.1:8080");
 const browserOrigin = process.env.KRUN_BROWSER_ORIGIN ?? "http://127.0.0.1:5173";
@@ -143,7 +143,7 @@ function gatewayRequest(host, path, { method = "GET", headers = {}, body } = {})
 }
 
 await login();
-const base = `/api/v1/orgs/${organization}/services/${service}/workers`;
+const base = `/api/v1/orgs/${organization}/workers/${worker}`;
 const upload = await api(base + "/source-uploads", "POST", {}, 201);
 const uploaded = await rawRequest(new URL(upload.upload_url), {
   method: "PUT",
@@ -240,7 +240,7 @@ const cached = await gatewayRequest(host, "/", { headers: { "if-none-match": roo
 assert.equal(cached.status, 304);
 const workerDomain = host.split(".").slice(1).join(".");
 const staticHost = "static." + workerDomain;
-const staticPath = `/${organization}/${service}/${artifact.archive_sha256}/index.html`;
+const staticPath = `/${organization}/${worker}/${artifact.archive_sha256}/index.html`;
 let staticPage;
 for (let attempt = 0; attempt < 20; attempt++) {
   staticPage = await gatewayRequest(staticHost, staticPath);
@@ -259,7 +259,7 @@ assert.equal(privateArchive.status, 403);
 console.log(JSON.stringify({
   state: "pass",
   organization,
-  service,
+  worker,
   build: build.id,
   artifact: artifact.id,
   operation: operation.id,

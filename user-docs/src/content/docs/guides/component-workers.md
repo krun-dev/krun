@@ -35,7 +35,7 @@ export default {
 
 可以使用 `caches.default`、`caches.open(name)` 和 cache 的 `put(request, response)`、`match(request)`、`delete(request)`。仅把缓存用于可丢失的加速数据：它是单个 runtime 进程内的有界缓存，重启或请求落到其他实例都可能 miss，`put` 成功也不保证实际存入。
 
-缓存按组织、服务、环境和名称隔离；支持常见 TTL、Vary、条件读取和单段 Range。不要依赖跨实例共享、全局清理、`ignoreSearch`、`ignoreVary`、SWR 或 Cloudflare CDN 缓存。`put` 不接受非 GET、206 响应或 `Vary: *`。
+缓存按组织、Worker、环境和名称隔离；支持常见 TTL、Vary、条件读取和单段 Range。不要依赖跨实例共享、全局清理、`ignoreSearch`、`ignoreVary`、SWR 或 Cloudflare CDN 缓存。`put` 不接受非 GET、206 响应或 `Vary: *`。
 
 ## 构建和发布
 

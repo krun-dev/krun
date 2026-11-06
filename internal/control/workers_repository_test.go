@@ -253,22 +253,22 @@ func TestRepositoryProjectKeepsWranglerInputsAndRejectsLocalSecrets(t *testing.T
 	}
 }
 
-func TestWorkerServiceListFiltersEnvironmentPermissions(t *testing.T) {
+func TestWorkerListFiltersEnvironmentPermissions(t *testing.T) {
 	s, _, base := workerTestServer(t)
 	s.Config.Workers.RepositoryProviders = repositoryTestProviders()
 	if r := request(s, "PUT", base+"/repository", "krun_cli_admin", `{"source":{"provider_id":"github","repository":"team/worker"},"expected_revision":0}`); r.Code != 200 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	payload := `{"name":"test list","expires_in":3600,"policy":{"schema_version":1,"statements":[{"effect":"allow","actions":["service.list"],"resource":{"kind":"organization","organization_id":"org-a","ids":["org-a"]},"conditions":{"environments":["global"]}},{"effect":"allow","actions":["service.read"],"resource":{"kind":"service","organization_id":"org-a","ids":["svc-a"]},"conditions":{"environments":["fix-demo"]}}]}}`
+	payload := `{"name":"test list","expires_in":3600,"policy":{"schema_version":1,"statements":[{"effect":"allow","actions":["worker.list"],"resource":{"kind":"organization","organization_id":"org-a","ids":["org-a"]},"conditions":{"environments":["global"]}},{"effect":"allow","actions":["worker.read"],"resource":{"kind":"worker","organization_id":"org-a","ids":["svc-a"]},"conditions":{"environments":["fix-demo"]}}]}}`
 	r := request(s, "POST", "/api/v1/orgs/org-a/api-keys", "krun_cli_admin", payload)
 	if r.Code != 201 {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	var key struct{ Key string }
 	_ = json.Unmarshal(r.Body.Bytes(), &key)
-	r = request(s, "GET", "/api/v1/orgs/org-a/workers/services", key.Key, "")
+	r = request(s, "GET", "/api/v1/orgs/org-a/workers", key.Key, "")
 	var list struct {
-		Items []workerapp.WorkerServiceSummary `json:"items"`
+		Items []workerapp.WorkerSummary `json:"items"`
 	}
 	_ = json.Unmarshal(r.Body.Bytes(), &list)
 	if r.Code != 200 || len(list.Items) != 1 || list.Items[0].ID != "svc-a" || len(list.Items[0].Environments) != 1 || list.Items[0].Environments[0].Name != "fix-demo" {
@@ -306,10 +306,10 @@ func TestRepositoryConnectionLifecycle(t *testing.T) {
 		{ID: "github", Type: "github", Name: "GitHub", Enabled: true, Priority: 10, ClientID: "cid", ClientSecret: "csecret"},
 	}
 	s.routes()
-	if r := request(s, "POST", "/api/v1/orgs/org-b/workers/repository/github/connect", "krun_cli_viewer", ""); r.Code != 403 {
+	if r := request(s, "POST", "/api/v1/orgs/org-b/worker-repositories/github/connect", "krun_cli_viewer", ""); r.Code != 403 {
 		t.Fatal("cross-organization repository connection allowed", r.Code, r.Body.String())
 	}
-	if r := request(s, "DELETE", "/api/v1/orgs/org-a/workers/repository/github/disconnect", "krun_cli_admin", ""); r.Code != 204 {
+	if r := request(s, "DELETE", "/api/v1/orgs/org-a/worker-repositories/github/disconnect", "krun_cli_admin", ""); r.Code != 204 {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	// 手工放置连接后 providers 列表应标记 connected

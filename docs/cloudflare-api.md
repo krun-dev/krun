@@ -118,7 +118,7 @@ Secret、Previews Base、Preview 部署/Secret/删除、流量比例拒绝、删
 桶元数据接口为 `/accounts/{account}/r2/buckets` 的 GET/POST 和
 `/accounts/{account}/r2/buckets/{bucket}` 的 GET，均位于本文开头的适配前缀下。
 创建桶需要 `organization.update`，读取需要 `organization.read`；部署 binding 使用
-既有 `service.publish` 权限，不要求发布者额外持有对象访问凭据。
+既有 `worker.publish` 权限，不要求发布者额外持有对象访问凭据。
 支持范围及现有限制见 [R2 binding](workers-r2.md)。
 
 `GET /accounts/{account}/r2/buckets/{bucket}/objects` 还支持 `prefix`、`delimiter`（空或 `/`）、

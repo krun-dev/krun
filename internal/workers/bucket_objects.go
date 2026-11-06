@@ -13,7 +13,7 @@ func (s *Service) AuthorizeBucket(st *domain.State, p authorization.Principal, o
 	default:
 		return domain.WorkerBucket{}, domain.Forbidden()
 	}
-	target, err := s.orgTarget(st, ServiceRef{Organization: organization})
+	target, err := s.orgTarget(st, WorkerRef{Organization: organization})
 	if err != nil {
 		return domain.WorkerBucket{}, err
 	}

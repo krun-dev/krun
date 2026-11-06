@@ -192,10 +192,10 @@ func (c *WorkersConfig) DefaultNetworkProfile() WorkerNetworkProfile {
 	return WorkerNetworkProfile{}
 }
 
-// normalizeServiceNetwork resolves saved product intent into its allowed
+// normalizeWorkerNetwork resolves saved product intent into its allowed
 // domain set. Physical placement is a separate durable entity. Keep this
 // independent from HTTP/API state so every projection uses the same defaults.
-func (c *WorkersConfig) NormalizeServiceNetwork(ws domain.WorkerService) domain.WorkerService {
+func (c *WorkersConfig) NormalizeWorkerNetwork(ws domain.Worker) domain.Worker {
 	profile, ok := c.NetworkProfile(ws.NetworkProfile)
 	if !ok {
 		profile = c.DefaultNetworkProfile()

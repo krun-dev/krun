@@ -8,9 +8,9 @@ import (
 	"github.com/uptrace/bun"
 )
 
-type Service struct {
-	bun.BaseModel      `bun:"table:krun_worker_services,alias:krun_worker_services"`
-	ServiceID          string          `bun:"service_id,pk"`
+type Worker struct {
+	bun.BaseModel      `bun:"table:krun_workers,alias:krun_workers"`
+	WorkerID           string          `bun:"worker_id,pk"`
 	OrgID              string          `bun:"org_id"`
 	NetworkProfile     string          `bun:"network_profile"`
 	Repository         json.RawMessage `bun:"repository,type:jsonb"`
@@ -21,9 +21,9 @@ type Service struct {
 	UpdatedAt          time.Time       `bun:"updated_at"`
 }
 
-type ServicePlacement struct {
-	bun.BaseModel  `bun:"table:krun_worker_service_placements,alias:krun_worker_service_placements"`
-	ServiceID      string    `bun:"service_id,pk"`
+type Placement struct {
+	bun.BaseModel  `bun:"table:krun_worker_placements,alias:krun_worker_placements"`
+	WorkerID       string    `bun:"worker_id,pk"`
 	PoolID         string    `bun:"pool_id,pk"`
 	OrgID          string    `bun:"org_id"`
 	NetworkProfile string    `bun:"network_profile"`
@@ -34,9 +34,9 @@ type ServicePlacement struct {
 	UpdatedAt      time.Time `bun:"updated_at"`
 }
 
-type ServiceDomain struct {
-	bun.BaseModel `bun:"table:krun_worker_service_domains,alias:krun_worker_service_domains"`
-	ServiceID     string `bun:"service_id,pk"`
+type Domain struct {
+	bun.BaseModel `bun:"table:krun_worker_domains,alias:krun_worker_domains"`
+	WorkerID      string `bun:"worker_id,pk"`
 	DomainID      string `bun:"domain_id,pk"`
 	Ordinal       int    `bun:"ordinal"`
 }
@@ -45,7 +45,7 @@ type Environment struct {
 	bun.BaseModel      `bun:"table:krun_worker_environments,alias:krun_worker_environments"`
 	VersionMetadata    string          `bun:"version_metadata"`
 	AssetsBinding      string          `bun:"assets_binding"`
-	ServiceID          string          `bun:"service_id,pk"`
+	WorkerID           string          `bun:"worker_id,pk"`
 	EnvName            string          `bun:"env_name,pk"`
 	Enabled            bool            `bun:"enabled"`
 	ConfigRevision     int             `bun:"config_revision"`
@@ -60,7 +60,7 @@ type AssetSession struct {
 	bun.BaseModel  `bun:"table:krun_worker_asset_sessions,alias:krun_worker_asset_sessions"`
 	SessionID      string    `bun:"session_id,pk"`
 	OrgID          string    `bun:"org_id"`
-	ServiceID      string    `bun:"service_id"`
+	WorkerID       string    `bun:"worker_id"`
 	UploadHash     string    `bun:"upload_hash"`
 	CompletionHash string    `bun:"completion_hash"`
 	CreatedAt      time.Time `bun:"created_at"`
@@ -82,7 +82,7 @@ type SecretVersion struct {
 	bun.BaseModel   `bun:"table:krun_worker_secret_versions,alias:krun_worker_secret_versions"`
 	SecretVersionID string    `bun:"secret_version_id,pk"`
 	OrgID           string    `bun:"org_id"`
-	ServiceID       string    `bun:"service_id"`
+	WorkerID        string    `bun:"worker_id"`
 	EnvName         string    `bun:"env_name"`
 	Name            string    `bun:"name"`
 	Ciphertext      []byte    `bun:"ciphertext"`
@@ -95,7 +95,7 @@ type SecretVersion struct {
 
 type EnvironmentSecret struct {
 	bun.BaseModel   `bun:"table:krun_worker_environment_secrets,alias:krun_worker_environment_secrets"`
-	ServiceID       string `bun:"service_id,pk"`
+	WorkerID        string `bun:"worker_id,pk"`
 	EnvName         string `bun:"env_name,pk"`
 	Name            string `bun:"name,pk"`
 	SecretVersionID string `bun:"secret_version_id"`
@@ -105,7 +105,7 @@ type Build struct {
 	bun.BaseModel      `bun:"table:krun_worker_builds,alias:krun_worker_builds"`
 	BuildID            string          `bun:"build_id,pk"`
 	OrgID              string          `bun:"org_id"`
-	ServiceID          string          `bun:"service_id"`
+	WorkerID           string          `bun:"worker_id"`
 	EnvName            string          `bun:"env_name"`
 	State              string          `bun:"state"`
 	Entrypoint         string          `bun:"entrypoint"`
@@ -179,7 +179,7 @@ type Version struct {
 	Message            string          `bun:"message"`
 	VersionID          string          `bun:"version_id,pk"`
 	OrgID              string          `bun:"org_id"`
-	ServiceID          string          `bun:"service_id"`
+	WorkerID           string          `bun:"worker_id"`
 	EnvName            string          `bun:"env_name"`
 	ArtifactID         string          `bun:"artifact_id"`
 	Profile            string          `bun:"profile"`
@@ -204,7 +204,7 @@ type Deployment struct {
 	bun.BaseModel `bun:"table:krun_worker_deployments,alias:krun_worker_deployments"`
 	DeploymentID  string     `bun:"deployment_id,pk"`
 	OrgID         string     `bun:"org_id"`
-	ServiceID     string     `bun:"service_id"`
+	WorkerID      string     `bun:"worker_id"`
 	EnvName       string     `bun:"env_name"`
 	VersionID     string     `bun:"version_id"`
 	OperationID   string     `bun:"operation_id"`
@@ -218,7 +218,7 @@ type Operation struct {
 	OperationID        string          `bun:"operation_id,pk"`
 	Kind               string          `bun:"kind"`
 	OrgID              string          `bun:"org_id"`
-	ServiceID          string          `bun:"service_id"`
+	WorkerID           string          `bun:"worker_id"`
 	EnvName            string          `bun:"env_name"`
 	State              string          `bun:"state"`
 	BuildID            string          `bun:"build_id"`
@@ -242,7 +242,7 @@ type Operation struct {
 
 type History struct {
 	bun.BaseModel `bun:"table:krun_worker_history,alias:krun_worker_history"`
-	ServiceID     string    `bun:"service_id,pk"`
+	WorkerID      string    `bun:"worker_id,pk"`
 	EnvName       string    `bun:"env_name,pk"`
 	Revision      int       `bun:"revision,pk"`
 	VersionID     string    `bun:"version_id"`
@@ -263,7 +263,7 @@ type Script struct {
 	bun.BaseModel   `bun:"table:krun_worker_scripts,alias:krun_worker_scripts"`
 	OrgID           string    `bun:"org_id,pk"`
 	ScriptName      string    `bun:"script_name,pk"`
-	ServiceID       string    `bun:"service_id"`
+	WorkerID        string    `bun:"worker_id"`
 	WorkersDev      bool      `bun:"workers_dev"`
 	PreviewsEnabled bool      `bun:"previews_enabled"`
 	CreatedAt       time.Time `bun:"created_at"`
@@ -282,7 +282,7 @@ type Bucket struct {
 
 type EnvironmentR2 struct {
 	bun.BaseModel `bun:"table:krun_worker_environment_r2,alias:krun_worker_environment_r2"`
-	ServiceID     string `bun:"service_id,pk"`
+	WorkerID      string `bun:"worker_id,pk"`
 	EnvName       string `bun:"env_name,pk"`
 	Name          string `bun:"name,pk"`
 	BucketID      string `bun:"bucket_id"`

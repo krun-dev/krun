@@ -27,15 +27,15 @@ func TestVersionUploadFreezesConfigurationWithoutDeploying(t *testing.T) {
 		t.Fatal("version snapshot not created")
 	}
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
-		env := st.Workers.Services["svc-a"].Environments["production"]
+		env := st.Workers.Workers["svc-a"].Environments["production"]
 		if env.Version != active.ID || len(st.Workers.Operations) != 0 || len(st.Workers.Deployments) != 0 {
 			t.Fatal("upload changed traffic")
 		}
 		env.Variables = map[string]any{"PLAIN": "changed after upload"}
 		env.ConfigRevision++
-		service := st.Workers.Services["svc-a"]
+		service := st.Workers.Workers["svc-a"]
 		service.Environments["production"] = env
-		st.Workers.Services["svc-a"] = service
+		st.Workers.Workers["svc-a"] = service
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -67,13 +67,13 @@ func TestBuildDeploymentFreezesJSONAndVersionMetadata(t *testing.T) {
 	server, store, base := workerTestServer(t)
 	seedPublishedWorker(t, store)
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
-		service := st.Workers.Services["svc-a"]
+		service := st.Workers.Workers["svc-a"]
 		env := service.Environments["production"]
 		env.VersionMetadata = "META"
 		env.Variables = map[string]any{"CONFIG": map[string]any{"nullable": nil, "items": []any{true, "two"}}}
 		service.Environments["production"] = env
-		st.Workers.Services["svc-a"] = service
-		st.Workers.Builds["build-meta"] = WorkerBuild{ID: "build-meta", Organization: "org-a", Service: "svc-a", Environment: "production", State: "succeeded", Artifact: "art_secret", Created: now()}
+		st.Workers.Workers["svc-a"] = service
+		st.Workers.Builds["build-meta"] = WorkerBuild{ID: "build-meta", Organization: "org-a", Worker: "svc-a", Environment: "production", State: "succeeded", Artifact: "art_secret", Created: now()}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -114,7 +114,7 @@ func TestPreviewsBaseSecretsAreCopiedOnlyAtCreation(t *testing.T) {
 		}
 	}
 	if err := store.View(context.Background(), PartitionWorkers, func(st *State) error {
-		service := st.Workers.Services["svc-a"]
+		service := st.Workers.Workers["svc-a"]
 		a, b := service.Environments["first"], service.Environments["second"]
 		if a.SecretVersions["apiToken"] == "" || a.SecretVersions["apiToken"] == b.SecretVersions["apiToken"] {
 			t.Fatal("active preview followed base changes")
@@ -136,16 +136,16 @@ func TestPinnedDeploymentRoutesKeepTheirVersion(t *testing.T) {
 	var oldHost string
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
 		at := time.Now().UTC()
-		old := domain.WorkerDeployment{ID: "dep-first", Organization: "org-a", Service: "svc-a", Environment: "production", Version: active.ID, Operation: "op-first", Created: at, Expires: at.Add(time.Hour), Committed: &at}
+		old := domain.WorkerDeployment{ID: "dep-first", Organization: "org-a", Worker: "svc-a", Environment: "production", Version: active.ID, Operation: "op-first", Created: at, Expires: at.Add(time.Hour), Committed: &at}
 		st.Workers.Deployments[old.ID] = old
-		service := st.Workers.Services["svc-a"]
+		service := st.Workers.Workers["svc-a"]
 		env := service.Environments["production"]
 		newVersion := active
 		newVersion.ID = "new-version"
 		st.Workers.Versions[newVersion.ID] = newVersion
 		env.Version = newVersion.ID
 		service.Environments["production"] = env
-		st.Workers.Services["svc-a"] = service
+		st.Workers.Workers["svc-a"] = service
 		projection := workerapp.WorkerConfigFromState(st, server.Config.Workers)
 		for _, route := range projection.Routes {
 			if strings.Contains(route.Host, workerapp.DeploymentEnvironment(old.ID)) {
@@ -159,7 +159,7 @@ func TestPinnedDeploymentRoutesKeepTheirVersion(t *testing.T) {
 			t.Fatal("pinned route missing")
 		}
 		delete(service.Environments, "production")
-		st.Workers.Services["svc-a"] = service
+		st.Workers.Workers["svc-a"] = service
 		projection = workerapp.WorkerConfigFromState(st, server.Config.Workers)
 		for _, route := range projection.Routes {
 			if route.Host == oldHost {

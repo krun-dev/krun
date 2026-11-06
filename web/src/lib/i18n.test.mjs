@@ -76,14 +76,14 @@ test("language switches persist, interpolate data safely, and preserve policy id
     t("通过 {{name}} 登录", { name: "团队 <script>" }),
     "Sign in with 团队 <script>",
   );
-  assert.equal(actionLabel("service.version.read"), "Read Service Version");
+  assert.equal(actionLabel("worker.version.read"), "Read Worker Version");
   assert.equal(t("Permission denied"), "Permission denied");
   const selections = initialSelections();
-  selections.service.actions = ["service.read"];
+  selections.worker.actions = ["worker.read"];
   assert.deepEqual(
     buildPolicy(selections, ["production"], "org_测试", false).statements[0]
       .actions,
-    ["service.read"],
+    ["worker.read"],
   );
   await setLanguage("zh-CN");
   assert.equal(t("Create organization"), "创建组织");

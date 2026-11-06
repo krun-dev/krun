@@ -31,8 +31,8 @@ func fixture() (*State, User, User) {
 	st.Members[memberKey("org-a", viewer.ID)] = Member{Organization: "org-a", User: viewer.ID}
 	st.Assignments["admin"] = Assignment{ID: "admin", SubjectKind: "user", SubjectID: admin.ID, Role: "system_admin", ScopeKind: "system", ScopeID: "system"}
 	st.Assignments["viewer"] = Assignment{ID: "viewer", SubjectKind: "user", SubjectID: viewer.ID, Role: "viewer", ScopeKind: "organization", ScopeID: "org-a"}
-	st.Resources["svc-a"] = Resource{ID: "svc-a", Kind: "service", Organization: "org-a", Name: "A", Revision: 1}
-	st.Resources["svc-b"] = Resource{ID: "svc-b", Kind: "service", Organization: "org-b", Name: "B", Revision: 1}
+	st.Resources["svc-a"] = Resource{ID: "svc-a", Kind: "worker", Organization: "org-a", Name: "A", Revision: 1}
+	st.Resources["svc-b"] = Resource{ID: "svc-b", Kind: "worker", Organization: "org-b", Name: "B", Revision: 1}
 	return st, admin, viewer
 }
 
@@ -73,7 +73,7 @@ func TestAPIValidationAndLastAdmin(t *testing.T) {
 	tests := []struct {
 		method, path, token, raw string
 		status                   int
-	}{{"GET", "/api/v1/orgs", "", "", 401}, {"GET", "/api/v1/orgs/org-b/members", "krun_cli_viewer", "", 403}, {"POST", "/api/v1/orgs/org-a/role-assignments", "krun_cli_admin", `{"subject_kind":"user","subject_id":"viewer","role_id":"system_admin","scope_kind":"system","scope_id":"system","conditions":{}}`, 422}, {"POST", "/api/v1/orgs", "krun_cli_admin", `{"name":"A","name":"B"}`, 400}, {"POST", "/api/v1/orgs", "krun_cli_admin", `{"name":"A","owner_user_id":"viewer"}`, 400}, {"PATCH", "/api/v1/system/users/admin", "krun_cli_admin", `{"status":"disabled"}`, 409}, {"DELETE", "/api/v1/system/role-assignments/admin", "krun_cli_admin", "", 409}, {"POST", "/api/v1/authz/check", "krun_cli_admin", `{"action":"service.read","resource_kind":"service","resource_id":"svc-a","principal_id":"admin"}`, 400}, {"GET", "/api/v1/orgs/org-b/services/svc-a", "krun_cli_admin", "", 404}}
+	}{{"GET", "/api/v1/orgs", "", "", 401}, {"GET", "/api/v1/orgs/org-b/members", "krun_cli_viewer", "", 403}, {"POST", "/api/v1/orgs/org-a/role-assignments", "krun_cli_admin", `{"subject_kind":"user","subject_id":"viewer","role_id":"system_admin","scope_kind":"system","scope_id":"system","conditions":{}}`, 422}, {"POST", "/api/v1/orgs", "krun_cli_admin", `{"name":"A","name":"B"}`, 400}, {"POST", "/api/v1/orgs", "krun_cli_admin", `{"name":"A","owner_user_id":"viewer"}`, 400}, {"PATCH", "/api/v1/system/users/admin", "krun_cli_admin", `{"status":"disabled"}`, 409}, {"DELETE", "/api/v1/system/role-assignments/admin", "krun_cli_admin", "", 409}, {"POST", "/api/v1/authz/check", "krun_cli_admin", `{"action":"worker.read","resource_kind":"worker","resource_id":"svc-a","principal_id":"admin"}`, 400}, {"GET", "/api/v1/orgs/org-b/workers/svc-a", "krun_cli_admin", "", 404}}
 	for _, tc := range tests {
 		t.Run(tc.path+tc.method+tc.raw, func(t *testing.T) {
 			w := request(s, tc.method, tc.path, tc.token, tc.raw)
@@ -92,7 +92,7 @@ func TestAPIValidationAndLastAdmin(t *testing.T) {
 
 func TestAPIKeyLifecycleAndImmediateUserRevocation(t *testing.T) {
 	s, store := testServer(t)
-	raw := `{"name":"test","expires_in":3600,"policy":{"schema_version":1,"statements":[{"effect":"allow","actions":["service.read"],"resource":{"organization_id":"org-a","kind":"service","ids":["svc-a"]},"conditions":{}}]}}`
+	raw := `{"name":"test","expires_in":3600,"policy":{"schema_version":1,"statements":[{"effect":"allow","actions":["worker.read"],"resource":{"organization_id":"org-a","kind":"worker","ids":["svc-a"]},"conditions":{}}]}}`
 	w := request(s, "POST", "/api/v1/orgs/org-a/api-keys", "krun_cli_viewer", raw)
 	if w.Code != 201 {
 		t.Fatal(w.Code, w.Body.String())
@@ -101,10 +101,10 @@ func TestAPIKeyLifecycleAndImmediateUserRevocation(t *testing.T) {
 	if e := json.Unmarshal(w.Body.Bytes(), &issued); e != nil {
 		t.Fatal(e)
 	}
-	if request(s, "GET", "/api/v1/orgs/org-a/services/svc-a", issued.Key, "").Code != 200 {
+	if request(s, "GET", "/api/v1/orgs/org-a/workers/svc-a", issued.Key, "").Code != 200 {
 		t.Fatal("exact key cannot read")
 	}
-	if request(s, "GET", "/api/v1/orgs/org-b/services/svc-b", issued.Key, "").Code != 404 {
+	if request(s, "GET", "/api/v1/orgs/org-b/workers/svc-b", issued.Key, "").Code != 404 {
 		t.Fatal("key escaped organization")
 	}
 	if request(s, "POST", "/api/v1/orgs/org-a/groups", issued.Key, `{"name":"x"}`).Code != 403 {
@@ -115,7 +115,7 @@ func TestAPIKeyLifecycleAndImmediateUserRevocation(t *testing.T) {
 		t.Fatal("secret leaked in metadata")
 	}
 	_ = store.Update(context.Background(), PartitionAll, func(st *State) error { delete(st.Assignments, "viewer"); return nil })
-	if request(s, "GET", "/api/v1/orgs/org-a/services/svc-a", issued.Key, "").Code != 404 {
+	if request(s, "GET", "/api/v1/orgs/org-a/workers/svc-a", issued.Key, "").Code != 404 {
 		t.Fatal("removed role remained active")
 	}
 	_ = store.Update(context.Background(), PartitionAll, func(st *State) error { k := st.Keys[issued.ID]; k.Revoked = true; st.Keys[k.ID] = k; return nil })

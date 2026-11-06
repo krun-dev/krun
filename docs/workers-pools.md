@@ -42,7 +42,7 @@ Version 固定代码和配置，不携带 pool；路由和内部制品访问根�
 
 ## 入口与域名
 
-业务 host 为 `w-<service-hash>-<environment>.<domain>`。
+业务 host 为 `w-<worker-hash>-<environment>.<domain>`。
 控制面按 `(pool, domain)` 协调共享通配 HTTPRoute，后端是该池 serving Service，
 因此网关资源数量由基础设施目录决定。静态资产按 domain 单独协调。
 

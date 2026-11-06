@@ -48,7 +48,7 @@ func TestPostgresAssetUploadCapabilityAndRetention(t *testing.T) {
 	controller := &workerapp.Controller{Service: &workerapp.Service{Store: store}}
 	raw := []byte("fixture")
 	hash := workerapp.AssetUploadHash("fixture.txt", raw)
-	out, err := controller.StartAssetUpload(ctx, workerapp.ServiceRef{Organization: "tenant", Service: "worker"}, map[string]workerapp.AssetUploadFile{"/fixture.txt": {Hash: hash, Size: len(raw)}, "/copy.txt": {Hash: hash, Size: len(raw)}})
+	out, err := controller.StartAssetUpload(ctx, workerapp.WorkerRef{Organization: "tenant", Worker: "worker"}, map[string]workerapp.AssetUploadFile{"/fixture.txt": {Hash: hash, Size: len(raw)}, "/copy.txt": {Hash: hash, Size: len(raw)}})
 	if err != nil {
 		t.Fatal(err)
 	}

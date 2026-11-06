@@ -14,11 +14,11 @@ import (
 func TestPostgresBuildClaimIsExclusive(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
-	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_worker_services (service_id, org_id) VALUES ('svc-1','org-1')`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_workers (worker_id, org_id) VALUES ('svc-1','org-1')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
-		st.Workers.Builds["bld-1"] = WorkerBuild{ID: "bld-1", Organization: "org-1", Service: "svc-1", Environment: "production", State: "queued", Created: now()}
+		st.Workers.Builds["bld-1"] = WorkerBuild{ID: "bld-1", Organization: "org-1", Worker: "svc-1", Environment: "production", State: "queued", Created: now()}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestPostgresBuildClaimIsExclusive(t *testing.T) {
 func TestPostgresWorkerIdempotencyClaimIsAtomic(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
-	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_worker_services (service_id, org_id) VALUES ('svc-1','org-1')`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_workers (worker_id, org_id) VALUES ('svc-1','org-1')`); err != nil {
 		t.Fatal(err)
 	}
 	ready := make(chan struct{}, 2)
@@ -73,7 +73,7 @@ func TestPostgresWorkerIdempotencyClaimIsAtomic(t *testing.T) {
 	for _, id := range []string{"bld-a", "bld-b"} {
 		go func(id string) {
 			errs <- store.Update(ctx, PartitionWorkers, func(st *State) error {
-				st.Workers.Builds[id] = WorkerBuild{ID: id, Organization: "org-1", Service: "svc-1", Environment: "production", State: "queued", Created: now()}
+				st.Workers.Builds[id] = WorkerBuild{ID: id, Organization: "org-1", Worker: "svc-1", Environment: "production", State: "queued", Created: now()}
 				st.Workers.Idempotency["same-key"] = WorkerIdempotency{Digest: "same-request", ID: id}
 				ready <- struct{}{}
 				<-start
@@ -111,8 +111,8 @@ func TestPostgresWorkerRepositoryRevisionCASIsExclusive(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
-		st.Workers.Services["svc-repository-cas"] = WorkerService{
-			Service: "svc-repository-cas", Organization: "org-1", Domains: []string{"internal"},
+		st.Workers.Workers["svc-repository-cas"] = Worker{
+			Worker: "svc-repository-cas", Organization: "org-1", Domains: []string{"internal"},
 			Environments: map[string]WorkerEnvironment{appconfig.WorkerBaseline: {
 				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]any{},
 			}},
@@ -127,13 +127,13 @@ func TestPostgresWorkerRepositoryRevisionCASIsExclusive(t *testing.T) {
 	for _, repository := range []string{"team/alpha", "team/bravo"} {
 		go func(repository string) {
 			errs <- store.Update(ctx, PartitionWorkers, func(st *State) error {
-				service := st.Workers.Services["svc-repository-cas"]
+				service := st.Workers.Workers["svc-repository-cas"]
 				if service.RepositoryRevision != 0 {
 					return problem(409, "REVISION_CONFLICT", "test did not load the shared pre-image")
 				}
 				service.Repository = &WorkerRepositorySource{ProviderID: "github", Repository: repository, Ref: "main"}
 				service.RepositoryRevision++
-				st.Workers.Services[service.Service] = service
+				st.Workers.Workers[service.Worker] = service
 				ready <- struct{}{}
 				<-start
 				return nil
@@ -148,7 +148,7 @@ func TestPostgresWorkerRepositoryRevisionCASIsExclusive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := st.Workers.Services["svc-repository-cas"]
+	service := st.Workers.Workers["svc-repository-cas"]
 	if service.RepositoryRevision != 1 || service.Repository == nil {
 		t.Fatalf("repository CAS result = %+v", service)
 	}
@@ -158,8 +158,8 @@ func TestPostgresWorkerEnvironmentConfigCASIsExclusive(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
-		st.Workers.Services["svc-environment-cas"] = WorkerService{
-			Service: "svc-environment-cas", Organization: "org-1", Domains: []string{"internal"},
+		st.Workers.Workers["svc-environment-cas"] = Worker{
+			Worker: "svc-environment-cas", Organization: "org-1", Domains: []string{"internal"},
 			Environments: map[string]WorkerEnvironment{appconfig.WorkerBaseline: {
 				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]any{},
 			}},
@@ -174,7 +174,7 @@ func TestPostgresWorkerEnvironmentConfigCASIsExclusive(t *testing.T) {
 	for _, value := range []string{"alpha", "bravo"} {
 		go func(value string) {
 			errs <- store.Update(ctx, PartitionWorkers, func(st *State) error {
-				service := st.Workers.Services["svc-environment-cas"]
+				service := st.Workers.Workers["svc-environment-cas"]
 				environment := service.Environments[appconfig.WorkerBaseline]
 				if environment.ConfigRevision != 1 {
 					return problem(409, "REVISION_CONFLICT", "test did not load the shared pre-image")
@@ -182,7 +182,7 @@ func TestPostgresWorkerEnvironmentConfigCASIsExclusive(t *testing.T) {
 				environment.Variables = map[string]any{"VALUE": value}
 				environment.ConfigRevision++
 				service.Environments[appconfig.WorkerBaseline] = environment
-				st.Workers.Services[service.Service] = service
+				st.Workers.Workers[service.Worker] = service
 				ready <- struct{}{}
 				<-start
 				return nil
@@ -197,7 +197,7 @@ func TestPostgresWorkerEnvironmentConfigCASIsExclusive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	environment := st.Workers.Services["svc-environment-cas"].Environments[appconfig.WorkerBaseline]
+	environment := st.Workers.Workers["svc-environment-cas"].Environments[appconfig.WorkerBaseline]
 	if environment.ConfigRevision != 2 || (environment.Variables["VALUE"] != "alpha" && environment.Variables["VALUE"] != "bravo") {
 		t.Fatalf("environment CAS result = %+v", environment)
 	}
@@ -207,8 +207,8 @@ func TestPostgresWorkerDomainsCASIsExclusive(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
-		st.Workers.Services["svc-domains-cas"] = WorkerService{
-			Service: "svc-domains-cas", Organization: "org-1", Domains: []string{"internal"},
+		st.Workers.Workers["svc-domains-cas"] = Worker{
+			Worker: "svc-domains-cas", Organization: "org-1", Domains: []string{"internal"},
 			Environments: map[string]WorkerEnvironment{appconfig.WorkerBaseline: {
 				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]any{},
 			}},
@@ -224,13 +224,13 @@ func TestPostgresWorkerDomainsCASIsExclusive(t *testing.T) {
 	for _, domain := range []string{"alpha", "bravo"} {
 		go func(domain string) {
 			errs <- store.Update(ctx, PartitionWorkers, func(st *State) error {
-				service := st.Workers.Services["svc-domains-cas"]
+				service := st.Workers.Workers["svc-domains-cas"]
 				if service.DomainsRevision != 0 {
 					return problem(409, "REVISION_CONFLICT", "test did not load the shared pre-image")
 				}
 				service.Domains = []string{domain}
 				service.DomainsRevision++
-				st.Workers.Services[service.Service] = service
+				st.Workers.Workers[service.Worker] = service
 				ready <- struct{}{}
 				<-start
 				return nil
@@ -245,7 +245,7 @@ func TestPostgresWorkerDomainsCASIsExclusive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := st.Workers.Services["svc-domains-cas"]
+	service := st.Workers.Workers["svc-domains-cas"]
 	if service.DomainsRevision != 1 || len(service.Domains) != 1 || service.Domains[0] != "alpha" && service.Domains[0] != "bravo" {
 		t.Fatalf("domain CAS result = %+v", service)
 	}
@@ -258,8 +258,8 @@ func TestPostgresWorkerPreviewSetCASPreventsConcurrentLimitOverflow(t *testing.T
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
-		st.Workers.Services["svc-preview-cas"] = WorkerService{
-			Service: "svc-preview-cas", Organization: "org-1", Domains: []string{"internal"},
+		st.Workers.Workers["svc-preview-cas"] = Worker{
+			Worker: "svc-preview-cas", Organization: "org-1", Domains: []string{"internal"},
 			Environments: map[string]WorkerEnvironment{appconfig.WorkerBaseline: {
 				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]any{},
 			}},
@@ -275,7 +275,7 @@ func TestPostgresWorkerPreviewSetCASPreventsConcurrentLimitOverflow(t *testing.T
 	for _, preview := range []string{"alpha", "bravo"} {
 		go func(preview string) {
 			errs <- store.Update(ctx, PartitionWorkers, func(st *State) error {
-				service := st.Workers.Services["svc-preview-cas"]
+				service := st.Workers.Workers["svc-preview-cas"]
 				// This models preview_limit=1: both replicas observe zero slots
 				// before either transaction commits.
 				if previewCount(service.Environments) != 0 {
@@ -285,7 +285,7 @@ func TestPostgresWorkerPreviewSetCASPreventsConcurrentLimitOverflow(t *testing.T
 					Name: preview, Enabled: true, ConfigRevision: 1, Variables: map[string]any{},
 				}
 				service.PreviewRevision++
-				st.Workers.Services[service.Service] = service
+				st.Workers.Workers[service.Worker] = service
 				ready <- struct{}{}
 				<-start
 				return nil
@@ -300,7 +300,7 @@ func TestPostgresWorkerPreviewSetCASPreventsConcurrentLimitOverflow(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := st.Workers.Services["svc-preview-cas"]
+	service := st.Workers.Workers["svc-preview-cas"]
 	if service.PreviewRevision != 1 || previewCount(service.Environments) != 1 {
 		t.Fatalf("preview CAS result = %+v", service)
 	}
@@ -339,10 +339,10 @@ func assertOneWorkerCASWinner(t *testing.T, errs <-chan error) {
 func TestPostgresConfigRevisionCASIsExclusive(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
-	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_dirty(service_id) VALUES('site-cas')`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_dirty(worker_id) VALUES('site-cas')`); err != nil {
 		t.Fatal(err)
 	}
-	dirty, err := store.DirtyWorkerServices(ctx)
+	dirty, err := store.DirtyWorkers(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +355,7 @@ func TestPostgresConfigRevisionCASIsExclusive(t *testing.T) {
 	for range 2 {
 		go func() {
 			<-start
-			_, won, err := store.AppendConfigDelta(ctx, 0, dirty, []workerConfigOp{{Type: "route_upsert", Pool: "default", Host: "site.workers.test", Route: &workerConfigRoute{Service: "site-cas", Host: "site.workers.test", Pool: "default"}}})
+			_, won, err := store.AppendConfigDelta(ctx, 0, dirty, []workerConfigOp{{Type: "route_upsert", Pool: "default", Host: "site.workers.test", Route: &workerConfigRoute{Worker: "site-cas", Host: "site.workers.test", Pool: "default"}}})
 			results <- result{won, err}
 		}()
 	}
@@ -383,7 +383,7 @@ func TestPostgresOperationClaimIsExclusive(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
-		st.Workers.Operations["op-1"] = WorkerOperation{ID: "op-1", Kind: "publish", Organization: "org-1", Service: "svc-1", Environment: "production", State: "queued", Created: now()}
+		st.Workers.Operations["op-1"] = WorkerOperation{ID: "op-1", Kind: "publish", Organization: "org-1", Worker: "svc-1", Environment: "production", State: "queued", Created: now()}
 		st.Workers.OperationPrivate["op-1"] = WorkerOperationPrivate{Actor: WorkerActor{User: "user-1", AuthVersion: 1}}
 		return nil
 	}); err != nil {
@@ -437,16 +437,16 @@ func TestPostgresCommitRequiresMatchingRevision(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
-		st.Workers.Services["svc-1"] = WorkerService{
-			Service: "svc-1", Organization: "org-1", Domains: []string{"internal"},
+		st.Workers.Workers["svc-1"] = Worker{
+			Worker: "svc-1", Organization: "org-1", Domains: []string{"internal"},
 			Environments: map[string]WorkerEnvironment{"production": {Name: "production", Enabled: true, Revision: 3, ConfigRevision: 1}},
 		}
-		st.Workers.Operations["op-1"] = WorkerOperation{ID: "op-1", Kind: "publish", Organization: "org-1", Service: "svc-1", Environment: "production", State: "validating", Version: "rel-1", ExpectedRevision: 2, Created: now()}
+		st.Workers.Operations["op-1"] = WorkerOperation{ID: "op-1", Kind: "publish", Organization: "org-1", Worker: "svc-1", Environment: "production", State: "validating", Version: "rel-1", ExpectedRevision: 2, Created: now()}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	committed, err := store.CommitOperation(ctx, WorkerOperation{ID: "op-1", Service: "svc-1", Environment: "production", Version: "rel-1", ExpectedRevision: 2})
+	committed, err := store.CommitOperation(ctx, WorkerOperation{ID: "op-1", Worker: "svc-1", Environment: "production", Version: "rel-1", ExpectedRevision: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,7 +460,7 @@ func TestPostgresCommitRequiresMatchingRevision(t *testing.T) {
 	if got := st.Workers.Operations["op-1"].State; got != "failed" {
 		t.Errorf("operation state = %q, want failed", got)
 	}
-	if got := st.Workers.Services["svc-1"].Environments["production"].Version; got != "" {
+	if got := st.Workers.Workers["svc-1"].Environments["production"].Version; got != "" {
 		t.Errorf("version = %q, want it untouched", got)
 	}
 }
@@ -514,7 +514,7 @@ func TestPostgresDeleteCascadesExplicitly(t *testing.T) {
 	if err := store.Update(ctx, PartitionIAM, func(st *State) error {
 		st.Organizations["org-1"] = Organization{ID: "org-1", Name: "One"}
 		st.Members[memberKey("org-1", "user-1")] = Member{Organization: "org-1", User: "user-1"}
-		st.Resources["svc-1"] = Resource{ID: "svc-1", Kind: "service", Organization: "org-1", Name: "svc"}
+		st.Resources["svc-1"] = Resource{ID: "svc-1", Kind: "worker", Organization: "org-1", Name: "svc"}
 		st.Assignments["a-1"] = Assignment{ID: "a-1", SubjectKind: "user", SubjectID: "user-1", Role: "viewer", ScopeKind: "organization", ScopeID: "org-1", Revision: 1}
 		return nil
 	}); err != nil {
@@ -548,7 +548,7 @@ func TestPostgresRetentionPrunesBuildsAndSessions(t *testing.T) {
 	old := now().Add(-40 * 24 * time.Hour)
 	if err := store.Update(ctx, PartitionIAM, func(st *State) error {
 		st.Organizations["o"] = Organization{ID: "o", Name: "Org"}
-		st.Resources["s"] = Resource{ID: "s", Kind: "service", Organization: "o", Name: "Service"}
+		st.Resources["s"] = Resource{ID: "s", Kind: "worker", Organization: "o", Name: "Worker"}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -556,11 +556,11 @@ func TestPostgresRetentionPrunesBuildsAndSessions(t *testing.T) {
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		for i := 0; i < 5; i++ {
 			id := "bld-" + string(rune('a'+i))
-			st.Workers.Builds[id] = WorkerBuild{ID: id, Organization: "o", Service: "s", Environment: "production", State: "succeeded", Created: old.Add(time.Duration(i) * time.Minute)}
+			st.Workers.Builds[id] = WorkerBuild{ID: id, Organization: "o", Worker: "s", Environment: "production", State: "succeeded", Created: old.Add(time.Duration(i) * time.Minute)}
 			st.Workers.BuildPrivate[id] = WorkerBuildPrivate{Actor: WorkerActor{User: "u"}, Log: "log"}
 		}
 		st.Workers.Artifacts["art-old"] = WorkerArtifact{ID: "art-old", Organization: "o", State: "finalized", ArchiveDigest: "archive-old", ObjectKey: "v1/o/old.tar.gz", StorageLocation: "test", Bucket: "test", Created: old}
-		st.Workers.Versions["rel-old"] = WorkerVersion{ID: "rel-old", Organization: "o", Service: "s", Environment: "production", Artifact: "art-old", ArchiveDigest: "archive-old", Created: old}
+		st.Workers.Versions["rel-old"] = WorkerVersion{ID: "rel-old", Organization: "o", Worker: "s", Environment: "production", Artifact: "art-old", ArchiveDigest: "archive-old", Created: old}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -605,19 +605,19 @@ func TestPostgresRetentionPrunesBuildsAndSessions(t *testing.T) {
 	}
 }
 
-func TestPostgresRetentionReconcilesDeletedWorkerService(t *testing.T) {
+func TestPostgresRetentionReconcilesDeletedWorker(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	if err := store.Update(ctx, PartitionIAM, func(st *State) error {
 		st.Organizations["orphan-org"] = Organization{ID: "orphan-org", Name: "Org"}
-		st.Resources["orphan-service"] = Resource{ID: "orphan-service", Kind: "service", Organization: "orphan-org", Name: "Service"}
+		st.Resources["orphan-service"] = Resource{ID: "orphan-service", Kind: "worker", Organization: "orphan-org", Name: "Worker"}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
-		st.Workers.Services["orphan-service"] = WorkerService{Service: "orphan-service", Organization: "orphan-org", Environments: map[string]WorkerEnvironment{"production": {Name: "production", Enabled: true}}}
-		st.Workers.Builds["orphan-build"] = WorkerBuild{ID: "orphan-build", Organization: "orphan-org", Service: "orphan-service", Environment: "production", State: "failed", Created: now()}
+		st.Workers.Workers["orphan-service"] = Worker{Worker: "orphan-service", Organization: "orphan-org", Environments: map[string]WorkerEnvironment{"production": {Name: "production", Enabled: true}}}
+		st.Workers.Builds["orphan-build"] = WorkerBuild{ID: "orphan-build", Organization: "orphan-org", Worker: "orphan-service", Environment: "production", State: "failed", Created: now()}
 		st.Workers.BuildPrivate["orphan-build"] = WorkerBuildPrivate{Actor: WorkerActor{User: "u"}}
 		return nil
 	}); err != nil {
@@ -633,10 +633,10 @@ func TestPostgresRetentionReconcilesDeletedWorkerService(t *testing.T) {
 		t.Fatal(err)
 	}
 	var services, builds, private int
-	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_worker_services WHERE service_id='orphan-service'`).Scan(&services); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_workers WHERE worker_id='orphan-service'`).Scan(&services); err != nil {
 		t.Fatal(err)
 	}
-	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_worker_builds WHERE service_id='orphan-service'`).Scan(&builds); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_worker_builds WHERE worker_id='orphan-service'`).Scan(&builds); err != nil {
 		t.Fatal(err)
 	}
 	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_worker_build_private WHERE build_id='orphan-build'`).Scan(&private); err != nil {
@@ -653,7 +653,7 @@ func TestPostgresArtifactGCWaitsForRetainedBuild(t *testing.T) {
 	old := now().Add(-workerArtifactRetain - time.Hour)
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Artifacts["art-held"] = WorkerArtifact{ID: "art-held", Organization: "org", State: "finalized", ArchiveDigest: "digest", ObjectKey: "v1/org/digest/bundle.tar.gz", StorageLocation: "test", Bucket: "test", Created: old}
-		st.Workers.Builds["build-held"] = WorkerBuild{ID: "build-held", Organization: "org", Service: "service", Environment: "production", State: "succeeded", Artifact: "art-held", Created: old}
+		st.Workers.Builds["build-held"] = WorkerBuild{ID: "build-held", Organization: "org", Worker: "worker", Environment: "production", State: "succeeded", Artifact: "art-held", Created: old}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -683,13 +683,13 @@ func TestPostgresPendingWorkIncludesBuildActor(t *testing.T) {
 	if err := store.Update(context.Background(), PartitionAll, func(st *State) error {
 		st.Users["u1"] = User{ID: "u1", Source: "local", Subject: "u1", Status: "active", AuthVersion: 3}
 		st.Organizations["o1"] = Organization{ID: "o1", Name: "O"}
-		st.Resources["s1"] = Resource{ID: "s1", Kind: "service", Organization: "o1", Revision: 1}
-		st.Workers.Services["s1"] = WorkerService{Service: "s1", Organization: "o1", Domains: []string{"internal"}, Environments: map[string]WorkerEnvironment{"production": {Name: "production", Enabled: true, ConfigRevision: 1}}}
-		st.Workers.Builds["b1"] = WorkerBuild{ID: "b1", Organization: "o1", Service: "s1", Environment: "production", State: "queued", Created: now()}
+		st.Resources["s1"] = Resource{ID: "s1", Kind: "worker", Organization: "o1", Revision: 1}
+		st.Workers.Workers["s1"] = Worker{Worker: "s1", Organization: "o1", Domains: []string{"internal"}, Environments: map[string]WorkerEnvironment{"production": {Name: "production", Enabled: true, ConfigRevision: 1}}}
+		st.Workers.Builds["b1"] = WorkerBuild{ID: "b1", Organization: "o1", Worker: "s1", Environment: "production", State: "queued", Created: now()}
 		st.Workers.BuildPrivate["b1"] = WorkerBuildPrivate{Actor: WorkerActor{User: "u1", AuthVersion: 3}, Files: map[string]string{"index.js": "x"}}
-		st.Workers.Versions["r1"] = WorkerVersion{ID: "r1", Organization: "o1", Service: "s1", Environment: "production", Artifact: "a1"}
+		st.Workers.Versions["r1"] = WorkerVersion{ID: "r1", Organization: "o1", Worker: "s1", Environment: "production", Artifact: "a1"}
 		st.Workers.Artifacts["a1"] = WorkerArtifact{ID: "a1", Organization: "o1", State: "finalized"}
-		st.Workers.Operations["op1"] = WorkerOperation{ID: "op1", Kind: "publish", Organization: "o1", Service: "s1", Environment: "production", State: "queued", Version: "r1", Created: now()}
+		st.Workers.Operations["op1"] = WorkerOperation{ID: "op1", Kind: "publish", Organization: "o1", Worker: "s1", Environment: "production", State: "queued", Version: "r1", Created: now()}
 		st.Workers.OperationPrivate["op1"] = WorkerOperationPrivate{Actor: WorkerActor{User: "u1", AuthVersion: 3}}
 		return nil
 	}); err != nil {
@@ -729,14 +729,14 @@ func TestPostgresCommitMarksStepsDone(t *testing.T) {
 		{Name: "synchronize", State: "pending"},
 	}
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
-		st.Workers.Services["s1"] = WorkerService{Service: "s1", Organization: "o1", Domains: []string{"internal"},
+		st.Workers.Workers["s1"] = Worker{Worker: "s1", Organization: "o1", Domains: []string{"internal"},
 			Environments: map[string]WorkerEnvironment{"production": {Name: "production", Enabled: true, ConfigRevision: 1}}}
-		st.Workers.Operations["op1"] = WorkerOperation{ID: "op1", Kind: "publish", Organization: "o1", Service: "s1", Environment: "production", State: "validating", Version: "r1", ExpectedRevision: 0, Steps: steps, Created: now()}
+		st.Workers.Operations["op1"] = WorkerOperation{ID: "op1", Kind: "publish", Organization: "o1", Worker: "s1", Environment: "production", State: "validating", Version: "r1", ExpectedRevision: 0, Steps: steps, Created: now()}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	committed, err := store.CommitOperation(ctx, WorkerOperation{ID: "op1", Service: "s1", Environment: "production", Version: "r1", ExpectedRevision: 0})
+	committed, err := store.CommitOperation(ctx, WorkerOperation{ID: "op1", Worker: "s1", Environment: "production", Version: "r1", ExpectedRevision: 0})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -47,7 +47,7 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 	if !ok {
 		return w.FailOperation(ctx, op.ID, "Version unavailable")
 	}
-	placement, placed := domain.ActiveWorkerPlacement(&state, version.Service)
+	placement, placed := domain.ActiveWorkerPlacement(&state, version.Worker)
 	pool, ok := w.Config.RuntimePool(placement.Pool)
 	if !placed || !ok {
 		return w.FailOperation(ctx, op.ID, "Runtime pool unavailable")
@@ -75,7 +75,7 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 			return w.FailOperation(ctx, op.ID, "Artifact validation failed: "+e.Error())
 		}
 		actor := state.OperationPrivate[op.ID].Actor
-		auth, e := w.AuthorizeActor(ctx, actor, op.Service, op.Environment, appconfig.WorkerOperationAction(op.Kind))
+		auth, e := w.AuthorizeActor(ctx, actor, op.Worker, op.Environment, appconfig.WorkerOperationAction(op.Kind))
 		if e != nil {
 			return e
 		}
@@ -176,7 +176,7 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 		}
 
 		actor := state.OperationPrivate[op.ID].Actor
-		auth, e := w.AuthorizeActor(ctx, actor, op.Service, op.Environment, appconfig.WorkerOperationAction(op.Kind))
+		auth, e := w.AuthorizeActor(ctx, actor, op.Worker, op.Environment, appconfig.WorkerOperationAction(op.Kind))
 		if e != nil {
 			return e
 		}
@@ -194,7 +194,7 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 
 	revision := int64(op.EdgeRevision)
 	if revision == 0 {
-		revision, e = w.PublishConfig(context.WithValue(ctx, storage.WorkerConfigPriorityKey{}, op.Service))
+		revision, e = w.PublishConfig(context.WithValue(ctx, storage.WorkerConfigPriorityKey{}, op.Worker))
 		if e != nil {
 			return w.NoteOperation(ctx, op.ID, "Committed; waiting for configuration publication")
 		}

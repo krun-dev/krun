@@ -52,7 +52,7 @@ func writeWorkersDiff(ctx context.Context, tx pgx.Tx, before, after *domain.Stat
 	if err := writeWorkerSecretVersions(ctx, tx, bw, aw, after.PendingWorkerSecrets); err != nil {
 		return err
 	}
-	if err := writeServices(ctx, tx, bw, aw); err != nil {
+	if err := writeWorkers(ctx, tx, bw, aw); err != nil {
 		return err
 	}
 	if err := writePlacements(ctx, tx, bw, aw); err != nil {
@@ -79,9 +79,9 @@ func writeWorkersDiff(ctx context.Context, tx pgx.Tx, before, after *domain.Stat
 	return nil
 }
 
-func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) error {
-	for id, svc := range aw.Services {
-		old, existed := bw.Services[id]
+func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) error {
+	for id, svc := range aw.Workers {
+		old, existed := bw.Workers[id]
 		repositoryChanged := !existed || old.RepositoryRevision != svc.RepositoryRevision || !reflect.DeepEqual(old.Repository, svc.Repository)
 		domainsChanged := existed && old.DomainsRevision != svc.DomainsRevision
 		profileChanged := existed && old.NetworkProfile != svc.NetworkProfile
@@ -96,9 +96,9 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 				repository = raw
 			}
 			if !existed {
-				tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_services
-					(service_id, org_id, network_profile, repository, repository_revision, domains_revision, preview_revision)
-					VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (service_id) DO NOTHING`, id, svc.Organization,
+				tag, err := tx.Exec(ctx, `INSERT INTO krun_workers
+					(worker_id, org_id, network_profile, repository, repository_revision, domains_revision, preview_revision)
+					VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (worker_id) DO NOTHING`, id, svc.Organization,
 					svc.NetworkProfile, repository, svc.RepositoryRevision, svc.DomainsRevision, svc.PreviewRevision)
 				if err != nil {
 					return err
@@ -117,9 +117,9 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 				if svc.RepositoryRevision != old.RepositoryRevision+1 {
 					return domain.Problem(409, "REVISION_CONFLICT", "Repository configuration changed")
 				}
-				tag, err := tx.Exec(ctx, `UPDATE krun_worker_services
+				tag, err := tx.Exec(ctx, `UPDATE krun_workers
 					SET repository=$2, repository_revision=$3, updated_at=now()
-					WHERE service_id=$1 AND repository_revision=$4`, id, repository, svc.RepositoryRevision, old.RepositoryRevision)
+					WHERE worker_id=$1 AND repository_revision=$4`, id, repository, svc.RepositoryRevision, old.RepositoryRevision)
 				if err != nil {
 					return err
 				}
@@ -132,9 +132,9 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 			if svc.DomainsRevision != old.DomainsRevision+1 {
 				return domain.Problem(409, "REVISION_CONFLICT", "Domain configuration changed")
 			}
-			tag, err := tx.Exec(ctx, `UPDATE krun_worker_services
+			tag, err := tx.Exec(ctx, `UPDATE krun_workers
 				SET domains_revision=$2, network_profile=$4, updated_at=now()
-				WHERE service_id=$1 AND domains_revision=$3`, id, svc.DomainsRevision, old.DomainsRevision, svc.NetworkProfile)
+				WHERE worker_id=$1 AND domains_revision=$3`, id, svc.DomainsRevision, old.DomainsRevision, svc.NetworkProfile)
 			if err != nil {
 				return err
 			}
@@ -143,8 +143,8 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 			}
 		}
 		if profileChanged && !domainsChanged {
-			tag, err := tx.Exec(ctx, `UPDATE krun_worker_services SET network_profile=$2, updated_at=now()
-				WHERE service_id=$1 AND network_profile=$3`, id, svc.NetworkProfile, old.NetworkProfile)
+			tag, err := tx.Exec(ctx, `UPDATE krun_workers SET network_profile=$2, updated_at=now()
+				WHERE worker_id=$1 AND network_profile=$3`, id, svc.NetworkProfile, old.NetworkProfile)
 			if err != nil {
 				return err
 			}
@@ -153,7 +153,7 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 			}
 		}
 		if domainsChanged {
-			if err := replaceServiceDomains(ctx, tx, id, svc.Domains); err != nil {
+			if err := replaceWorkerDomains(ctx, tx, id, svc.Domains); err != nil {
 				return err
 			}
 		}
@@ -161,9 +161,9 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 			if svc.PreviewRevision != old.PreviewRevision+1 {
 				return domain.Problem(409, "REVISION_CONFLICT", "Preview environments changed")
 			}
-			tag, err := tx.Exec(ctx, `UPDATE krun_worker_services
+			tag, err := tx.Exec(ctx, `UPDATE krun_workers
 				SET preview_revision=$2, updated_at=now()
-				WHERE service_id=$1 AND preview_revision=$3`, id, svc.PreviewRevision, old.PreviewRevision)
+				WHERE worker_id=$1 AND preview_revision=$3`, id, svc.PreviewRevision, old.PreviewRevision)
 			if err != nil {
 				return err
 			}
@@ -182,8 +182,8 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 			}
 			if !ok {
 				tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_environments
-					(service_id, env_name, enabled, config_revision, variables, deployment_revision, version_id, confirmed_version_id, version_metadata, assets_binding)
-					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (service_id, env_name) DO NOTHING`,
+					(worker_id, env_name, enabled, config_revision, variables, deployment_revision, version_id, confirmed_version_id, version_metadata, assets_binding)
+					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (worker_id, env_name) DO NOTHING`,
 					id, name, env.Enabled, env.ConfigRevision, variables, env.Revision, env.Version, env.Confirmed, env.VersionMetadata, env.AssetsBinding)
 				if err != nil {
 					return err
@@ -195,7 +195,7 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 				tag, err := tx.Exec(ctx, `UPDATE krun_worker_environments
 					SET enabled=$3, config_revision=$4, variables=$5, deployment_revision=$6,
 					    version_id=$7, confirmed_version_id=$8, version_metadata=$13, assets_binding=$14, updated_at=now()
-					WHERE service_id=$1 AND env_name=$2 AND config_revision=$9
+					WHERE worker_id=$1 AND env_name=$2 AND config_revision=$9
 					  AND deployment_revision=$10 AND version_id=$11 AND confirmed_version_id=$12`,
 					id, name, env.Enabled, env.ConfigRevision, variables, env.Revision, env.Version, env.Confirmed,
 					oldEnv.ConfigRevision, oldEnv.Revision, oldEnv.Version, oldEnv.Confirmed, env.VersionMetadata, env.AssetsBinding)
@@ -212,11 +212,11 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 		}
 		for name, oldEnv := range domain.StorageWorkerEnvironments(old) {
 			if _, ok := domain.StorageWorkerEnvironments(svc)[name]; !ok {
-				if _, err := tx.Exec(ctx, `DELETE FROM krun_worker_environment_secrets WHERE service_id=$1 AND env_name=$2`, id, name); err != nil {
+				if _, err := tx.Exec(ctx, `DELETE FROM krun_worker_environment_secrets WHERE worker_id=$1 AND env_name=$2`, id, name); err != nil {
 					return err
 				}
 				tag, err := tx.Exec(ctx, `DELETE FROM krun_worker_environments
-					WHERE service_id=$1 AND env_name=$2 AND config_revision=$3
+					WHERE worker_id=$1 AND env_name=$2 AND config_revision=$3
 					  AND deployment_revision=$4 AND version_id=$5 AND confirmed_version_id=$6`,
 					id, name, oldEnv.ConfigRevision, oldEnv.Revision, oldEnv.Version, oldEnv.Confirmed)
 				if err != nil {
@@ -228,20 +228,20 @@ func writeServices(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 			}
 		}
 	}
-	for id := range bw.Services {
-		if _, ok := aw.Services[id]; ok {
+	for id := range bw.Workers {
+		if _, ok := aw.Workers[id]; ok {
 			continue
 		}
 		for _, statement := range []string{
-			`DELETE FROM krun_worker_environment_secrets WHERE service_id=$1`,
-			`DELETE FROM krun_worker_service_domains WHERE service_id=$1`,
-			`DELETE FROM krun_worker_environments WHERE service_id=$1`,
+			`DELETE FROM krun_worker_environment_secrets WHERE worker_id=$1`,
+			`DELETE FROM krun_worker_domains WHERE worker_id=$1`,
+			`DELETE FROM krun_worker_environments WHERE worker_id=$1`,
 		} {
 			if _, err := tx.Exec(ctx, statement, id); err != nil {
 				return err
 			}
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM krun_worker_services WHERE service_id=$1`, id); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM krun_workers WHERE worker_id=$1`, id); err != nil {
 			return err
 		}
 	}
@@ -255,8 +255,8 @@ func writePlacements(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState)
 		if _, ok := aw.Placements[key]; ok {
 			continue
 		}
-		tag, err := tx.Exec(ctx, `DELETE FROM krun_worker_service_placements
-			WHERE service_id=$1 AND pool_id=$2 AND revision=$3`, placement.Service, placement.Pool, placement.Revision)
+		tag, err := tx.Exec(ctx, `DELETE FROM krun_worker_placements
+			WHERE worker_id=$1 AND pool_id=$2 AND revision=$3`, placement.Worker, placement.Pool, placement.Revision)
 		if err != nil {
 			return err
 		}
@@ -270,9 +270,9 @@ func writePlacements(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState)
 			continue
 		}
 		if !existed {
-			_, err := tx.Exec(ctx, `INSERT INTO krun_worker_service_placements
-				(service_id, pool_id, org_id, network_profile, role, state, revision, created_at, updated_at)
-				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, placement.Service, placement.Pool,
+			_, err := tx.Exec(ctx, `INSERT INTO krun_worker_placements
+				(worker_id, pool_id, org_id, network_profile, role, state, revision, created_at, updated_at)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, placement.Worker, placement.Pool,
 				placement.Organization, placement.NetworkProfile, placement.Role, placement.State,
 				placement.Revision, placement.Created, placement.Updated)
 			if err != nil {
@@ -280,9 +280,9 @@ func writePlacements(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState)
 			}
 			continue
 		}
-		tag, err := tx.Exec(ctx, `UPDATE krun_worker_service_placements
+		tag, err := tx.Exec(ctx, `UPDATE krun_worker_placements
 			SET org_id=$3, network_profile=$4, role=$5, state=$6, revision=$7, updated_at=$8
-			WHERE service_id=$1 AND pool_id=$2 AND revision=$9`, placement.Service, placement.Pool,
+			WHERE worker_id=$1 AND pool_id=$2 AND revision=$9`, placement.Worker, placement.Pool,
 			placement.Organization, placement.NetworkProfile, placement.Role, placement.State,
 			placement.Revision, placement.Updated, old.Revision)
 		if err != nil {
@@ -309,7 +309,7 @@ func sameWorkerPlacements(a, b map[string]domain.WorkerPlacement) bool {
 }
 
 func sameWorkerPlacement(a, b domain.WorkerPlacement) bool {
-	return a.Service == b.Service && a.Organization == b.Organization &&
+	return a.Worker == b.Worker && a.Organization == b.Organization &&
 		a.NetworkProfile == b.NetworkProfile && a.Pool == b.Pool && a.Role == b.Role &&
 		a.State == b.State && a.Revision == b.Revision && a.Created.Equal(b.Created) && a.Updated.Equal(b.Updated)
 }
@@ -348,12 +348,12 @@ func samePreviewSet(a, b map[string]domain.WorkerEnvironment) bool {
 	return true
 }
 
-func replaceServiceDomains(ctx context.Context, tx pgx.Tx, service string, domains []string) error {
-	if _, err := tx.Exec(ctx, `DELETE FROM krun_worker_service_domains WHERE service_id=$1`, service); err != nil {
+func replaceWorkerDomains(ctx context.Context, tx pgx.Tx, worker string, domains []string) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM krun_worker_domains WHERE worker_id=$1`, worker); err != nil {
 		return err
 	}
 	for i, domain := range domains {
-		if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_service_domains (service_id, domain_id, ordinal) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, service, domain, i); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_domains (worker_id, domain_id, ordinal) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, worker, domain, i); err != nil {
 			return err
 		}
 	}
@@ -396,14 +396,14 @@ func writeBuilds(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) err
 		}
 		if !existed {
 			if !workerBuildTerminal(b.State) {
-				tag, err := tx.Exec(ctx, `UPDATE krun_worker_services
+				tag, err := tx.Exec(ctx, `UPDATE krun_workers
 					SET active_build_count=active_build_count+1, updated_at=now()
-					WHERE service_id=$1 AND active_build_count < $2`, b.Service, WorkerActiveBuildLimit)
+					WHERE worker_id=$1 AND active_build_count < $2`, b.Worker, WorkerActiveBuildLimit)
 				if err != nil {
 					return err
 				}
 				if tag.RowsAffected() != 1 {
-					return domain.Problem(409, "BUILD_LIMIT", "At most 100 builds may be active per service")
+					return domain.Problem(409, "BUILD_LIMIT", "At most 100 builds may be active per worker")
 				}
 			}
 			if private, ok := aw.BuildPrivate[id]; ok && private.SourceKey != "" {
@@ -411,17 +411,17 @@ func writeBuilds(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) err
 					return err
 				}
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_builds (build_id, org_id, service_id, env_name, state, entrypoint, source_digest, profile, compatibility_date, compatibility_flags, job, artifact_id, error, repository, assets, created_at, finished_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`, id, b.Organization, b.Service, b.Environment, b.State, b.Entrypoint, b.SourceDigest, b.Profile, b.CompatibilityDate, flags, b.Job, b.Artifact, b.Error, repository, assets, b.Created, b.Finished); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_builds (build_id, org_id, worker_id, env_name, state, entrypoint, source_digest, profile, compatibility_date, compatibility_flags, job, artifact_id, error, repository, assets, created_at, finished_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`, id, b.Organization, b.Worker, b.Environment, b.State, b.Entrypoint, b.SourceDigest, b.Profile, b.CompatibilityDate, flags, b.Job, b.Artifact, b.Error, repository, assets, b.Created, b.Finished); err != nil {
 				return err
 			}
 		} else {
 			tag, err := tx.Exec(ctx, `UPDATE krun_worker_builds
-				SET org_id=$2, service_id=$3, env_name=$4, state=$5, entrypoint=$6,
+				SET org_id=$2, worker_id=$3, env_name=$4, state=$5, entrypoint=$6,
 				    source_digest=$7, profile=$8, compatibility_date=$9, compatibility_flags=$10,
 				    job=$11, artifact_id=$12, error=$13, repository=$14, assets=$15,
 				    created_at=$16, finished_at=$17
 				WHERE build_id=$1 AND state=$18 AND claimed_by=$19
-				  AND claimed_at IS NOT DISTINCT FROM $20`, id, b.Organization, b.Service,
+				  AND claimed_at IS NOT DISTINCT FROM $20`, id, b.Organization, b.Worker,
 				b.Environment, b.State, b.Entrypoint, b.SourceDigest, b.Profile,
 				b.CompatibilityDate, flags, b.Job, b.Artifact, b.Error, repository, assets, b.Created, b.Finished,
 				old.State, old.ClaimedBy, old.ClaimedAt)
@@ -437,12 +437,12 @@ func writeBuilds(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) err
 		if _, ok := aw.Builds[id]; ok {
 			continue
 		}
-		var deletedState, deletedService string
+		var deletedState, deletedWorker string
 		old := bw.Builds[id]
 		err := tx.QueryRow(ctx, `DELETE FROM krun_worker_builds
 			WHERE build_id=$1 AND state=$2 AND claimed_by=$3
 			  AND claimed_at IS NOT DISTINCT FROM $4
-			RETURNING state, service_id`, id, old.State, old.ClaimedBy, old.ClaimedAt).Scan(&deletedState, &deletedService)
+			RETURNING state, worker_id`, id, old.State, old.ClaimedBy, old.ClaimedAt).Scan(&deletedState, &deletedWorker)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errors.New("build changed while deleting snapshot")
 		}
@@ -450,9 +450,9 @@ func writeBuilds(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) err
 			return err
 		}
 		if !workerBuildTerminal(deletedState) {
-			if _, err := tx.Exec(ctx, `UPDATE krun_worker_services
+			if _, err := tx.Exec(ctx, `UPDATE krun_workers
 				SET active_build_count=GREATEST(active_build_count-1,0), updated_at=now()
-				WHERE service_id=$1`, deletedService); err != nil {
+				WHERE worker_id=$1`, deletedWorker); err != nil {
 				return err
 			}
 		}
@@ -511,7 +511,7 @@ func sameBuild(a, b domain.WorkerBuild) bool {
 	} else if !a.Finished.Equal(*b.Finished) {
 		return false
 	}
-	return a.ID == b.ID && a.Organization == b.Organization && a.Service == b.Service &&
+	return a.ID == b.ID && a.Organization == b.Organization && a.Worker == b.Worker &&
 		a.Environment == b.Environment && a.State == b.State && a.Entrypoint == b.Entrypoint &&
 		a.SourceDigest == b.SourceDigest && a.Profile == b.Profile &&
 		a.CompatibilityDate == b.CompatibilityDate && sameStrings(a.CompatibilityFlags, b.CompatibilityFlags) && a.Job == b.Job &&
@@ -592,7 +592,7 @@ func sameVersion(a, b domain.WorkerVersion) bool {
 	if !reflect.DeepEqual(a.R2Bindings, b.R2Bindings) {
 		return false
 	}
-	return a.VersionMetadata == b.VersionMetadata && a.AssetsBinding == b.AssetsBinding && a.Tag == b.Tag && a.Message == b.Message && a.ID == b.ID && a.Service == b.Service && a.Organization == b.Organization &&
+	return a.VersionMetadata == b.VersionMetadata && a.AssetsBinding == b.AssetsBinding && a.Tag == b.Tag && a.Message == b.Message && a.ID == b.ID && a.Worker == b.Worker && a.Organization == b.Organization &&
 		a.Environment == b.Environment && a.Artifact == b.Artifact && a.Profile == b.Profile && a.ArchiveDigest == b.ArchiveDigest &&
 		a.ModuleDigest == b.ModuleDigest && a.CompatibilityDate == b.CompatibilityDate &&
 		sameStrings(a.CompatibilityFlags, b.CompatibilityFlags) && a.ConfigRevision == b.ConfigRevision &&
@@ -617,20 +617,20 @@ func writeVersions(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 		if err != nil {
 			return err
 		}
-		tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_versions (version_id, org_id, service_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message)
+		tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_versions (version_id, org_id, worker_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message)
 				SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18
 				WHERE EXISTS (SELECT 1 FROM krun_worker_artifacts
 					WHERE artifact_id=$5 AND state='finalized' AND org_id=$2
 					  AND profile=$6 AND archive_digest=$7 AND module_digest=$8
 					  AND compatibility_date=$9 AND compatibility_flags=$10)
-				ON CONFLICT (version_id) DO UPDATE SET version_id=excluded.version_id`, id, r.Organization, r.Service, r.Environment, r.Artifact, r.Profile, r.ArchiveDigest, r.ModuleDigest, r.CompatibilityDate, flags, r.ConfigRevision, variables, r.SecretDigest, r.Created, r.VersionMetadata, r.AssetsBinding, r.Tag, r.Message)
+				ON CONFLICT (version_id) DO UPDATE SET version_id=excluded.version_id`, id, r.Organization, r.Worker, r.Environment, r.Artifact, r.Profile, r.ArchiveDigest, r.ModuleDigest, r.CompatibilityDate, flags, r.ConfigRevision, variables, r.SecretDigest, r.Created, r.VersionMetadata, r.AssetsBinding, r.Tag, r.Message)
 		if err != nil {
 			return err
 		}
 		if tag.RowsAffected() == 0 {
 			return domain.Problem(409, "ARTIFACT_UNAVAILABLE", "Artifact is no longer available")
 		}
-		if err := replaceWorkerVersionSecrets(ctx, tx, id, r.Service, r.Environment, r.SecretVersions); err != nil {
+		if err := replaceWorkerVersionSecrets(ctx, tx, id, r.Worker, r.Environment, r.SecretVersions); err != nil {
 			return err
 		}
 	}
@@ -654,7 +654,7 @@ func sameOperation(a, b domain.WorkerOperation) bool {
 	if a.Finished != nil && !a.Finished.Equal(*b.Finished) {
 		return false
 	}
-	return a.ID == b.ID && a.Kind == b.Kind && a.Service == b.Service && a.Organization == b.Organization &&
+	return a.ID == b.ID && a.Kind == b.Kind && a.Worker == b.Worker && a.Organization == b.Organization &&
 		a.Environment == b.Environment && a.State == b.State && a.Build == b.Build &&
 		a.Version == b.Version && a.ExpectedRevision == b.ExpectedRevision &&
 		a.ConfigRevision == b.ConfigRevision && a.EdgeRevision == b.EdgeRevision &&
@@ -674,7 +674,7 @@ func writeOperations(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState)
 		}
 		actor := aw.OperationPrivate[id].Actor
 		if !existed {
-			if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_operations (operation_id, kind, org_id, service_id, env_name, state, build_id, version_id, expected_revision, config_revision, edge_revision, deployment_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, id, op.Kind, op.Organization, op.Service, op.Environment, op.State, op.Build, op.Version, op.ExpectedRevision, op.ConfigRevision, op.EdgeRevision, op.DeploymentRevision, op.Error, steps, actor.User, actor.Key, actor.AuthVersion, op.Created, op.Finished); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_operations (operation_id, kind, org_id, worker_id, env_name, state, build_id, version_id, expected_revision, config_revision, edge_revision, deployment_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, id, op.Kind, op.Organization, op.Worker, op.Environment, op.State, op.Build, op.Version, op.ExpectedRevision, op.ConfigRevision, op.EdgeRevision, op.DeploymentRevision, op.Error, steps, actor.User, actor.Key, actor.AuthVersion, op.Created, op.Finished); err != nil {
 				return err
 			}
 			continue
@@ -703,9 +703,9 @@ func writeOperations(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState)
 
 func writeHistories(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) error {
 	for key, entries := range aw.Histories {
-		service, env := splitHistoryKey(key)
+		worker, env := splitHistoryKey(key)
 		for _, h := range entries {
-			if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_history (service_id, env_name, revision, version_id, operation_id, kind, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (service_id, env_name, revision) DO NOTHING`, service, env, h.Revision, h.Version, h.Operation, h.Kind, h.Time); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_history (worker_id, env_name, revision, version_id, operation_id, kind, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (worker_id, env_name, revision) DO NOTHING`, worker, env, h.Revision, h.Version, h.Operation, h.Kind, h.Time); err != nil {
 				return err
 			}
 		}
@@ -713,7 +713,7 @@ func writeHistories(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) 
 	return nil
 }
 
-// splitHistoryKey splits "service/env", the key the in-memory map uses.
+// splitHistoryKey splits "worker/env", the key the in-memory map uses.
 func splitHistoryKey(key string) (string, string) {
 	for i := len(key) - 1; i >= 0; i-- {
 		if key[i] == '/' {

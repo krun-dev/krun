@@ -267,8 +267,8 @@ CREATE TABLE IF NOT EXISTS krun_repository_connect_states (
 );
 CREATE INDEX IF NOT EXISTS krun_repository_connect_states_expiry ON krun_repository_connect_states (expires_at);
 
-CREATE TABLE IF NOT EXISTS krun_worker_services (
-	service_id          text PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS krun_workers (
+	worker_id          text PRIMARY KEY,
 	org_id              text NOT NULL,
 	network_profile     text NOT NULL DEFAULT 'default',
 	repository          jsonb,
@@ -278,10 +278,10 @@ CREATE TABLE IF NOT EXISTS krun_worker_services (
 	active_build_count  integer NOT NULL DEFAULT 0 CHECK (active_build_count >= 0),
 	updated_at          timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS krun_worker_services_org ON krun_worker_services (org_id);
+CREATE INDEX IF NOT EXISTS krun_workers_org ON krun_workers (org_id);
 
-CREATE TABLE IF NOT EXISTS krun_worker_service_placements (
-	service_id      text NOT NULL,
+CREATE TABLE IF NOT EXISTS krun_worker_placements (
+	worker_id      text NOT NULL,
 	pool_id         text NOT NULL,
 	org_id          text NOT NULL,
 	network_profile text NOT NULL,
@@ -290,25 +290,25 @@ CREATE TABLE IF NOT EXISTS krun_worker_service_placements (
 	revision        integer NOT NULL DEFAULT 1 CHECK (revision > 0),
 	created_at      timestamptz NOT NULL DEFAULT now(),
 	updated_at      timestamptz NOT NULL DEFAULT now(),
-	PRIMARY KEY (service_id, pool_id)
+	PRIMARY KEY (worker_id, pool_id)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS krun_worker_service_placements_primary
-	ON krun_worker_service_placements (service_id)
+CREATE UNIQUE INDEX IF NOT EXISTS krun_worker_placements_primary
+	ON krun_worker_placements (worker_id)
 	WHERE role='primary' AND state IN ('preparing','ready','active');
-CREATE INDEX IF NOT EXISTS krun_worker_service_placements_pool
-	ON krun_worker_service_placements (pool_id, state);
+CREATE INDEX IF NOT EXISTS krun_worker_placements_pool
+	ON krun_worker_placements (pool_id, state);
 
-CREATE TABLE IF NOT EXISTS krun_worker_service_domains (
-	service_id text NOT NULL,
+CREATE TABLE IF NOT EXISTS krun_worker_domains (
+	worker_id text NOT NULL,
 	domain_id  text NOT NULL,
 	ordinal    integer NOT NULL DEFAULT 0,
-	PRIMARY KEY (service_id, domain_id)
+	PRIMARY KEY (worker_id, domain_id)
 );
 
 CREATE TABLE IF NOT EXISTS krun_worker_environments (
  version_metadata text NOT NULL DEFAULT '',
  assets_binding text NOT NULL DEFAULT '',
-	service_id           text NOT NULL,
+	worker_id           text NOT NULL,
 	env_name             text NOT NULL,
 	enabled              boolean NOT NULL DEFAULT true,
 	config_revision      integer NOT NULL DEFAULT 1,
@@ -317,7 +317,7 @@ CREATE TABLE IF NOT EXISTS krun_worker_environments (
 	version_id           text NOT NULL DEFAULT '',
 	confirmed_version_id text NOT NULL DEFAULT '',
 	updated_at           timestamptz NOT NULL DEFAULT now(),
-	PRIMARY KEY (service_id, env_name)
+	PRIMARY KEY (worker_id, env_name)
 );
 
 -- CF asset sessions expire after one hour. Each file is an individual row;
@@ -325,7 +325,7 @@ CREATE TABLE IF NOT EXISTS krun_worker_environments (
 CREATE TABLE IF NOT EXISTS krun_worker_asset_sessions (
  session_id text PRIMARY KEY,
  org_id text NOT NULL,
- service_id text NOT NULL,
+ worker_id text NOT NULL,
  upload_hash text NOT NULL UNIQUE,
  completion_hash text NOT NULL UNIQUE,
  created_at timestamptz NOT NULL,
@@ -347,7 +347,7 @@ CREATE INDEX IF NOT EXISTS krun_worker_asset_session_files_hash ON krun_worker_a
 CREATE TABLE IF NOT EXISTS krun_worker_secret_versions (
 	secret_version_id text PRIMARY KEY,
 	org_id            text NOT NULL,
-	service_id        text NOT NULL,
+	worker_id        text NOT NULL,
 	env_name          text NOT NULL,
 	name              text NOT NULL,
 	ciphertext        bytea NOT NULL,
@@ -360,20 +360,20 @@ CREATE TABLE IF NOT EXISTS krun_worker_secret_versions (
 	CHECK (octet_length(nonce) = 12)
 );
 CREATE INDEX IF NOT EXISTS krun_worker_secret_versions_scope
-	ON krun_worker_secret_versions (service_id, env_name, name, created_at DESC);
+	ON krun_worker_secret_versions (worker_id, env_name, name, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS krun_worker_environment_secrets (
-	service_id       text NOT NULL,
+	worker_id       text NOT NULL,
 	env_name         text NOT NULL,
 	name             text NOT NULL,
 	secret_version_id text NOT NULL,
-	PRIMARY KEY (service_id, env_name, name)
+	PRIMARY KEY (worker_id, env_name, name)
 );
 
 CREATE TABLE IF NOT EXISTS krun_worker_builds (
 	build_id      text PRIMARY KEY,
 	org_id        text NOT NULL,
-	service_id    text NOT NULL,
+	worker_id    text NOT NULL,
 	env_name      text NOT NULL,
 	state         text NOT NULL,
 	entrypoint    text NOT NULL DEFAULT '',
@@ -393,7 +393,7 @@ CREATE TABLE IF NOT EXISTS krun_worker_builds (
 	claimed_by    text NOT NULL DEFAULT '',
 	claimed_at    timestamptz
 );
-CREATE INDEX IF NOT EXISTS krun_worker_builds_service ON krun_worker_builds (service_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS krun_worker_builds_worker ON krun_worker_builds (worker_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS krun_worker_build_private (
 	build_id           text PRIMARY KEY,
@@ -446,7 +446,7 @@ CREATE TABLE IF NOT EXISTS krun_worker_versions (
  message text NOT NULL DEFAULT '',
 	version_id      text PRIMARY KEY,
 	org_id          text NOT NULL,
-	service_id      text NOT NULL,
+	worker_id      text NOT NULL,
 	env_name        text NOT NULL,
 	artifact_id     text NOT NULL,
 	profile         text NOT NULL DEFAULT '',
@@ -459,7 +459,7 @@ CREATE TABLE IF NOT EXISTS krun_worker_versions (
 	secret_digest   text NOT NULL DEFAULT '',
 	created_at      timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS krun_worker_versions_service ON krun_worker_versions (service_id, env_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS krun_worker_versions_worker ON krun_worker_versions (worker_id, env_name, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS krun_worker_version_secrets (
 	version_id        text NOT NULL,
@@ -471,7 +471,7 @@ CREATE TABLE IF NOT EXISTS krun_worker_version_secrets (
 CREATE TABLE IF NOT EXISTS krun_worker_deployments (
  deployment_id text PRIMARY KEY,
  org_id text NOT NULL,
- service_id text NOT NULL,
+ worker_id text NOT NULL,
  env_name text NOT NULL,
  version_id text NOT NULL,
  operation_id text NOT NULL UNIQUE,
@@ -480,14 +480,14 @@ CREATE TABLE IF NOT EXISTS krun_worker_deployments (
  committed_at timestamptz,
  CHECK (expires_at > created_at)
 );
-CREATE INDEX IF NOT EXISTS krun_worker_deployments_service ON krun_worker_deployments(service_id,env_name,created_at DESC);
+CREATE INDEX IF NOT EXISTS krun_worker_deployments_worker ON krun_worker_deployments(worker_id,env_name,created_at DESC);
 CREATE INDEX IF NOT EXISTS krun_worker_deployments_expiry ON krun_worker_deployments(expires_at);
 
 CREATE TABLE IF NOT EXISTS krun_worker_operations (
 	operation_id       text PRIMARY KEY,
 	kind               text NOT NULL,
 	org_id             text NOT NULL,
-	service_id         text NOT NULL,
+	worker_id         text NOT NULL,
 	env_name           text NOT NULL,
 	state              text NOT NULL,
 	build_id           text NOT NULL DEFAULT '',
@@ -508,19 +508,19 @@ CREATE TABLE IF NOT EXISTS krun_worker_operations (
 	claimed_by         text NOT NULL DEFAULT '',
 	claimed_at         timestamptz
 );
-CREATE INDEX IF NOT EXISTS krun_worker_operations_service ON krun_worker_operations (service_id, env_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS krun_worker_operations_worker ON krun_worker_operations (worker_id, env_name, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS krun_worker_history (
-	service_id   text NOT NULL,
+	worker_id   text NOT NULL,
 	env_name     text NOT NULL,
 	revision     integer NOT NULL,
 	version_id   text NOT NULL,
 	operation_id text NOT NULL,
 	kind         text NOT NULL,
 	created_at   timestamptz NOT NULL DEFAULT now(),
-	PRIMARY KEY (service_id, env_name, revision)
+	PRIMARY KEY (worker_id, env_name, revision)
 );
-CREATE INDEX IF NOT EXISTS krun_worker_history_recent ON krun_worker_history (service_id, env_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS krun_worker_history_recent ON krun_worker_history (worker_id, env_name, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS krun_worker_idempotency (
 	idem_key   text PRIMARY KEY,
@@ -538,7 +538,7 @@ CREATE TABLE IF NOT EXISTS worker_config_revisions (
 
 CREATE TABLE IF NOT EXISTS worker_config_routes (
  expires_at timestamptz,
- service_id text NOT NULL,
+ worker_id text NOT NULL,
  shard text NOT NULL CHECK(shard ~ '^[0-9a-f]{2}$'),
 	host       text PRIMARY KEY,
 	pool       text NOT NULL,
@@ -570,11 +570,11 @@ CREATE TABLE IF NOT EXISTS worker_config_ops (
 	)
 );
 
-CREATE INDEX IF NOT EXISTS worker_config_routes_service ON worker_config_routes(service_id);
+CREATE INDEX IF NOT EXISTS worker_config_routes_worker ON worker_config_routes(worker_id);
 CREATE INDEX IF NOT EXISTS worker_config_routes_version ON worker_config_routes(version_id,pool);
 CREATE INDEX IF NOT EXISTS worker_config_routes_shard ON worker_config_routes(pool,shard,host);
 CREATE INDEX IF NOT EXISTS worker_config_ops_pool ON worker_config_ops(pool,config_revision,ordinal);
-CREATE INDEX IF NOT EXISTS krun_worker_versions_artifact ON krun_worker_versions(artifact_id,service_id);
+CREATE INDEX IF NOT EXISTS krun_worker_versions_artifact ON krun_worker_versions(artifact_id,worker_id);
 CREATE INDEX IF NOT EXISTS krun_resources_page ON krun_resources(org_id,kind,resource_id);
 CREATE INDEX IF NOT EXISTS krun_worker_idempotency_prefix ON krun_worker_idempotency(idem_key text_pattern_ops);
 CREATE INDEX IF NOT EXISTS krun_worker_builds_schedulable ON krun_worker_builds(reconcile_after,created_at) WHERE state NOT IN ('succeeded','failed');
@@ -586,15 +586,15 @@ CREATE TABLE IF NOT EXISTS worker_asset_objects(
 );
 CREATE INDEX IF NOT EXISTS worker_asset_objects_artifact ON worker_asset_objects(artifact_id,object_key);
 CREATE SEQUENCE IF NOT EXISTS worker_dirty_seq;
-CREATE TABLE IF NOT EXISTS worker_retention_scopes(service_id text PRIMARY KEY,generation bigint NOT NULL DEFAULT nextval('worker_dirty_seq'));
+CREATE TABLE IF NOT EXISTS worker_retention_scopes(worker_id text PRIMARY KEY,generation bigint NOT NULL DEFAULT nextval('worker_dirty_seq'));
 CREATE OR REPLACE FUNCTION krun_mark_worker_retention() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
- INSERT INTO worker_retention_scopes(service_id) VALUES(NEW.service_id) ON CONFLICT(service_id) DO UPDATE SET generation=nextval('worker_dirty_seq');
+ INSERT INTO worker_retention_scopes(worker_id) VALUES(NEW.worker_id) ON CONFLICT(worker_id) DO UPDATE SET generation=nextval('worker_dirty_seq');
  RETURN NULL;
 END $$;
 CREATE OR REPLACE TRIGGER worker_build_retention AFTER INSERT OR UPDATE OF state ON krun_worker_builds FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_retention();
 CREATE OR REPLACE TRIGGER worker_history_retention AFTER INSERT ON krun_worker_history FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_retention();
-CREATE INDEX IF NOT EXISTS worker_retention_scopes_generation ON worker_retention_scopes(generation,service_id);
+CREATE INDEX IF NOT EXISTS worker_retention_scopes_generation ON worker_retention_scopes(generation,worker_id);
 CREATE INDEX IF NOT EXISTS krun_worker_versions_age ON krun_worker_versions(created_at);
 CREATE INDEX IF NOT EXISTS krun_worker_operations_age ON krun_worker_operations(created_at);
 CREATE INDEX IF NOT EXISTS krun_worker_builds_age ON krun_worker_builds(created_at);
@@ -606,10 +606,10 @@ CREATE INDEX IF NOT EXISTS krun_worker_builds_artifact ON krun_worker_builds(art
 CREATE INDEX IF NOT EXISTS krun_worker_environment_secrets_version ON krun_worker_environment_secrets(secret_version_id);
 CREATE INDEX IF NOT EXISTS krun_worker_version_secrets_version ON krun_worker_version_secrets(secret_version_id);
 CREATE TABLE IF NOT EXISTS worker_config_dirty (
- service_id text PRIMARY KEY,
+ worker_id text PRIMARY KEY,
  generation bigint NOT NULL DEFAULT nextval('worker_dirty_seq')
 );
-CREATE INDEX IF NOT EXISTS worker_config_dirty_generation ON worker_config_dirty(generation,service_id);
+CREATE INDEX IF NOT EXISTS worker_config_dirty_generation ON worker_config_dirty(generation,worker_id);
 CREATE TABLE IF NOT EXISTS worker_config_checkpoints (
  pool text NOT NULL,
  shard text NOT NULL,
@@ -620,21 +620,21 @@ CREATE TABLE IF NOT EXISTS worker_config_checkpoints (
 CREATE OR REPLACE FUNCTION krun_mark_worker_config_dirty() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF TG_OP<>'INSERT' THEN
-  INSERT INTO worker_config_dirty(service_id) VALUES(OLD.service_id) ON CONFLICT(service_id) DO UPDATE SET generation=nextval('worker_dirty_seq');
+  INSERT INTO worker_config_dirty(worker_id) VALUES(OLD.worker_id) ON CONFLICT(worker_id) DO UPDATE SET generation=nextval('worker_dirty_seq');
  END IF;
  IF TG_OP<>'DELETE' THEN
-  INSERT INTO worker_config_dirty(service_id) VALUES(NEW.service_id) ON CONFLICT(service_id) DO UPDATE SET generation=nextval('worker_dirty_seq');
+  INSERT INTO worker_config_dirty(worker_id) VALUES(NEW.worker_id) ON CONFLICT(worker_id) DO UPDATE SET generation=nextval('worker_dirty_seq');
  END IF;
  RETURN NULL;
 END $$;
-CREATE OR REPLACE TRIGGER worker_services_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_services FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
+CREATE OR REPLACE TRIGGER workers_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_workers FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
 CREATE OR REPLACE TRIGGER worker_env_config_dirty AFTER INSERT OR DELETE OR UPDATE OF enabled,version_id ON krun_worker_environments FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
-CREATE OR REPLACE TRIGGER worker_domains_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_service_domains FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
-CREATE OR REPLACE TRIGGER worker_placements_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_service_placements FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
+CREATE OR REPLACE TRIGGER worker_domains_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_domains FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
+CREATE OR REPLACE TRIGGER worker_placements_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_placements FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
 CREATE OR REPLACE FUNCTION krun_mark_resource_config_dirty() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
- IF TG_OP<>'INSERT' AND OLD.kind='service' THEN INSERT INTO worker_retention_scopes(service_id) VALUES(OLD.resource_id) ON CONFLICT(service_id) DO UPDATE SET generation=nextval('worker_dirty_seq');INSERT INTO worker_config_dirty(service_id) VALUES(OLD.resource_id) ON CONFLICT(service_id) DO UPDATE SET generation=nextval('worker_dirty_seq');END IF;
- IF TG_OP<>'DELETE' AND NEW.kind='service' THEN INSERT INTO worker_config_dirty(service_id) VALUES(NEW.resource_id) ON CONFLICT(service_id) DO UPDATE SET generation=nextval('worker_dirty_seq');END IF;
+ IF TG_OP<>'INSERT' AND OLD.kind='worker' THEN INSERT INTO worker_retention_scopes(worker_id) VALUES(OLD.resource_id) ON CONFLICT(worker_id) DO UPDATE SET generation=nextval('worker_dirty_seq');INSERT INTO worker_config_dirty(worker_id) VALUES(OLD.resource_id) ON CONFLICT(worker_id) DO UPDATE SET generation=nextval('worker_dirty_seq');END IF;
+ IF TG_OP<>'DELETE' AND NEW.kind='worker' THEN INSERT INTO worker_config_dirty(worker_id) VALUES(NEW.resource_id) ON CONFLICT(worker_id) DO UPDATE SET generation=nextval('worker_dirty_seq');END IF;
  RETURN NULL;
 END $$;
 CREATE OR REPLACE TRIGGER resource_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_resources FOR EACH ROW EXECUTE FUNCTION krun_mark_resource_config_dirty();
@@ -651,7 +651,7 @@ CREATE OR REPLACE TRIGGER deployment_config_dirty AFTER INSERT OR UPDATE OR DELE
 CREATE TABLE IF NOT EXISTS krun_worker_scripts (
  org_id text NOT NULL,
  script_name text NOT NULL,
- service_id text NOT NULL UNIQUE,
+ worker_id text NOT NULL UNIQUE,
  workers_dev boolean NOT NULL DEFAULT true,
  previews_enabled boolean NOT NULL DEFAULT true,
  created_at timestamptz NOT NULL DEFAULT now(),
@@ -714,11 +714,11 @@ CREATE TABLE IF NOT EXISTS krun_worker_buckets (
 );
 CREATE INDEX IF NOT EXISTS krun_worker_buckets_org ON krun_worker_buckets(org_id, bucket_id);
 CREATE TABLE IF NOT EXISTS krun_worker_environment_r2 (
- service_id text NOT NULL,
+ worker_id text NOT NULL,
  env_name text NOT NULL,
  name text NOT NULL,
  bucket_id text NOT NULL,
- PRIMARY KEY (service_id, env_name, name)
+ PRIMARY KEY (worker_id, env_name, name)
 );
 CREATE INDEX IF NOT EXISTS krun_worker_environment_r2_bucket ON krun_worker_environment_r2(bucket_id);
 CREATE TABLE IF NOT EXISTS krun_worker_version_r2 (

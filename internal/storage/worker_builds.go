@@ -255,21 +255,21 @@ func (s *Store) finishBuildOwned(ctx context.Context, id, replica, state, messag
 		return err
 	}
 	defer tx.Rollback(ctx)
-	var service string
+	var worker string
 	err = tx.QueryRow(ctx, `UPDATE krun_worker_builds
 		SET state=$2, error=$3, artifact_id=$4, finished_at=now()
 		WHERE build_id=$1 AND state NOT IN ('succeeded','failed')
 		  AND ($5='' OR claimed_by=$5)
-		RETURNING service_id`, id, state, message, artifact, replica).Scan(&service)
+		RETURNING worker_id`, id, state, message, artifact, replica).Scan(&worker)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return tx.Commit(ctx)
 	}
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE krun_worker_services
+	if _, err = tx.Exec(ctx, `UPDATE krun_workers
 		SET active_build_count=GREATEST(active_build_count-1,0), updated_at=now()
-		WHERE service_id=$1`, service); err != nil {
+		WHERE worker_id=$1`, worker); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE krun_worker_build_private SET log='', log_key=$2 WHERE build_id=$1`, id, logKey); err != nil {
@@ -406,12 +406,12 @@ func (s *Store) FinishClaimedBuildWithArtifact(ctx context.Context, id, replica,
 	if tag.RowsAffected() != 1 {
 		return ErrArtifactBeingCollected
 	}
-	var service string
+	var worker string
 	err = tx.QueryRow(ctx, `UPDATE krun_worker_builds
 		SET state=$2, error=$3, artifact_id=$4, finished_at=now()
 		WHERE build_id=$1 AND state NOT IN ('succeeded','failed')
 		  AND ($5='' OR claimed_by=$5)
-		RETURNING service_id`, id, state, message, artifact.ID, replica).Scan(&service)
+		RETURNING worker_id`, id, state, message, artifact.ID, replica).Scan(&worker)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if replica != "" {
 			return nil
@@ -421,9 +421,9 @@ func (s *Store) FinishClaimedBuildWithArtifact(ctx context.Context, id, replica,
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE krun_worker_services
+	if _, err = tx.Exec(ctx, `UPDATE krun_workers
 		SET active_build_count=GREATEST(active_build_count-1,0), updated_at=now()
-		WHERE service_id=$1`, service); err != nil {
+		WHERE worker_id=$1`, worker); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE krun_worker_build_private SET log='', log_key=$2 WHERE build_id=$1`, id, logKey); err != nil {

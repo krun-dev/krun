@@ -146,7 +146,7 @@ func TestRuntimePoolsExposeOnlyProductNetworkProfiles(t *testing.T) {
 		if got := placement.Pool; !ok || got != "public-b" {
 			t.Fatalf("hidden pool assignment=%q", got)
 		}
-		if got := st.Workers.Services["svc-a"].NetworkProfile; got != "external-service" {
+		if got := st.Workers.Workers["svc-a"].NetworkProfile; got != "external-service" {
 			t.Fatalf("saved network profile=%q", got)
 		}
 		return nil
@@ -197,11 +197,11 @@ func TestNetworkProfileApprovalAndPublishedPlacementLock(t *testing.T) {
 		s.Config.Workers = c
 		s.routes()
 		if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
-			service := s.workerService(st, Target{ID: "svc-a", Organization: "org-a"})
+			service := s.worker(st, Target{ID: "svc-a", Organization: "org-a"})
 			env := service.Environments[appconfig.WorkerBaseline]
 			env.Version = "version-existing"
 			service.Environments[appconfig.WorkerBaseline] = env
-			st.Workers.Services[service.Service] = service
+			st.Workers.Workers[service.Worker] = service
 			return nil
 		}); err != nil {
 			t.Fatal(err)
@@ -546,7 +546,7 @@ func TestServiceDomainsUpdateAddsAndRemovesHosts(t *testing.T) {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
-		ws := st.Workers.Services["svc-a"]
+		ws := st.Workers.Workers["svc-a"]
 		if len(ws.Domains) != 1 || ws.Domains[0] != "internal" {
 			t.Error("service domains:", ws.Domains)
 		}
@@ -623,9 +623,9 @@ func TestServiceDomainsRequiresCurrentRevision(t *testing.T) {
 
 func TestWorkerConfigProjectionCoversEveryDomain(t *testing.T) {
 	st, _ := workerConfigFixture()
-	ws := st.Workers.Services["svc-a"]
+	ws := st.Workers.Workers["svc-a"]
 	ws.Domains = []string{"internal", "external"}
-	st.Workers.Services["svc-a"] = ws
+	st.Workers.Workers["svc-a"] = ws
 	p := workerapp.WorkerConfigFromState(st, workerProjectionConfig([]appconfig.WorkerDomain{
 		{ID: "internal", Domain: "workers.test", Access: "private"},
 		{ID: "external", Domain: "workers-out.example.test", Access: "public"},
@@ -652,10 +652,10 @@ func TestWorkerConfigProjectionCoversEveryDomain(t *testing.T) {
 
 func TestWorkerConfigProjectionRequiresDurablePlacement(t *testing.T) {
 	st, _ := workerConfigFixture()
-	service := st.Workers.Services["svc-a"]
+	service := st.Workers.Workers["svc-a"]
 	service.NetworkProfile = "default"
 	service.Domains = []string{"external"}
-	st.Workers.Services[service.Service] = service
+	st.Workers.Workers[service.Worker] = service
 	st.Workers.Placements = map[string]WorkerPlacement{}
 	config := multiPoolCatalogConfig()
 	if err := config.Validate(); err != nil {
@@ -931,9 +931,9 @@ func TestProcessOperationValidationMembers(t *testing.T) {
 				Kube: &kubernetes.Client{Base: apiServer.URL, Namespace: c.Namespace, Client: apiServer.Client()},
 				Http: &http.Client{Transport: validationTransport{target: apiServer.URL, base: apiServer.Client().Transport}}, AssetCache: map[string]workerapp.WorkerCachedAssets{}, Replica: "test",
 			}
-			version := WorkerVersion{ID: "rel-cas", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-cas", ArchiveDigest: code.ArchiveDigest, ModuleDigest: code.Digest}
+			version := WorkerVersion{ID: "rel-cas", Worker: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-cas", ArchiveDigest: code.ArchiveDigest, ModuleDigest: code.Digest}
 			artifact := WorkerArtifact{ID: "art-cas", Organization: "org-a", State: "finalized", Profile: code.Profile, ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: code.CompatibilityFlags, Size: len(raw), ObjectKey: "v1/org-a/archive.tar.gz", StorageLocation: "test", Bucket: "artifacts", Created: now()}
-			op := WorkerOperation{ID: "op-cas", Kind: "publish", Service: "svc-a", Organization: "org-a", Environment: "production", State: "validating", Version: version.ID, ExpectedRevision: 99, Created: now()}
+			op := WorkerOperation{ID: "op-cas", Kind: "publish", Worker: "svc-a", Organization: "org-a", Environment: "production", State: "validating", Version: version.ID, ExpectedRevision: 99, Created: now()}
 			encrypted, err := workerapp.EncryptWorkerSecret(c, "org-a", "svc-a", "production", "API_SECRET", "admin", "candidate-only")
 			if err != nil {
 				t.Fatal(err)
@@ -941,7 +941,7 @@ func TestProcessOperationValidationMembers(t *testing.T) {
 			version.SecretVersions = map[string]string{"API_SECRET": encrypted.Version.ID}
 			version.SecretDigest = workerapp.WorkerSecretsDigest(version.SecretVersions)
 			state := WorkerState{
-				Placements: map[string]WorkerPlacement{"svc-a\x00" + sourcePool: {Service: "svc-a", Organization: "org-a", Pool: sourcePool, Role: "primary", State: "active"}},
+				Placements: map[string]WorkerPlacement{"svc-a\x00" + sourcePool: {Worker: "svc-a", Organization: "org-a", Pool: sourcePool, Role: "primary", State: "active"}},
 				Versions:   map[string]WorkerVersion{version.ID: version}, Artifacts: map[string]WorkerArtifact{artifact.ID: artifact},
 				Operations: map[string]WorkerOperation{op.ID: op}, OperationPrivate: map[string]WorkerOperationPrivate{op.ID: {Actor: WorkerActor{User: "admin", AuthVersion: 1}}},
 			}

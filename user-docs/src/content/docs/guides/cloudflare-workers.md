@@ -53,7 +53,7 @@ export default {
 }
 ```
 
-`name` 是组织内的 Worker 名称；首次发布会在 krun 中创建对应的服务。后续使用相同名称发布会更新该服务。
+`name` 是组织内的 Worker 名称；首次发布会在 krun 中创建对应的 Worker。后续使用相同名称发布会更新该 Worker。
 
 ## 3. 构建并发布
 
@@ -107,7 +107,7 @@ Worker 可以通过 `env.API_TOKEN` 读取该值。Secret 更新会基于当前�
 
 ## 使用仓库构建
 
-也可以在 krun 控制台的 Workers 页面创建服务、连接 Git 仓库，然后构建并发布。仓库需要包含 Wrangler 配置及一个 npm、pnpm、Yarn 或 Bun 锁文件。平台按仓库配置执行构建；构建成功后，在控制台选择产物和目标环境发布。
+也可以在 krun 控制台的 Workers 页面创建 Worker、连接 Git 仓库，然后构建并发布。仓库需要包含 Wrangler 配置及一个 npm、pnpm、Yarn 或 Bun 锁文件。平台按仓库配置执行构建；构建成功后，在控制台选择产物和目标环境发布。
 
 Wrangler 配置的用法可参考 [Cloudflare 官方文档](https://developers.cloudflare.com/workers/wrangler/configuration/)；自定义构建命令可配置在 `build.command` 中，详见 [Custom builds](https://developers.cloudflare.com/workers/wrangler/custom-builds/)。
 

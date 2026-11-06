@@ -9,7 +9,7 @@ const pageErrors = new WeakMap();
 let cookies, org, workflow, resources;
 const run = randomUUID().slice(0, 8);
 const base = () => `/api/v1/orgs/${org.id}`;
-const workerBase = () => `${base()}/services/${workflow.id}/workers`;
+const workerBase = () => `${base()}/workers/${workflow.id}`;
 const locationFor = (id) =>
   `/?page=workers&workspace=${org.id}${id ? "&worker=" + id : ""}`;
 async function api(context, path, method = "GET", input) {
@@ -82,14 +82,14 @@ test.beforeAll(async ({ browser, baseURL }) => {
   for (let offset = 0; offset < 105; offset += 7) {
     const batch = await Promise.all(
       Array.from({ length: Math.min(7, 105 - offset) }, (_, i) =>
-        api(context, base() + "/services", "POST", {
+        api(context, base() + "/workers", "POST", {
           name: `UI site ${run} ${offset + i}`,
         }),
       ),
     );
     resources.push(...batch);
   }
-  workflow = await api(context, base() + "/services", "POST", {
+  workflow = await api(context, base() + "/workers", "POST", {
     name: "UI workflow " + run,
   });
   // Materialize its placement so the UI can configure a repository and run a

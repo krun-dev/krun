@@ -64,7 +64,7 @@ type StatePartition int
 const (
 	// PartitionIAM covers identity, organizations, permissions and keys.
 	PartitionIAM StatePartition = 1 << iota
-	// PartitionWorkers covers services, builds, versions and operations.
+	// PartitionWorkers covers workers, builds, versions and operations.
 	PartitionWorkers
 	// PartitionAll loads both halves. Read paths may use it; a mutation must
 	// not, because that would put IAM and Workers in one transaction.

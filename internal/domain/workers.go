@@ -27,7 +27,7 @@ type WorkerBuild struct {
 	Assets             *WorkerAssetsConfig    `json:"assets,omitempty"`
 	ID                 string                 `json:"id"`
 	Organization       string                 `json:"organization_id"`
-	Service            string                 `json:"service_id"`
+	Worker             string                 `json:"worker_id"`
 	Environment        string                 `json:"environment"`
 	State              string                 `json:"state"`
 	Entrypoint         string                 `json:"entrypoint"`
@@ -81,8 +81,8 @@ type WorkerEnvironment struct {
 	AssetsBinding   string                     `json:"assets_binding,omitempty"`
 	Name            string                     `json:"name"`
 	Enabled         bool                       `json:"enabled"`
-	// Domains mirrors the service-level selection, in catalog order. Routing
-	// decisions live on the service; this copy keeps each environment row
+	// Domains mirrors the worker-level selection, in catalog order. Routing
+	// decisions live on the worker; this copy keeps each environment row
 	// self-describing for projections and API responses.
 	Domains []string `json:"domains"`
 	// Hosts holds one route host per selected domain: {slug}-{env}.{domain}.
@@ -102,33 +102,33 @@ type WorkerEnvironment struct {
 	Confirmed      string            `json:"confirmed_version_id,omitempty"`
 }
 
-type WorkerService struct {
+type Worker struct {
 	PreviewBase        *WorkerEnvironment      `json:"previews_base,omitempty"`
 	Repository         *WorkerRepositorySource `json:"repository_source,omitempty"`
 	RepositoryRevision int                     `json:"repository_revision"`
 	// DomainsRevision is the optimistic-concurrency token for replacing the
-	// service's routing domains. PreviewRevision is internal coordination for
+	// worker's routing domains. PreviewRevision is internal coordination for
 	// changes to the preview-environment set; it prevents concurrent creates
 	// from both passing the configured preview limit.
 	DomainsRevision int    `json:"domains_revision"`
 	PreviewRevision int    `json:"preview_revision"`
-	Service         string `json:"service_id"`
+	Worker          string `json:"worker_id"`
 	Organization    string `json:"organization_id"`
-	// NetworkProfile is the stable product intent selected for the service.
+	// NetworkProfile is the stable product intent selected for the worker.
 	NetworkProfile string `json:"network_profile"`
-	// Domains is the service-level domain selection. Every environment of the
-	// service is served on every selected domain, so adding a domain adds one
+	// Domains is the worker-level domain selection. Every environment of the
+	// worker is served on every selected domain, so adding a domain adds one
 	// host per environment without touching per-environment configuration.
 	Domains      []string                     `json:"domains"`
 	Environments map[string]WorkerEnvironment `json:"environments"`
 }
 
-// WorkerPlacement is the infrastructure assignment for one service. It is a
-// separate entity because a service may temporarily have more than one
+// WorkerPlacement is the infrastructure assignment for one worker. It is a
+// separate entity because a worker may temporarily have more than one
 // placement during a platform-managed migration. Organization APIs never
 // expose pool IDs.
 type WorkerPlacement struct {
-	Service        string    `json:"service_id"`
+	Worker         string    `json:"worker_id"`
 	Organization   string    `json:"organization_id"`
 	NetworkProfile string    `json:"network_profile"`
 	Pool           string    `json:"pool"`
@@ -146,7 +146,7 @@ type WorkerVersion struct {
 	Tag                string                     `json:"tag,omitempty"`
 	Message            string                     `json:"message,omitempty"`
 	ID                 string                     `json:"id"`
-	Service            string                     `json:"service_id"`
+	Worker             string                     `json:"worker_id"`
 	Organization       string                     `json:"organization_id"`
 	Environment        string                     `json:"environment"`
 	Artifact           string                     `json:"artifact_id"`
@@ -170,7 +170,7 @@ type WorkerVersion struct {
 type WorkerSecretVersion struct {
 	ID           string    `json:"id"`
 	Organization string    `json:"organization_id"`
-	Service      string    `json:"service_id"`
+	Worker       string    `json:"worker_id"`
 	Environment  string    `json:"environment"`
 	Name         string    `json:"name"`
 	ValueDigest  string    `json:"value_sha256"`
@@ -188,7 +188,7 @@ type WorkerStep struct {
 type WorkerDeployment struct {
 	ID           string     `json:"id"`
 	Organization string     `json:"organization_id"`
-	Service      string     `json:"service_id"`
+	Worker       string     `json:"worker_id"`
 	Environment  string     `json:"environment"`
 	Version      string     `json:"version_id"`
 	Operation    string     `json:"operation_id"`
@@ -200,7 +200,7 @@ type WorkerDeployment struct {
 type WorkerOperation struct {
 	ID                 string       `json:"id"`
 	Kind               string       `json:"kind"`
-	Service            string       `json:"service_id"`
+	Worker             string       `json:"worker_id"`
 	Organization       string       `json:"organization_id"`
 	Environment        string       `json:"environment"`
 	State              string       `json:"state"`
@@ -242,7 +242,7 @@ type WorkerAck struct {
 type WorkerState struct {
 	Buckets          map[string]WorkerBucket
 	Revision         int
-	Services         map[string]WorkerService
+	Workers          map[string]Worker
 	Placements       map[string]WorkerPlacement
 	Builds           map[string]WorkerBuild
 	BuildPrivate     map[string]WorkerBuildPrivate
@@ -260,7 +260,7 @@ type WorkerState struct {
 type WorkerScript struct {
 	Organization    string
 	Name            string
-	Service         string
+	Worker          string
 	WorkersDev      bool
 	PreviewsEnabled bool
 }

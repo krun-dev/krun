@@ -17,21 +17,21 @@ func (s *Store) loadWorkers(ctx context.Context, st *domain.State) error {
 	}
 	batch := &pgx.Batch{}
 	queueStateRead(ctx, batch, `SELECT bucket_id, org_id, name, store_id, enabled, revision, created_at FROM krun_worker_buckets`)
-	queueStateRead(ctx, batch, `SELECT service_id, org_id, network_profile, repository, repository_revision, domains_revision, preview_revision FROM krun_worker_services`)
-	queueStateRead(ctx, batch, `SELECT service_id, pool_id, org_id, network_profile, role, state, revision, created_at, updated_at FROM krun_worker_service_placements`)
-	queueStateRead(ctx, batch, `SELECT service_id, domain_id FROM krun_worker_service_domains ORDER BY service_id, ordinal`)
-	queueStateRead(ctx, batch, `SELECT service_id, env_name, enabled, config_revision, variables, deployment_revision, version_id, confirmed_version_id, version_metadata, assets_binding FROM krun_worker_environments`)
-	queueStateRead(ctx, batch, `SELECT secret_version_id, org_id, service_id, env_name, name, value_digest, key_version, created_by, created_at FROM krun_worker_secret_versions`)
-	queueStateRead(ctx, batch, `SELECT service_id, env_name, name, secret_version_id FROM krun_worker_environment_secrets`)
-	queueStateRead(ctx, batch, `SELECT build_id, org_id, service_id, env_name, state, entrypoint, source_digest, profile, compatibility_date, compatibility_flags, job, artifact_id, error, repository, assets, created_at, finished_at, claimed_by, claimed_at FROM krun_worker_builds`)
+	queueStateRead(ctx, batch, `SELECT worker_id, org_id, network_profile, repository, repository_revision, domains_revision, preview_revision FROM krun_workers`)
+	queueStateRead(ctx, batch, `SELECT worker_id, pool_id, org_id, network_profile, role, state, revision, created_at, updated_at FROM krun_worker_placements`)
+	queueStateRead(ctx, batch, `SELECT worker_id, domain_id FROM krun_worker_domains ORDER BY worker_id, ordinal`)
+	queueStateRead(ctx, batch, `SELECT worker_id, env_name, enabled, config_revision, variables, deployment_revision, version_id, confirmed_version_id, version_metadata, assets_binding FROM krun_worker_environments`)
+	queueStateRead(ctx, batch, `SELECT secret_version_id, org_id, worker_id, env_name, name, value_digest, key_version, created_by, created_at FROM krun_worker_secret_versions`)
+	queueStateRead(ctx, batch, `SELECT worker_id, env_name, name, secret_version_id FROM krun_worker_environment_secrets`)
+	queueStateRead(ctx, batch, `SELECT build_id, org_id, worker_id, env_name, state, entrypoint, source_digest, profile, compatibility_date, compatibility_flags, job, artifact_id, error, repository, assets, created_at, finished_at, claimed_by, claimed_at FROM krun_worker_builds`)
 	queueStateRead(ctx, batch, `SELECT artifact_id, org_id, state, profile, archive_digest, manifest_digest, module_digest, compatibility_date, compatibility_flags, size_bytes, object_key, storage_location, bucket, created_at FROM krun_worker_artifacts`)
-	queueStateRead(ctx, batch, `SELECT version_id, org_id, service_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message FROM krun_worker_versions`)
+	queueStateRead(ctx, batch, `SELECT version_id, org_id, worker_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message FROM krun_worker_versions`)
 	queueStateRead(ctx, batch, `SELECT version_id, name, secret_version_id FROM krun_worker_version_secrets`)
-	queueStateRead(ctx, batch, `SELECT deployment_id,org_id,service_id,env_name,version_id,operation_id,created_at,expires_at,committed_at FROM krun_worker_deployments`)
-	queueStateRead(ctx, batch, `SELECT operation_id, kind, org_id, service_id, env_name, state, build_id, version_id, expected_revision, config_revision, edge_revision, deployment_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at FROM krun_worker_operations`)
-	queueStateRead(ctx, batch, `SELECT service_id, env_name, revision, version_id, operation_id, kind, created_at FROM krun_worker_history ORDER BY created_at DESC`)
+	queueStateRead(ctx, batch, `SELECT deployment_id,org_id,worker_id,env_name,version_id,operation_id,created_at,expires_at,committed_at FROM krun_worker_deployments`)
+	queueStateRead(ctx, batch, `SELECT operation_id, kind, org_id, worker_id, env_name, state, build_id, version_id, expected_revision, config_revision, edge_revision, deployment_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at FROM krun_worker_operations`)
+	queueStateRead(ctx, batch, `SELECT worker_id, env_name, revision, version_id, operation_id, kind, created_at FROM krun_worker_history ORDER BY created_at DESC`)
 	queueStateRead(ctx, batch, `SELECT idem_key, digest, target_id FROM krun_worker_idempotency`)
-	queueStateRead(ctx, batch, `SELECT service_id, env_name, name, bucket_id FROM krun_worker_environment_r2`)
+	queueStateRead(ctx, batch, `SELECT worker_id, env_name, name, bucket_id FROM krun_worker_environment_r2`)
 	queueStateRead(ctx, batch, `SELECT version_id, name, bucket_id FROM krun_worker_version_r2`)
 
 	results := s.pool.SendBatch(ctx, batch)
@@ -39,7 +39,7 @@ func (s *Store) loadWorkers(ctx context.Context, st *domain.State) error {
 
 	for _, read := range []func(pgx.BatchResults, *domain.State) error{
 		readWorkerBuckets,
-		readWorkerServices, readWorkerPlacements, readWorkerDomains, readWorkerEnvironments,
+		readWorkers, readWorkerPlacements, readWorkerDomains, readWorkerEnvironments,
 		readWorkerSecretVersions, readWorkerEnvironmentSecrets,
 		readWorkerBuilds, readWorkerArtifacts,
 		readWorkerVersions, readWorkerVersionSecrets, readWorkerDeployments, readWorkerOperations, readWorkerHistory,
@@ -53,7 +53,7 @@ func (s *Store) loadWorkers(ctx context.Context, st *domain.State) error {
 	return nil
 }
 
-func readWorkerServices(results pgx.BatchResults, st *domain.State) error {
+func readWorkers(results pgx.BatchResults, st *domain.State) error {
 	ws := st.Workers
 	rows, err := results.Query()
 	if err != nil {
@@ -67,8 +67,8 @@ func readWorkerServices(results pgx.BatchResults, st *domain.State) error {
 		if err = rows.Scan(&id, &org, &profile, &repository, &repositoryRevision, &domainsRevision, &previewRevision); err != nil {
 			return err
 		}
-		svc := domain.WorkerService{
-			Service: id, Organization: org, NetworkProfile: profile, RepositoryRevision: repositoryRevision,
+		svc := domain.Worker{
+			Worker: id, Organization: org, NetworkProfile: profile, RepositoryRevision: repositoryRevision,
 			DomainsRevision: domainsRevision, PreviewRevision: previewRevision,
 			Domains: []string{}, Environments: map[string]domain.WorkerEnvironment{},
 		}
@@ -79,7 +79,7 @@ func readWorkerServices(results pgx.BatchResults, st *domain.State) error {
 			}
 			svc.Repository = &src
 		}
-		ws.Services[id] = svc
+		ws.Workers[id] = svc
 	}
 	return rows.Err()
 }
@@ -92,11 +92,11 @@ func readWorkerPlacements(results pgx.BatchResults, st *domain.State) error {
 	defer rows.Close()
 	for rows.Next() {
 		var placement domain.WorkerPlacement
-		if err = rows.Scan(&placement.Service, &placement.Pool, &placement.Organization, &placement.NetworkProfile,
+		if err = rows.Scan(&placement.Worker, &placement.Pool, &placement.Organization, &placement.NetworkProfile,
 			&placement.Role, &placement.State, &placement.Revision, &placement.Created, &placement.Updated); err != nil {
 			return err
 		}
-		st.Workers.Placements[domain.WorkerPlacementKey(placement.Service, placement.Pool)] = placement
+		st.Workers.Placements[domain.WorkerPlacementKey(placement.Worker, placement.Pool)] = placement
 	}
 	return rows.Err()
 }
@@ -109,13 +109,13 @@ func readWorkerDomains(results pgx.BatchResults, st *domain.State) error {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var service, domain string
-		if err = rows.Scan(&service, &domain); err != nil {
+		var worker, domain string
+		if err = rows.Scan(&worker, &domain); err != nil {
 			return err
 		}
-		svc := ws.Services[service]
+		svc := ws.Workers[worker]
 		svc.Domains = append(svc.Domains, domain)
-		ws.Services[service] = svc
+		ws.Workers[worker] = svc
 	}
 	return rows.Err()
 }
@@ -128,10 +128,10 @@ func readWorkerEnvironments(results pgx.BatchResults, st *domain.State) error {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var service, name string
+		var worker, name string
 		var env domain.WorkerEnvironment
 		var variables []byte
-		if err = rows.Scan(&service, &name, &env.Enabled, &env.ConfigRevision, &variables, &env.Revision, &env.Version, &env.Confirmed, &env.VersionMetadata, &env.AssetsBinding); err != nil {
+		if err = rows.Scan(&worker, &name, &env.Enabled, &env.ConfigRevision, &variables, &env.Revision, &env.Version, &env.Confirmed, &env.VersionMetadata, &env.AssetsBinding); err != nil {
 			return err
 		}
 		env.Name = name
@@ -142,7 +142,7 @@ func readWorkerEnvironments(results pgx.BatchResults, st *domain.State) error {
 				return err
 			}
 		}
-		svc := ws.Services[service]
+		svc := ws.Workers[worker]
 		if svc.Environments == nil {
 			svc.Environments = map[string]domain.WorkerEnvironment{}
 		}
@@ -151,7 +151,7 @@ func readWorkerEnvironments(results pgx.BatchResults, st *domain.State) error {
 		} else {
 			svc.Environments[name] = env
 		}
-		ws.Services[service] = svc
+		ws.Workers[worker] = svc
 	}
 	return rows.Err()
 }
@@ -164,7 +164,7 @@ func readWorkerSecretVersions(results pgx.BatchResults, st *domain.State) error 
 	defer rows.Close()
 	for rows.Next() {
 		var version domain.WorkerSecretVersion
-		if err = rows.Scan(&version.ID, &version.Organization, &version.Service, &version.Environment,
+		if err = rows.Scan(&version.ID, &version.Organization, &version.Worker, &version.Environment,
 			&version.Name, &version.ValueDigest, &version.KeyVersion, &version.CreatedBy, &version.Created); err != nil {
 			return err
 		}
@@ -180,11 +180,11 @@ func readWorkerEnvironmentSecrets(results pgx.BatchResults, st *domain.State) er
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var service, environment, name, version string
-		if err = rows.Scan(&service, &environment, &name, &version); err != nil {
+		var worker, environment, name, version string
+		if err = rows.Scan(&worker, &environment, &name, &version); err != nil {
 			return err
 		}
-		item, ok := st.Workers.Services[service]
+		item, ok := st.Workers.Workers[worker]
 		if !ok {
 			continue
 		}
@@ -206,7 +206,7 @@ func readWorkerEnvironmentSecrets(results pgx.BatchResults, st *domain.State) er
 		} else {
 			item.Environments[environment] = env
 		}
-		st.Workers.Services[service] = item
+		st.Workers.Workers[worker] = item
 	}
 	return rows.Err()
 }
@@ -221,7 +221,7 @@ func readWorkerBuilds(results pgx.BatchResults, st *domain.State) error {
 	for rows.Next() {
 		var b domain.WorkerBuild
 		var repository, assets, flags []byte
-		if err = rows.Scan(&b.ID, &b.Organization, &b.Service, &b.Environment, &b.State, &b.Entrypoint, &b.SourceDigest, &b.Profile, &b.CompatibilityDate, &flags, &b.Job, &b.Artifact, &b.Error, &repository, &assets, &b.Created, &b.Finished, &b.ClaimedBy, &b.ClaimedAt); err != nil {
+		if err = rows.Scan(&b.ID, &b.Organization, &b.Worker, &b.Environment, &b.State, &b.Entrypoint, &b.SourceDigest, &b.Profile, &b.CompatibilityDate, &flags, &b.Job, &b.Artifact, &b.Error, &repository, &assets, &b.Created, &b.Finished, &b.ClaimedBy, &b.ClaimedAt); err != nil {
 			return err
 		}
 		if err = json.Unmarshal(flags, &b.CompatibilityFlags); err != nil {
@@ -277,7 +277,7 @@ func readWorkerVersions(results pgx.BatchResults, st *domain.State) error {
 	for rows.Next() {
 		var r domain.WorkerVersion
 		var variables, flags []byte
-		if err = rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.Profile, &r.ArchiveDigest, &r.ModuleDigest, &r.CompatibilityDate, &flags, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created, &r.VersionMetadata, &r.AssetsBinding, &r.Tag, &r.Message); err != nil {
+		if err = rows.Scan(&r.ID, &r.Organization, &r.Worker, &r.Environment, &r.Artifact, &r.Profile, &r.ArchiveDigest, &r.ModuleDigest, &r.CompatibilityDate, &flags, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created, &r.VersionMetadata, &r.AssetsBinding, &r.Tag, &r.Message); err != nil {
 			return err
 		}
 		if err = json.Unmarshal(flags, &r.CompatibilityFlags); err != nil {
@@ -330,7 +330,7 @@ func readWorkerOperations(results pgx.BatchResults, st *domain.State) error {
 		var op domain.WorkerOperation
 		var steps []byte
 		var actor domain.WorkerActor
-		if err = rows.Scan(&op.ID, &op.Kind, &op.Organization, &op.Service, &op.Environment, &op.State, &op.Build, &op.Version, &op.ExpectedRevision, &op.ConfigRevision, &op.EdgeRevision, &op.DeploymentRevision, &op.Error, &steps, &actor.User, &actor.Key, &actor.AuthVersion, &op.Created, &op.Finished); err != nil {
+		if err = rows.Scan(&op.ID, &op.Kind, &op.Organization, &op.Worker, &op.Environment, &op.State, &op.Build, &op.Version, &op.ExpectedRevision, &op.ConfigRevision, &op.EdgeRevision, &op.DeploymentRevision, &op.Error, &steps, &actor.User, &actor.Key, &actor.AuthVersion, &op.Created, &op.Finished); err != nil {
 			return err
 		}
 		if len(steps) > 0 {
@@ -352,12 +352,12 @@ func readWorkerHistory(results pgx.BatchResults, st *domain.State) error {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var service, env string
+		var worker, env string
 		var h domain.WorkerHistory
-		if err = rows.Scan(&service, &env, &h.Revision, &h.Version, &h.Operation, &h.Kind, &h.Time); err != nil {
+		if err = rows.Scan(&worker, &env, &h.Revision, &h.Version, &h.Operation, &h.Kind, &h.Time); err != nil {
 			return err
 		}
-		key := service + "/" + env
+		key := worker + "/" + env
 		ws.Histories[key] = append(ws.Histories[key], h)
 	}
 	return rows.Err()

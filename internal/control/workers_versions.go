@@ -43,7 +43,7 @@ func (s *Server) workerSecretBatch(st *State, p Principal, r *http.Request) (any
 		environment = domain.PreviewBaseName
 		authEnv = "global"
 	}
-	target, err := s.workerTarget(st, r, authEnv, "service.publish", p)
+	target, err := s.workerTarget(st, r, authEnv, "worker.publish", p)
 	if err != nil {
 		return nil, 0, err
 	}

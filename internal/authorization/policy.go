@@ -16,14 +16,14 @@ func ValidatePolicy(st *domain.State, p Principal, org, scope string, policy dom
 			return domain.Problem(422, "POLICY_INVALID", "invalid effect or actions")
 		}
 		if r.AllSystem {
-			if scope != "system" || len(r.IDs) > 0 || r.All || r.Organization != "" || !slices.Contains([]string{"*", "system", "organization", "service", "model", "api_key"}, r.Kind) {
+			if scope != "system" || len(r.IDs) > 0 || r.All || r.Organization != "" || !slices.Contains([]string{"*", "system", "organization", "worker", "model", "api_key"}, r.Kind) {
 				return domain.Problem(422, "POLICY_INVALID", "cross-workspace wildcard requires a system-scoped key and no organization or IDs")
 			}
 		} else {
 			if scope == "organization" && r.Organization != org {
 				return domain.Problem(422, "POLICY_INVALID", "selector must belong to this organization")
 			}
-			if r.All == (len(r.IDs) > 0) || !slices.Contains([]string{"*", "organization", "service", "model", "api_key"}, r.Kind) || (r.Kind == "*" && !r.All) {
+			if r.All == (len(r.IDs) > 0) || !slices.Contains([]string{"*", "organization", "worker", "model", "api_key"}, r.Kind) || (r.Kind == "*" && !r.All) {
 				return domain.Problem(422, "POLICY_INVALID", "choose exact IDs or organization wildcard")
 			}
 			if r.All && (r.Organization == "" || !SourceAllowed(st, p.User, r.Organization)) {

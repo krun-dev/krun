@@ -33,7 +33,7 @@ type WorkerBuildCreateInput struct {
 // for the full 2 MiB decoded source limit without raising every API's 1 MiB cap.
 const WorkerBuildRequestBodyMax = 16 << 20
 
-func (s *Service) WorkerBuildCreate(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef, in WorkerBuildCreateInput) (any, Outcome, error) {
+func (s *Service) WorkerBuildCreate(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, in WorkerBuildCreateInput) (any, Outcome, error) {
 	if in.Environment == "" {
 		return nil, Read, domain.Problem(422, "WORKER_BUILD_INVALID", "environment is required (production or a preview slug)")
 	}
@@ -47,7 +47,7 @@ func (s *Service) WorkerBuildCreate(ctx context.Context, st *domain.State, p aut
 	if e != nil {
 		return nil, Read, e
 	}
-	ws := s.WorkerService(st, t)
+	ws := s.Worker(st, t)
 	current, exists := ws.Environments[in.Environment]
 	if !exists {
 		return nil, Read, domain.NotFound()
@@ -124,12 +124,12 @@ func (s *Service) WorkerBuildCreate(ctx context.Context, st *domain.State, p aut
 	}
 	count := 0
 	for _, b := range st.Workers.Builds {
-		if b.Service == t.ID && b.State != "succeeded" && b.State != "failed" {
+		if b.Worker == t.ID && b.State != "succeeded" && b.State != "failed" {
 			count++
 		}
 	}
 	if count >= storage.WorkerActiveBuildLimit {
-		return nil, Read, domain.Problem(409, "BUILD_LIMIT", "At most 100 builds may be active per service")
+		return nil, Read, domain.Problem(409, "BUILD_LIMIT", "At most 100 builds may be active per worker")
 	}
 	raw, _ := json.Marshal(in.Files)
 	id = securetoken.NewID("bld")
@@ -137,7 +137,7 @@ func (s *Service) WorkerBuildCreate(ctx context.Context, st *domain.State, p aut
 	if s.Config.Workers.BuilderMode == "local" {
 		job = "local-" + securetoken.Digest(id)[:16]
 	}
-	b := domain.WorkerBuild{ID: id, Organization: t.Organization, Service: t.ID, Environment: in.Environment, State: "queued", Entrypoint: in.Entrypoint, SourceDigest: workerartifact.BytesDigest(raw), Profile: workerartifact.WorkerProfile, CompatibilityDate: compatibilityDate, CompatibilityFlags: compatibilityFlags, Job: job, Assets: in.Assets, Created: time.Now().UTC()}
+	b := domain.WorkerBuild{ID: id, Organization: t.Organization, Worker: t.ID, Environment: in.Environment, State: "queued", Entrypoint: in.Entrypoint, SourceDigest: workerartifact.BytesDigest(raw), Profile: workerartifact.WorkerProfile, CompatibilityDate: compatibilityDate, CompatibilityFlags: compatibilityFlags, Job: job, Assets: in.Assets, Created: time.Now().UTC()}
 	if in.SourceUpload != "" {
 		b.SourceDigest = ""
 	}
@@ -152,7 +152,7 @@ func (s *Service) WorkerBuildCreate(ctx context.Context, st *domain.State, p aut
 
 }
 
-func (s *Service) WorkerSourceUploadCreate(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
+func (s *Service) WorkerSourceUploadCreate(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
 	t, e := s.WorkerCollectionTarget(st, ref, "build.start", p)
 	if e != nil {
 		return nil, Read, e
@@ -165,15 +165,15 @@ func (s *Service) WorkerSourceUploadCreate(ctx context.Context, st *domain.State
 
 }
 
-func (s *Service) WorkerBuildList(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
-	t, e := s.WorkerCollectionTarget(st, ref, "service.version.read", p)
+func (s *Service) WorkerBuildList(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
+	t, e := s.WorkerCollectionTarget(st, ref, "worker.version.read", p)
 	if e != nil {
 		return nil, Read, e
 	}
 	out := []domain.WorkerBuild{}
 	for _, b := range st.Workers.Builds {
-		if b.Service == t.ID {
-			d, e := authorization.Authorize(st, p, "service.version.read", authorization.Target{Kind: "service", ID: t.ID, Organization: t.Organization, Environment: b.Environment})
+		if b.Worker == t.ID {
+			d, e := authorization.Authorize(st, p, "worker.version.read", authorization.Target{Kind: "worker", ID: t.ID, Organization: t.Organization, Environment: b.Environment})
 			if e != nil {
 				return nil, Read, e
 			}
@@ -187,22 +187,22 @@ func (s *Service) WorkerBuildList(ctx context.Context, st *domain.State, p autho
 
 }
 
-func (s *Service) WorkerGetBuild(st *domain.State, p authorization.Principal, ref ServiceRef, action string) (domain.WorkerBuild, error) {
+func (s *Service) WorkerGetBuild(st *domain.State, p authorization.Principal, ref WorkerRef, action string) (domain.WorkerBuild, error) {
 	b, ok := st.Workers.Builds[ref.Item]
-	if !ok || b.Service != ref.Service || b.Organization != ref.Organization {
+	if !ok || b.Worker != ref.Worker || b.Organization != ref.Organization {
 		return b, domain.NotFound()
 	}
 	_, e := s.WorkerTarget(st, ref, b.Environment, action, p)
 	return b, e
 }
 
-func (s *Service) WorkerBuildGet(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
-	b, e := s.WorkerGetBuild(st, p, ref, "service.version.read")
+func (s *Service) WorkerBuildGet(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
+	b, e := s.WorkerGetBuild(st, p, ref, "worker.version.read")
 	return b, Read, e
 
 }
 
-func (s *Service) WorkerBuildLogs(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
+func (s *Service) WorkerBuildLogs(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
 	b, e := s.WorkerGetBuild(st, p, ref, "log.read")
 	if e != nil {
 		return nil, Read, e
@@ -226,7 +226,7 @@ func (s *Service) WorkerBuildLogs(ctx context.Context, st *domain.State, p autho
 
 }
 
-func (s *Service) WorkerBuildSource(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
+func (s *Service) WorkerBuildSource(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
 	b, e := s.WorkerGetBuild(st, p, ref, "source.read")
 	if e != nil {
 		return nil, Read, e

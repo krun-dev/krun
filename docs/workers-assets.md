@@ -45,8 +45,8 @@ manifest 使用 single-flight 和有界 LRU，路径索引只构建一次；资�
 | 前缀 | 内容 | 访问 |
 | --- | --- | --- |
 | `v1/<org>/sha256/<digest>/` | 代码归档与 manifest | 私有，按需签名下载 |
-| `pub/<org>/<service>/<digest>/` | 公网静态资产副本 | 通过绑定的公网静态域访问 |
-| `int/<org>/<service>/<digest>/` | 内网静态资产副本 | 通过绑定的内网静态域访问 |
+| `pub/<org>/<worker>/<digest>/` | 公网静态资产副本 | 通过绑定的公网静态域访问 |
+| `int/<org>/<worker>/<digest>/` | 内网静态资产副本 | 通过绑定的内网静态域访问 |
 
 以上均为逻辑 key；配置 `s3_prefix` 后，实际对象在该前缀下隔离。外部私有桶不修改
 桶策略，静态域名由 runtime 使用签名 URL 读取，配置分发同样使用带鉴权的读取。

@@ -6,25 +6,25 @@ import (
 	"github.com/krun-dev/krun/internal/domain"
 )
 
-func (s *Service) ResolveInvocation(st *domain.State, principal authorization.Principal, ref ServiceRef) (string, string, error) {
+func (s *Service) ResolveInvocation(st *domain.State, principal authorization.Principal, ref WorkerRef) (string, string, error) {
 	env := ref.Environment
 	if !appconfig.WorkerEnvValid(env) {
 		return "", "", domain.NotFound()
 	}
-	target, err := s.WorkerTarget(st, ref, env, "service.invoke", principal)
+	target, err := s.WorkerTarget(st, ref, env, "worker.invoke", principal)
 	if err != nil {
 		return "", "", err
 	}
-	service := st.Workers.Services[target.ID]
-	current := service.Environments[env]
+	worker := st.Workers.Workers[target.ID]
+	current := worker.Environments[env]
 	if !current.Enabled || current.Version == "" {
 		return "", "", domain.Problem(409, "WORKER_NOT_PUBLISHED", "Publish this enabled environment first")
 	}
-	// Invoke through the first selected domain of the service. The domain's
+	// Invoke through the first selected domain of the worker. The domain's
 	// Gateway decides which instance to address. Hosts are derived, not
-	// stored, so they come from the catalog and the service selection.
-	slug := appconfig.WorkerSlug(service.Organization, service.Service)
-	for _, id := range s.SyncServiceDomains(service) {
+	// stored, so they come from the catalog and the worker selection.
+	slug := appconfig.WorkerSlug(worker.Organization, worker.Worker)
+	for _, id := range s.SyncWorkerDomains(worker) {
 		d, ok := s.Config.Workers.Domain(id)
 		if !ok {
 			continue

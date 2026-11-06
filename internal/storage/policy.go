@@ -19,10 +19,10 @@ const workerBaseline = "production"
 // Retained row limits. Every table that grows per request, per build or per
 // version has a bound here and a matching DELETE in retention.go.
 const (
-	WorkerBuildRetainPerService = 100
-	workerBuildLogRetain        = 7 * 24 * time.Hour
-	workerOperationRetain       = 30 * 24 * time.Hour
-	WorkerArtifactRetain        = 30 * 24 * time.Hour
-	workerIdempotencyRetain     = 7 * 24 * time.Hour
-	WorkerHistoryRetainPerEnv   = 50
+	WorkerBuildRetainPerWorker = 100
+	workerBuildLogRetain       = 7 * 24 * time.Hour
+	workerOperationRetain      = 30 * 24 * time.Hour
+	WorkerArtifactRetain       = 30 * 24 * time.Hour
+	workerIdempotencyRetain    = 7 * 24 * time.Hour
+	WorkerHistoryRetainPerEnv  = 50
 )

@@ -226,7 +226,7 @@ func (w *Controller) Reconcile(ctx context.Context) error {
 				return err
 			}
 			ready := false
-			if p, ok := domain.ActiveWorkerPlacement(&pending, op.Service); ok {
+			if p, ok := domain.ActiveWorkerPlacement(&pending, op.Worker); ok {
 				ready = routesReady["pool:"+p.Pool]
 			}
 

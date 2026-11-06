@@ -35,11 +35,11 @@ func WorkerPoolConfigLatestKey(pool string) string {
 }
 
 // workerConfigFromState includes the baseline and preview environments of every
-// live service. Disabled environments stay in the projection so the runtime can
+// live worker. Disabled environments stay in the projection so the runtime can
 // answer 410 instead of 404; unpublished environments carry an empty version.
 //
 // Hosts are not stored, so they are derived here from the configured domain
-// catalog and the service's selection. This is the same derivation the
+// catalog and the worker's selection. This is the same derivation the
 // HTTPRoute reconciler and the API use, which keeps the three from drifting.
 func WorkerConfigFromState(st *domain.State, config *appconfig.WorkersConfig) domain.WorkerConfigProjection {
 	out := domain.WorkerConfigProjection{Routes: []domain.WorkerConfigRoute{}, Versions: map[string]domain.WorkerVersion{}}
@@ -49,24 +49,24 @@ func WorkerConfigFromState(st *domain.State, config *appconfig.WorkersConfig) do
 	placements := map[string]domain.WorkerPlacement{}
 	for _, p := range st.Workers.Placements {
 		if p.Role == "primary" && p.State == "active" {
-			placements[p.Service] = p
+			placements[p.Worker] = p
 		}
 	}
-	for id, ws := range st.Workers.Services {
+	for id, ws := range st.Workers.Workers {
 		resource, ok := st.Resources[id]
-		if !ok || resource.Kind != "service" || resource.Organization != ws.Organization {
+		if !ok || resource.Kind != "worker" || resource.Organization != ws.Organization {
 			continue
 		}
 		if _, ok := st.Organizations[ws.Organization]; !ok {
 			continue
 		}
-		ws = config.NormalizeServiceNetwork(ws)
+		ws = config.NormalizeWorkerNetwork(ws)
 		placement, placed := placements[id]
 		if !placed || placement.NetworkProfile != ws.NetworkProfile || !config.PoolAllowedForProfile(ws.NetworkProfile, placement.Pool) {
 			continue
 		}
 		pool := placement.Pool
-		hosts := ServiceHostPatterns(ws, config.Domains)
+		hosts := WorkerHostPatterns(ws, config.Domains)
 		for name, env := range ws.Environments {
 			// The map key is authoritative: Environment.Name is a denormalised
 			// copy; the key defines the environment identity.
@@ -77,13 +77,13 @@ func WorkerConfigFromState(st *domain.State, config *appconfig.WorkersConfig) do
 			// the Gateway instance already decided which entry a request used.
 			for _, host := range hosts {
 				if expanded := EnvHostName(host, name); expanded != "" {
-					out.Routes = append(out.Routes, domain.WorkerConfigRoute{Service: id, Host: expanded, Path: "/", Enabled: env.Enabled, Version: env.Version, Pool: pool})
+					out.Routes = append(out.Routes, domain.WorkerConfigRoute{Worker: id, Host: expanded, Path: "/", Enabled: env.Enabled, Version: env.Version, Pool: pool})
 				}
 			}
 			if env.Version == "" {
 				continue
 			}
-			if version, ok := st.Workers.Versions[env.Version]; ok && version.Service == id && version.Organization == ws.Organization {
+			if version, ok := st.Workers.Versions[env.Version]; ok && version.Worker == id && version.Organization == ws.Organization {
 				out.Versions[version.ID] = version
 			}
 		}
@@ -93,24 +93,24 @@ func WorkerConfigFromState(st *domain.State, config *appconfig.WorkersConfig) do
 		if deployment.Committed == nil || !deployment.Expires.After(time.Now()) {
 			continue
 		}
-		service, ok := st.Workers.Services[deployment.Service]
+		worker, ok := st.Workers.Workers[deployment.Worker]
 		if !ok {
 			continue
 		}
-		env, ok := service.Environments[deployment.Environment]
+		env, ok := worker.Environments[deployment.Environment]
 		if !ok {
 			continue
 		}
-		placement, ok := placements[service.Service]
-		if !ok || !config.PoolAllowedForProfile(service.NetworkProfile, placement.Pool) {
+		placement, ok := placements[worker.Worker]
+		if !ok || !config.PoolAllowedForProfile(worker.NetworkProfile, placement.Pool) {
 			continue
 		}
 		version, ok := st.Workers.Versions[deployment.Version]
-		if !ok || version.Service != service.Service || version.Organization != service.Organization {
+		if !ok || version.Worker != worker.Worker || version.Organization != worker.Organization {
 			continue
 		}
-		for _, host := range DeploymentHosts(config, service, deployment.ID) {
-			out.Routes = append(out.Routes, domain.WorkerConfigRoute{Service: service.Service, Host: host, Path: "/", Expires: &deployment.Expires, Enabled: env.Enabled, Version: version.ID, Pool: placement.Pool})
+		for _, host := range DeploymentHosts(config, worker, deployment.ID) {
+			out.Routes = append(out.Routes, domain.WorkerConfigRoute{Worker: worker.Worker, Host: host, Path: "/", Expires: &deployment.Expires, Enabled: env.Enabled, Version: version.ID, Pool: placement.Pool})
 		}
 		out.Versions[version.ID] = version
 	}
@@ -128,11 +128,11 @@ func WorkerConfigOpsForPool(in []domain.WorkerConfigOp, pool string) []domain.Wo
 	return out
 }
 
-// serviceHostPatterns returns one "<slug>\x00<suffix>" pattern per selected
+// workerHostPatterns returns one "<slug>\x00<suffix>" pattern per selected
 // domain, in catalog order. envHostName expands the environment segment. A
-// service with no stored selection falls back to the catalog defaults, matching
-// what normalizeService does for the API and the route reconciler.
-func ServiceHostPatterns(ws domain.WorkerService, domains []appconfig.WorkerDomain) []string {
+// worker with no stored selection falls back to the catalog defaults, matching
+// what normalizeWorker does for the API and the route reconciler.
+func WorkerHostPatterns(ws domain.Worker, domains []appconfig.WorkerDomain) []string {
 	selected := map[string]bool{}
 	selection := ws.Domains
 	if len(selection) == 0 {
@@ -148,7 +148,7 @@ func ServiceHostPatterns(ws domain.WorkerService, domains []appconfig.WorkerDoma
 	for _, id := range selection {
 		selected[id] = true
 	}
-	slug := appconfig.WorkerSlug(ws.Organization, ws.Service)
+	slug := appconfig.WorkerSlug(ws.Organization, ws.Worker)
 	out := []string{}
 	for _, d := range domains {
 		if selected[d.ID] {
@@ -282,7 +282,7 @@ type WorkerConfigLatest struct {
 }
 
 // publishConfig serializes local publication; PostgreSQL coordinates replicas
-// through the per-service dirty queue and revision CAS.
+// through the per-worker dirty queue and revision CAS.
 func (w *Controller) PublishConfig(ctx context.Context) (int64, error) {
 	w.configMu.Lock()
 	defer w.configMu.Unlock()

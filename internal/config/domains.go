@@ -13,17 +13,17 @@ import (
 	securetoken "github.com/krun-dev/krun/internal/securetoken"
 )
 
-// selectPoolForService uses rendezvous hashing so adding or removing a pool
+// selectPoolForWorker uses rendezvous hashing so adding or removing a pool
 // only moves the services whose winner changes. The result is persisted as a
 // placement; this function is also useful for repairing a missing placement.
-func (c *WorkersConfig) SelectPoolForService(profileID, serviceID string) (WorkerRuntimePool, bool) {
+func (c *WorkersConfig) SelectPoolForWorker(profileID, workerID string) (WorkerRuntimePool, bool) {
 	pools := c.PoolsForProfile(profileID)
 	if len(pools) == 0 {
 		return WorkerRuntimePool{}, false
 	}
 	best, bestScore := pools[0], ""
 	for _, pool := range pools {
-		score := workerartifact.BytesDigest([]byte(profileID + "\x00" + serviceID + "\x00" + pool.ID))
+		score := workerartifact.BytesDigest([]byte(profileID + "\x00" + workerID + "\x00" + pool.ID))
 		if score > bestScore {
 			best, bestScore = pool, score
 		}
@@ -222,9 +222,9 @@ func WorkerTerminal(v string) bool {
 
 func WorkerOperationAction(kind string) string {
 	if kind == "secret" {
-		return "service.publish"
+		return "worker.publish"
 	}
-	return "service." + kind
+	return "worker." + kind
 }
 
 func WorkerVariablesValid(vars map[string]any) bool {
@@ -246,11 +246,11 @@ func WorkerVariablesValid(vars map[string]any) bool {
 	return size <= 16<<10
 }
 
-func (c *WorkersConfig) ServicePool(state *domain.WorkerState, service domain.WorkerService) string {
-	if p, ok := domain.ActiveWorkerPlacement(state, service.Service); ok && p.NetworkProfile == service.NetworkProfile {
+func (c *WorkersConfig) WorkerPool(state *domain.WorkerState, service domain.Worker) string {
+	if p, ok := domain.ActiveWorkerPlacement(state, service.Worker); ok && p.NetworkProfile == service.NetworkProfile {
 		return p.Pool
 	}
-	if p, ok := c.SelectPoolForService(service.NetworkProfile, service.Service); ok {
+	if p, ok := c.SelectPoolForWorker(service.NetworkProfile, service.Worker); ok {
 		return p.ID
 	}
 	return ""

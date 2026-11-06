@@ -16,7 +16,7 @@ type AssetObject struct {
 
 type RetentionScope struct {
 	bun.BaseModel `bun:"table:worker_retention_scopes,alias:worker_retention_scopes"`
-	ServiceID     string `bun:"service_id,pk"`
+	WorkerID      string `bun:"worker_id,pk"`
 	Generation    int64  `bun:"generation"`
 }
 

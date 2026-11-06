@@ -37,7 +37,7 @@ export function canOpenSection(
   const allowed = (action: string) => permissions.actions[action] === true;
   switch (section) {
     case "workers":
-      return allowed("service.list");
+      return allowed("worker.list");
     case "buckets":
       return allowed("storage.object.read");
     case "members":
@@ -48,7 +48,7 @@ export function canOpenSection(
     case "keys":
       return allowed("apiKey.create");
     case "resources":
-      return allowed("service.list") && allowed("model.list");
+      return allowed("worker.list") && allowed("model.list");
     case "check":
       return allowed("organization.read");
     case "audit":

@@ -39,21 +39,21 @@ func TestThreeOrganizationRoles(t *testing.T) {
 		{"storage.object.read", "organization", "org-a", "org_admin member viewer"},
 		{"storage.object.write", "organization", "org-a", "org_admin member"},
 		{"storage.object.delete", "organization", "org-a", "org_admin member"},
-		{"service.list", "organization", "org-a", "org_admin member viewer"},
-		{"service.create", "organization", "org-a", "org_admin member"},
-		{"service.read", "service", "svc-a", "org_admin member viewer"},
-		{"service.update", "service", "svc-a", "org_admin member"},
-		{"service.delete", "service", "svc-a", "org_admin member"},
-		{"service.version.read", "service", "svc-a", "org_admin member viewer"},
-		{"service.version.create", "service", "svc-a", "org_admin member"},
-		{"service.publish", "service", "svc-a", "org_admin member"},
-		{"service.rollback", "service", "svc-a", "org_admin member"},
-		{"service.invoke", "service", "svc-a", "org_admin member"},
-		{"build.start", "service", "svc-a", "org_admin member"},
-		{"log.read", "service", "svc-a", "org_admin member viewer"},
-		{"source.read", "service", "svc-a", "org_admin member viewer"},
-		{"binding.attach", "service", "svc-a", "org_admin member"},
-		{"binding.detach", "service", "svc-a", "org_admin member"},
+		{"worker.list", "organization", "org-a", "org_admin member viewer"},
+		{"worker.create", "organization", "org-a", "org_admin member"},
+		{"worker.read", "worker", "svc-a", "org_admin member viewer"},
+		{"worker.update", "worker", "svc-a", "org_admin member"},
+		{"worker.delete", "worker", "svc-a", "org_admin member"},
+		{"worker.version.read", "worker", "svc-a", "org_admin member viewer"},
+		{"worker.version.create", "worker", "svc-a", "org_admin member"},
+		{"worker.publish", "worker", "svc-a", "org_admin member"},
+		{"worker.rollback", "worker", "svc-a", "org_admin member"},
+		{"worker.invoke", "worker", "svc-a", "org_admin member"},
+		{"build.start", "worker", "svc-a", "org_admin member"},
+		{"log.read", "worker", "svc-a", "org_admin member viewer"},
+		{"source.read", "worker", "svc-a", "org_admin member viewer"},
+		{"binding.attach", "worker", "svc-a", "org_admin member"},
+		{"binding.detach", "worker", "svc-a", "org_admin member"},
 		{"model.list", "organization", "org-a", "org_admin member viewer"},
 		{"model.create", "organization", "org-a", "org_admin member"},
 		{"model.read", "model", "model-a", "org_admin member viewer"},
@@ -116,7 +116,7 @@ func TestMemberScopeAndKeyRestrictions(t *testing.T) {
 		SubjectKind: "user",
 		SubjectID:   user.ID,
 		Role:        "member",
-		ScopeKind:   "service",
+		ScopeKind:   "worker",
 		ScopeID:     "svc-a",
 		Conditions:  domain.Conditions{Environments: []string{"production"}},
 	}
@@ -124,8 +124,8 @@ func TestMemberScopeAndKeyRestrictions(t *testing.T) {
 		Version: 1,
 		Statements: []Statement{{
 			Effect:   "allow",
-			Actions:  []string{"service.read"},
-			Resource: Selector{Kind: "service", Organization: "org-a", IDs: []string{"svc-a"}},
+			Actions:  []string{"worker.read"},
+			Resource: Selector{Kind: "worker", Organization: "org-a", IDs: []string{"svc-a"}},
 		}},
 	}}
 	checks := []struct {
@@ -136,15 +136,15 @@ func TestMemberScopeAndKeyRestrictions(t *testing.T) {
 		key      *APIKey
 		allowed  bool
 	}{
-		{"publish granted service", "svc-a", "production", "service.publish", nil, true},
-		{"no other environment", "svc-a", "development", "service.publish", nil, false},
-		{"no other organization", "svc-b", "production", "service.publish", nil, false},
-		{"read-only key can read", "svc-a", "production", "service.read", &key, true},
-		{"read-only key cannot publish", "svc-a", "production", "service.publish", &key, false},
+		{"publish granted service", "svc-a", "production", "worker.publish", nil, true},
+		{"no other environment", "svc-a", "development", "worker.publish", nil, false},
+		{"no other organization", "svc-b", "production", "worker.publish", nil, false},
+		{"read-only key can read", "svc-a", "production", "worker.read", &key, true},
+		{"read-only key cannot publish", "svc-a", "production", "worker.publish", &key, false},
 	}
 	for _, check := range checks {
 		t.Run(check.name, func(t *testing.T) {
-			target, err := Resolve(st, "service", check.resource, check.env)
+			target, err := Resolve(st, "worker", check.resource, check.env)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -155,8 +155,8 @@ func TestMemberScopeAndKeyRestrictions(t *testing.T) {
 		})
 	}
 	delete(st.Members, domain.MemberKey("org-a", user.ID))
-	target, _ := Resolve(st, "service", "svc-a", "production")
-	decision, err := Authorize(st, Principal{User: user}, "service.publish", target)
+	target, _ := Resolve(st, "worker", "svc-a", "production")
+	decision, err := Authorize(st, Principal{User: user}, "worker.publish", target)
 	if err != nil || decision.Allowed {
 		t.Fatalf("removed member retained access: %+v %v", decision, err)
 	}

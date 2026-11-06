@@ -24,7 +24,7 @@ func TestBuildLogs(t *testing.T) {
 			_, _ = w.Write([]byte("build complete\n"))
 			return
 		}
-		if r.URL.Path != "/api/v1/orgs/org/services/svc/workers/builds/bld/logs" {
+		if r.URL.Path != "/api/v1/orgs/org/workers/svc/builds/bld/logs" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"state": "succeeded", "download_url": server.URL + "/log-object"})
@@ -32,7 +32,7 @@ func TestBuildLogs(t *testing.T) {
 	defer server.Close()
 	var out bytes.Buffer
 	c := Client{Profile: Profile{Endpoint: server.URL, Token: "krun_cli_test"}, Out: &out, Err: &out}
-	if err := c.buildLogs(context.Background(), []string{"logs", "--org", "org", "--service", "svc", "--build", "bld", "--follow"}); err != nil {
+	if err := c.buildLogs(context.Background(), []string{"logs", "--org", "org", "--worker", "svc", "--build", "bld", "--follow"}); err != nil {
 		t.Fatal(err)
 	}
 	if out.String() != "build complete\n" {

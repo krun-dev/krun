@@ -7,19 +7,19 @@ import (
 	"github.com/krun-dev/krun/internal/domain"
 )
 
-func (s *Service) PreviewBase(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef, in *WorkerEnvironmentUpdateInput) (any, Outcome, error) {
-	action := "service.read"
+func (s *Service) PreviewBase(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, in *WorkerEnvironmentUpdateInput) (any, Outcome, error) {
+	action := "worker.read"
 	if in != nil {
-		action = "service.update"
+		action = "worker.update"
 	}
 	target, err := s.WorkerTarget(st, ref, "global", action, p)
 	if err != nil {
 		return nil, Read, err
 	}
-	service := s.WorkerServiceView(st, target)
+	worker := s.WorkerView(st, target)
 	base := domain.WorkerEnvironment{Name: domain.PreviewBaseName, Enabled: true, Variables: map[string]any{}, SecretVersions: map[string]string{}}
-	if service.PreviewBase != nil {
-		base = *service.PreviewBase
+	if worker.PreviewBase != nil {
+		base = *worker.PreviewBase
 	}
 	if in == nil {
 		return base, Read, nil
@@ -55,7 +55,7 @@ func (s *Service) PreviewBase(ctx context.Context, st *domain.State, p authoriza
 		return nil, Read, err
 	}
 	base.ConfigRevision++
-	service.PreviewBase = &base
-	st.Workers.Services[ref.Service] = service
+	worker.PreviewBase = &base
+	st.Workers.Workers[ref.Worker] = worker
 	return base, Read, nil
 }

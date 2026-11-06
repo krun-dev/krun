@@ -116,14 +116,14 @@ test("viewer permissions drive navigation and cannot be bypassed through URLs or
   ]);
   await expect(page.getByRole("button", { name: "创建 Worker", exact: true })).toHaveCount(0);
   const permissions = await api(viewer.context, orgPath() + "/permissions");
-  expect(permissions.actions["service.list"]).toBe(true);
+  expect(permissions.actions["worker.list"]).toBe(true);
   expect(permissions.actions["iam.read"]).toBe(false);
   expect(permissions.actions["storage.object.read"]).toBe(true);
   expect(permissions.actions["storage.object.write"]).toBe(false);
 
   const bucket = await api(
     admin.context,
-    orgPath() + "/workers/buckets",
+    orgPath() + "/buckets",
     "POST",
     { name: "viewer-" + randomUUID().slice(0, 8) },
     201,
@@ -134,10 +134,10 @@ test("viewer permissions drive navigation and cannot be bypassed through URLs or
   await page.getByRole("button", { name: bucket.name, exact: true }).click();
   await expect(page.getByText("目录为空", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "上传文件", exact: true })).toHaveCount(0);
-  await api(viewer.context, orgPath() + "/workers/buckets", "POST", { name: "cannot-create" }, 403);
+  await api(viewer.context, orgPath() + "/buckets", "POST", { name: "cannot-create" }, 403);
   await api(
     viewer.context,
-    `${orgPath()}/workers/buckets/${bucket.id}/objects/access`,
+    `${orgPath()}/buckets/${bucket.id}/objects/access`,
     "POST",
     { operation: "upload", key: "denied.txt", size: 1 },
     403,
@@ -191,7 +191,7 @@ test("the role picker offers three roles and a member can work without organizat
   const grant = grants.items.find((item) => item.subject_id === viewerID && item.role_id === "member");
   expect(grant).toBeTruthy();
   const permissions = await api(viewer.context, orgPath() + "/permissions");
-  expect(permissions.actions["service.create"]).toBe(true);
+  expect(permissions.actions["worker.create"]).toBe(true);
   expect(permissions.actions["storage.bucket.create"]).toBe(true);
   expect(permissions.actions["iam.grant"]).toBe(false);
   expect(permissions.actions["organization.update"]).toBe(false);
@@ -200,17 +200,17 @@ test("the role picker offers three roles and a member can work without organizat
   await expect(viewer.page.locator("aside nav").getByRole("button", { name: "组织成员", exact: true })).toHaveCount(0);
   await api(viewer.context, orgPath() + "/members", "GET", undefined, 403);
   await api(viewer.context, "/api/v1/system/users", "GET", undefined, 403);
-  const resource = await api(viewer.context, orgPath() + "/services", "POST", { name: "member-resource" }, 201);
-  await api(viewer.context, `${orgPath()}/services/${resource.id}`, "DELETE", undefined, 204);
-  const bucket = await api(viewer.context, orgPath() + "/workers/buckets", "POST", { name: "member-" + randomUUID().slice(0, 8) }, 201);
-  await api(viewer.context, `${orgPath()}/workers/buckets/${bucket.id}`, "PATCH", { enabled: false, revision: bucket.revision });
+  const resource = await api(viewer.context, orgPath() + "/workers", "POST", { name: "member-resource" }, 201);
+  await api(viewer.context, `${orgPath()}/workers/${resource.id}`, "DELETE", undefined, 204);
+  const bucket = await api(viewer.context, orgPath() + "/buckets", "POST", { name: "member-" + randomUUID().slice(0, 8) }, 201);
+  await api(viewer.context, `${orgPath()}/buckets/${bucket.id}`, "PATCH", { enabled: false, revision: bucket.revision });
   await viewer.page.goto(`/?page=buckets&workspace=${organization.id}`);
   await expect(viewer.page.getByRole("button", { name: "创建桶", exact: true })).toBeVisible();
 
   await api(member.context, `${orgPath()}/role-assignments/${grant.assignment_id}`, "DELETE", undefined, 204);
   await viewer.page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(viewer.page.getByRole("button", { name: "创建桶", exact: true })).toHaveCount(0);
-  await api(viewer.context, orgPath() + "/services", "POST", { name: "write-after-revoke" }, 403);
+  await api(viewer.context, orgPath() + "/workers", "POST", { name: "write-after-revoke" }, 403);
   for (const role of ["developer", "publisher"]) {
     await api(member.context, orgPath() + "/role-assignments", "POST", {
       subject_kind: "user", subject_id: viewerID, role_id: role,

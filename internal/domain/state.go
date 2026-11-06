@@ -39,25 +39,25 @@ func NewState() *State {
 
 func MemberKey(org, user string) string { return org + "/" + user }
 
-func WorkerPlacementKey(service, pool string) string { return service + "\x00" + pool }
+func WorkerPlacementKey(worker, pool string) string { return worker + "\x00" + pool }
 
-func ActiveWorkerPlacement(state *WorkerState, service string) (WorkerPlacement, bool) {
+func ActiveWorkerPlacement(state *WorkerState, worker string) (WorkerPlacement, bool) {
 	if state == nil {
 		return WorkerPlacement{}, false
 	}
 	for _, placement := range state.Placements {
-		if placement.Service == service && placement.Role == "primary" && placement.State == "active" {
+		if placement.Worker == worker && placement.Role == "primary" && placement.State == "active" {
 			return placement, true
 		}
 	}
 	return WorkerPlacement{}, false
 }
 
-func WorkerServiceAvailableInPool(state *WorkerState, service, pool string) bool {
+func WorkerAvailableInPool(state *WorkerState, worker, pool string) bool {
 	if state == nil {
 		return false
 	}
-	placement, ok := state.Placements[WorkerPlacementKey(service, pool)]
+	placement, ok := state.Placements[WorkerPlacementKey(worker, pool)]
 	return ok && (placement.State == "preparing" || placement.State == "ready" || placement.State == "active")
 }
 
@@ -65,7 +65,7 @@ func NewWorkerState() *WorkerState {
 	return &WorkerState{
 		Buckets:          map[string]WorkerBucket{},
 		Revision:         1,
-		Services:         map[string]WorkerService{},
+		Workers:          map[string]Worker{},
 		Placements:       map[string]WorkerPlacement{},
 		Builds:           map[string]WorkerBuild{},
 		BuildPrivate:     map[string]WorkerBuildPrivate{},
@@ -111,7 +111,7 @@ func WorkerSecretNames(versions map[string]string) []string {
 }
 
 func SameWorkerSecretVersion(a, b WorkerSecretVersion) bool {
-	return a.ID == b.ID && a.Organization == b.Organization && a.Service == b.Service &&
+	return a.ID == b.ID && a.Organization == b.Organization && a.Worker == b.Worker &&
 		a.Environment == b.Environment && a.Name == b.Name && a.ValueDigest == b.ValueDigest &&
 		a.KeyVersion == b.KeyVersion && a.CreatedBy == b.CreatedBy && a.Created.Equal(b.Created)
 }
@@ -137,8 +137,8 @@ func CloneState(src *State) (*State, error) {
 		dst.Workers.Buckets[id] = target
 	}
 	// Preserve only the identifiers; ciphertext is never part of State.
-	for service, source := range src.Workers.Services {
-		target, ok := dst.Workers.Services[service]
+	for worker, source := range src.Workers.Workers {
+		target, ok := dst.Workers.Workers[worker]
 		if !ok {
 			continue
 		}
@@ -153,7 +153,7 @@ func CloneState(src *State) (*State, error) {
 		if source.PreviewBase != nil && target.PreviewBase != nil {
 			target.PreviewBase.SecretVersions = CloneStringsMap(source.PreviewBase.SecretVersions)
 		}
-		dst.Workers.Services[service] = target
+		dst.Workers.Workers[worker] = target
 	}
 	for id, source := range src.Workers.Versions {
 		target, ok := dst.Workers.Versions[id]
@@ -198,13 +198,13 @@ func CloneState(src *State) (*State, error) {
 // PreviewBaseName is an internal configuration scope, never a routable environment.
 const PreviewBaseName = "@previews-base"
 
-func StorageWorkerEnvironments(service WorkerService) map[string]WorkerEnvironment {
-	out := make(map[string]WorkerEnvironment, len(service.Environments)+1)
-	for name, env := range service.Environments {
+func StorageWorkerEnvironments(worker Worker) map[string]WorkerEnvironment {
+	out := make(map[string]WorkerEnvironment, len(worker.Environments)+1)
+	for name, env := range worker.Environments {
 		out[name] = env
 	}
-	if service.PreviewBase != nil {
-		out[PreviewBaseName] = *service.PreviewBase
+	if worker.PreviewBase != nil {
+		out[PreviewBaseName] = *worker.PreviewBase
 	}
 	return out
 }

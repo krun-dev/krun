@@ -22,7 +22,7 @@ func (s *Store) WorkerScript(ctx context.Context, org, name string) (domain.Work
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.WorkerScript{}, false, nil
 	}
-	return domain.WorkerScript{Organization: row.OrgID, Name: row.ScriptName, Service: row.ServiceID, WorkersDev: row.WorkersDev, PreviewsEnabled: row.PreviewsEnabled}, err == nil, err
+	return domain.WorkerScript{Organization: row.OrgID, Name: row.ScriptName, Worker: row.WorkerID, WorkersDev: row.WorkersDev, PreviewsEnabled: row.PreviewsEnabled}, err == nil, err
 }
 func (s *Store) BindWorkerScript(ctx context.Context, script domain.WorkerScript) error {
 	if s.pool == nil {
@@ -32,14 +32,14 @@ func (s *Store) BindWorkerScript(ctx context.Context, script domain.WorkerScript
 			s.scripts = map[string]domain.WorkerScript{}
 		}
 		key := scriptKey(script.Organization, script.Name)
-		if old, ok := s.scripts[key]; ok && old.Service != script.Service {
+		if old, ok := s.scripts[key]; ok && old.Worker != script.Worker {
 			return domain.Problem(409, "REVISION_CONFLICT", "Worker name already bound")
 		}
 		s.scripts[key] = script
 		return nil
 	}
-	row := models.Script{OrgID: script.Organization, ScriptName: script.Name, ServiceID: script.Service, WorkersDev: script.WorkersDev, PreviewsEnabled: script.PreviewsEnabled}
-	result, err := s.orm.NewInsert().Model(&row).Column("org_id", "script_name", "service_id", "workers_dev", "previews_enabled").On("CONFLICT (org_id, script_name) DO UPDATE").Set("workers_dev = EXCLUDED.workers_dev").Set("previews_enabled = EXCLUDED.previews_enabled").Where("krun_worker_scripts.service_id = EXCLUDED.service_id").Returning("NULL").Exec(ctx)
+	row := models.Script{OrgID: script.Organization, ScriptName: script.Name, WorkerID: script.Worker, WorkersDev: script.WorkersDev, PreviewsEnabled: script.PreviewsEnabled}
+	result, err := s.orm.NewInsert().Model(&row).Column("org_id", "script_name", "worker_id", "workers_dev", "previews_enabled").On("CONFLICT (org_id, script_name) DO UPDATE").Set("workers_dev = EXCLUDED.workers_dev").Set("previews_enabled = EXCLUDED.previews_enabled").Where("krun_worker_scripts.worker_id = EXCLUDED.worker_id").Returning("NULL").Exec(ctx)
 	if err != nil {
 		return err
 	}
@@ -78,13 +78,13 @@ func (s *Store) WorkerScripts(ctx context.Context, org string) ([]domain.WorkerS
 	err := s.orm.NewSelect().Model(&rows).Where("org_id = ?", org).Order("script_name").Limit(200).Scan(ctx)
 	out := make([]domain.WorkerScript, 0, len(rows))
 	for _, v := range rows {
-		out = append(out, domain.WorkerScript{Organization: v.OrgID, Name: v.ScriptName, Service: v.ServiceID, WorkersDev: v.WorkersDev, PreviewsEnabled: v.PreviewsEnabled})
+		out = append(out, domain.WorkerScript{Organization: v.OrgID, Name: v.ScriptName, Worker: v.WorkerID, WorkersDev: v.WorkersDev, PreviewsEnabled: v.PreviewsEnabled})
 	}
 	return out, err
 }
 
 // ReserveWorkerScript atomically chooses one identity for concurrent first
-// uploads. Recreating a deleted Script always receives a fresh service ID.
+// uploads. Recreating a deleted Script always receives a fresh worker ID.
 func (s *Store) ReserveWorkerScript(ctx context.Context, script domain.WorkerScript) (domain.WorkerScript, error) {
 	if s.pool == nil {
 		s.mu.Lock()
@@ -99,8 +99,8 @@ func (s *Store) ReserveWorkerScript(ctx context.Context, script domain.WorkerScr
 		s.scripts[key] = script
 		return script, nil
 	}
-	row := models.Script{OrgID: script.Organization, ScriptName: script.Name, ServiceID: script.Service, WorkersDev: script.WorkersDev, PreviewsEnabled: script.PreviewsEnabled}
-	if _, err := s.orm.NewInsert().Model(&row).Column("org_id", "script_name", "service_id", "workers_dev", "previews_enabled").On("CONFLICT (org_id,script_name) DO NOTHING").Returning("NULL").Exec(ctx); err != nil {
+	row := models.Script{OrgID: script.Organization, ScriptName: script.Name, WorkerID: script.Worker, WorkersDev: script.WorkersDev, PreviewsEnabled: script.PreviewsEnabled}
+	if _, err := s.orm.NewInsert().Model(&row).Column("org_id", "script_name", "worker_id", "workers_dev", "previews_enabled").On("CONFLICT (org_id,script_name) DO NOTHING").Returning("NULL").Exec(ctx); err != nil {
 		return script, err
 	}
 	got, ok, err := s.WorkerScript(ctx, script.Organization, script.Name)

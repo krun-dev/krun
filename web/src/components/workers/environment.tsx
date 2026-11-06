@@ -112,7 +112,7 @@ export function EnvironmentSettings({
             </a>
           ))}
           <p className="text-xs text-muted-foreground">
-            {t("域名由服务的“路由与域名”页统一选择，此处只展示当前环境的地址。")}
+            {t("域名由Worker的“路由与域名”页统一选择，此处只展示当前环境的地址。")}
           </p>
         </div>
         <Field

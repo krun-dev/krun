@@ -23,7 +23,7 @@ export type RepositoryProvider = {
   connected: boolean;
   oauth: boolean;
 };
-export type WorkerServiceSummary = Resource & {
+export type WorkerSummary = Resource & {
   repository_source?: RepositorySource;
   network_profile: WorkerNetworkProfile;
   environments: Pick<

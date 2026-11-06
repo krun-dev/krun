@@ -12,7 +12,7 @@ import (
 	storage "github.com/krun-dev/krun/internal/storage"
 )
 
-// Only the dirty service batch is read and diffed. Queue generations protect a
+// Only the dirty worker batch is read and diffed. Queue generations protect a
 // newer mutation from being acknowledged by an older publisher. The revision
 // transaction contains database statements only; all S3 writes are retryable.
 func (w *Controller) PublishConfigDelta(ctx context.Context) (int64, error) {
@@ -21,7 +21,7 @@ func (w *Controller) PublishConfigDelta(ctx context.Context) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		dirty, err := w.Service.Store.DirtyWorkerServices(ctx)
+		dirty, err := w.Service.Store.DirtyWorkers(ctx)
 		if err != nil {
 			return head, err
 		}
@@ -36,7 +36,7 @@ func (w *Controller) PublishConfigDelta(ctx context.Context) (int64, error) {
 		if err != nil {
 			return head, err
 		}
-		old, err := w.Service.Store.PublishedWorkerServices(ctx, ids)
+		old, err := w.Service.Store.PublishedWorkers(ctx, ids)
 		if err != nil {
 			return head, err
 		}

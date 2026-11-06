@@ -633,7 +633,7 @@ export function IAMPage({
                             <option value="organization">
                               {t("整个组织")}
                             </option>
-                            <option value="service">{t("指定服务")}</option>
+                            <option value="worker">{t("指定Worker")}</option>
                             <option value="model">{t("指定模型")}</option>
                           </SelectField>
                         </Field>
@@ -744,7 +744,7 @@ export function CheckPage({
                   {[
                     "system",
                     "organization",
-                    "service",
+                    "worker",
                     "model",
                     "api_key",
                   ].map((k) => (
@@ -766,7 +766,7 @@ export function CheckPage({
                   required
                   value={action}
                   onChange={(e) => setAction(e.target.value)}
-                  placeholder="service.read"
+                  placeholder="worker.read"
                 />
               </Field>
               <Field label={t("目标环境")}>
@@ -949,7 +949,7 @@ export function ResourcesPage({
   reload,
 }: Omit<Props, "scope">) {
   useTranslation();
-  const [kind, setKind] = useState("services"),
+  const [kind, setKind] = useState("workers"),
     [open, setOpen] = useState(false),
     [name, setName] = useState(""),
     [busy, setBusy] = useState(false);
@@ -967,7 +967,7 @@ export function ResourcesPage({
     return (
       <Empty
         title={t("请切换到组织空间")}
-        description={t("服务与模型归属于具体组织。")}
+        description={t("Worker与模型归属于具体组织。")}
       />
     );
   return (
@@ -976,7 +976,7 @@ export function ResourcesPage({
         eyebrow={t("Resource catalog")}
         title={t("资源目录")}
         description={t(
-          "管理服务与模型元数据；Workers 构建与发布可从 Workers 页面操作。",
+          "管理Worker与模型元数据；Workers 构建与发布可从 Workers 页面操作。",
         )}
         action={
           <Button onClick={() => setOpen(true)}>
@@ -987,7 +987,7 @@ export function ResourcesPage({
       />
       <Tabs value={kind} onValueChange={setKind} className="mb-5">
         <TabsList>
-          <TabsTrigger value="services">{t("服务")}</TabsTrigger>
+          <TabsTrigger value="workers">{t("Worker")}</TabsTrigger>
           <TabsTrigger value="models">{t("模型")}</TabsTrigger>
         </TabsList>
       </Tabs>
@@ -1060,7 +1060,7 @@ export function ResourcesPage({
           <DialogHeader>
             <DialogTitle>
               {t("创建")}
-              {kind === "services" ? t("服务") : t("模型")}
+              {kind === "workers" ? t("Worker") : t("模型")}
             </DialogTitle>
             <DialogDescription>
               {t("资源创建后获得不可复用的稳定 ID。")}

@@ -31,8 +31,8 @@ func TestPostgresOperationEdgeRevisionIsFrozen(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_worker_operations
-		(operation_id, kind, org_id, service_id, env_name, state)
-		VALUES ('op-edge','publish','org','service','production','committed')`); err != nil {
+		(operation_id, kind, org_id, worker_id, env_name, state)
+		VALUES ('op-edge','publish','org','worker','production','committed')`); err != nil {
 		t.Fatal(err)
 	}
 	first, err := store.SetOperationEdgeRevision(ctx, "op-edge", 11)
@@ -63,13 +63,13 @@ func TestPostgresOperationEdgeRevisionIsFrozen(t *testing.T) {
 func TestPostgresStaleSnapshotCannotReviveFinishedBuild(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
-	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_worker_services
-		(service_id, org_id) VALUES ('svc-cas','org-cas')`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_workers
+		(worker_id, org_id) VALUES ('svc-cas','org-cas')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Builds["build-cas"] = WorkerBuild{
-			ID: "build-cas", Organization: "org-cas", Service: "svc-cas",
+			ID: "build-cas", Organization: "org-cas", Worker: "svc-cas",
 			Environment: "production", State: "queued", Created: now(),
 		}
 		st.Workers.BuildPrivate["build-cas"] = WorkerBuildPrivate{Actor: WorkerActor{User: "user", AuthVersion: 1}}
@@ -108,7 +108,7 @@ func TestPostgresStaleSnapshotCannotReviveFinishedBuild(t *testing.T) {
 	if err := postgresTestPool(store).QueryRow(ctx, `SELECT state FROM krun_worker_builds WHERE build_id='build-cas'`).Scan(&state); err != nil {
 		t.Fatal(err)
 	}
-	if err := postgresTestPool(store).QueryRow(ctx, `SELECT active_build_count FROM krun_worker_services WHERE service_id='svc-cas'`).Scan(&active); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT active_build_count FROM krun_workers WHERE worker_id='svc-cas'`).Scan(&active); err != nil {
 		t.Fatal(err)
 	}
 	if state != "failed" || active != 0 {
@@ -119,13 +119,13 @@ func TestPostgresStaleSnapshotCannotReviveFinishedBuild(t *testing.T) {
 func TestPostgresStaleBuildOwnerCannotFinishAfterTakeover(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
-	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_worker_services
-		(service_id, org_id) VALUES ('svc-owner','org-owner')`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_workers
+		(worker_id, org_id) VALUES ('svc-owner','org-owner')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Builds["build-owner"] = WorkerBuild{
-			ID: "build-owner", Organization: "org-owner", Service: "svc-owner",
+			ID: "build-owner", Organization: "org-owner", Worker: "svc-owner",
 			Environment: "production", State: "queued", Created: now(),
 		}
 		st.Workers.BuildPrivate["build-owner"] = WorkerBuildPrivate{Actor: WorkerActor{User: "user", AuthVersion: 1}}
@@ -157,7 +157,7 @@ func TestPostgresStaleBuildOwnerCannotFinishAfterTakeover(t *testing.T) {
 	if err := postgresTestPool(store).QueryRow(ctx, `SELECT state, claimed_by FROM krun_worker_builds WHERE build_id='build-owner'`).Scan(&state, &owner); err != nil {
 		t.Fatal(err)
 	}
-	if err := postgresTestPool(store).QueryRow(ctx, `SELECT active_build_count FROM krun_worker_services WHERE service_id='svc-owner'`).Scan(&active); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT active_build_count FROM krun_workers WHERE worker_id='svc-owner'`).Scan(&active); err != nil {
 		t.Fatal(err)
 	}
 	if state != "building" || owner != "replica-new" || active != 1 {
@@ -169,7 +169,7 @@ func TestPostgresStaleBuildOwnerCannotFinishAfterTakeover(t *testing.T) {
 	if err := postgresTestPool(store).QueryRow(ctx, `SELECT state FROM krun_worker_builds WHERE build_id='build-owner'`).Scan(&state); err != nil {
 		t.Fatal(err)
 	}
-	if err := postgresTestPool(store).QueryRow(ctx, `SELECT active_build_count FROM krun_worker_services WHERE service_id='svc-owner'`).Scan(&active); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT active_build_count FROM krun_workers WHERE worker_id='svc-owner'`).Scan(&active); err != nil {
 		t.Fatal(err)
 	}
 	if state != "failed" || active != 0 {

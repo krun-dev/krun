@@ -13,7 +13,7 @@
 <root_prefix>/org/<organization_id>/buckets/<bucket_id>/<key>
 ```
 
-原生对象接口的 base 为 `/api/v1/orgs/{org}/workers/buckets/{bucketID}/objects`：
+原生对象接口的 base 为 `/api/v1/orgs/{org}/buckets/{bucketID}/objects`：
 
 | 接口 | 行为 | 权限 |
 | --- | --- | --- |

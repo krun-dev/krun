@@ -10,10 +10,10 @@ import (
 	"github.com/krun-dev/krun/internal/storage"
 )
 
-// ServiceRef identifies an organization service and, when applicable, one of
+// WorkerRef identifies an organization worker and, when applicable, one of
 // its environments or subordinate items. Item is a build, version, operation,
 // artifact or secret name, as specified by the called operation.
-type ServiceRef struct{ Organization, Service, Environment, Item string }
+type WorkerRef struct{ Organization, Worker, Environment, Item string }
 
 // Outcome describes an application result; HTTP status mapping belongs to the adapter.
 type Outcome uint8
@@ -54,7 +54,7 @@ func (s *Service) audit(st *domain.State, p authorization.Principal, action, tar
 	}
 }
 
-func (s *Service) orgTarget(st *domain.State, ref ServiceRef) (authorization.Target, error) {
+func (s *Service) orgTarget(st *domain.State, ref WorkerRef) (authorization.Target, error) {
 	return authorization.Resolve(st, "organization", ref.Organization, "global")
 }
 

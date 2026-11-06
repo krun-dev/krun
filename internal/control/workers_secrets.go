@@ -28,7 +28,7 @@ func (s *Server) workerSecretChange(st *State, p Principal, r *http.Request, del
 	if !appconfig.WorkerEnvValid(environment) || !workerSecretNameValid(name) {
 		return nil, 0, notFound()
 	}
-	target, err := s.workerTarget(st, r, environment, "service.publish", p)
+	target, err := s.workerTarget(st, r, environment, "worker.publish", p)
 	if err != nil {
 		return nil, 0, err
 	}

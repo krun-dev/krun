@@ -14,19 +14,19 @@ import (
 func TestPostgresConfigDeltaMovesAndDeletesRoutes(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
-	moving := workerConfigRoute{Service: "moving", Host: "move.workers.test", Pool: "old", Path: "/", Enabled: true, Version: "shared"}
-	keeping := workerConfigRoute{Service: "keeping", Host: "keep.workers.test", Pool: "old", Path: "/", Enabled: true, Version: "kept"}
-	deleting := workerConfigRoute{Service: "deleting", Host: "delete.workers.test", Pool: "old", Path: "/", Enabled: true, Version: "orphan"}
+	moving := workerConfigRoute{Worker: "moving", Host: "move.workers.test", Pool: "old", Path: "/", Enabled: true, Version: "shared"}
+	keeping := workerConfigRoute{Worker: "keeping", Host: "keep.workers.test", Pool: "old", Path: "/", Enabled: true, Version: "kept"}
+	deleting := workerConfigRoute{Worker: "deleting", Host: "delete.workers.test", Pool: "old", Path: "/", Enabled: true, Version: "orphan"}
 	before := workerConfigProjection{
 		Routes: []workerConfigRoute{deleting, keeping, moving},
 		Versions: map[string]WorkerVersion{
 			"shared": {ID: "shared"}, "kept": {ID: "kept"}, "orphan": {ID: "orphan"},
 		},
 	}
-	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_dirty(service_id) VALUES ('moving'), ('keeping'), ('deleting')`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_dirty(worker_id) VALUES ('moving'), ('keeping'), ('deleting')`); err != nil {
 		t.Fatal(err)
 	}
-	dirty, err := store.DirtyWorkerServices(ctx)
+	dirty, err := store.DirtyWorkers(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,10 +41,10 @@ func TestPostgresConfigDeltaMovesAndDeletesRoutes(t *testing.T) {
 		Routes:   []workerConfigRoute{keeping, moving},
 		Versions: map[string]WorkerVersion{"shared": {ID: "shared"}, "kept": {ID: "kept"}},
 	}
-	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_dirty(service_id) VALUES ('moving'), ('deleting')`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_dirty(worker_id) VALUES ('moving'), ('deleting')`); err != nil {
 		t.Fatal(err)
 	}
-	dirty, err = store.DirtyWorkerServices(ctx)
+	dirty, err = store.DirtyWorkers(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestPostgresConfigDeltaMovesAndDeletesRoutes(t *testing.T) {
 	if revision, won, err := store.AppendConfigDelta(ctx, 1, dirty, ops); err != nil || !won || revision != 2 {
 		t.Fatalf("move revision=%d won=%v err=%v", revision, won, err)
 	}
-	projection, err := store.PublishedWorkerServices(ctx, []string{"moving", "keeping", "deleting"})
+	projection, err := store.PublishedWorkers(ctx, []string{"moving", "keeping", "deleting"})
 	if err != nil || !reflect.DeepEqual(projection, after) {
 		t.Fatalf("projection=%+v want=%+v err=%v", projection, after, err)
 	}
@@ -96,7 +96,7 @@ func TestPostgresConfigDeltaMovesAndDeletesRoutes(t *testing.T) {
 	if err := json.Unmarshal(revisions[0].Ops, &recorded); err != nil || !reflect.DeepEqual(recorded, ops) {
 		t.Fatalf("recorded=%+v want=%+v err=%v", recorded, ops, err)
 	}
-	if dirty, err := store.DirtyWorkerServices(ctx); err != nil || len(dirty) != 0 {
+	if dirty, err := store.DirtyWorkers(ctx); err != nil || len(dirty) != 0 {
 		t.Fatalf("dirty=%+v err=%v", dirty, err)
 	}
 }
@@ -104,7 +104,7 @@ func TestPostgresConfigDeltaMovesAndDeletesRoutes(t *testing.T) {
 func TestPostgresConfigDeltaRollsBackFailedBatch(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
-	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_dirty(service_id, generation) VALUES ('svc', 1)`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_dirty(worker_id, generation) VALUES ('svc', 1)`); err != nil {
 		t.Fatal(err)
 	}
 	// The version and route writes precede the invalid log entry in the batch.
@@ -113,7 +113,7 @@ func TestPostgresConfigDeltaRollsBackFailedBatch(t *testing.T) {
 		{Type: "version_put", Pool: "default", Version: &WorkerVersion{ID: "version"}},
 		{Type: "route_upsert", Pool: "default", Host: "route.workers.test", Route: &workerConfigRoute{Host: "wrong.workers.test", Version: "version"}},
 	}
-	revision, won, err := store.AppendConfigDelta(ctx, 0, []workerDirtyService{{ID: "svc", Generation: 1}}, ops)
+	revision, won, err := store.AppendConfigDelta(ctx, 0, []workerDirtyWorker{{ID: "svc", Generation: 1}}, ops)
 	if err == nil || !strings.Contains(err.Error(), "apply config operations") || won || revision != 0 {
 		t.Fatalf("revision=%d won=%v err=%v", revision, won, err)
 	}
@@ -127,7 +127,7 @@ func TestPostgresConfigDeltaRollsBackFailedBatch(t *testing.T) {
 	if err := postgresTestPool(store).QueryRow(ctx, `SELECT value::bigint FROM krun_meta WHERE key='worker_config_head'`).Scan(&head); err != nil || head != 0 {
 		t.Fatalf("head=%d err=%v", head, err)
 	}
-	if dirty, err := store.DirtyWorkerServices(ctx); err != nil || len(dirty) != 1 || dirty[0].Generation != 1 {
+	if dirty, err := store.DirtyWorkers(ctx); err != nil || len(dirty) != 1 || dirty[0].Generation != 1 {
 		t.Fatalf("dirty=%+v err=%v", dirty, err)
 	}
 }
@@ -141,7 +141,7 @@ func TestPostgresConfigDeltaRollsBackCleanupFailureAndRetries(t *testing.T) {
 		`UPDATE krun_meta SET value='512' WHERE key='worker_config_head'`,
 		`INSERT INTO worker_config_revisions(config_revision, digest) VALUES (1, 'expired'), (512, 'current')`,
 		`INSERT INTO worker_config_ops(config_revision, ordinal, pool, op_type, host) VALUES (1, 0, 'old', 'route_delete', 'expired.workers.test')`,
-		`INSERT INTO worker_config_dirty(service_id, generation) VALUES ('svc', 1)`,
+		`INSERT INTO worker_config_dirty(worker_id, generation) VALUES ('svc', 1)`,
 		`INSERT INTO worker_config_versions(version_id, pool, payload) VALUES ('version', 'old', '{"id":"version"}')`,
 		`CREATE FUNCTION fail_config_cleanup() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'cleanup failed'; END $$`,
 		`CREATE TRIGGER fail_config_cleanup BEFORE DELETE ON worker_config_revisions FOR EACH ROW EXECUTE FUNCTION fail_config_cleanup()`,
@@ -155,14 +155,14 @@ func TestPostgresConfigDeltaRollsBackCleanupFailureAndRetries(t *testing.T) {
 		_, _ = postgresTestPool(store).Exec(ctx, `DROP TRIGGER IF EXISTS fail_config_cleanup ON worker_config_revisions`)
 		_, _ = postgresTestPool(store).Exec(ctx, `DROP FUNCTION IF EXISTS fail_config_cleanup()`)
 	})
-	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_routes(host, pool, enabled, version_id, service_id, shard) VALUES ($1, 'old', true, 'version', 'svc', $2)`, host, shard); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_routes(host, pool, enabled, version_id, worker_id, shard) VALUES ($1, 'old', true, 'version', 'svc', $2)`, host, shard); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_checkpoints(pool, shard, revision, published_revision) VALUES ('old', $1, 512, 512)`, shard); err != nil {
 		t.Fatal(err)
 	}
 	ops := []workerConfigOp{{Type: "route_delete", Pool: "old", Host: host}}
-	dirty := []workerDirtyService{{ID: "svc", Generation: 1}}
+	dirty := []workerDirtyWorker{{ID: "svc", Generation: 1}}
 	revision, won, err := store.AppendConfigDelta(ctx, 512, dirty, ops)
 	if err == nil || !strings.Contains(err.Error(), "prune config revisions") || won || revision != 512 {
 		t.Fatalf("revision=%d won=%v err=%v", revision, won, err)
@@ -210,19 +210,19 @@ func TestPostgresConfigDeltaRollsBackCleanupFailureAndRetries(t *testing.T) {
 func TestPostgresConfigDeltaNoOpKeepsNewerDirtyGeneration(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
-	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_dirty(service_id, generation) VALUES ('svc', 2)`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO worker_config_dirty(worker_id, generation) VALUES ('svc', 2)`); err != nil {
 		t.Fatal(err)
 	}
-	if revision, won, err := store.AppendConfigDelta(ctx, 0, []workerDirtyService{{ID: "svc", Generation: 1}}, nil); err != nil || !won || revision != 0 {
+	if revision, won, err := store.AppendConfigDelta(ctx, 0, []workerDirtyWorker{{ID: "svc", Generation: 1}}, nil); err != nil || !won || revision != 0 {
 		t.Fatalf("revision=%d won=%v err=%v", revision, won, err)
 	}
-	if dirty, err := store.DirtyWorkerServices(ctx); err != nil || len(dirty) != 1 || dirty[0].Generation != 2 {
+	if dirty, err := store.DirtyWorkers(ctx); err != nil || len(dirty) != 1 || dirty[0].Generation != 2 {
 		t.Fatalf("newer generation lost: dirty=%+v err=%v", dirty, err)
 	}
-	if revision, won, err := store.AppendConfigDelta(ctx, 0, []workerDirtyService{{ID: "svc", Generation: 2}}, nil); err != nil || !won || revision != 0 {
+	if revision, won, err := store.AppendConfigDelta(ctx, 0, []workerDirtyWorker{{ID: "svc", Generation: 2}}, nil); err != nil || !won || revision != 0 {
 		t.Fatalf("ack revision=%d won=%v err=%v", revision, won, err)
 	}
-	if dirty, err := store.DirtyWorkerServices(ctx); err != nil || len(dirty) != 0 {
+	if dirty, err := store.DirtyWorkers(ctx); err != nil || len(dirty) != 0 {
 		t.Fatalf("ack dirty=%+v err=%v", dirty, err)
 	}
 }

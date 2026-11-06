@@ -9,11 +9,11 @@
 | --- | --- | --- |
 | 控制面读取 | 站点 API 按组织/资源过滤 SQL；列表用资源 ID 游标；Runtime 按 Version/Artifact 主键查询；登录只读当前 identity，启动只注册来源；导航只加载当前用户的授权上下文 | 管理员的批量 IAM 管理操作仍保留独立的管理查询语义；没有给它们伪造授权缓存 |
 | 网关协调 | 共享路由按 pool × domain 建通配 HTTPRoute；不加载全站点拓扑；命名空间清单一次分页读取并复用；已就绪路由每 30 秒修复，未就绪时每秒重试 | 共享路由是唯一入口模型 |
-| 发布 | 数据库触发器将变更合并成一条 service dirty 行；每批最多 256 站点；仅对变化路由/Version 写增量；有界批次在 CAS 事务内按顺序写入，无网络调用；操作优先发布自己的站点 | catalogue 变化会一次性入队重建，按有界批次推进；revision 仍是全局单调游标 |
+| 发布 | 数据库触发器将变更合并成一条 Worker dirty 行；每批最多 256 站点；仅对变化路由/Version 写增量；有界批次在 CAS 事务内按顺序写入，无网络调用；操作优先发布自己的站点 | catalogue 变化会一次性入队重建，按有界批次推进；revision 仍是全局单调游标 |
 | Runtime 配置 | 紧凑 head 启动；冷 host 定向查询；仅缓存最多 4096 条 route 和其 Version；增量原地同步提交、按引用计数回收，不遍历全表；对象存储有 256 个 host hash shard | 每个 shard 的大小随所属站点数增长；百万条路由均匀分布时约 3906 条/shard；不要求每 Pod 下载全池 |
 | 资产 | finalize 独立保存有 digest 的 manifest；控制面用 single-flight + LRU；Runtime manifest 使用 LRU、合并并发回源、预建路径索引；资产字节缓存维持有界 LRU | 冷请求仍会依赖控制面签名与对象存储；独立静态域可直达对象存储/CDN |
 | 队列 | 可认领状态/租约筛选，`reconcile_after` 轮转；有界并行协调；`started_at` 区分执行时间与排队时间；认领后才做候选归档 I/O | 不引入额外消息队列；操作行仍是持久化工作队列 |
-| 清理 | dirty service retention scope；历史排名仅针对发生变化的站点；过期删除每批最多 1000 行；孤儿 input 有持久游标；资产对象归属索引 + S3 multi-delete；对象扫描有游标和批量上限；GC 独立于发布循环 | 对象 GC 每 10 秒最多执行 8 秒，数据库 retention 每分钟最多执行 20 秒；积压跨批次推进 |
+| 清理 | dirty Worker retention scope；历史排名仅针对发生变化的站点；过期删除每批最多 1000 行；孤儿 input 有持久游标；资产对象归属索引 + S3 multi-delete；对象扫描有游标和批量上限；GC 独立于发布循环 | 对象 GC 每 10 秒最多执行 8 秒，数据库 retention 每分钟最多执行 20 秒；积压跨批次推进 |
 
 写请求保留一次回滚前像；删除重复的 handler checkpoint。拒绝写入仍由 Store 丢弃业务变更并单独提交拒绝审计。
 授权策略仅在单次只读请求内复用，跨请求重新读取权限，不改变权限撤销语义。
@@ -33,7 +33,7 @@ workers:
 共享路由下，业务 host 格式为：
 
 ```text
-w-<service-hash>-<environment>.<domain-suffix>
+w-<worker-hash>-<environment>.<domain-suffix>
 ```
 
 每个 domain 只需一条 `*.<domain-suffix>` 路由，且必须经 Profile 唯一选中一个池。

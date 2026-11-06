@@ -18,7 +18,7 @@ for (const n of [10000, 100000, 1000000]) {
     enabled: true,
   }));
   let versions = Object.fromEntries(
-    routes.map((r, i) => [r.version, { id: r.version, service_id: `s${i}` }]),
+    routes.map((r, i) => [r.version, { id: r.version, worker_id: `s${i}` }]),
   );
   runtime.applySnapshot({
     config_revision: 1,

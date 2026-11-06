@@ -54,9 +54,9 @@ func queueInvitationRead(ctx context.Context, batch *pgx.Batch, query string) bo
 	case "krun_group_members":
 		predicate = `user_id=ANY($2::text[])`
 	case "krun_assignments":
-		predicate = subjects + ` AND (scope_kind='system' OR scope_kind='organization' AND scope_id=$1 OR scope_kind IN ('service','model') AND scope_id IN (SELECT resource_id FROM krun_resources WHERE org_id=$1))`
+		predicate = subjects + ` AND (scope_kind='system' OR scope_kind='organization' AND scope_id=$1 OR scope_kind IN ('worker','model') AND scope_id IN (SELECT resource_id FROM krun_resources WHERE org_id=$1))`
 	case "krun_resources":
-		predicate = `org_id=$1 AND resource_id IN (SELECT scope_id FROM krun_assignments WHERE ` + subjects + ` AND scope_kind IN ('service','model'))`
+		predicate = `org_id=$1 AND resource_id IN (SELECT scope_id FROM krun_assignments WHERE ` + subjects + ` AND scope_kind IN ('worker','model'))`
 	case "krun_identity_sources", "krun_identity_providers", "krun_meta":
 		predicate = "true"
 	}

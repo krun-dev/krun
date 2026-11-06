@@ -25,24 +25,24 @@ type BindingsInput struct {
 	Inherit            []string
 }
 
-func (s *Service) StageBindings(st *domain.State, p authorization.Principal, ref ServiceRef, in BindingsInput) error {
+func (s *Service) StageBindings(st *domain.State, p authorization.Principal, ref WorkerRef, in BindingsInput) error {
 	env := ref.Environment
-	action := "service.publish"
+	action := "worker.publish"
 	authEnv := env
 	if env == domain.PreviewBaseName {
-		action = "service.update"
+		action = "worker.update"
 		authEnv = "global"
 	}
 	target, err := s.WorkerTarget(st, ref, authEnv, action, p)
 	if err != nil {
 		return err
 	}
-	service := s.WorkerService(st, target)
-	current, ok := service.Environments[env]
+	worker := s.Worker(st, target)
+	current, ok := worker.Environments[env]
 	if env == domain.PreviewBaseName {
 		current = domain.WorkerEnvironment{Name: env, Enabled: true, Variables: map[string]any{}, SecretVersions: map[string]string{}}
-		if service.PreviewBase != nil {
-			current = *service.PreviewBase
+		if worker.PreviewBase != nil {
+			current = *worker.PreviewBase
 		}
 		ok = true
 	}
@@ -162,11 +162,11 @@ func (s *Service) StageBindings(st *domain.State, p authorization.Principal, ref
 	current.SecretNames = domain.WorkerSecretNames(secrets)
 	current.ConfigRevision++
 	if env == domain.PreviewBaseName {
-		service.PreviewBase = &current
+		worker.PreviewBase = &current
 	} else {
-		service.Environments[env] = current
+		worker.Environments[env] = current
 	}
-	st.Workers.Services[target.ID] = service
+	st.Workers.Workers[target.ID] = worker
 	s.audit(st, p, "workers.bindings.change", target.ID+"/"+env, true)
 	return nil
 }

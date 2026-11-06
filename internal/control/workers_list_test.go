@@ -13,23 +13,23 @@ import (
 	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
-func TestWorkerServiceSearchPaginationAndCreationTime(t *testing.T) {
+func TestWorkerSearchPaginationAndCreationTime(t *testing.T) {
 	s, store, _ := cfTestServer(t)
 	created := time.Date(2026, 11, 6, 1, 2, 3, 0, time.UTC)
 	if err := store.Update(context.Background(), PartitionAll, func(st *State) error {
 		for i := 0; i < 5; i++ {
 			id := fmt.Sprintf("list-%02d", i)
-			st.Resources[id] = Resource{ID: id, Kind: "service", Organization: "org-a", Name: "Search Demo", Revision: 1, Created: created}
+			st.Resources[id] = Resource{ID: id, Kind: "worker", Organization: "org-a", Name: "Search Demo", Revision: 1, Created: created}
 		}
-		st.Resources["list-other"] = Resource{ID: "list-other", Kind: "service", Organization: "org-b", Name: "Search Demo", Revision: 1}
+		st.Resources["list-other"] = Resource{ID: "list-other", Kind: "worker", Organization: "org-b", Name: "Search Demo", Revision: 1}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	base := "/api/v1/orgs/org-a/workers/services"
+	base := "/api/v1/orgs/org-a/workers"
 	var page struct {
-		Items     []workerapp.WorkerServiceSummary `json:"items"`
-		NextAfter string                           `json:"next_after"`
+		Items     []workerapp.WorkerSummary `json:"items"`
+		NextAfter string                    `json:"next_after"`
 	}
 	seen := map[string]bool{}
 	after := ""
@@ -50,7 +50,7 @@ func TestWorkerServiceSearchPaginationAndCreationTime(t *testing.T) {
 	if after != "" || len(seen) != 5 {
 		t.Fatalf("incorrect terminal page: %q, %v", after, seen)
 	}
-	for _, query := range []string{"q=LIST-04", "service_id=list-04&q=missing&after=zzz"} {
+	for _, query := range []string{"q=LIST-04", "worker_id=list-04&q=missing&after=zzz"} {
 		response := request(s, "GET", base+"?"+query, "krun_cli_admin", "")
 		if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil || response.Code != 200 || len(page.Items) != 1 || page.Items[0].ID != "list-04" {
 			t.Fatalf("detail/search: %d %s", response.Code, response.Body.String())
@@ -66,12 +66,12 @@ func TestWorkerServiceSearchPaginationAndCreationTime(t *testing.T) {
 		t.Fatal(response.Code, response.Body.String())
 	}
 
-	response = request(s, "POST", "/api/v1/orgs/org-a/services", "krun_cli_admin", `{"name":"Fresh Worker"}`)
+	response = request(s, "POST", "/api/v1/orgs/org-a/workers", "krun_cli_admin", `{"name":"Fresh Worker"}`)
 	var resource Resource
 	if err := json.Unmarshal(response.Body.Bytes(), &resource); err != nil || response.Code != 201 || resource.Created.IsZero() {
 		t.Fatalf("creation time missing: %d %s", response.Code, response.Body.String())
 	}
-	response = request(s, "PATCH", "/api/v1/orgs/org-a/services/"+resource.ID, "krun_cli_admin", `{"name":"Renamed Worker","expected_revision":1}`)
+	response = request(s, "PATCH", "/api/v1/orgs/org-a/workers/"+resource.ID, "krun_cli_admin", `{"name":"Renamed Worker","expected_revision":1}`)
 	var renamed Resource
 	if err := json.Unmarshal(response.Body.Bytes(), &renamed); err != nil || response.Code != 200 || !renamed.Created.Equal(resource.Created) {
 		t.Fatalf("creation time changed on rename: %d %s", response.Code, response.Body.String())
@@ -100,7 +100,7 @@ func TestBucketSearchPaginationDetailsAndCFCollection(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	base := "/api/v1/orgs/org-a/workers/buckets"
+	base := "/api/v1/orgs/org-a/buckets"
 	var page struct {
 		Items []domain.WorkerBucket `json:"items"`
 		Next  string                `json:"next_after"`

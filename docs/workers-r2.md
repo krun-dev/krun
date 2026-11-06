@@ -25,10 +25,10 @@
 
 | 接口 | 权限与行为 |
 | --- | --- |
-| `GET /api/v1/orgs/{org}/workers/buckets` | `organization.read`，列出该组织的逻辑桶 |
-| `GET /api/v1/orgs/{org}/workers/buckets/{id}` | `organization.read`，读取本组织桶详情（含停用桶） |
-| `POST /api/v1/orgs/{org}/workers/buckets` | `storage.bucket.create`，body 为 `{"name":"product-images"}` |
-| `PATCH /api/v1/orgs/{org}/workers/buckets/{id}` | `storage.bucket.update`，以 `{"enabled":false,"revision":1}` 禁用 |
+| `GET /api/v1/orgs/{org}/buckets` | `organization.read`，列出该组织的逻辑桶 |
+| `GET /api/v1/orgs/{org}/buckets/{id}` | `organization.read`，读取本组织桶详情（含停用桶） |
+| `POST /api/v1/orgs/{org}/buckets` | `storage.bucket.create`，body 为 `{"name":"product-images"}` |
+| `PATCH /api/v1/orgs/{org}/buckets/{id}` | `storage.bucket.update`，以 `{"enabled":false,"revision":1}` 禁用 |
 
 列表传入 `q`、`limit` 或 `after` 时启用控制台分页：`q` 按名称或 ID 不区分大小写
 包含搜索，`limit` 为 1–200（默认 100），`after` 使用上次响应的 `next_after`，没有
@@ -159,7 +159,7 @@ lifecycle，也不承诺 token 到期就自动清除后端分片；没有配置�
 当前固定 workerd 版本的 WorkerLoader 尚未暴露 cacheApiOutbound，因此由可信父 Worker
 提供有界本地缓存，业务预加载模块安装兼容 facade，无需修改业务的 compatibility flags。
 
-缓存按组织、服务、环境和 cache name 隔离，同环境不同版本共享；validator 使用独立范围。
+缓存按组织、Worker、环境和 cache name 隔离，同环境不同版本共享；validator 使用独立范围。
 URL 包括查询参数，不包括 fragment。内容只在当前 runtime 进程内有效，重启或调度到其他
 Pod 可能 miss；没有跨 Pod 复制或全局 purge。缓存数据与控制调用都不经过 krun-server。
 

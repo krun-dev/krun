@@ -84,9 +84,22 @@ krun members list --org ORGANIZATION_ID
 krun groups list --org ORGANIZATION_ID
 krun roles list --org ORGANIZATION_ID
 krun keys list --org ORGANIZATION_ID
+krun workers list --org ORGANIZATION_ID
 ```
 
 将 `ORGANIZATION_ID` 替换为 `krun org list` 输出中的组织 ID。还可以使用 `krun org create --name NAME`、`krun groups create --org ORGANIZATION_ID --name NAME` 等命令；操作受当前身份和组织权限限制。
+
+Worker 使用 `workers` 命令管理，`WORKER_ID` 来自创建或列表输出中的 `id`：
+
+```sh
+krun workers create --org ORGANIZATION_ID --name NAME
+krun workers get --org ORGANIZATION_ID --id WORKER_ID
+krun workers update --org ORGANIZATION_ID --id WORKER_ID --name NAME --revision 1
+krun workers delete --org ORGANIZATION_ID --id WORKER_ID
+krun build logs --org ORGANIZATION_ID --worker WORKER_ID --build BUILD_ID --follow
+```
+
+更新时使用当前资源的 `revision`。授权给指定 Worker 时使用 `--scope-kind worker --scope-id WORKER_ID`；API Key 的资源类型为 `worker`，动作包括 `worker.read`、`worker.publish` 和 `worker.version.read`。构建与日志分别使用 `build.start`、`log.read`，资源类型同样为 `worker`。Worker 的审计动作使用同一套名称。
 
 查看审计记录：
 

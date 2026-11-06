@@ -10,7 +10,7 @@ func resourceKind(r *http.Request) string {
 	if containsPath(r.Pattern, "models") {
 		return "model"
 	}
-	return "service"
+	return "worker"
 }
 
 func containsPath(path, part string) bool {

@@ -56,7 +56,7 @@ export function BucketsPage({
     () => new URLSearchParams(location.search).get("bucket") || "",
   );
   const collection = useCollectionPage<WorkerBucket>(
-    base + "/workers/buckets",
+    base + "/buckets",
     !system && !selected,
     refresh,
   );
@@ -82,7 +82,7 @@ export function BucketsPage({
     }
     const controller = new AbortController();
     void api<WorkerBucket>(
-      base + "/workers/buckets/" + encodeURIComponent(selected),
+      base + "/buckets/" + encodeURIComponent(selected),
       "GET",
       undefined,
       controller.signal,
@@ -103,7 +103,7 @@ export function BucketsPage({
     setBusy(true);
     setFormError("");
     try {
-      await api(base + "/workers/buckets", "POST", { name });
+      await api(base + "/buckets", "POST", { name });
       setCreate(false);
       setName("");
       reload();
@@ -120,7 +120,7 @@ export function BucketsPage({
     }
     setBusy(true);
     try {
-      await api(base + "/workers/buckets/" + encodeURIComponent(target.id), "PATCH", {
+      await api(base + "/buckets/" + encodeURIComponent(target.id), "PATCH", {
         enabled: !target.enabled,
         revision: target.revision,
       });

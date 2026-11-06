@@ -13,7 +13,7 @@ import (
 var bucketNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$`)
 
 func (s *Service) BucketList(st *domain.State, p authorization.Principal, organization string) ([]domain.WorkerBucket, error) {
-	target, err := s.orgTarget(st, ServiceRef{Organization: organization})
+	target, err := s.orgTarget(st, WorkerRef{Organization: organization})
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +31,7 @@ func (s *Service) BucketList(st *domain.State, p authorization.Principal, organi
 }
 
 func (s *Service) BucketGet(st *domain.State, p authorization.Principal, organization, id string) (domain.WorkerBucket, error) {
-	target, err := s.orgTarget(st, ServiceRef{Organization: organization})
+	target, err := s.orgTarget(st, WorkerRef{Organization: organization})
 	if err != nil {
 		return domain.WorkerBucket{}, err
 	}
@@ -46,7 +46,7 @@ func (s *Service) BucketGet(st *domain.State, p authorization.Principal, organiz
 }
 
 func (s *Service) BucketCreate(st *domain.State, p authorization.Principal, organization, name string) (domain.WorkerBucket, error) {
-	target, err := s.orgTarget(st, ServiceRef{Organization: organization})
+	target, err := s.orgTarget(st, WorkerRef{Organization: organization})
 	if err != nil {
 		return domain.WorkerBucket{}, err
 	}
@@ -87,7 +87,7 @@ func (s *Service) BucketCreate(st *domain.State, p authorization.Principal, orga
 }
 
 func (s *Service) BucketSetEnabled(st *domain.State, p authorization.Principal, organization, id string, enabled bool, revision int64) (domain.WorkerBucket, error) {
-	target, err := s.orgTarget(st, ServiceRef{Organization: organization})
+	target, err := s.orgTarget(st, WorkerRef{Organization: organization})
 	if err != nil {
 		return domain.WorkerBucket{}, err
 	}

@@ -46,27 +46,27 @@ func (s *Server) cfScripts(st *State, p Principal, r *http.Request) (any, int, e
 	if err != nil {
 		return nil, 0, err
 	}
-	if err = s.require(st, p, r, "service.list", t); err != nil {
+	if err = s.require(st, p, r, "worker.list", t); err != nil {
 		return nil, 0, err
 	}
 	scripts, _ := r.Context().Value(cfScriptsContext{}).([]domain.WorkerScript)
 	out := []any{}
 	for _, script := range scripts {
-		ref := workerapp.ServiceRef{Organization: script.Organization, Service: script.Service}
-		if _, err := s.workerApplication(r).WorkerCollectionTarget(st, ref, "service.read", p); err != nil {
+		ref := workerapp.WorkerRef{Organization: script.Organization, Worker: script.Worker}
+		if _, err := s.workerApplication(r).WorkerCollectionTarget(st, ref, "worker.read", p); err != nil {
 			continue
 		}
-		out = append(out, map[string]any{"id": script.Name, "name": script.Name, "tag": script.Service})
+		out = append(out, map[string]any{"id": script.Name, "name": script.Name, "tag": script.Worker})
 	}
 	return out, 200, nil
 }
-func (s *Server) cfCurrent(st *State, p Principal, r *http.Request) (WorkerService, WorkerEnvironment, error) {
+func (s *Server) cfCurrent(st *State, p Principal, r *http.Request) (Worker, WorkerEnvironment, error) {
 	ref := workerRef(r)
-	t, err := s.workerTarget(st, r, ref.Environment, "service.read", p)
+	t, err := s.workerTarget(st, r, ref.Environment, "worker.read", p)
 	if err != nil {
-		return WorkerService{}, WorkerEnvironment{}, err
+		return Worker{}, WorkerEnvironment{}, err
 	}
-	service := s.workerApplication(r).WorkerServiceView(st, t)
+	service := s.workerApplication(r).WorkerView(st, t)
 	env, ok := service.Environments[ref.Environment]
 	if !ok {
 		return service, env, notFound()
@@ -150,7 +150,7 @@ func (s *Server) cfScriptDetails(st *State, p Principal, r *http.Request) (any, 
 	if service.PreviewBase != nil {
 		base = *service.PreviewBase
 	}
-	return map[string]any{"id": script.Name, "name": script.Name, "tag": script.Service, "subdomain": subdomain, "previews_base_config": map[string]any{"env": cfEnvBindings(base)}, "default_environment": map[string]any{"environment": "production", "script": map[string]any{"id": script.Name, "tag": script.Service, "last_deployed_from": "api", "compatibility_date": version.CompatibilityDate, "compatibility_flags": version.CompatibilityFlags, "bindings": cfBindings(env)}}}, 200, nil
+	return map[string]any{"id": script.Name, "name": script.Name, "tag": script.Worker, "subdomain": subdomain, "previews_base_config": map[string]any{"env": cfEnvBindings(base)}, "default_environment": map[string]any{"environment": "production", "script": map[string]any{"id": script.Name, "tag": script.Worker, "last_deployed_from": "api", "compatibility_date": version.CompatibilityDate, "compatibility_flags": version.CompatibilityFlags, "bindings": cfBindings(env)}}}, 200, nil
 }
 func cfVersion(v WorkerVersion, number int) map[string]any {
 	return map[string]any{"id": v.ID, "number": number, "metadata": map[string]any{"created_on": v.Created, "has_preview": false, "source": "api", "author_id": "krun", "author_email": ""}, "annotations": map[string]any{"workers/tag": v.Tag, "workers/message": v.Message}, "resources": map[string]any{"script": map[string]any{"etag": v.ArchiveDigest, "handlers": []string{"fetch"}}, "script_runtime": map[string]any{"compatibility_date": v.CompatibilityDate, "compatibility_flags": v.CompatibilityFlags}, "bindings": cfBindings(WorkerEnvironment{R2Bindings: v.R2Bindings, Variables: v.Variables, SecretVersions: v.SecretVersions, VersionMetadata: v.VersionMetadata, AssetsBinding: v.AssetsBinding})}}
@@ -182,12 +182,12 @@ func cfDeployment(d domain.WorkerDeployment) map[string]any {
 func (s *Server) cfDeployments(st *State, p Principal, r *http.Request) (any, int, error) {
 	ref := workerRef(r)
 	ref.Environment = "production"
-	if _, err := s.workerTarget(st, r, ref.Environment, "service.version.read", p); err != nil {
+	if _, err := s.workerTarget(st, r, ref.Environment, "worker.version.read", p); err != nil {
 		return nil, 0, err
 	}
 	items := []domain.WorkerDeployment{}
 	for _, d := range st.Workers.Deployments {
-		if d.Service == ref.Service && d.Organization == ref.Organization && d.Environment == ref.Environment && d.Committed != nil {
+		if d.Worker == ref.Worker && d.Organization == ref.Organization && d.Environment == ref.Environment && d.Committed != nil {
 			items = append(items, d)
 		}
 	}
@@ -224,12 +224,12 @@ func (s *Server) cfSecrets(st *State, p Principal, r *http.Request) (any, int, e
 	}
 	return out, 200, nil
 }
-func (s *Server) cfPreviewView(service WorkerService, env WorkerEnvironment) map[string]any {
+func (s *Server) cfPreviewView(service Worker, env WorkerEnvironment) map[string]any {
 	urls := []string{}
 	if u := s.cfURL(env); u != "" {
 		urls = append(urls, u)
 	}
-	return map[string]any{"name": env.Name, "id": env.Name, "env": cfEnvBindings(env), "urls": urls, "worker_id": service.Service}
+	return map[string]any{"name": env.Name, "id": env.Name, "env": cfEnvBindings(env), "urls": urls, "worker_id": service.Worker}
 }
 func (s *Server) cfPreviews(st *State, p Principal, r *http.Request) (any, int, error) {
 	app := s.workerApplication(r)
@@ -250,7 +250,7 @@ func (s *Server) cfPreviews(st *State, p Principal, r *http.Request) (any, int, 
 			return nil, 0, err
 		}
 		env := out.(WorkerEnvironment)
-		service := st.Workers.Services[ref.Service]
+		service := st.Workers.Workers[ref.Worker]
 		return s.cfPreviewView(service, env), 200, nil
 	}
 	if r.Method == http.MethodDelete {
@@ -262,7 +262,7 @@ func (s *Server) cfPreviews(st *State, p Principal, r *http.Request) (any, int, 
 		return nil, 0, err
 	}
 	items := []any{}
-	service := st.Workers.Services[ref.Service]
+	service := st.Workers.Workers[ref.Worker]
 	for _, env := range out.(map[string]any)["items"].([]WorkerEnvironment) {
 		if env.Name == "production" {
 			continue
@@ -282,12 +282,12 @@ func (s *Server) cfPreviews(st *State, p Principal, r *http.Request) (any, int, 
 }
 func (s *Server) cfPreviewDeployments(st *State, p Principal, r *http.Request) (any, int, error) {
 	ref := workerRef(r)
-	if _, err := s.workerTarget(st, r, ref.Environment, "service.version.read", p); err != nil {
+	if _, err := s.workerTarget(st, r, ref.Environment, "worker.version.read", p); err != nil {
 		return nil, 0, err
 	}
 	var selected domain.WorkerDeployment
 	for _, d := range st.Workers.Deployments {
-		if d.Service != ref.Service || d.Organization != ref.Organization || d.Environment != ref.Environment || d.Committed == nil {
+		if d.Worker != ref.Worker || d.Organization != ref.Organization || d.Environment != ref.Environment || d.Committed == nil {
 			continue
 		}
 		if r.PathValue("deployment") == "latest" {
@@ -310,11 +310,11 @@ func (s *Server) cfPreviewDeployments(st *State, p Principal, r *http.Request) (
 	return out, 200, nil
 }
 func (s *Server) cfDeploymentURLs(st *State, d domain.WorkerDeployment) []string {
-	service, ok := st.Workers.Services[d.Service]
+	service, ok := st.Workers.Workers[d.Worker]
 	if !ok {
 		return []string{}
 	}
-	service = s.workerApplication(nil).NormalizeService(service)
+	service = s.workerApplication(nil).NormalizeWorker(service)
 	urls := []string{}
 	for _, host := range workerapp.DeploymentHosts(s.Config.Workers, service, d.ID) {
 		scheme := "https://"

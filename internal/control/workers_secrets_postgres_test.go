@@ -19,7 +19,7 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 	}
 	refs := map[string]string{"API_TOKEN": encrypted.Version.ID}
 	version := WorkerVersion{
-		ID: "rel-secret-postgres", Organization: "org-secret", Service: "svc-secret", Environment: "production",
+		ID: "rel-secret-postgres", Organization: "org-secret", Worker: "svc-secret", Environment: "production",
 		Artifact: "art-secret-postgres", ArchiveDigest: "archive", ModuleDigest: "module",
 		ConfigRevision: 2, Variables: map[string]any{}, SecretDigest: workerapp.WorkerSecretsDigest(refs),
 		SecretVersions: refs, Created: now(),
@@ -27,14 +27,14 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 	if err = store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.SecretVersions[encrypted.Version.ID] = encrypted.Version
 		st.PendingWorkerSecrets = map[string]encryptedWorkerSecret{encrypted.Version.ID: encrypted}
-		st.Workers.Services[version.Service] = WorkerService{
-			Service: version.Service, Organization: version.Organization,
+		st.Workers.Workers[version.Worker] = Worker{
+			Worker: version.Worker, Organization: version.Organization,
 			Environments: map[string]WorkerEnvironment{
 				"production": {Name: "production", Enabled: true, ConfigRevision: 2, Variables: map[string]any{}, SecretNames: []string{"API_TOKEN"}, SecretVersions: refs},
 			},
 		}
 		placed := now()
-		st.Workers.Placements[workerPlacementKey(version.Service, "default")] = WorkerPlacement{Service: version.Service, Organization: version.Organization, NetworkProfile: "default", Pool: "default", Role: "primary", State: "active", Revision: 1, Created: placed, Updated: placed}
+		st.Workers.Placements[workerPlacementKey(version.Worker, "default")] = WorkerPlacement{Worker: version.Worker, Organization: version.Organization, NetworkProfile: "default", Pool: "default", Role: "primary", State: "active", Revision: 1, Created: placed, Updated: placed}
 		st.Workers.Artifacts[version.Artifact] = WorkerArtifact{ID: version.Artifact, Organization: version.Organization, State: "finalized", ArchiveDigest: version.ArchiveDigest, ModuleDigest: version.ModuleDigest, Created: now()}
 		st.Workers.Versions[version.ID] = version
 		return nil
@@ -53,7 +53,7 @@ func TestWorkerSecretsPersistEncryptedAndRelational(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	environment := loaded.Workers.Services[version.Service].Environments["production"]
+	environment := loaded.Workers.Workers[version.Worker].Environments["production"]
 	if environment.SecretVersions["API_TOKEN"] != encrypted.Version.ID || loaded.Workers.Versions[version.ID].SecretVersions["API_TOKEN"] != encrypted.Version.ID {
 		t.Fatalf("relational bindings not reloaded: env=%v version=%v", environment.SecretVersions, loaded.Workers.Versions[version.ID].SecretVersions)
 	}

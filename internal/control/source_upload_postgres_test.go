@@ -14,8 +14,8 @@ func TestPostgresSourceUploadReservationDefeatsStaleGCClaim(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
-		st.Workers.Services["source-service"] = WorkerService{
-			Service: "source-service", Organization: "source-org",
+		st.Workers.Workers["source-service"] = Worker{
+			Worker: "source-service", Organization: "source-org",
 			Environments: map[string]WorkerEnvironment{appconfig.WorkerBaseline: {
 				Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]any{},
 			}},
@@ -41,7 +41,7 @@ func TestPostgresSourceUploadReservationDefeatsStaleGCClaim(t *testing.T) {
 	staleRevision := candidates[0].UseRevision
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Builds["source-build"] = WorkerBuild{
-			ID: "source-build", Organization: "source-org", Service: "source-service",
+			ID: "source-build", Organization: "source-org", Worker: "source-service",
 			Environment: appconfig.WorkerBaseline, State: "queued", Entrypoint: "index.ts", Created: now(),
 		}
 		st.Workers.BuildPrivate["source-build"] = WorkerBuildPrivate{SourceKey: key}
@@ -64,7 +64,7 @@ func TestPostgresSourceUploadReservationDefeatsStaleGCClaim(t *testing.T) {
 	// The same upload capability is one-shot; a second build cannot share it.
 	err = store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Builds["source-build-reuse"] = WorkerBuild{
-			ID: "source-build-reuse", Organization: "source-org", Service: "source-service",
+			ID: "source-build-reuse", Organization: "source-org", Worker: "source-service",
 			Environment: appconfig.WorkerBaseline, State: "queued", Entrypoint: "index.ts", Created: now(),
 		}
 		st.Workers.BuildPrivate["source-build-reuse"] = WorkerBuildPrivate{SourceKey: key}
@@ -103,16 +103,16 @@ func TestPostgresBuildRetentionUsesStableTieBreakAndRemovesPrivateOrphans(t *tes
 	ctx := context.Background()
 	if err := store.Update(ctx, PartitionIAM, func(st *State) error {
 		st.Organizations["retention-org"] = Organization{ID: "retention-org", Name: "Retention", Revision: 1}
-		st.Resources["retention-service"] = Resource{ID: "retention-service", Kind: "service", Organization: "retention-org", Name: "Retention", Revision: 1}
+		st.Resources["retention-service"] = Resource{ID: "retention-service", Kind: "worker", Organization: "retention-org", Name: "Retention", Revision: 1}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	created := now().Add(-48 * time.Hour).UTC().Truncate(time.Second)
-	for i := 0; i < workerBuildRetainPerService+1; i++ {
+	for i := 0; i < workerBuildRetainPerWorker+1; i++ {
 		id := "retention-build-" + leftPad(itoa(i), 3)
 		if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_worker_builds
-			(build_id, org_id, service_id, env_name, state, entrypoint, created_at)
+			(build_id, org_id, worker_id, env_name, state, entrypoint, created_at)
 			VALUES ($1,'retention-org','retention-service','production','failed','index.ts',$2)`, id, created); err != nil {
 			t.Fatal(err)
 		}
@@ -129,7 +129,7 @@ func TestPostgresBuildRetentionUsesStableTieBreakAndRemovesPrivateOrphans(t *tes
 		t.Fatal(err)
 	}
 	var builds, private, orphans int
-	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_worker_builds WHERE service_id='retention-service'`).Scan(&builds); err != nil {
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_worker_builds WHERE worker_id='retention-service'`).Scan(&builds); err != nil {
 		t.Fatal(err)
 	}
 	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_worker_build_private WHERE build_id LIKE 'retention-build-%'`).Scan(&private); err != nil {
@@ -138,7 +138,7 @@ func TestPostgresBuildRetentionUsesStableTieBreakAndRemovesPrivateOrphans(t *tes
 	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM krun_worker_build_private WHERE build_id='retention-orphan'`).Scan(&orphans); err != nil {
 		t.Fatal(err)
 	}
-	if builds != workerBuildRetainPerService || private != workerBuildRetainPerService || orphans != 0 {
+	if builds != workerBuildRetainPerWorker || private != workerBuildRetainPerWorker || orphans != 0 {
 		t.Fatalf("retention builds=%d private=%d orphan=%d", builds, private, orphans)
 	}
 }

@@ -9,16 +9,16 @@ import {
 } from "./permissions.ts";
 
 const actions = [
-  "service.read",
-  "service.list",
-  "service.version.read",
+  "worker.read",
+  "worker.list",
+  "worker.version.read",
   "log.read",
-  "service.create",
-  "service.update",
-  "service.delete",
-  "service.publish",
-  "service.rollback",
-  "service.invoke",
+  "worker.create",
+  "worker.update",
+  "worker.delete",
+  "worker.publish",
+  "worker.rollback",
+  "worker.invoke",
   "build.start",
 ];
 test("read/write presets do not include execution or deployment", () => {
@@ -29,7 +29,7 @@ test("read/write presets do not include execution or deployment", () => {
 });
 test("multiple resource types retain their own selectors and conditions", () => {
   const selections = initialSelections();
-  selections.service.actions = ["service.read"];
+  selections.worker.actions = ["worker.read"];
   selections.model = {
     actions: ["model.read"],
     all: false,
@@ -39,7 +39,7 @@ test("multiple resource types retain their own selectors and conditions", () => 
   const policy = buildPolicy(selections, ["staging"], "org-a", false);
   assert.equal(policy.statements.length, 2);
   assert.deepEqual(policy.statements[0].resource, {
-    kind: "service",
+    kind: "worker",
     organization_id: "org-a",
     all_in_organization: true,
   });
@@ -47,7 +47,7 @@ test("multiple resource types retain their own selectors and conditions", () => 
   assert.deepEqual(policy.statements[1].conditions, {
     environments: ["staging"],
   });
-  const registry = { "service.read": ["service"], "model.read": ["model"] };
+  const registry = { "worker.read": ["worker"], "model.read": ["model"] };
   assert.deepEqual(
     buildPolicy(
       parseSelections(policy, registry, "org-a", false).selections,
@@ -61,16 +61,16 @@ test("multiple resource types retain their own selectors and conditions", () => 
 });
 test("cross-workspace wildcards retain the selected resource kind", () => {
   const selections = initialSelections();
-  selections.service.actions = ["log.read"];
+  selections.worker.actions = ["log.read"];
   const policy = buildPolicy(selections, [], "system", true);
   assert.deepEqual(policy.statements[0].resource, {
-    kind: "service",
+    kind: "worker",
     all_in_system: true,
   });
   assert.ok(
     parseSelections(
       policy,
-      { "log.read": ["service", "model"] },
+      { "log.read": ["worker", "model"] },
       "system",
       true,
     ),
@@ -78,9 +78,9 @@ test("cross-workspace wildcards retain the selected resource kind", () => {
 });
 test("JSON conversion refuses rules that would lose restrictions", () => {
   const selections = initialSelections();
-  selections.service.actions = ["service.read"];
+  selections.worker.actions = ["worker.read"];
   const policy = buildPolicy(selections, [], "org-a", false);
-  const registry = { "service.read": ["service"] };
+  const registry = { "worker.read": ["worker"] };
   assert.equal(
     parseSelections(
       { ...policy, statements: [{ ...policy.statements[0], effect: "deny" }] },

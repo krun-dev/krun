@@ -24,14 +24,14 @@ func workerTestServer(t *testing.T) (*Server, *Store, string) {
 	s.routes()
 	// A default preview so build/permission tests have a non-baseline target.
 	if e := store.Update(context.Background(), PartitionAll, func(st *State) error {
-		ws := s.workerService(st, Target{ID: "svc-a", Organization: "org-a"})
+		ws := s.worker(st, Target{ID: "svc-a", Organization: "org-a"})
 		ws.Environments["fix-demo"] = WorkerEnvironment{Name: "fix-demo", Enabled: true, Domains: []string{"internal"}, ConfigRevision: 1, Variables: map[string]any{}}
-		st.Workers.Services["svc-a"] = ws
+		st.Workers.Workers["svc-a"] = ws
 		return nil
 	}); e != nil {
 		t.Fatal(e)
 	}
-	return s, store, "/api/v1/orgs/org-a/services/svc-a/workers"
+	return s, store, "/api/v1/orgs/org-a/workers/svc-a"
 }
 
 func TestWorkerBuildPermissionScopeAndIdempotency(t *testing.T) {
@@ -64,7 +64,7 @@ func TestWorkerBuildPermissionScopeAndIdempotency(t *testing.T) {
 	if strings.Contains(r.Body.String(), "fetch()") || strings.Contains(r.Body.String(), "Files") || strings.Contains(r.Body.String(), "Actor") {
 		t.Fatal("private source/identity leaked", r.Body.String())
 	}
-	if r := request(s, "GET", "/api/v1/orgs/org-b/services/svc-b/workers/builds/"+b.ID, "krun_cli_admin", ""); r.Code != 404 {
+	if r := request(s, "GET", "/api/v1/orgs/org-b/workers/svc-b/builds/"+b.ID, "krun_cli_admin", ""); r.Code != 404 {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
@@ -132,7 +132,7 @@ func TestWorkerPreviewLimitAndRevisionLifecycle(t *testing.T) {
 		t.Fatalf("replacement exceeded preview limit: %d %s", r.Code, r.Body.String())
 	}
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
-		service := st.Workers.Services["svc-a"]
+		service := st.Workers.Workers["svc-a"]
 		if service.PreviewRevision != 2 || previewCount(service.Environments) != 1 {
 			t.Fatalf("preview lifecycle state: %+v", service)
 		}
@@ -145,9 +145,9 @@ func TestWorkerPreviewLimitAndRevisionLifecycle(t *testing.T) {
 func TestTerminalBuildRetentionDoesNotBlockNextBuild(t *testing.T) {
 	s, store, base := workerTestServer(t)
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
-		for i := 0; i < workerBuildRetainPerService; i++ {
+		for i := 0; i < workerBuildRetainPerWorker; i++ {
 			id := fmt.Sprintf("old-%03d", i)
-			st.Workers.Builds[id] = WorkerBuild{ID: id, Organization: "org-a", Service: "svc-a", Environment: "production", State: "succeeded", Created: now()}
+			st.Workers.Builds[id] = WorkerBuild{ID: id, Organization: "org-a", Worker: "svc-a", Environment: "production", State: "succeeded", Created: now()}
 		}
 		return nil
 	}); err != nil {
@@ -163,15 +163,15 @@ func TestWorkerOverviewAggregatesPollingState(t *testing.T) {
 	s, store, base := workerTestServer(t)
 	build := seedWorkerBuild(t, s, store, base)
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
-		version := WorkerVersion{ID: "rel-overview", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: build.Artifact, Created: now()}
+		version := WorkerVersion{ID: "rel-overview", Worker: "svc-a", Organization: "org-a", Environment: "production", Artifact: build.Artifact, Created: now()}
 		st.Workers.Versions[version.ID] = version
-		service := st.Workers.Services["svc-a"]
+		service := st.Workers.Workers["svc-a"]
 		env := service.Environments["production"]
 		env.Version, env.Confirmed = version.ID, version.ID
 		service.Environments["production"] = env
-		st.Workers.Services[service.Service] = service
+		st.Workers.Workers[service.Worker] = service
 		st.Workers.Histories["svc-a/production"] = []WorkerHistory{{Revision: 1, Version: version.ID, Operation: "op-overview", Kind: "publish", Time: now()}}
-		st.Workers.Operations["op-overview"] = WorkerOperation{ID: "op-overview", Service: "svc-a", Organization: "org-a", Environment: "production", State: "available", Version: version.ID, Created: now()}
+		st.Workers.Operations["op-overview"] = WorkerOperation{ID: "op-overview", Worker: "svc-a", Organization: "org-a", Environment: "production", State: "available", Version: version.ID, Created: now()}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -255,7 +255,7 @@ func TestWorkerVersionQueuesImmutableConfigurationAndRejectsInvalidTarget(t *tes
 		t.Fatal(r.Code, r.Body.String())
 	}
 	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
-		env := st.Workers.Services["svc-a"].Environments["production"]
+		env := st.Workers.Workers["svc-a"].Environments["production"]
 		if env.Revision != 0 || env.Version != "" {
 			t.Fatal("enqueue committed a version")
 		}
@@ -273,7 +273,7 @@ func TestWorkerActorKeyRevocationIsRechecked(t *testing.T) {
 	_ = b
 	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
 		user := st.Users["admin"]
-		st.Keys["key"] = APIKey{ID: "key", Owner: user.ID, ScopeKind: "system", Policy: Policy{Version: 1, Statements: []Statement{{Effect: "allow", Actions: []string{"build.start"}, Resource: Selector{Kind: "service", Organization: "org-a", IDs: []string{"svc-a"}}}}}}
+		st.Keys["key"] = APIKey{ID: "key", Owner: user.ID, ScopeKind: "system", Policy: Policy{Version: 1, Statements: []Statement{{Effect: "allow", Actions: []string{"build.start"}, Resource: Selector{Kind: "worker", Organization: "org-a", IDs: []string{"svc-a"}}}}}}
 		a := WorkerActor{User: user.ID, Key: "key", AuthVersion: user.AuthVersion}
 		if s.workerAuthorizeActor(st, a, "svc-a", "fix-demo", "build.start") != nil {
 			t.Fatal("valid key denied")
@@ -295,11 +295,11 @@ func TestWorkerRollbackCanRecoverACommittedVersion(t *testing.T) {
 	var op WorkerOperation
 	_ = json.Unmarshal(first.Body.Bytes(), &op)
 	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
-		ws := st.Workers.Services["svc-a"]
+		ws := st.Workers.Workers["svc-a"]
 		env := ws.Environments["production"]
 		env.Revision, env.Version, env.Confirmed = 2, op.Version, op.Version
 		ws.Environments["production"] = env
-		st.Workers.Services["svc-a"] = ws
+		st.Workers.Workers["svc-a"] = ws
 		st.Workers.Histories["svc-a/production"] = []WorkerHistory{{Revision: 1, Version: op.Version}}
 		op.State = "committed"
 		st.Workers.Operations[op.ID] = op
@@ -312,7 +312,7 @@ func TestWorkerRollbackCanRecoverACommittedVersion(t *testing.T) {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
-		if st.Workers.Operations[op.ID].State != "committed" || st.Workers.Services["svc-a"].Environments["production"].Revision != 2 {
+		if st.Workers.Operations[op.ID].State != "committed" || st.Workers.Workers["svc-a"].Environments["production"].Revision != 2 {
 			t.Fatal("rollback enqueue changed the active version before validation")
 		}
 		return nil
@@ -331,11 +331,11 @@ func TestCommittedVersionDoesNotBlockNewPublish(t *testing.T) {
 	var op WorkerOperation
 	_ = json.Unmarshal(first.Body.Bytes(), &op)
 	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
-		ws := st.Workers.Services["svc-a"]
+		ws := st.Workers.Workers["svc-a"]
 		env := ws.Environments["production"]
 		env.Revision, env.Version = 2, op.Version
 		ws.Environments["production"] = env
-		st.Workers.Services["svc-a"] = ws
+		st.Workers.Workers["svc-a"] = ws
 		op.State = "committed"
 		st.Workers.Operations[op.ID] = op
 		return nil
@@ -349,7 +349,7 @@ func TestCommittedVersionDoesNotBlockNewPublish(t *testing.T) {
 func TestWorkerEnvironmentScopedKeyCanReadCollections(t *testing.T) {
 	s, store, base := workerTestServer(t)
 	seedWorkerBuild(t, s, store, base)
-	r := request(s, "POST", "/api/v1/orgs/org-a/api-keys", "krun_cli_admin", `{"name":"test only","expires_in":3600,"policy":{"schema_version":1,"statements":[{"effect":"allow","actions":["service.read","service.version.read"],"resource":{"kind":"service","organization_id":"org-a","ids":["svc-a"]},"conditions":{"environments":["fix-demo"]}}]}}`)
+	r := request(s, "POST", "/api/v1/orgs/org-a/api-keys", "krun_cli_admin", `{"name":"test only","expires_in":3600,"policy":{"schema_version":1,"statements":[{"effect":"allow","actions":["worker.read","worker.version.read"],"resource":{"kind":"worker","organization_id":"org-a","ids":["svc-a"]},"conditions":{"environments":["fix-demo"]}}]}}`)
 	if r.Code != 201 {
 		t.Fatal(r.Code, r.Body.String())
 	}
@@ -416,7 +416,11 @@ func TestWorkerArchiveIntegrityAndTraversal(t *testing.T) {
 
 func TestWorkerRoutesReportUnconfiguredInsteadOfMissing(t *testing.T) {
 	s, _ := testServer(t)
-	r := request(s, http.MethodGet, "/api/v1/orgs/org-a/workers/services", "krun_cli_admin", "")
+	r := request(s, http.MethodGet, "/api/v1/orgs/org-a/workers", "krun_cli_admin", "")
+	if r.Code != 200 || !strings.Contains(r.Body.String(), `"kind":"worker"`) {
+		t.Fatalf("Worker metadata should remain available: %d %s", r.Code, r.Body.String())
+	}
+	r = request(s, http.MethodGet, "/api/v1/orgs/org-a/workers/svc-a/overview", "krun_cli_admin", "")
 	if r.Code != 503 || !strings.Contains(r.Body.String(), "WORKERS_NOT_CONFIGURED") {
 		t.Fatalf("unconfigured workers route: %d %s", r.Code, r.Body.String())
 	}
@@ -460,6 +464,25 @@ func TestWorkerVersionAPIHidesRuntimePool(t *testing.T) {
 	if strings.Contains(response.Body.String(), `"pool"`) || strings.Contains(response.Body.String(), "runtime-default") {
 		t.Fatalf("runtime placement leaked: %s", response.Body.String())
 	}
+	if !strings.Contains(response.Body.String(), `"worker_id":"`+version.Worker+`"`) || strings.Contains(response.Body.String(), `"service_id"`) {
+		t.Fatalf("version must identify its Worker: %s", response.Body.String())
+	}
+}
+
+func TestWorkerStaticAssetRouteUsesWorkerIdentity(t *testing.T) {
+	s, _, _ := workerTestServer(t)
+	pool := s.Config.Workers.DefaultRuntimePool()
+	path := "/api/internal/workers/static-assets/pub/org-a/svc-a/" + strings.Repeat("a", 64) + "/index.html"
+	r := httptest.NewRequest(http.MethodGet, path, nil)
+	r.Header.Set("Authorization", "Bearer "+pool.RuntimeToken)
+	r.Header.Set("X-Runtime-Pool", pool.ID)
+	w := httptest.NewRecorder()
+	s.serveInternal(w, r)
+	// A valid Worker identity reaches the pool access check. This private pool
+	// cannot serve public assets; an unbound route parameter would return 404.
+	if w.Code != http.StatusForbidden || r.PathValue("worker") != "svc-a" {
+		t.Fatalf("static asset Worker identity lost: %d %s", w.Code, w.Body.String())
+	}
 }
 
 func TestWorkerConsoleReadsRespectServiceAndEnvironment(t *testing.T) {
@@ -474,10 +497,10 @@ func TestWorkerConsoleReadsRespectServiceAndEnvironment(t *testing.T) {
 	if r := request(s, "GET", base+"/versions/"+op.Version, "krun_cli_admin", ""); r.Code != 200 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	if r := request(s, "GET", "/api/v1/orgs/org-b/services/svc-b/workers/versions/"+op.Version, "krun_cli_admin", ""); r.Code != 404 {
+	if r := request(s, "GET", "/api/v1/orgs/org-b/workers/svc-b/versions/"+op.Version, "krun_cli_admin", ""); r.Code != 404 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	r = request(s, "POST", "/api/v1/orgs/org-a/api-keys", "krun_cli_admin", `{"name":"test read","expires_in":3600,"policy":{"schema_version":1,"statements":[{"effect":"allow","actions":["service.read","service.version.read"],"resource":{"kind":"service","organization_id":"org-a","ids":["svc-a"]},"conditions":{"environments":["fix-demo"]}}]}}`)
+	r = request(s, "POST", "/api/v1/orgs/org-a/api-keys", "krun_cli_admin", `{"name":"test read","expires_in":3600,"policy":{"schema_version":1,"statements":[{"effect":"allow","actions":["worker.read","worker.version.read"],"resource":{"kind":"worker","organization_id":"org-a","ids":["svc-a"]},"conditions":{"environments":["fix-demo"]}}]}}`)
 	var key struct{ Key string }
 	_ = json.Unmarshal(r.Body.Bytes(), &key)
 	if r := request(s, "GET", base+"/versions/"+op.Version, key.Key, ""); r.Code != 403 {

@@ -276,7 +276,7 @@ const archive = tar({ "manifest.json": JSON.stringify(manifest), "modules/index.
 const descriptor = {
   id: "version-r2",
   organization_id: "org-test",
-  service_id: "svc-test",
+  worker_id: "svc-test",
   environment: "production",
   artifact_id: "artifact-r2",
   profile: manifest.profile,
@@ -709,7 +709,7 @@ try {
       const candidate = {
         ...descriptor,
         id: options.id ?? "version-" + marker,
-        service_id: service,
+        worker_id: service,
         archive_sha256: sha(archive),
         secret_digest: "digest-" + marker,
         variables: {

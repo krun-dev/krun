@@ -12,7 +12,7 @@ func TestPostgresR2BindingsAndRuntimeAuthorization(t *testing.T) {
 	ctx := context.Background()
 	if err := s.Update(ctx, PartitionIAM, func(st *domain.State) error {
 		st.Organizations["org-r2"] = domain.Organization{ID: "org-r2", Name: "Storage test", Revision: 1}
-		st.Resources["svc-r2"] = domain.Resource{ID: "svc-r2", Organization: "org-r2", Kind: "service", Name: "Storage Worker", Revision: 1}
+		st.Resources["svc-r2"] = domain.Resource{ID: "svc-r2", Organization: "org-r2", Kind: "worker", Name: "Storage Worker", Revision: 1}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -21,10 +21,10 @@ func TestPostgresR2BindingsAndRuntimeAuthorization(t *testing.T) {
 	ref := domain.WorkerR2Binding{BucketID: "bucket-r2", BucketName: "images", StoreID: "primary"}
 	if err := s.Update(ctx, PartitionWorkers, func(st *domain.State) error {
 		st.Workers.Buckets["bucket-r2"] = domain.WorkerBucket{ID: "bucket-r2", Organization: "org-r2", Name: "images", Store: "primary", Enabled: true, Revision: 1, Created: at}
-		st.Workers.Services["svc-r2"] = domain.WorkerService{Service: "svc-r2", Organization: "org-r2", Environments: map[string]domain.WorkerEnvironment{"production": {Name: "production", Enabled: true, Version: "version-r2", R2Bindings: map[string]domain.WorkerR2Binding{"IMAGES": ref}}}}
-		st.Workers.Placements[domain.WorkerPlacementKey("svc-r2", "default")] = domain.WorkerPlacement{Service: "svc-r2", Organization: "org-r2", Pool: "default", Role: "primary", State: "active", Revision: 1, Created: at, Updated: at}
+		st.Workers.Workers["svc-r2"] = domain.Worker{Worker: "svc-r2", Organization: "org-r2", Environments: map[string]domain.WorkerEnvironment{"production": {Name: "production", Enabled: true, Version: "version-r2", R2Bindings: map[string]domain.WorkerR2Binding{"IMAGES": ref}}}}
+		st.Workers.Placements[domain.WorkerPlacementKey("svc-r2", "default")] = domain.WorkerPlacement{Worker: "svc-r2", Organization: "org-r2", Pool: "default", Role: "primary", State: "active", Revision: 1, Created: at, Updated: at}
 		st.Workers.Artifacts["artifact-r2"] = domain.WorkerArtifact{ID: "artifact-r2", Organization: "org-r2", State: "finalized", Created: at}
-		st.Workers.Versions["version-r2"] = domain.WorkerVersion{ID: "version-r2", Organization: "org-r2", Service: "svc-r2", Environment: "production", Artifact: "artifact-r2", Created: at, R2Bindings: map[string]domain.WorkerR2Binding{"IMAGES": ref}}
+		st.Workers.Versions["version-r2"] = domain.WorkerVersion{ID: "version-r2", Organization: "org-r2", Worker: "svc-r2", Environment: "production", Artifact: "artifact-r2", Created: at, R2Bindings: map[string]domain.WorkerR2Binding{"IMAGES": ref}}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -33,7 +33,7 @@ func TestPostgresR2BindingsAndRuntimeAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Workers.Buckets["bucket-r2"].Store != "primary" || loaded.Workers.Versions["version-r2"].R2Bindings["IMAGES"] != ref || loaded.Workers.Services["svc-r2"].Environments["production"].R2Bindings["IMAGES"] != ref {
+	if loaded.Workers.Buckets["bucket-r2"].Store != "primary" || loaded.Workers.Versions["version-r2"].R2Bindings["IMAGES"] != ref || loaded.Workers.Workers["svc-r2"].Environments["production"].R2Bindings["IMAGES"] != ref {
 		t.Fatal("bucket or binding rows did not reload")
 	}
 	if err := s.Update(ctx, PartitionWorkers, func(*domain.State) error { return nil }); err != nil {

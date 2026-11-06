@@ -73,7 +73,7 @@ func (s *Server) workerInvokeTarget(r *http.Request) (string, string, error) {
 		// A denied invoke stays in the audit log even though the read path made
 		// no other change.
 		_ = s.Store.Update(r.Context(), PartitionIAM, func(st *State) error {
-			s.audit(st, principal, r, "service.invoke", r.PathValue("resource"), false)
+			s.audit(st, principal, r, "worker.invoke", r.PathValue("resource"), false)
 			return nil
 		})
 		return "", "", appErr

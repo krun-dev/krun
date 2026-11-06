@@ -85,7 +85,7 @@ Session Cookie：生产 `__Host-krun_session`，Secure/HttpOnly/SameSite=Lax/Pat
 | 能力 | 组织管理员 `org_admin` | 成员 `member` | 只读 `viewer` |
 | --- | --- | --- | --- |
 | 查看资源、版本、源码与日志 | 是 | 是 | 是 |
-| 创建、修改、删除服务与模型元数据 | 是 | 是 | 否 |
+| 创建、修改、删除 Worker 与模型元数据 | 是 | 是 | 否 |
 | Workers 构建、创建版本、发布、回滚和调用 | 是 | 是 | 否 |
 | 创建、启用与停用逻辑桶 | 是 | 是 | 否 |
 | 浏览、下载存储对象 | 是 | 是 | 是 |
@@ -102,7 +102,7 @@ Session Cookie：生产 `__Host-krun_session`，Secure/HttpOnly/SameSite=Lax/Pat
 在明确接受时同时建立成员资格和 `member` / `viewer` 角色。
 每个成员都可以管理自己的 API Key，实际访问始终取当前角色与 Key 策略的交集。
 
-上表为整个组织、全部环境授权。`member` / `viewer` 也可限定到指定服务或模型及环境；
+上表为整个组织、全部环境授权。`member` / `viewer` 也可限定到指定 Worker 或模型及环境；
 `org_admin` 必须是整组织范围且不能附加环境条件。成员关系、账号状态、身份来源约束、
 Key 范围和撤权检查逐请求生效。模型执行相关动作仍是预留目录，不代表存在执行接口。
 
@@ -138,8 +138,8 @@ Key 范围和撤权检查逐请求生效。模型执行相关动作仍是预留�
 | POST /orgs/:org/api-keys、/system/api-keys | S | 当前用户所有；所有用户支持组织 / 跨工作空间 Key，始终受当前用户权限约束 |
 | GET /orgs/:org/api-keys、/system/api-keys | S K | 逐 Key apiKey.read 后过滤 |
 | GET/PATCH/DELETE /api-keys/:key | GET/DELETE S K，PATCH S | 读取、策略更新、撤销；更新验证选择器、动作兼容性与 Owner 状态，运行时取权限交集 |
-| GET/POST /orgs/:org/services、/models | S K | list/create，对列表逐资源 read 检查 |
-| GET/PATCH/DELETE /orgs/:org/services/:resource、/models/:resource | S K | read/update/delete；路径组织与实际归属一致 |
+| GET/POST /orgs/:org/workers、/models | S K | list/create，对列表逐资源 read 检查 |
+| GET/PATCH/DELETE /orgs/:org/workers/:resource、/models/:resource | S K | read/update/delete；路径组织与实际归属一致 |
 | GET /system/audit、/orgs/:org/audit | S K | audit.read，游标分页，仅最近 7 天；limit 默认 50、最大 500 |
 
 JSON DTO 拒绝未知字段和重复键，正文上限 1 MiB。资源/组/Key/Assignment 的更新需要 expected_revision，不匹配 409。创建返回稳定随机 ID；删除后不会复用。名单、组织成员和组写入读取最新事实，禁止跨组织组/角色；错误的用户或资源不会被隐式创建。
@@ -154,9 +154,9 @@ JSON DTO 拒绝未知字段和重复键，正文上限 1 MiB。资源/组/Key/As
 {"subject_kind":"group","subject_id":"grp_xxx","role_id":"member","scope_kind":"organization","scope_id":"org_xxx","conditions":{}}
 ```
 
-Key 创建：`{name, expires_in, policy}`。`expires_in` 必填，`0` 表示长期有效，返回 `expires_at: null`；正数为 60 秒至 90 天，有限期限到期后拒绝认证与策略更新。撤销、禁用用户、身份来源限制及实时角色检查同样适用于长期有效 Key。策略见 `config/key-policy.example.yaml`。只读资源、列表、版本、发布、删除分别授权，不存在 `write` 或隐式超级 Key。精确 Key 列表发现可显式加入组织选择器上的 service.list / model.list；返回条目仍逐资源过滤。
+Key 创建：`{name, expires_in, policy}`。`expires_in` 必填，`0` 表示长期有效，返回 `expires_at: null`；正数为 60 秒至 90 天，有限期限到期后拒绝认证与策略更新。撤销、禁用用户、身份来源限制及实时角色检查同样适用于长期有效 Key。策略见 `config/key-policy.example.yaml`。只读资源、列表、版本、发布、删除分别授权，不存在 `write` 或隐式超级 Key。精确 Key 列表发现可显式加入组织选择器上的 worker.list / model.list；返回条目仍逐资源过滤。
 
-所有用户可选择 `actions:["*"]`，按选择器兼容的动作目录展开。`resource.kind:"*"` 可配合 `all_in_organization:true` 与准确 `organization_id` 表示组织所有类型资源；`all_in_system:true` 仅用于跨工作空间 Key，允许所有用户创建自己的 Key，并不授予系统管理员权限。使用 service/model 等具体 kind 时仍限制该类型。`kind:"system", all_in_system:true` 仅选择平台资源；全部资源类型统一使用 `kind:"*"`。
+所有用户可选择 `actions:["*"]`，按选择器兼容的动作目录展开。`resource.kind:"*"` 可配合 `all_in_organization:true` 与准确 `organization_id` 表示组织所有类型资源；`all_in_system:true` 仅用于跨工作空间 Key，允许所有用户创建自己的 Key，并不授予系统管理员权限。使用 worker/model 等具体 kind 时仍限制该类型。`kind:"system", all_in_system:true` 仅选择平台资源；全部资源类型统一使用 `kind:"*"`。
 
 策略是访问上限，可以勾选用户当前尚未获授的操作；精确 ID 仍须存在且属于选择器指定组织。每次请求严格计算“用户当前权限 ∩ Key 策略”，deny 优先；角色、成员和身份来源变化立即生效。组织范围 Key 始终不能跨组织。普通用户只可列出、读取、修改或撤销自己的跨工作空间 Key；其他系统管理接口仍按各自权限检查。
 

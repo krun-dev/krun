@@ -19,7 +19,7 @@ export default {
         cf: cf ?? null,
         environment: {
           KRUN_ENVIRONMENT: env.KRUN_ENVIRONMENT ?? null,
-          KRUN_SERVICE_ID: env.KRUN_SERVICE_ID ?? null,
+          KRUN_WORKER_ID: env.KRUN_WORKER_ID ?? null,
           KRUN_VERSION_ID: env.KRUN_VERSION_ID ?? null,
           GREETING: env.GREETING ?? null,
         },

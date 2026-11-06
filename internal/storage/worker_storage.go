@@ -67,20 +67,20 @@ func (s *Store) writeWorkerBuckets(ctx context.Context, tx pgx.Tx, before, after
 }
 
 func (s *Store) writeWorkerR2Bindings(ctx context.Context, tx pgx.Tx, before, after *domain.WorkerState) error {
-	for id, service := range after.Services {
-		old := domain.StorageWorkerEnvironments(before.Services[id])
-		for env, desired := range domain.StorageWorkerEnvironments(service) {
+	for id, worker := range after.Workers {
+		old := domain.StorageWorkerEnvironments(before.Workers[id])
+		for env, desired := range domain.StorageWorkerEnvironments(worker) {
 			if reflect.DeepEqual(old[env].R2Bindings, desired.R2Bindings) {
 				continue
 			}
-			if err := storageMutation(ctx, tx, s.orm.NewDelete().Model((*models.EnvironmentR2)(nil)).Where("service_id = ? AND env_name = ?", id, env), false); err != nil {
+			if err := storageMutation(ctx, tx, s.orm.NewDelete().Model((*models.EnvironmentR2)(nil)).Where("worker_id = ? AND env_name = ?", id, env), false); err != nil {
 				return err
 			}
 			for name, binding := range desired.R2Bindings {
-				if err := checkR2Bucket(ctx, tx, binding.BucketID, service.Organization); err != nil {
+				if err := checkR2Bucket(ctx, tx, binding.BucketID, worker.Organization); err != nil {
 					return err
 				}
-				row := models.EnvironmentR2{ServiceID: id, EnvName: env, Name: name, BucketID: binding.BucketID}
+				row := models.EnvironmentR2{WorkerID: id, EnvName: env, Name: name, BucketID: binding.BucketID}
 				if err := storageMutation(ctx, tx, s.orm.NewInsert().Model(&row).Returning("NULL"), true); err != nil {
 					return err
 				}
@@ -106,11 +106,11 @@ func (s *Store) writeWorkerR2Bindings(ctx context.Context, tx pgx.Tx, before, af
 	}
 	// Explicit deletion also catches removed environments and versions. Runtime
 	// grant reads require the owning rows, so an orphan can never authorize I/O.
-	for id, service := range before.Services {
-		current := domain.StorageWorkerEnvironments(after.Services[id])
-		for env := range domain.StorageWorkerEnvironments(service) {
+	for id, worker := range before.Workers {
+		current := domain.StorageWorkerEnvironments(after.Workers[id])
+		for env := range domain.StorageWorkerEnvironments(worker) {
 			if _, exists := current[env]; !exists {
-				if err := storageMutation(ctx, tx, s.orm.NewDelete().Model((*models.EnvironmentR2)(nil)).Where("service_id = ? AND env_name = ?", id, env), false); err != nil {
+				if err := storageMutation(ctx, tx, s.orm.NewDelete().Model((*models.EnvironmentR2)(nil)).Where("worker_id = ? AND env_name = ?", id, env), false); err != nil {
 					return err
 				}
 			}
@@ -161,15 +161,15 @@ func readWorkerEnvironmentR2(results pgx.BatchResults, st *domain.State) error {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var serviceID, env, name, bucketID string
-		if err := rows.Scan(&serviceID, &env, &name, &bucketID); err != nil {
+		var workerID, env, name, bucketID string
+		if err := rows.Scan(&workerID, &env, &name, &bucketID); err != nil {
 			return err
 		}
-		service, exists := st.Workers.Services[serviceID]
+		worker, exists := st.Workers.Workers[workerID]
 		if !exists {
 			continue
 		}
-		current, exists := domain.StorageWorkerEnvironments(service)[env]
+		current, exists := domain.StorageWorkerEnvironments(worker)[env]
 		if !exists {
 			continue
 		}
@@ -178,11 +178,11 @@ func readWorkerEnvironmentR2(results pgx.BatchResults, st *domain.State) error {
 		}
 		current.R2Bindings[name] = domain.WorkerR2Binding{StoreID: st.Workers.Buckets[bucketID].Store, BucketID: bucketID, BucketName: st.Workers.Buckets[bucketID].Name}
 		if env == domain.PreviewBaseName {
-			service.PreviewBase = &current
+			worker.PreviewBase = &current
 		} else {
-			service.Environments[env] = current
+			worker.Environments[env] = current
 		}
-		st.Workers.Services[serviceID] = service
+		st.Workers.Workers[workerID] = worker
 	}
 	return rows.Err()
 }
