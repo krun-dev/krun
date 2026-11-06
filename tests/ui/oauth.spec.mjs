@@ -42,7 +42,7 @@ test.beforeAll(() => {
 });
 function processCommand(command, args, env = {}) {
   const child = spawn(command, args, {
-    env: { ...process.env, KRUN_TOKEN: "", KRUN_SERVER: "", ...env },
+    env: { ...process.env, KRUN_TOKEN: "", KRUN_ENDPOINT: "", ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stdout = "",
@@ -124,7 +124,7 @@ test("krun browser login, automatic refresh and logout use the real issuer", asy
     "--browser=false",
     "--callback-port",
     "0",
-    "--server",
+    "--endpoint",
     origin,
     "--config",
     config,
@@ -178,7 +178,7 @@ test("device authorization is clear on mobile and returns success without a call
     "login",
     "--device",
     "--browser=false",
-    "--server",
+    "--endpoint",
     origin,
     "--config",
     config,
@@ -221,7 +221,7 @@ test("cancelling browser authorization reaches the CLI without issuing credentia
     "--browser=false",
     "--callback-port",
     "0",
-    "--server",
+    "--endpoint",
     origin,
     "--config",
     config,

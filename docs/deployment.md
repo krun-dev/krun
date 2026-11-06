@@ -4,7 +4,7 @@
 [公司部署包](../deploy/production/README.md)：包含镜像构建、主配置示例、离线资源渲染、
 Gateway 预检和显式 apply 脚本。它与下面的静态控制台同源契约一致。
 
-生产控制台是纯静态站点：`npm run build` 生成 `dist/console/index.html`、`assets/`、用户文档和多平台 CLI 下载文件。构建需要 Go 工具链和 Node.js 22.23.4 或更新的受支持版本（22.x 或 24+）；这些 CLI 是静态文件，无需生产 Node 运行时。把 **`dist/console/` 的内容** 上传到 OSS bucket 根目录；生产
+生产控制台是纯静态站点：`npm run build` 生成 `dist/console/index.html`、`assets/`、用户文档和多平台 CLI 下载文件。构建需要 Go 工具链、Git、Python 3 和 Node.js 22.23.4 或更新的受支持版本（22.x 或 24+）；这些 CLI 是静态文件，无需生产 Node 运行时。把 **`dist/console/` 的内容** 上传到 OSS bucket 根目录；生产
 环境不运行 Node，也不要把仓库、`dist/` 的其他内容或配置文件一起上传。
 
 控制台与控制面 API 共用一个公开 origin。这个 origin 前的 CDN / 反向代理必须实现且只实现：
@@ -32,7 +32,7 @@ db: ${KRUN_DATABASE_URL}
 
 `public_url` 必须是浏览器实际使用的 HTTPS origin。OAuth 回调地址是
 `https://console.example.com/api/auth/<provider-id>/callback`，CLI 使用
-`krun login --server https://console.example.com`。后端不会从 Host 或
+`krun login --endpoint https://console.example.com`。后端不会从 Host 或
 `X-Forwarded-*` 猜测公开地址。
 
 `trusted_proxy_cidrs` 只决定哪些直接上游有权提供 `X-Forwarded-For`；未列出的来源
@@ -55,6 +55,8 @@ Set-Cookie；`/api/*` 不得缓存。每一层代理都应把自己的直接下�
 `trusted_proxy_cidrs`，并采用遇到的第一个不可信地址作为客户端地址。
 
 Starlight 的页面、搜索索引、Markdown 原文和客户端资源均随构建输出到 `/docs/`，无需登录。文档入口为 `/docs/`，静态托管需将目录默认文档设为 `index.html`；CLI 下载文件也需随静态产物一起上传。
+
+CLI 的 `krun upgrade` 从同源 `/downloads/manifest.json` 读取版本和各平台文件的 SHA-256，再下载对应二进制。构建脚本将 Git tag/commit（工作区有修改时带 `-dirty`）同时写入二进制版本和 manifest。部署时先上传二进制、最后上传 manifest，并让 `/downloads/*` 每次重新验证缓存（不要 immutable）；发布期间文件与 manifest 不一致时，CLI 会拒绝替换并提示重试。上述文件均为公开静态资源，不需要新后端路由或运行期代理。
 
 `index.html` 和 `/docs/` 必须 `no-store`（或至少每次重新验证），带内容哈希的 `/assets/*` 才能
 长期 immutable 缓存。静态入口还应下发 CSP、`nosniff`、点击劫持和 Referrer-Policy

@@ -46,7 +46,7 @@ func TestCLIRequestsEnglishErrors(t *testing.T) {
 	}))
 	defer server.Close()
 	var out bytes.Buffer
-	err := Run(context.Background(), []string{"--config", filepath.Join(t.TempDir(), "config.yaml"), "--server", server.URL, "whoami"}, strings.NewReader(""), &out, &out)
+	err := Run(context.Background(), []string{"--config", filepath.Join(t.TempDir(), "config.yaml"), "--endpoint", server.URL, "whoami"}, strings.NewReader(""), &out, &out)
 	if err == nil || err.Error() != "UNAUTHENTICATED: authentication required" {
 		t.Fatal(err)
 	}

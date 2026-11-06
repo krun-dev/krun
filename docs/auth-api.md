@@ -42,8 +42,8 @@ krun CLI 和 Wrangler 共用 OAuth 授权与凭据存储。Access Token 有效 1
 CLI 使用：
 
 ```sh
-krun login --server https://console.example.com
-krun login --device --browser=false --server https://console.example.com
+krun login --endpoint https://console.example.com
+krun login --device --browser=false --endpoint https://console.example.com
 krun whoami
 krun logout
 ```

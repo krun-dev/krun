@@ -20,7 +20,7 @@ import (
 )
 
 type Profile struct {
-	Server       string    `json:"server"`
+	Endpoint     string    `json:"endpoint"`
 	Token        string    `json:"token"`
 	RefreshToken string    `json:"refresh_token,omitempty"`
 	Expires      time.Time `json:"expires_at,omitempty"`
@@ -38,10 +38,10 @@ type responseError struct {
 }
 
 func (e *responseError) Error() string { return e.Code + ": " + e.Message }
-func validateServer(server string) error {
-	u, e := url.Parse(server)
+func validateEndpoint(endpoint string) error {
+	u, e := url.Parse(endpoint)
 	if e != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" && u.Path != "/" {
-		return errors.New("server must be an HTTPS origin")
+		return errors.New("endpoint must be an HTTPS origin")
 	}
 	if u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1")) {
 		return errors.New("HTTPS required except loopback development")
@@ -49,7 +49,7 @@ func validateServer(server string) error {
 	return nil
 }
 func (c *Client) requestOnce(ctx context.Context, method, path string, input any, output any, anonymous bool, headers ...func(http.Header)) error {
-	if e := validateServer(c.Profile.Server); e != nil {
+	if e := validateEndpoint(c.Profile.Endpoint); e != nil {
 		return e
 	}
 	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
@@ -63,7 +63,7 @@ func (c *Client) requestOnce(ctx context.Context, method, path string, input any
 			return e
 		}
 	}
-	r, e := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.Profile.Server, "/")+path, bytes.NewReader(raw))
+	r, e := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.Profile.Endpoint, "/")+path, bytes.NewReader(raw))
 	if e != nil {
 		return e
 	}
@@ -165,16 +165,16 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		}
 	}()
 	path := defaultPath()
-	server := os.Getenv("KRUN_SERVER")
+	endpoint := os.Getenv("KRUN_ENDPOINT")
 	filtered := []string{}
 	for i := 0; i < len(args); i++ {
-		if args[i] == "--server" || args[i] == "--config" {
+		if args[i] == "--endpoint" || args[i] == "--config" {
 			if i+1 >= len(args) {
 				return errors.New("missing global flag value")
 			}
 			value := args[i+1]
-			if args[i] == "--server" {
-				server = value
+			if args[i] == "--endpoint" {
+				endpoint = value
 			} else {
 				path = value
 			}
@@ -183,18 +183,25 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 			filtered = append(filtered, args[i])
 		}
 	}
+	if len(filtered) > 0 && (filtered[0] == "version" || filtered[0] == "--version") {
+		if len(filtered) != 1 {
+			return errors.New("version does not accept arguments")
+		}
+		fmt.Fprintln(out, "krun", Version)
+		return nil
+	}
 	c := &Client{Path: path, In: in, Out: out, Err: errOut}
 	profile, e := loadProfile(path)
 	if e != nil {
 		return e
 	}
 	c.Profile = profile
-	if server != "" && strings.TrimRight(server, "/") != strings.TrimRight(c.Profile.Server, "/") {
+	if endpoint != "" && strings.TrimRight(endpoint, "/") != strings.TrimRight(c.Profile.Endpoint, "/") {
 		c.clearCredentials()
-		c.Profile.Server = server
+		c.Profile.Endpoint = endpoint
 	}
-	if c.Profile.Server == "" {
-		c.Profile.Server = "http://127.0.0.1:8080"
+	if c.Profile.Endpoint == "" {
+		c.Profile.Endpoint = "http://127.0.0.1:8080"
 	}
 	if token := os.Getenv("KRUN_TOKEN"); token != "" {
 		c.clearCredentials()
@@ -213,6 +220,10 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 	command := filtered[0]
 	rest := filtered[1:]
 	switch command {
+	case "config":
+		return c.configure(rest)
+	case "upgrade":
+		return c.upgrade(ctx, rest)
 	case "login":
 		return c.login(ctx, rest)
 	case "whoami", "status":
@@ -561,7 +572,10 @@ func (c *Client) manage(ctx context.Context, command string, args []string) erro
 
 const help = `krun — control-plane CLI
 
-  krun login [--server URL] [--browser=false] [--device | --token-stdin] [--callback-port PORT]
+  krun version
+  krun upgrade [--check]
+  krun config set endpoint URL | get endpoint | show
+  krun login [--endpoint URL] [--browser=false] [--device | --token-stdin] [--callback-port PORT]
   krun whoami | logout
   krun org list | create --name NAME
   krun members list | add | remove --org ID [--user ID]
@@ -583,7 +597,7 @@ const help = `krun — control-plane CLI
   krun audit [--org ID] [--limit 50] [--cursor CURSOR]
   krun api --method METHOD --path /api/v1/... [--file FILE]
 
-Global options: --server URL, --config FILE
-Environment: KRUN_SERVER, KRUN_TOKEN (for automation)
+Global options: --endpoint URL, --config FILE
+Environment: KRUN_ENDPOINT, KRUN_TOKEN (for automation)
 Browser-approved CLI sessions permit IAM administration; API Keys remain restricted.
 `

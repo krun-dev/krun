@@ -46,7 +46,7 @@ func TestCLIControlOAuthLoginRefreshAndLogoutContract(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			done := make(chan error, 1)
-			args := []string{"login", "--browser=false", "--server", httpServer.URL, "--config", profilePath}
+			args := []string{"login", "--browser=false", "--endpoint", httpServer.URL, "--config", profilePath}
 			if device {
 				args = append(args, "--device")
 			} else {

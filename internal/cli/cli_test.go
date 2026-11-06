@@ -31,7 +31,7 @@ func TestBuildLogs(t *testing.T) {
 	}))
 	defer server.Close()
 	var out bytes.Buffer
-	c := Client{Profile: Profile{Server: server.URL, Token: "krun_cli_test"}, Out: &out, Err: &out}
+	c := Client{Profile: Profile{Endpoint: server.URL, Token: "krun_cli_test"}, Out: &out, Err: &out}
 	if err := c.buildLogs(context.Background(), []string{"logs", "--org", "org", "--service", "svc", "--build", "bld", "--follow"}); err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestTokenLoginPermissionsAndLogout(t *testing.T) {
 	defer server.Close()
 	path := filepath.Join(t.TempDir(), "nested", "profile.yaml")
 	var out, errOut bytes.Buffer
-	args := []string{"login", "--token-stdin", "--server", server.URL, "--config", path}
+	args := []string{"login", "--token-stdin", "--endpoint", server.URL, "--config", path}
 	if e := Run(context.Background(), args, strings.NewReader("krun_key_test\n"), &out, &errOut); e != nil {
 		t.Fatal(e)
 	}
@@ -87,10 +87,10 @@ func TestServerSwitchDoesNotLeakSavedToken(t *testing.T) {
 	}))
 	defer server.Close()
 	path := filepath.Join(t.TempDir(), "profile.yaml")
-	raw, _ := configfile.Marshal(path, Profile{Server: "https://old.example.com", Token: "saved-secret"})
+	raw, _ := configfile.Marshal(path, Profile{Endpoint: "https://old.example.com", Token: "saved-secret"})
 	_ = os.WriteFile(path, raw, 0600)
 	var out bytes.Buffer
-	if e := Run(context.Background(), []string{"whoami", "--server", server.URL, "--config", path}, strings.NewReader(""), &out, &out); e != nil {
+	if e := Run(context.Background(), []string{"whoami", "--endpoint", server.URL, "--config", path}, strings.NewReader(""), &out, &out); e != nil {
 		t.Fatal(e)
 	}
 	if received != "" {
@@ -98,10 +98,10 @@ func TestServerSwitchDoesNotLeakSavedToken(t *testing.T) {
 	}
 }
 func TestRejectNonHTTPSAndAPIAbsolutePaths(t *testing.T) {
-	if validateServer("http://public.example.com") == nil || validateServer("https://example.com/other") == nil {
+	if validateEndpoint("http://public.example.com") == nil || validateEndpoint("https://example.com/other") == nil {
 		t.Fatal("unsafe server accepted")
 	}
-	c := Client{Profile: Profile{Server: "https://example.com"}}
+	c := Client{Profile: Profile{Endpoint: "https://example.com"}}
 	if c.request(context.Background(), "GET", "//evil.example.com", nil, nil, false) == nil {
 		t.Fatal("absolute API path accepted")
 	}
@@ -141,7 +141,7 @@ statements:
 			}))
 			defer server.Close()
 			config := filepath.Join(dir, "profile.yaml")
-			profile, _ := configfile.Marshal(config, Profile{Server: server.URL, Token: "krun_cli_test"})
+			profile, _ := configfile.Marshal(config, Profile{Endpoint: server.URL, Token: "krun_cli_test"})
 			_ = os.WriteFile(config, profile, 0600)
 			var out bytes.Buffer
 			e := Run(context.Background(), []string{"keys", "create", "--system", "--name", "test", "--policy", policyFile, "--expires", tc.flag, "--config", config}, strings.NewReader(""), &out, &out)
@@ -164,7 +164,7 @@ func TestAuditPaginationFlags(t *testing.T) {
 	}))
 	defer server.Close()
 	config := filepath.Join(dir, "profile.yaml")
-	raw, _ := configfile.Marshal(config, Profile{Server: server.URL, Token: "krun_cli_test"})
+	raw, _ := configfile.Marshal(config, Profile{Endpoint: server.URL, Token: "krun_cli_test"})
 	_ = os.WriteFile(config, raw, 0600)
 	var out bytes.Buffer
 	err := Run(context.Background(), []string{"audit", "--org", "org-a", "--limit", "100", "--cursor", "opaque+/=cursor", "--config", config}, strings.NewReader(""), &out, &out)
@@ -204,7 +204,7 @@ func TestYAMLInputReachesJSONAPI(t *testing.T) {
 	defer server.Close()
 	config := filepath.Join(dir, "profile.yaml")
 	var out bytes.Buffer
-	args := []string{"api", "--method", "POST", "--path", "/api/v1/test", "--file", input, "--server", server.URL, "--config", config}
+	args := []string{"api", "--method", "POST", "--path", "/api/v1/test", "--file", input, "--endpoint", server.URL, "--config", config}
 	if err := Run(context.Background(), args, strings.NewReader(""), &out, &out); err != nil || !called {
 		t.Fatal("YAML request failed", err)
 	}

@@ -36,20 +36,25 @@ curl -fsSL {{KRUN_ORIGIN}}/install.sh | sh -s -- {{KRUN_ORIGIN}}
 
 手动下载后，将文件设为可执行并放到 PATH 中；Windows 用户可在 PowerShell 中运行下载的 `krun-windows-amd64.exe help`。
 
+安装后可用 `krun version` 查看版本，运行 `krun upgrade --endpoint {{KRUN_ORIGIN}}` 升级到当前控制台发布的 CLI。
+
 ## 3. 连接你的账号
 
 ```sh
-krun login --server {{KRUN_ORIGIN}}
+krun config set endpoint {{KRUN_ORIGIN}}
+krun login
 krun whoami
 krun org list
 ```
+
+保存 endpoint 后，登录、升级和资源命令都会使用该地址。可用 `krun config show` 查看配置；临时连接其他控制台时使用 `--endpoint URL`。
 
 在浏览器中完成登录并批准 CLI 访问。`whoami` 查看当前身份，`org list` 查看你可以访问的组织。CLI 会保存登录信息；使用 `krun logout` 退出。
 
 在远程终端或无法自动打开浏览器时，可以使用设备授权：
 
 ```sh
-krun login --server {{KRUN_ORIGIN}} --device --browser=false
+krun login --endpoint {{KRUN_ORIGIN}} --device --browser=false
 ```
 
 按终端提示在浏览器中完成授权。CLI 接受 HTTPS 控制台地址；本地开发允许 loopback HTTP 地址。
