@@ -66,8 +66,8 @@ func (s *Store) CommitOperation(ctx context.Context, op domain.WorkerOperation) 
 	}
 	tag, err = tx.Exec(ctx, `UPDATE krun_worker_environments
 		SET version_id=$4, deployment_revision=deployment_revision+1, updated_at=now()
-		WHERE service_id=$1 AND env_name=$2 AND deployment_revision=$3 AND enabled`,
-		op.Service, op.Environment, op.ExpectedRevision, op.Version)
+		WHERE worker_id=$1 AND env_name=$2 AND deployment_revision=$3 AND enabled`,
+		op.Worker, op.Environment, op.ExpectedRevision, op.Version)
 	if err != nil {
 		return false, err
 	}
@@ -88,12 +88,12 @@ func (s *Store) CommitOperation(ctx context.Context, op domain.WorkerOperation) 
 	// the environment CAS. A stale operation must not cancel live convergence.
 	if _, err = tx.Exec(ctx, `UPDATE krun_worker_operations
 		SET state='superseded', error='Replaced by '||$3, finished_at=now()
-		WHERE service_id=$1 AND env_name=$2 AND operation_id<>$3 AND state='committed'`,
-		op.Service, op.Environment, op.ID); err != nil {
+		WHERE worker_id=$1 AND env_name=$2 AND operation_id<>$3 AND state='committed'`,
+		op.Worker, op.Environment, op.ID); err != nil {
 		return false, err
 	}
 	var revision int
-	if err = tx.QueryRow(ctx, `SELECT deployment_revision FROM krun_worker_environments WHERE service_id=$1 AND env_name=$2`, op.Service, op.Environment).Scan(&revision); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT deployment_revision FROM krun_worker_environments WHERE worker_id=$1 AND env_name=$2`, op.Worker, op.Environment).Scan(&revision); err != nil {
 		return false, err
 	}
 	// Steps 0-2 (artifact, candidate, commit) are finished by the time the
@@ -139,16 +139,16 @@ func (s *Store) ConfirmOperation(ctx context.Context, op domain.WorkerOperation)
 	if tag.RowsAffected() == 0 {
 		return tx.Commit(ctx)
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO krun_worker_history (service_id, env_name, revision, version_id, operation_id, kind, created_at)
-		SELECT service_id, env_name, deployment_revision, version_id, operation_id, kind, now()
+	if _, err = tx.Exec(ctx, `INSERT INTO krun_worker_history (worker_id, env_name, revision, version_id, operation_id, kind, created_at)
+		SELECT worker_id, env_name, deployment_revision, version_id, operation_id, kind, now()
 		FROM krun_worker_operations WHERE operation_id=$1
-		ON CONFLICT (service_id, env_name, revision) DO NOTHING`, op.ID); err != nil {
+		ON CONFLICT (worker_id, env_name, revision) DO NOTHING`, op.ID); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE krun_worker_environments
 		SET confirmed_version_id = (SELECT version_id FROM krun_worker_operations WHERE operation_id=$1), updated_at=now()
-		WHERE service_id=$2 AND env_name=$3 AND version_id=(SELECT version_id FROM krun_worker_operations WHERE operation_id=$1)`,
-		op.ID, op.Service, op.Environment); err != nil {
+		WHERE worker_id=$2 AND env_name=$3 AND version_id=(SELECT version_id FROM krun_worker_operations WHERE operation_id=$1)`,
+		op.ID, op.Worker, op.Environment); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

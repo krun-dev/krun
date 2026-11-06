@@ -13,18 +13,18 @@ import (
 	securetoken "github.com/krun-dev/krun/internal/securetoken"
 )
 
-func (s *Service) WorkerArtifactGet(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
-	t, e := s.WorkerCollectionTarget(st, ref, "service.version.read", p)
+func (s *Service) WorkerArtifactGet(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
+	t, e := s.WorkerCollectionTarget(st, ref, "worker.version.read", p)
 	if e != nil {
 		return nil, Read, e
 	}
 	a, ok := st.Workers.Artifacts[ref.Item]
 	related := false
 	for _, b := range st.Workers.Builds {
-		if b.Service == t.ID && b.Artifact == a.ID {
+		if b.Worker == t.ID && b.Artifact == a.ID {
 			target := t
 			target.Environment = b.Environment
-			d, e := authorization.Authorize(st, p, "service.version.read", target)
+			d, e := authorization.Authorize(st, p, "worker.version.read", target)
 			if e != nil {
 				return nil, Read, e
 			}

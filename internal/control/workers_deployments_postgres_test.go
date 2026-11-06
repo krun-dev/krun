@@ -14,8 +14,8 @@ func TestPostgresDeploymentCommitPublishesPinnedRouteAndProtectsVersion(t *testi
 	ctx := context.Background()
 	seedPerformanceSites(t, store, 2)
 	artifact := WorkerArtifact{ID: "artifact", Organization: "tenant", State: "finalized", Created: now()}
-	version := WorkerVersion{ID: "version", Organization: "tenant", Service: "site-000002", Environment: "production", Artifact: artifact.ID, Created: now(), Variables: map[string]any{}}
-	op := WorkerOperation{ID: "op-deploy", Kind: "publish", Organization: version.Organization, Service: version.Service, Environment: version.Environment, Version: version.ID, State: "queued", Created: now(), Steps: []domain.WorkerStep{{Name: "artifact"}, {Name: "candidate"}, {Name: "commit"}, {Name: "synchronize"}}}
+	version := WorkerVersion{ID: "version", Organization: "tenant", Worker: "site-000002", Environment: "production", Artifact: artifact.ID, Created: now(), Variables: map[string]any{}}
+	op := WorkerOperation{ID: "op-deploy", Kind: "publish", Organization: version.Organization, Worker: version.Worker, Environment: version.Environment, Version: version.ID, State: "queued", Created: now(), Steps: []domain.WorkerStep{{Name: "artifact"}, {Name: "candidate"}, {Name: "commit"}, {Name: "synchronize"}}}
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Artifacts[artifact.ID] = artifact
 		st.Workers.Versions[version.ID] = version
@@ -33,7 +33,7 @@ func TestPostgresDeploymentCommitPublishesPinnedRouteAndProtectsVersion(t *testi
 		t.Fatalf("unchanged deployment lost instant equality: %v", err)
 	}
 	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}})
-	projection, err := workerapp.LoadWorkerConfigProjection(ctx, store, []string{version.Service}, config)
+	projection, err := workerapp.LoadWorkerConfigProjection(ctx, store, []string{version.Worker}, config)
 	if err != nil {
 		t.Fatal(err)
 	}

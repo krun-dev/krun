@@ -19,7 +19,7 @@ func boundedRetentionDelete(query string) string {
 }
 
 func (s *Store) retainWorkerScopes(ctx context.Context) error {
-	rows, err := s.pool.Query(ctx, `SELECT service_id,generation FROM worker_retention_scopes ORDER BY generation LIMIT 256`)
+	rows, err := s.pool.Query(ctx, `SELECT worker_id,generation FROM worker_retention_scopes ORDER BY generation LIMIT 256`)
 	if err != nil {
 		return err
 	}
@@ -43,29 +43,29 @@ func (s *Store) retainWorkerScopes(ctx context.Context) error {
 	}
 	for _, v := range scopes {
 		more := false
-		// Each window is restricted to one dirty service, using the existing
-		// (service,environment,created_at) and (service,created_at) indexes.
-		tag, e := s.pool.Exec(ctx, `DELETE FROM krun_worker_history WHERE (service_id,env_name,revision) IN (
-   SELECT service_id,env_name,revision FROM (SELECT service_id,env_name,revision,row_number() OVER(PARTITION BY env_name ORDER BY created_at DESC,revision DESC) n FROM krun_worker_history WHERE service_id=$1) ranked WHERE n>$2 LIMIT 1000)`, v.id, WorkerHistoryRetainPerEnv)
+		// Each window is restricted to one dirty worker, using the existing
+		// (worker,environment,created_at) and (worker,created_at) indexes.
+		tag, e := s.pool.Exec(ctx, `DELETE FROM krun_worker_history WHERE (worker_id,env_name,revision) IN (
+   SELECT worker_id,env_name,revision FROM (SELECT worker_id,env_name,revision,row_number() OVER(PARTITION BY env_name ORDER BY created_at DESC,revision DESC) n FROM krun_worker_history WHERE worker_id=$1) ranked WHERE n>$2 LIMIT 1000)`, v.id, WorkerHistoryRetainPerEnv)
 		if e != nil {
 			return e
 		}
 		more = more || tag.RowsAffected() == 1000
-		tag, e = s.pool.Exec(ctx, `WITH victims AS MATERIALIZED(SELECT build_id FROM krun_worker_builds WHERE service_id=$1 AND state IN('succeeded','failed') ORDER BY created_at DESC,build_id DESC OFFSET $2 LIMIT 1000), private AS(DELETE FROM krun_worker_build_private WHERE build_id IN(SELECT build_id FROM victims)) DELETE FROM krun_worker_builds WHERE build_id IN(SELECT build_id FROM victims)`, v.id, WorkerBuildRetainPerService)
+		tag, e = s.pool.Exec(ctx, `WITH victims AS MATERIALIZED(SELECT build_id FROM krun_worker_builds WHERE worker_id=$1 AND state IN('succeeded','failed') ORDER BY created_at DESC,build_id DESC OFFSET $2 LIMIT 1000), private AS(DELETE FROM krun_worker_build_private WHERE build_id IN(SELECT build_id FROM victims)) DELETE FROM krun_worker_builds WHERE build_id IN(SELECT build_id FROM victims)`, v.id, WorkerBuildRetainPerWorker)
 		if e != nil {
 			return e
 		}
 		more = more || tag.RowsAffected() == 1000
-		// Deleted services are known from the resource deletion event. No repeated
-		// full-table anti-join over every surviving service is necessary.
+		// Deleted workers are known from the resource deletion event. No repeated
+		// full-table anti-join over every surviving worker is necessary.
 		var live bool
-		if e = s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM krun_resources WHERE resource_id=$1 AND kind='service')`, v.id).Scan(&live); e != nil {
+		if e = s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM krun_resources WHERE resource_id=$1 AND kind='worker')`, v.id).Scan(&live); e != nil {
 			return e
 		}
 		if !live {
 			queries := []string{
-				`WITH victims AS MATERIALIZED(SELECT build_id FROM krun_worker_builds WHERE service_id=$1 LIMIT 1000), private AS(DELETE FROM krun_worker_build_private WHERE build_id IN(SELECT build_id FROM victims)) DELETE FROM krun_worker_builds WHERE build_id IN(SELECT build_id FROM victims)`,
-				`WITH victims AS MATERIALIZED(SELECT version_id FROM krun_worker_versions WHERE service_id=$1 LIMIT 1000), bindings AS(DELETE FROM krun_worker_version_secrets WHERE version_id IN(SELECT version_id FROM victims)), r2 AS(DELETE FROM krun_worker_version_r2 WHERE version_id IN(SELECT version_id FROM victims)) DELETE FROM krun_worker_versions WHERE version_id IN(SELECT version_id FROM victims)`,
+				`WITH victims AS MATERIALIZED(SELECT build_id FROM krun_worker_builds WHERE worker_id=$1 LIMIT 1000), private AS(DELETE FROM krun_worker_build_private WHERE build_id IN(SELECT build_id FROM victims)) DELETE FROM krun_worker_builds WHERE build_id IN(SELECT build_id FROM victims)`,
+				`WITH victims AS MATERIALIZED(SELECT version_id FROM krun_worker_versions WHERE worker_id=$1 LIMIT 1000), bindings AS(DELETE FROM krun_worker_version_secrets WHERE version_id IN(SELECT version_id FROM victims)), r2 AS(DELETE FROM krun_worker_version_r2 WHERE version_id IN(SELECT version_id FROM victims)) DELETE FROM krun_worker_versions WHERE version_id IN(SELECT version_id FROM victims)`,
 			}
 			for _, query := range queries {
 				tag, e = s.pool.Exec(ctx, query, v.id)
@@ -74,8 +74,8 @@ func (s *Store) retainWorkerScopes(ctx context.Context) error {
 				}
 				more = more || tag.RowsAffected() == 1000
 			}
-			for _, table := range []string{"krun_worker_deployments", "krun_worker_history", "krun_worker_operations", "krun_worker_environment_secrets", "krun_worker_environment_r2", "krun_worker_environments", "krun_worker_service_domains", "krun_worker_service_placements", "krun_worker_services"} {
-				tag, e = s.pool.Exec(ctx, `DELETE FROM `+table+` WHERE ctid IN(SELECT ctid FROM `+table+` WHERE service_id=$1 LIMIT 1000)`, v.id)
+			for _, table := range []string{"krun_worker_deployments", "krun_worker_history", "krun_worker_operations", "krun_worker_environment_secrets", "krun_worker_environment_r2", "krun_worker_environments", "krun_worker_domains", "krun_worker_placements", "krun_workers"} {
+				tag, e = s.pool.Exec(ctx, `DELETE FROM `+table+` WHERE ctid IN(SELECT ctid FROM `+table+` WHERE worker_id=$1 LIMIT 1000)`, v.id)
 				if e != nil {
 					return e
 				}
@@ -83,7 +83,7 @@ func (s *Store) retainWorkerScopes(ctx context.Context) error {
 			}
 		}
 		if !more {
-			if _, e = s.pool.Exec(ctx, `DELETE FROM worker_retention_scopes WHERE service_id=$1 AND generation=$2`, v.id, v.generation); e != nil {
+			if _, e = s.pool.Exec(ctx, `DELETE FROM worker_retention_scopes WHERE worker_id=$1 AND generation=$2`, v.id, v.generation); e != nil {
 				return e
 			}
 		}

@@ -40,12 +40,12 @@ func assetCompletionToken(token string, expires time.Time) string {
 	return assetUploadToken(expires, securetoken.Digest("assets-complete/"+token))
 }
 
-func (w *Controller) StartAssetUpload(ctx context.Context, ref ServiceRef, manifest map[string]AssetUploadFile) (AssetUploadSession, error) {
+func (w *Controller) StartAssetUpload(ctx context.Context, ref WorkerRef, manifest map[string]AssetUploadFile) (AssetUploadSession, error) {
 	if len(manifest) > artifact.WorkerAssetsFilesMax {
 		return AssetUploadSession{}, domain.Problem(413, "WORKER_ASSETS_INVALID", "Too many asset files")
 	}
 	at := time.Now().UTC()
-	a := domain.WorkerAssetSession{ID: securetoken.UUID(), Organization: ref.Organization, Service: ref.Service, Created: at, Expires: at.Add(time.Hour)}
+	a := domain.WorkerAssetSession{ID: securetoken.UUID(), Organization: ref.Organization, Worker: ref.Worker, Created: at, Expires: at.Add(time.Hour)}
 	token := assetUploadToken(a.Expires, securetoken.Random())
 	a.UploadHash = securetoken.Digest(token)
 	a.CompletionHash = securetoken.Digest(assetCompletionToken(token, a.Expires))
@@ -136,12 +136,12 @@ func (w *Controller) CompleteAssetUpload(ctx context.Context, org, token string)
 // UploadedAssets resolves only a completed capability for this exact Worker.
 // The resulting bytes become part of its ordinary immutable artifact and use
 // the same validation, publication, rollback and GC paths as native assets.
-func (w *Controller) UploadedAssets(ctx context.Context, ref ServiceRef, token string, config domain.WorkerAssetsConfig) (*artifact.WorkerManifestAssets, map[string][]byte, error) {
+func (w *Controller) UploadedAssets(ctx context.Context, ref WorkerRef, token string, config domain.WorkerAssetsConfig) (*artifact.WorkerManifestAssets, map[string][]byte, error) {
 	a, err := w.Service.Store.WorkerAssetSession(ctx, ref.Organization, securetoken.Digest(token), true)
 	if err != nil {
 		return nil, nil, err
 	}
-	if a.Service != ref.Service {
+	if a.Worker != ref.Worker {
 		return nil, nil, domain.Forbidden()
 	}
 	files := map[string][]byte{}

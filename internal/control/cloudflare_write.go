@@ -48,7 +48,7 @@ func (s *Server) cfCreateWorker(w http.ResponseWriter, r *http.Request) {
 	s.json(w, 200, cfResult(out))
 }
 func (s *Server) cfSubdomainUpdate(st *State, p Principal, r *http.Request) (any, int, error) {
-	if _, err := s.workerTarget(st, r, "global", "service.update", p); err != nil {
+	if _, err := s.workerTarget(st, r, "global", "worker.update", p); err != nil {
 		return nil, 0, err
 	}
 	var in struct {
@@ -90,7 +90,7 @@ func (s *Server) cfDeleteScript(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			return e
 		}
-		if e = s.require(st, p, r, "service.delete", t); e != nil {
+		if e = s.require(st, p, r, "worker.delete", t); e != nil {
 			return e
 		}
 		return s.iam().DeleteResource(st, t)
@@ -137,11 +137,11 @@ func (s *Server) cfCreateDeployment(w http.ResponseWriter, r *http.Request) {
 	var op WorkerOperation
 	err = s.cfCall(r, true, func(st *State, p Principal) error {
 		ref := workerRef(r)
-		t, e := s.workerTarget(st, r, ref.Environment, "service.publish", p)
+		t, e := s.workerTarget(st, r, ref.Environment, "worker.publish", p)
 		if e != nil {
 			return e
 		}
-		service := s.workerApplication(r).WorkerService(st, t)
+		service := s.workerApplication(r).Worker(st, t)
 		env := service.Environments[ref.Environment]
 		out, _, e := s.workerApplication(r).WorkerDeploymentCreate(r.Context(), st, p, ref, t, ref.Environment, "publish", workerapp.WorkerDeploymentCreateInput{Version: in.Versions[0].ID, Revision: env.Revision, Key: securetoken.UUID()})
 		if e == nil {
@@ -224,17 +224,17 @@ func (s *Server) cfSecretChange(w http.ResponseWriter, r *http.Request) {
 	var op WorkerOperation
 	err = s.cfCall(r, true, func(st *State, p Principal) error {
 		ref := workerRef(r)
-		target, e := s.workerTarget(st, r, ref.Environment, "service.publish", p)
+		target, e := s.workerTarget(st, r, ref.Environment, "worker.publish", p)
 		if e != nil {
 			return e
 		}
-		env := s.workerApplication(r).WorkerService(st, target).Environments[ref.Environment]
+		env := s.workerApplication(r).Worker(st, target).Environments[ref.Environment]
 		if env.Version == "" {
 			return problem(409, "VERSION_NOT_DEPLOYED", "Deploy a Worker before changing secrets")
 		}
 		// Ordinary Secret operations must not silently discard an uploaded draft.
 		for _, v := range st.Workers.Versions {
-			if v.Organization == ref.Organization && v.Service == ref.Service && v.Environment == ref.Environment && v.Created.After(st.Workers.Versions[env.Version].Created) {
+			if v.Organization == ref.Organization && v.Worker == ref.Worker && v.Environment == ref.Environment && v.Created.After(st.Workers.Versions[env.Version].Created) {
 				return problem(409, "VERSION_NOT_DEPLOYED", "Deploy the latest uploaded version before changing secrets")
 			}
 		}

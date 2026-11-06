@@ -28,11 +28,11 @@ func TestCloudflareJSONAndMetadataBindings(t *testing.T) {
 		p.User = domain.User{ID: "admin", Source: "local", Status: "active"}
 		app := server.workerApplication(nil)
 		app.Require = func(*domain.State, Principal, string, Target) error { return nil }
-		ref := workerapp.ServiceRef{Organization: "org-a", Service: "svc-a", Environment: "production"}
+		ref := workerapp.WorkerRef{Organization: "org-a", Worker: "svc-a", Environment: "production"}
 		if e := app.StageBindings(st, p, ref, in); e != nil {
 			return e
 		}
-		env := st.Workers.Services["svc-a"].Environments["production"]
+		env := st.Workers.Workers["svc-a"].Environments["production"]
 		version := workerapp.SnapshotVersion("org-a", "svc-a", "production", WorkerArtifact{}, env)
 		original := version.Variables["CONFIG"].(map[string]any)["nested"].([]any)[3].(map[string]any)
 		env.Variables["CONFIG"].(map[string]any)["nested"].([]any)[3].(map[string]any)["x"] = "changed"
@@ -61,7 +61,7 @@ func TestCloudflareJSONAndMetadataBindings(t *testing.T) {
 func TestAssetSessionCapabilitiesAndValidation(t *testing.T) {
 	_, store, _ := cfTestServer(t)
 	controller := &workerapp.Controller{Service: &workerapp.Service{Store: store}}
-	ref := workerapp.ServiceRef{Organization: "org-a", Service: "svc-a"}
+	ref := workerapp.WorkerRef{Organization: "org-a", Worker: "svc-a"}
 	data := []byte("asset data")
 	if workerapp.AssetUploadHash(".nojekyll", data) != workerapp.AssetUploadHash("extensionless", data) {
 		t.Fatal("dotfile hashing differs from Wrangler path.extname")
@@ -103,7 +103,7 @@ func TestAssetSessionCapabilitiesAndValidation(t *testing.T) {
 	if _, err = store.WorkerAssetSession(context.Background(), ref.Organization, securetoken.Digest(complete), true); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = controller.UploadedAssets(context.Background(), workerapp.ServiceRef{Organization: "org-a", Service: "other"}, complete, domain.WorkerAssetsConfig{}); err == nil {
+	if _, _, err = controller.UploadedAssets(context.Background(), workerapp.WorkerRef{Organization: "org-a", Worker: "other"}, complete, domain.WorkerAssetsConfig{}); err == nil {
 		t.Fatal("cross-Worker completion accepted")
 	}
 	for _, name := range []string{"relative.html", "/../escape.html", "//double.html", "/bad\\path.html"} {
@@ -138,18 +138,18 @@ func TestCloudflareKeepVariableTypes(t *testing.T) {
 				t.Fatal(err)
 			}
 			err = store.Update(context.Background(), PartitionWorkers, func(st *State) error {
-				service := st.Workers.Services["svc-a"]
+				service := st.Workers.Workers["svc-a"]
 				env := service.Environments["production"]
 				env.Variables = map[string]any{"TEXT": "old", "CHANGED": "old", "JSON": map[string]any{"enabled": true}, "NULL": nil}
 				service.Environments["production"] = env
-				st.Workers.Services["svc-a"] = service
+				st.Workers.Workers["svc-a"] = service
 				app := server.workerApplication(nil)
 				app.Require = func(*domain.State, Principal, string, Target) error { return nil }
-				err := app.StageBindings(st, Principal{User: domain.User{ID: "admin", Source: "local", Status: "active"}, Kind: "cli_session"}, workerapp.ServiceRef{Organization: "org-a", Service: "svc-a", Environment: "production"}, input)
+				err := app.StageBindings(st, Principal{User: domain.User{ID: "admin", Source: "local", Status: "active"}, Kind: "cli_session"}, workerapp.WorkerRef{Organization: "org-a", Worker: "svc-a", Environment: "production"}, input)
 				if err != nil {
 					return err
 				}
-				actual := st.Workers.Services["svc-a"].Environments["production"].Variables
+				actual := st.Workers.Workers["svc-a"].Environments["production"].Variables
 				if !reflect.DeepEqual(map[string]any(actual), test.want) {
 					t.Fatalf("got %#v, want %#v", actual, test.want)
 				}

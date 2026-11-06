@@ -17,12 +17,12 @@ func testBuildLogPublication(t *testing.T, s *Store) {
 	t.Helper()
 	ctx := context.Background()
 	if err := s.Update(ctx, PartitionWorkers, func(st *domain.State) error {
-		st.Workers.Services["worker"] = domain.WorkerService{
-			Service: "worker", Organization: "org",
+		st.Workers.Workers["worker"] = domain.Worker{
+			Worker: "worker", Organization: "org",
 			Environments: map[string]domain.WorkerEnvironment{},
 		}
 		st.Workers.Builds["b"] = domain.WorkerBuild{
-			ID: "b", Organization: "org", Service: "worker", Environment: "production",
+			ID: "b", Organization: "org", Worker: "worker", Environment: "production",
 			State: "queued", Created: now(),
 		}
 		st.Workers.BuildPrivate["b"] = domain.WorkerBuildPrivate{

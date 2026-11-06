@@ -49,15 +49,15 @@ func TestOrganizationRoleHTTPBoundaries(t *testing.T) {
 				body   string
 				status int
 			}{
-				{"GET", "/api/v1/orgs/org-a/services/svc-a", "", http.StatusOK},
-				{"POST", "/api/v1/orgs/org-a/services", `{"name":"role-resource"}`, writeStatus},
+				{"GET", "/api/v1/orgs/org-a/workers/svc-a", "", http.StatusOK},
+				{"POST", "/api/v1/orgs/org-a/workers", `{"name":"role-resource"}`, writeStatus},
 				{"GET", "/api/v1/orgs/org-a/members", "", managementStatus},
 				{"GET", "/api/v1/orgs/org-a/role-assignments", "", managementStatus},
 				{"GET", "/api/v1/orgs/org-a/audit", "", managementStatus},
 				{"GET", "/api/v1/system/users", "", http.StatusForbidden},
 				{"GET", "/api/v1/system/audit", "", http.StatusForbidden},
 				{"GET", "/api/v1/orgs/org-b/members", "", http.StatusForbidden},
-				{"POST", "/api/v1/orgs/org-b/services", `{"name":"cross-org"}`, http.StatusForbidden},
+				{"POST", "/api/v1/orgs/org-b/workers", `{"name":"cross-org"}`, http.StatusForbidden},
 			}
 			for _, check := range checks {
 				response := request(server, check.method, check.path, "krun_cli_viewer", check.body)
@@ -118,7 +118,7 @@ func TestRoleChangesRestrictExistingAPIKey(t *testing.T) {
 	if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &key) != nil {
 		t.Fatalf("create key: %d %s", response.Code, response.Body.String())
 	}
-	response = request(server, "POST", "/api/v1/orgs/org-a/services", key.Key, `{"name":"member-can-create"}`)
+	response = request(server, "POST", "/api/v1/orgs/org-a/workers", key.Key, `{"name":"member-can-create"}`)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("member key: %d %s", response.Code, response.Body.String())
 	}
@@ -126,11 +126,11 @@ func TestRoleChangesRestrictExistingAPIKey(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("revoke member role: %d %s", response.Code, response.Body.String())
 	}
-	response = request(server, "POST", "/api/v1/orgs/org-a/services", key.Key, `{"name":"viewer-cannot-create"}`)
+	response = request(server, "POST", "/api/v1/orgs/org-a/workers", key.Key, `{"name":"viewer-cannot-create"}`)
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("existing key retained revoked write permission: %d %s", response.Code, response.Body.String())
 	}
-	response = request(server, "GET", "/api/v1/orgs/org-a/services/svc-a", key.Key, "")
+	response = request(server, "GET", "/api/v1/orgs/org-a/workers/svc-a", key.Key, "")
 	if response.Code != http.StatusOK {
 		t.Fatalf("viewer key lost read access: %d %s", response.Code, response.Body.String())
 	}
@@ -167,7 +167,7 @@ func TestMemberCanBuildCreateVersionPublishAndRollback(t *testing.T) {
 	}
 	var revision int
 	if err := store.View(context.Background(), PartitionWorkers, func(st *State) error {
-		revision = st.Workers.Services["svc-a"].Environments["production"].Revision
+		revision = st.Workers.Workers["svc-a"].Environments["production"].Revision
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -183,13 +183,13 @@ func TestMemberCanBuildCreateVersionPublishAndRollback(t *testing.T) {
 	}
 	// Model the controller's completed publish before requesting a rollback.
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
-		service := st.Workers.Services["svc-a"]
+		service := st.Workers.Workers["svc-a"]
 		environment := service.Environments["production"]
 		environment.Version = version.ID
 		environment.Confirmed = version.ID
 		environment.Revision = revision + 1
 		service.Environments["production"] = environment
-		st.Workers.Services["svc-a"] = service
+		st.Workers.Workers["svc-a"] = service
 		operation.State = "committed"
 		st.Workers.Operations[operation.ID] = operation
 		st.Workers.Histories["svc-a/production"] = []WorkerHistory{{Revision: revision, Version: activeVersion.ID}}

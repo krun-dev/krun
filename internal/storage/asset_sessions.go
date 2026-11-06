@@ -26,7 +26,7 @@ func (s *Store) InsertWorkerAssetSession(ctx context.Context, session domain.Wor
 		return err
 	}
 	defer tx.Rollback(ctx)
-	row := models.AssetSession{SessionID: session.ID, OrgID: session.Organization, ServiceID: session.Service, UploadHash: session.UploadHash, CompletionHash: session.CompletionHash, CreatedAt: session.Created, ExpiresAt: session.Expires}
+	row := models.AssetSession{SessionID: session.ID, OrgID: session.Organization, WorkerID: session.Worker, UploadHash: session.UploadHash, CompletionHash: session.CompletionHash, CreatedAt: session.Created, ExpiresAt: session.Expires}
 	if _, err = tx.orm.NewInsert().Model(&row).Returning("NULL").Exec(ctx); err != nil {
 		return err
 	}
@@ -79,7 +79,7 @@ func (s *Store) WorkerAssetSession(ctx context.Context, org, hash string, comple
 	if err != nil {
 		return domain.WorkerAssetSession{}, err
 	}
-	a := domain.WorkerAssetSession{ID: row.SessionID, Organization: row.OrgID, Service: row.ServiceID, UploadHash: row.UploadHash, CompletionHash: row.CompletionHash, Created: row.CreatedAt, Expires: row.ExpiresAt}
+	a := domain.WorkerAssetSession{ID: row.SessionID, Organization: row.OrgID, Worker: row.WorkerID, UploadHash: row.UploadHash, CompletionHash: row.CompletionHash, Created: row.CreatedAt, Expires: row.ExpiresAt}
 	var files []models.AssetSessionFile
 	if err = s.orm.NewSelect().Model(&files).Where("session_id = ?", a.ID).OrderExpr("path ASC").Scan(ctx); err != nil {
 		return a, err

@@ -119,7 +119,7 @@ func (w *Controller) PrepareRepositoryBuild(ctx context.Context, build domain.Wo
 	private.Files = nil
 	private.SourceKey = sourceKey
 	// Authorization needs the IAM partition, so it runs before the Workers write.
-	denied, authErr := w.AuthorizeActor(ctx, private.Actor, build.Service, build.Environment, "build.start")
+	denied, authErr := w.AuthorizeActor(ctx, private.Actor, build.Worker, build.Environment, "build.start")
 	if authErr != nil {
 		return build, private, authErr
 	}

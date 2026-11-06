@@ -18,7 +18,7 @@ type ConfigRevision struct {
 type ConfigRoute struct {
 	bun.BaseModel `bun:"table:worker_config_routes,alias:worker_config_routes"`
 	ExpiresAt     *time.Time `bun:"expires_at"`
-	ServiceID     string     `bun:"service_id"`
+	WorkerID      string     `bun:"worker_id"`
 	Shard         string     `bun:"shard"`
 	Host          string     `bun:"host,pk"`
 	Pool          string     `bun:"pool"`
@@ -47,7 +47,7 @@ type ConfigOp struct {
 
 type ConfigDirty struct {
 	bun.BaseModel `bun:"table:worker_config_dirty,alias:worker_config_dirty"`
-	ServiceID     string `bun:"service_id,pk"`
+	WorkerID      string `bun:"worker_id,pk"`
 	Generation    int64  `bun:"generation"`
 }
 

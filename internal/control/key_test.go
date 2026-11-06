@@ -33,13 +33,13 @@ func TestUserWildcardKeysStayWithinCurrentPermissions(t *testing.T) {
 			if request(s, "PATCH", "/api/v1/api-keys/"+issued.ID, "krun_cli_viewer", update).Code != 200 {
 				t.Fatal("permanent key cannot update its policy")
 			}
-			if request(s, "GET", "/api/v1/orgs/org-a/services/svc-a", issued.Key, "").Code != 200 {
+			if request(s, "GET", "/api/v1/orgs/org-a/workers/svc-a", issued.Key, "").Code != 200 {
 				t.Fatal("viewer wildcard cannot read its service")
 			}
-			if request(s, "PATCH", "/api/v1/orgs/org-a/services/svc-a", issued.Key, `{"name":"forbidden","expected_revision":1}`).Code != 403 {
+			if request(s, "PATCH", "/api/v1/orgs/org-a/workers/svc-a", issued.Key, `{"name":"forbidden","expected_revision":1}`).Code != 403 {
 				t.Fatal("wildcard escalated viewer to writer")
 			}
-			if request(s, "GET", "/api/v1/system/users", issued.Key, "").Code != 403 || request(s, "GET", "/api/v1/orgs/org-b/services/svc-b", issued.Key, "").Code != 404 {
+			if request(s, "GET", "/api/v1/system/users", issued.Key, "").Code != 403 || request(s, "GET", "/api/v1/orgs/org-b/workers/svc-b", issued.Key, "").Code != 404 {
 				t.Fatal("wildcard escaped user permissions")
 			}
 			if request(s, "POST", "/api/v1/orgs/org-a/groups", issued.Key, `{"name":"forbidden"}`).Code != 403 {
@@ -50,14 +50,14 @@ func TestUserWildcardKeysStayWithinCurrentPermissions(t *testing.T) {
 			}
 			// Snapshot round trips must preserve nil deadlines and wildcard policies.
 			_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
-				st.Resources["future"] = Resource{ID: "future", Kind: "service", Organization: "org-a", Name: "future"}
+				st.Resources["future"] = Resource{ID: "future", Kind: "worker", Organization: "org-a", Name: "future"}
 				return nil
 			})
-			if request(s, "GET", "/api/v1/orgs/org-a/services/future", issued.Key, "").Code != 200 {
+			if request(s, "GET", "/api/v1/orgs/org-a/workers/future", issued.Key, "").Code != 200 {
 				t.Fatal("future resource not included in wildcard")
 			}
 			_ = store.Update(context.Background(), PartitionAll, func(st *State) error { delete(st.Assignments, "viewer"); return nil })
-			if request(s, "GET", "/api/v1/orgs/org-a/services/svc-a", issued.Key, "").Code != 404 {
+			if request(s, "GET", "/api/v1/orgs/org-a/workers/svc-a", issued.Key, "").Code != 404 {
 				t.Fatal("revoked role remained usable through wildcard")
 			}
 			if request(s, "DELETE", "/api/v1/api-keys/"+issued.ID, "krun_cli_viewer", "").Code != 204 || request(s, "GET", "/api/v1/me", issued.Key, "").Code != 401 {
@@ -69,21 +69,21 @@ func TestUserWildcardKeysStayWithinCurrentPermissions(t *testing.T) {
 
 func TestExactTemplatesUseLiveUserPermissions(t *testing.T) {
 	st, _, viewer := fixture()
-	policy := Policy{Version: 1, Statements: []Statement{{Effect: "allow", Actions: []string{"*"}, Resource: Selector{Kind: "service", Organization: "org-a", IDs: []string{"svc-a"}}}}}
+	policy := Policy{Version: 1, Statements: []Statement{{Effect: "allow", Actions: []string{"*"}, Resource: Selector{Kind: "worker", Organization: "org-a", IDs: []string{"svc-a"}}}}}
 	if e := validatePolicy(st, Principal{User: viewer}, "org-a", "organization", policy); e != nil {
 		t.Fatal("ordinary user cannot select all actions", e)
 	}
 	key := APIKey{ID: "key", Organization: "org-a", ScopeKind: "organization", Policy: policy}
-	target, _ := resolve(st, "service", "svc-a", "production")
+	target, _ := resolve(st, "worker", "svc-a", "production")
 	check := func(want bool) {
 		t.Helper()
-		d, e := Authorize(st, Principal{User: viewer, Key: &key}, "service.publish", target)
+		d, e := Authorize(st, Principal{User: viewer, Key: &key}, "worker.publish", target)
 		if e != nil || d.Allowed != want {
 			t.Fatal(d, e)
 		}
 	}
 	check(false)
-	st.Assignments["publisher"] = Assignment{ID: "publisher", SubjectKind: "user", SubjectID: viewer.ID, Role: "member", ScopeKind: "service", ScopeID: "svc-a"}
+	st.Assignments["publisher"] = Assignment{ID: "publisher", SubjectKind: "user", SubjectID: viewer.ID, Role: "member", ScopeKind: "worker", ScopeID: "svc-a"}
 	check(true)
 	org := st.Organizations["org-a"]
 	org.Sources = []string{"another-source"}
@@ -99,8 +99,8 @@ func TestWildcardConditionsKindsAndDeny(t *testing.T) {
 	st, admin, viewer := fixture()
 	st.Resources["model-a"] = Resource{ID: "model-a", Kind: "model", Organization: "org-a"}
 	policy := Policy{Version: 1, Statements: []Statement{
-		{Effect: "allow", Actions: []string{"*"}, Resource: Selector{Kind: "service", AllSystem: true}, Conditions: Conditions{Environments: []string{"version-candidate"}}},
-		{Effect: "deny", Actions: []string{"*"}, Resource: Selector{Kind: "service", Organization: "org-a", IDs: []string{"svc-a"}}, Conditions: Conditions{Environments: []string{"production"}}},
+		{Effect: "allow", Actions: []string{"*"}, Resource: Selector{Kind: "worker", AllSystem: true}, Conditions: Conditions{Environments: []string{"version-candidate"}}},
+		{Effect: "deny", Actions: []string{"*"}, Resource: Selector{Kind: "worker", Organization: "org-a", IDs: []string{"svc-a"}}, Conditions: Conditions{Environments: []string{"production"}}},
 	}}
 	if e := validatePolicy(st, Principal{User: viewer}, "", "system", policy); e != nil {
 		t.Fatal(e)
@@ -109,7 +109,7 @@ func TestWildcardConditionsKindsAndDeny(t *testing.T) {
 	for _, tc := range []struct {
 		kind, id, env string
 		allowed       bool
-	}{{"service", "svc-a", "version-candidate", true}, {"service", "svc-a", "production", false}, {"model", "model-a", "version-candidate", false}} {
+	}{{"worker", "svc-a", "version-candidate", true}, {"worker", "svc-a", "production", false}, {"model", "model-a", "version-candidate", false}} {
 		target, _ := resolve(st, tc.kind, tc.id, tc.env)
 		d, e := Authorize(st, Principal{User: viewer, Key: &key}, tc.kind+".read", target)
 		if e != nil || d.Allowed != tc.allowed {
@@ -123,15 +123,15 @@ func TestWildcardConditionsKindsAndDeny(t *testing.T) {
 	}
 	policy.Statements[0].Conditions = Conditions{}
 	key.Policy = policy
-	target, _ := resolve(st, "service", "svc-a", "production")
-	d, e := Authorize(st, Principal{User: viewer, Key: &key}, "service.read", target)
+	target, _ := resolve(st, "worker", "svc-a", "production")
+	d, e := Authorize(st, Principal{User: viewer, Key: &key}, "worker.read", target)
 	if e != nil || d.Allowed || !d.UserAllowed || d.KeyAllowed {
 		t.Fatal("wildcard deny ignored", d, e)
 	}
 	if validatePolicy(st, Principal{User: viewer}, "org-a", "organization", policy) == nil {
 		t.Fatal("organization key accepted system selector")
 	}
-	policy.Statements = []Statement{{Effect: "allow", Actions: []string{"model.read"}, Resource: Selector{Kind: "service", AllSystem: true}}}
+	policy.Statements = []Statement{{Effect: "allow", Actions: []string{"model.read"}, Resource: Selector{Kind: "worker", AllSystem: true}}}
 	if validatePolicy(st, Principal{User: viewer}, "", "system", policy) == nil {
 		t.Fatal("typed system wildcard accepted incompatible action")
 	}
@@ -188,15 +188,15 @@ func TestSystemSelectorIsLimitedToPlatformResources(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := APIKey{ID: "platform-only", Owner: admin.ID, ScopeKind: "system", Policy: policy}
-	target, err := resolve(st, "service", "svc-a", "production")
+	target, err := resolve(st, "worker", "svc-a", "production")
 	if err != nil {
 		t.Fatal(err)
 	}
-	decision, err := Authorize(st, Principal{User: admin, Key: &key}, "service.read", target)
+	decision, err := Authorize(st, Principal{User: admin, Key: &key}, "worker.read", target)
 	if err != nil || decision.Allowed {
 		t.Fatalf("platform selector granted service access: %+v %v", decision, err)
 	}
-	policy.Statements[0].Actions = []string{"service.read"}
+	policy.Statements[0].Actions = []string{"worker.read"}
 	if err := validatePolicy(st, Principal{User: admin}, "", "system", policy); err == nil {
 		t.Fatal("cross-kind platform statement accepted")
 	}

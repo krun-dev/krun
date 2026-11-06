@@ -10,8 +10,8 @@ import (
 	storage "github.com/krun-dev/krun/internal/storage"
 )
 
-func (s *Service) WorkerTarget(st *domain.State, ref ServiceRef, env, action string, p authorization.Principal) (authorization.Target, error) {
-	t, e := authorization.Resolve(st, "service", ref.Service, env)
+func (s *Service) WorkerTarget(st *domain.State, ref WorkerRef, env, action string, p authorization.Principal) (authorization.Target, error) {
+	t, e := authorization.Resolve(st, "worker", ref.Worker, env)
 	if e != nil || t.Organization != ref.Organization {
 		return t, domain.NotFound()
 	}
@@ -19,13 +19,13 @@ func (s *Service) WorkerTarget(st *domain.State, ref ServiceRef, env, action str
 }
 
 // Collection APIs use the union of visible environments, rather than requiring global permission.
-func (s *Service) WorkerCollectionTarget(st *domain.State, ref ServiceRef, action string, p authorization.Principal) (authorization.Target, error) {
-	t, e := authorization.Resolve(st, "service", ref.Service, "global")
+func (s *Service) WorkerCollectionTarget(st *domain.State, ref WorkerRef, action string, p authorization.Principal) (authorization.Target, error) {
+	t, e := authorization.Resolve(st, "worker", ref.Worker, "global")
 	if e != nil || t.Organization != ref.Organization {
 		return t, domain.NotFound()
 	}
 	candidates := []string{appconfig.WorkerBaseline}
-	if ws, ok := st.Workers.Services[t.ID]; ok {
+	if ws, ok := st.Workers.Workers[t.ID]; ok {
 		names := make([]string, 0, len(ws.Environments))
 		for name := range ws.Environments {
 			if name != appconfig.WorkerBaseline {
@@ -50,7 +50,7 @@ func (s *Service) WorkerCollectionTarget(st *domain.State, ref ServiceRef, actio
 }
 
 // Reauthorize durable operations with current user/Key state before each privileged transition.
-func (s *Service) WorkerAuthorizeActor(st *domain.State, a domain.WorkerActor, service, env, action string) error {
+func (s *Service) WorkerAuthorizeActor(st *domain.State, a domain.WorkerActor, worker, env, action string) error {
 	user, ok := st.Users[a.User]
 	if !ok || user.Status != "active" || user.AuthVersion != a.AuthVersion || !s.sourceEnabled(user.Source) {
 		return domain.Forbidden()
@@ -63,7 +63,7 @@ func (s *Service) WorkerAuthorizeActor(st *domain.State, a domain.WorkerActor, s
 		}
 		p.Key = &key
 	}
-	target, e := authorization.Resolve(st, "service", service, env)
+	target, e := authorization.Resolve(st, "worker", worker, env)
 	if e != nil {
 		return e
 	}
@@ -79,10 +79,10 @@ func (s *Service) WorkerAuthorizeActor(st *domain.State, a domain.WorkerActor, s
 
 // authorizeActor re-checks a durable operation's actor against current IAM
 // state. Authorization needs both partitions: the grants and user rows are IAM,
-// but resolve() looks the service up in krun_resources, which is Workers.
-func (w *Controller) AuthorizeActor(ctx context.Context, actor domain.WorkerActor, service, env, action string) (error, error) {
+// but resolve() looks the worker up in krun_resources, which is Workers.
+func (w *Controller) AuthorizeActor(ctx context.Context, actor domain.WorkerActor, worker, env, action string) (error, error) {
 	var denied error
-	ctx, err := w.Service.Store.ActorScope(ctx, actor, service)
+	ctx, err := w.Service.Store.ActorScope(ctx, actor, worker)
 	if err != nil {
 		if _, ok := err.(*domain.APIError); ok {
 			return err, nil
@@ -90,7 +90,7 @@ func (w *Controller) AuthorizeActor(ctx context.Context, actor domain.WorkerActo
 		return nil, err
 	}
 	err = w.Service.Store.View(ctx, storage.PartitionIAM, func(st *domain.State) error {
-		denied = w.Service.WorkerAuthorizeActor(st, actor, service, env, action)
+		denied = w.Service.WorkerAuthorizeActor(st, actor, worker, env, action)
 		return nil
 	})
 	return denied, err

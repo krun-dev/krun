@@ -17,7 +17,7 @@ func (s *Server) requireWorkers(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func (s *Server) workersRoutes(m *http.ServeMux) {
-	base := "/api/v1/orgs/{org}/services/{resource}/workers"
+	base := "/api/v1/orgs/{org}/workers/{resource}"
 	protectWithBodyLimit := func(sessionOnly bool, bodyLimit int64, fn endpoint) http.HandlerFunc {
 		return s.protectedWorkersWithBodyLimit(sessionOnly, bodyLimit, func(st *State, p Principal, r *http.Request) (any, int, error) {
 			if s.Config.Workers == nil {
@@ -29,11 +29,11 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	protect := func(sessionOnly bool, fn endpoint) http.HandlerFunc {
 		return protectWithBodyLimit(sessionOnly, apiJSONBodyMax, fn)
 	}
-	m.HandleFunc("GET /api/v1/orgs/{org}/workers/buckets", protect(false, s.workerBucketList))
-	m.HandleFunc("GET /api/v1/orgs/{org}/workers/buckets/{bucket}", protect(false, s.workerBucketGet))
-	m.HandleFunc("POST /api/v1/orgs/{org}/workers/buckets", protect(false, s.workerBucketCreate))
-	m.HandleFunc("PATCH /api/v1/orgs/{org}/workers/buckets/{bucket}", protect(false, s.workerBucketUpdate))
-	objects := "/api/v1/orgs/{org}/workers/buckets/{bucket}/objects"
+	m.HandleFunc("GET /api/v1/orgs/{org}/buckets", protect(false, s.workerBucketList))
+	m.HandleFunc("GET /api/v1/orgs/{org}/buckets/{bucket}", protect(false, s.workerBucketGet))
+	m.HandleFunc("POST /api/v1/orgs/{org}/buckets", protect(false, s.workerBucketCreate))
+	m.HandleFunc("PATCH /api/v1/orgs/{org}/buckets/{bucket}", protect(false, s.workerBucketUpdate))
+	objects := "/api/v1/orgs/{org}/buckets/{bucket}/objects"
 	// Object operations persist only the ordinary authorization audit, never
 	// Workers snapshots or per-object database rows.
 	objectHandler := s.protectedWith(false, PartitionAll, 0, apiJSONBodyMax, s.workerObjects)
@@ -41,17 +41,17 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	m.HandleFunc("DELETE "+objects, objectHandler)
 	m.HandleFunc("POST "+objects+"/access", objectHandler)
 	m.HandleFunc("GET "+objects+"/{objectOperation}", objectHandler)
-	m.HandleFunc("GET /api/v1/orgs/{org}/workers/services", protect(false, s.workerServiceList))
+	m.HandleFunc("GET /api/v1/orgs/{org}/workers", s.protectedWorkersWithBodyLimit(false, apiJSONBodyMax, s.workerList))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/domains", protect(false, s.workerDomains))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/network-profiles", protect(false, s.workerNetworkProfiles))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/repository-providers", protect(false, s.workerRepositoryProviders))
-	m.HandleFunc("POST /api/v1/orgs/{org}/workers/repository/{provider}/connect", protect(true, s.workerRepositoryConnect))
-	m.HandleFunc("DELETE /api/v1/orgs/{org}/workers/repository/{provider}/disconnect", protect(true, s.workerRepositoryDisconnect))
+	m.HandleFunc("POST /api/v1/orgs/{org}/worker-repositories/{provider}/connect", protect(true, s.workerRepositoryConnect))
+	m.HandleFunc("DELETE /api/v1/orgs/{org}/worker-repositories/{provider}/disconnect", protect(true, s.workerRepositoryDisconnect))
 	m.HandleFunc("GET /api/v1/workers/repository/{provider}/callback", s.workerRepositoryCallback)
 	m.HandleFunc("POST /api/v1/workers/repository/{provider}/callback", s.workerRepositoryCallback)
-	m.HandleFunc("GET "+base+"/domains", protect(false, s.workerServiceDomains))
-	m.HandleFunc("PUT "+base+"/domains", protect(false, s.workerServiceDomainsUpdate))
-	m.HandleFunc("PUT "+base+"/network-profile", protect(false, s.workerServiceNetworkProfileUpdate))
+	m.HandleFunc("GET "+base+"/domains", protect(false, s.workerRoutingDomains))
+	m.HandleFunc("PUT "+base+"/domains", protect(false, s.workerRoutingDomainsUpdate))
+	m.HandleFunc("PUT "+base+"/network-profile", protect(false, s.workerNetworkProfileUpdate))
 	m.HandleFunc("GET "+base+"/repository", protect(false, s.workerRepositoryGet))
 	m.HandleFunc("PUT "+base+"/repository", protect(false, s.workerRepositoryUpdate))
 	m.HandleFunc("POST "+base+"/builds", protectWithBodyLimit(false, workerapp.WorkerBuildRequestBodyMax, s.workerBuildCreate))
@@ -90,8 +90,8 @@ func (s *Server) workerTarget(st *State, r *http.Request, env, action string, p 
 	return s.workerApplication(r).WorkerTarget(st, workerRef(r), env, action, p)
 }
 
-func (s *Server) workerService(st *State, t Target) WorkerService {
-	return s.workerApplication(nil).WorkerService(st, t)
+func (s *Server) worker(st *State, t Target) Worker {
+	return s.workerApplication(nil).Worker(st, t)
 }
 
 func (s *Server) workerBuildCreate(st *State, p Principal, r *http.Request) (any, int, error) {
@@ -161,38 +161,38 @@ func (s *Server) workerOverview(st *State, p Principal, r *http.Request) (any, i
 	return out, workerHTTPStatus(outcome), err
 }
 
-// workerServiceDomains returns the service-level domain selection together with
+// workerRoutingDomains returns the Worker-level domain selection together with
 // the catalog, so the console can render the routing page in one round trip.
-func (s *Server) workerServiceDomains(st *State, p Principal, r *http.Request) (any, int, error) {
-	out, outcome, err := s.workerApplication(r).WorkerServiceDomains(r.Context(), st, p, workerRef(r))
+func (s *Server) workerRoutingDomains(st *State, p Principal, r *http.Request) (any, int, error) {
+	out, outcome, err := s.workerApplication(r).WorkerRoutingDomains(r.Context(), st, p, workerRef(r))
 	return out, workerHTTPStatus(outcome), err
 }
 
-// workerServiceDomainsUpdate replaces the service-level domain selection. Every
-// environment of the service is re-homed onto the new set.
-func (s *Server) workerServiceDomainsUpdate(st *State, p Principal, r *http.Request) (any, int, error) {
-	t, e := s.workerTarget(st, r, appconfig.WorkerBaseline, "service.update", p)
+// workerRoutingDomainsUpdate replaces the Worker-level domain selection. Every
+// environment of the Worker is re-homed onto the new set.
+func (s *Server) workerRoutingDomainsUpdate(st *State, p Principal, r *http.Request) (any, int, error) {
+	t, e := s.workerTarget(st, r, appconfig.WorkerBaseline, "worker.update", p)
 	if e != nil {
 		return nil, 0, e
 	}
-	var in workerapp.WorkerServiceDomainsUpdateInput
+	var in workerapp.WorkerRoutingDomainsUpdateInput
 	if e = body(r, &in); e != nil {
 		return nil, 0, e
 	}
-	out, outcome, err := s.workerApplication(r).WorkerServiceDomainsUpdate(r.Context(), st, p, workerRef(r), t, in)
+	out, outcome, err := s.workerApplication(r).WorkerRoutingDomainsUpdate(r.Context(), st, p, workerRef(r), t, in)
 	return out, workerHTTPStatus(outcome), err
 }
 
-func (s *Server) workerServiceNetworkProfileUpdate(st *State, p Principal, r *http.Request) (any, int, error) {
-	t, err := s.workerTarget(st, r, appconfig.WorkerBaseline, "service.update", p)
+func (s *Server) workerNetworkProfileUpdate(st *State, p Principal, r *http.Request) (any, int, error) {
+	t, err := s.workerTarget(st, r, appconfig.WorkerBaseline, "worker.update", p)
 	if err != nil {
 		return nil, 0, err
 	}
-	var in workerapp.WorkerServiceNetworkProfileUpdateInput
+	var in workerapp.WorkerNetworkProfileUpdateInput
 	if err = body(r, &in); err != nil {
 		return nil, 0, err
 	}
-	out, outcome, err := s.workerApplication(r).WorkerServiceNetworkProfileUpdate(r.Context(), st, p, workerRef(r), t, in)
+	out, outcome, err := s.workerApplication(r).WorkerNetworkProfileUpdate(r.Context(), st, p, workerRef(r), t, in)
 	return out, workerHTTPStatus(outcome), err
 }
 
@@ -216,7 +216,7 @@ func (s *Server) workerEnvironmentUpdate(st *State, p Principal, r *http.Request
 	if !appconfig.WorkerEnvValid(env) {
 		return nil, 0, notFound()
 	}
-	t, e := s.workerTarget(st, r, env, "service.update", p)
+	t, e := s.workerTarget(st, r, env, "worker.update", p)
 	if e != nil {
 		return nil, 0, e
 	}
@@ -241,7 +241,7 @@ func (s *Server) workerDeploymentCreate(st *State, p Principal, r *http.Request,
 	if !appconfig.WorkerEnvValid(env) {
 		return nil, 0, notFound()
 	}
-	t, e := s.workerTarget(st, r, env, "service."+kind, p)
+	t, e := s.workerTarget(st, r, env, "worker."+kind, p)
 	if e != nil {
 		return nil, 0, e
 	}

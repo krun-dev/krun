@@ -19,13 +19,13 @@ func RememberDeployment(st *domain.State, op domain.WorkerOperation) {
 		st.Workers.Deployments = map[string]domain.WorkerDeployment{}
 	}
 	id := DeploymentID(op.ID)
-	st.Workers.Deployments[id] = domain.WorkerDeployment{ID: id, Organization: op.Organization, Service: op.Service, Environment: op.Environment, Version: op.Version, Operation: op.ID, Created: op.Created, Expires: op.Created.Add(DeploymentRetention)}
+	st.Workers.Deployments[id] = domain.WorkerDeployment{ID: id, Organization: op.Organization, Worker: op.Worker, Environment: op.Environment, Version: op.Version, Operation: op.ID, Created: op.Created, Expires: op.Created.Add(DeploymentRetention)}
 }
 func DeploymentID(operation string) string   { return "dep_" + strings.TrimPrefix(operation, "op_") }
 func DeploymentEnvironment(id string) string { return "d-" + securetoken.Digest(id)[:20] }
-func DeploymentHosts(config *appconfig.WorkersConfig, service domain.WorkerService, id string) []string {
+func DeploymentHosts(config *appconfig.WorkersConfig, worker domain.Worker, id string) []string {
 	hosts := []string{}
-	for _, pattern := range ServiceHostPatterns(service, config.Domains) {
+	for _, pattern := range WorkerHostPatterns(worker, config.Domains) {
 		if host := EnvHostName(pattern, DeploymentEnvironment(id)); host != "" {
 			hosts = append(hosts, host)
 		}
@@ -39,26 +39,26 @@ type DeploymentView struct {
 	Hosts []string `json:"hosts"`
 }
 
-func (s *Service) WorkerDeployments(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
-	if _, err := s.WorkerCollectionTarget(st, ref, "service.version.read", p); err != nil {
+func (s *Service) WorkerDeployments(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
+	if _, err := s.WorkerCollectionTarget(st, ref, "worker.version.read", p); err != nil {
 		return nil, Read, err
 	}
 	out := []DeploymentView{}
 	for _, d := range st.Workers.Deployments {
-		if d.Organization != ref.Organization || d.Service != ref.Service || ref.Item != "" && ref.Item != d.ID || ref.Environment != "" && ref.Environment != d.Environment {
+		if d.Organization != ref.Organization || d.Worker != ref.Worker || ref.Item != "" && ref.Item != d.ID || ref.Environment != "" && ref.Environment != d.Environment {
 			continue
 		}
-		if _, err := s.WorkerTarget(st, ref, d.Environment, "service.version.read", p); err != nil {
+		if _, err := s.WorkerTarget(st, ref, d.Environment, "worker.version.read", p); err != nil {
 			continue
 		}
-		service := s.WorkerServiceView(st, authorization.Target{ID: ref.Service, Organization: ref.Organization})
+		worker := s.WorkerView(st, authorization.Target{ID: ref.Worker, Organization: ref.Organization})
 		state := st.Workers.Operations[d.Operation].State
 		if state == "" {
 			state = "available"
 		}
 		hosts := []string{}
 		if d.Committed != nil && d.Expires.After(time.Now()) {
-			hosts = DeploymentHosts(s.Config.Workers, service, d.ID)
+			hosts = DeploymentHosts(s.Config.Workers, worker, d.ID)
 		}
 		view := DeploymentView{WorkerDeployment: d, State: state, Hosts: hosts}
 		if ref.Item != "" {

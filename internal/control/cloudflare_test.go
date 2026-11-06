@@ -16,7 +16,7 @@ import (
 
 func cfTestServer(t *testing.T) (*Server, *Store, string) {
 	s, store, _ := workerTestServer(t)
-	if err := store.BindWorkerScript(context.Background(), domain.WorkerScript{Organization: "org-a", Name: "fixture", Service: "svc-a", WorkersDev: true, PreviewsEnabled: true}); err != nil {
+	if err := store.BindWorkerScript(context.Background(), domain.WorkerScript{Organization: "org-a", Name: "fixture", Worker: "svc-a", WorkersDev: true, PreviewsEnabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	return s, store, cfPrefix + "/accounts/org-a/workers/scripts/fixture"
@@ -60,7 +60,7 @@ func TestCloudflarePreviewsBaseCopiesAndMasksSecrets(t *testing.T) {
 		t.Fatalf("preview: %d %s", r.Code, r.Body.String())
 	}
 	if err := store.View(context.Background(), PartitionWorkers, func(st *State) error {
-		service := st.Workers.Services["svc-a"]
+		service := st.Workers.Workers["svc-a"]
 		if service.Environments["branch-one"].SecretVersions["apiToken"] == "" || service.Environments["branch-one"].Variables["label"] != "base" || len(service.Environments["production"].SecretVersions) != 0 {
 			t.Fatal("Preview base isolation failed")
 		}
@@ -104,7 +104,7 @@ func TestCloudflareMultipartRetainsNestedModuleNames(t *testing.T) {
 func TestCloudflarePostgresScriptRegistry(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
-	script := domain.WorkerScript{Organization: "org-fixture", Name: "stable", Service: "service-fixture", WorkersDev: true, PreviewsEnabled: true}
+	script := domain.WorkerScript{Organization: "org-fixture", Name: "stable", Worker: "service-fixture", WorkersDev: true, PreviewsEnabled: true}
 	for i := 0; i < 2; i++ {
 		if err := store.BindWorkerScript(ctx, script); err != nil {
 			t.Fatal(err)
@@ -140,7 +140,7 @@ func TestCloudflareMergePatchBodies(t *testing.T) {
 
 func TestCloudflareDoesNotResurrectNativeDeletedResource(t *testing.T) {
 	s, store, _ := cfTestServer(t)
-	script := domain.WorkerScript{Organization: "org-a", Name: "native-deleted", Service: "old-service", WorkersDev: true, PreviewsEnabled: true}
+	script := domain.WorkerScript{Organization: "org-a", Name: "native-deleted", Worker: "old-service", WorkersDev: true, PreviewsEnabled: true}
 	if err := store.BindWorkerScript(context.Background(), script); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestCloudflareDoesNotResurrectNativeDeletedResource(t *testing.T) {
 		t.Fatalf("orphan identity recreated: %d %s", r.Code, r.Body.String())
 	}
 	if err := store.View(context.Background(), PartitionAll, func(st *State) error {
-		if _, ok := st.Resources[script.Service]; ok {
+		if _, ok := st.Resources[script.Worker]; ok {
 			t.Fatal("deleted IAM resource resurrected")
 		}
 		return nil

@@ -19,7 +19,7 @@ const (
 // OpenStore creates the storage implementation without exposing its driver.
 func OpenStore(ctx context.Context, dsn string) (*Store, error) { return storage.Open(ctx, dsn) }
 
-type workerDirtyService = storage.DirtyService
+type workerDirtyWorker = storage.DirtyWorker
 
 type stateReadScope = storage.ReadScope
 
@@ -41,4 +41,4 @@ const auditRetention = storage.AuditRetention
 
 const workerActiveBuildLimit = storage.WorkerActiveBuildLimit
 
-const workerBuildRetainPerService = storage.WorkerBuildRetainPerService
+const workerBuildRetainPerWorker = storage.WorkerBuildRetainPerWorker

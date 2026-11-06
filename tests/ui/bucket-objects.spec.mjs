@@ -40,8 +40,8 @@ test("browse directories and transfer object bytes directly to storage", async (
   const id = randomUUID().slice(0, 8);
   const org = await api("/api/v1/orgs", "POST", { name: "Object browser " + id });
   const base = "/api/v1/orgs/" + org.id;
-  const bucket = await api(base + "/workers/buckets", "POST", { name: "browser-" + id });
-  const objects = base + "/workers/buckets/" + bucket.id + "/objects";
+  const bucket = await api(base + "/buckets", "POST", { name: "browser-" + id });
+  const objects = base + "/buckets/" + bucket.id + "/objects";
   const keys = ["目录/hello +?#%.txt", "目录/empty.txt", "目录/sub/nested.txt"];
   try {
     await page.goto("/?page=buckets&workspace=" + org.id);

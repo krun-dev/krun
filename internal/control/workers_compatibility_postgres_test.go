@@ -25,14 +25,14 @@ func TestPostgresWorkerCompatibilityMetadataRoundTrip(t *testing.T) {
 	}
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Builds["bld-compat"] = WorkerBuild{
-			ID: "bld-compat", Organization: "org-compat", Service: "svc-compat", Environment: appconfig.WorkerBaseline,
+			ID: "bld-compat", Organization: "org-compat", Worker: "svc-compat", Environment: appconfig.WorkerBaseline,
 			State: "succeeded", Entrypoint: "index.ts", Profile: workerartifact.WorkerProfile,
 			CompatibilityDate: "2026-09-28", CompatibilityFlags: append([]string(nil), flags...),
 			Artifact: artifact.ID, Created: created, Finished: &finished,
 		}
 		st.Workers.Artifacts[artifact.ID] = artifact
 		st.Workers.Versions["rel-compat"] = WorkerVersion{
-			ID: "rel-compat", Organization: "org-compat", Service: "svc-compat", Environment: appconfig.WorkerBaseline,
+			ID: "rel-compat", Organization: "org-compat", Worker: "svc-compat", Environment: appconfig.WorkerBaseline,
 			Artifact: artifact.ID, Profile: artifact.Profile, ArchiveDigest: artifact.ArchiveDigest, ModuleDigest: artifact.ModuleDigest,
 			CompatibilityDate: artifact.CompatibilityDate, CompatibilityFlags: append([]string(nil), flags...),
 			Variables: map[string]any{"CONFIG": map[string]any{"values": []any{true, nil, json.Number("42")}}}, VersionMetadata: "CF_VERSION_METADATA", Tag: "fixture-tag", Message: "fixture message", Created: created,
@@ -65,7 +65,7 @@ func TestPostgresWorkerCompatibilityMetadataRoundTrip(t *testing.T) {
 
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Versions["rel-mismatch"] = WorkerVersion{
-			ID: "rel-mismatch", Organization: artifact.Organization, Service: "svc-compat", Environment: appconfig.WorkerBaseline,
+			ID: "rel-mismatch", Organization: artifact.Organization, Worker: "svc-compat", Environment: appconfig.WorkerBaseline,
 			Artifact: artifact.ID, Profile: artifact.Profile, ArchiveDigest: artifact.ArchiveDigest, ModuleDigest: artifact.ModuleDigest,
 			CompatibilityDate: "2026-09-27", CompatibilityFlags: []string{"nodejs_compat"}, Variables: map[string]any{}, Created: created,
 		}

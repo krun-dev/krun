@@ -60,14 +60,14 @@ func TestPostgresMillionSiteReadBound(t *testing.T) {
 	t.Logf("seeded %d sites with placements and production environments in %s", n, time.Since(started))
 	samples := make([]time.Duration, 0, 25)
 	for i := 0; i < 25; i++ {
-		scope := stateReadScope{User: "actor", Organization: "tenant", Service: fmt.Sprintf("site-%06d", 2+2*i), Kind: "service", Limit: 100}
+		scope := stateReadScope{User: "actor", Organization: "tenant", Worker: fmt.Sprintf("site-%06d", 2+2*i), Kind: "worker", Limit: 100}
 		started = time.Now()
 		state, e := store.Open(withStateScope(ctx, scope), PartitionAll)
 		if e != nil {
 			t.Fatal(e)
 		}
 		samples = append(samples, time.Since(started))
-		if len(state.Resources) != 1 || len(state.Workers.Services) != 1 || len(state.Workers.Placements) != 1 {
+		if len(state.Resources) != 1 || len(state.Workers.Workers) != 1 || len(state.Workers.Placements) != 1 {
 			t.Fatal("single-site query loaded unrelated sites")
 		}
 	}

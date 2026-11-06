@@ -11,20 +11,20 @@ var actions = map[string][]string{
 	"organization.create": {"system"}, "system.configure": {"system"}, "system.role.read": {"system"}, "system.role.grant": {"system"}, "system.role.revoke": {"system"}, "system.user.read": {"system"}, "system.user.update": {"system"}, "audit.read": {"system", "organization"},
 	"organization.read": {"organization"}, "organization.update": {"organization"}, "organization.delete": {"organization"}, "member.read": {"organization"}, "member.manage": {"organization"}, "iam.read": {"organization"}, "iam.grant": {"organization"}, "iam.revoke": {"organization"},
 	"apiKey.create": {"organization", "system"}, "apiKey.read": {"api_key"}, "apiKey.update": {"api_key"}, "apiKey.revoke": {"api_key"},
-	"service.list": {"organization"}, "service.create": {"organization"}, "service.read": {"service"}, "service.update": {"service"}, "service.delete": {"service"}, "service.publish": {"service"}, "service.rollback": {"service"}, "service.version.read": {"service"}, "service.version.create": {"service"}, "service.invoke": {"service"},
-	"model.list": {"organization"}, "model.create": {"organization"}, "model.read": {"model"}, "model.update": {"model"}, "model.delete": {"model"}, "model.publish": {"model"}, "model.rollback": {"model"}, "model.version.read": {"model"}, "model.version.create": {"model"}, "model.use": {"model"}, "model.invoke": {"model"}, "build.start": {"service", "model"}, "log.read": {"service", "model"}, "source.read": {"service", "model"}, "binding.attach": {"service"}, "binding.detach": {"service"},
+	"worker.list": {"organization"}, "worker.create": {"organization"}, "worker.read": {"worker"}, "worker.update": {"worker"}, "worker.delete": {"worker"}, "worker.publish": {"worker"}, "worker.rollback": {"worker"}, "worker.version.read": {"worker"}, "worker.version.create": {"worker"}, "worker.invoke": {"worker"},
+	"model.list": {"organization"}, "model.create": {"organization"}, "model.read": {"model"}, "model.update": {"model"}, "model.delete": {"model"}, "model.publish": {"model"}, "model.rollback": {"model"}, "model.version.read": {"model"}, "model.version.create": {"model"}, "model.use": {"model"}, "model.invoke": {"model"}, "build.start": {"worker", "model"}, "log.read": {"worker", "model"}, "source.read": {"worker", "model"}, "binding.attach": {"worker"}, "binding.detach": {"worker"},
 }
 var roleActions = map[string][]string{
 	"viewer": {
 		"organization.read",
-		"service.list", "service.read", "service.version.read",
+		"worker.list", "worker.read", "worker.version.read",
 		"model.list", "model.read", "model.version.read",
 		"log.read", "source.read", "storage.object.read",
 	},
 	"member": {
 		"organization.read",
-		"service.list", "service.read", "service.create", "service.update", "service.delete",
-		"service.version.create", "service.version.read", "service.publish", "service.rollback", "service.invoke",
+		"worker.list", "worker.read", "worker.create", "worker.update", "worker.delete",
+		"worker.version.create", "worker.version.read", "worker.publish", "worker.rollback", "worker.invoke",
 		"model.list", "model.read", "model.create", "model.update", "model.delete",
 		"model.version.create", "model.version.read", "model.publish", "model.rollback", "model.use", "model.invoke",
 		"build.start", "log.read", "source.read", "binding.attach", "binding.detach",

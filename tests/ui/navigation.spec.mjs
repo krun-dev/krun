@@ -45,14 +45,14 @@ test.afterAll(async () => {
 
 const viewer = {
   "organization.read": true,
-  "service.list": true,
+  "worker.list": true,
   "model.list": true,
   "apiKey.create": true,
   "storage.object.read": true,
 };
 const admin = {
   ...viewer,
-  "service.create": true,
+  "worker.create": true,
   "member.read": true,
   "iam.read": true,
   "audit.read": true,
@@ -152,7 +152,7 @@ test("unauthorized direct URLs fall back without requesting protected page data"
   expect(requests).not.toContain("/api/v1/system/users");
   expect(requests).not.toContain("/api/v1/orgs/org-a/members");
   expect(requests).not.toContain("/api/v1/orgs/org-a/audit");
-  expect(requests).not.toContain("/api/v1/orgs/org-a/workers/buckets");
+  expect(requests).not.toContain("/api/v1/orgs/org-a/buckets");
 });
 
 test("organization admins see organization management without system administration", async ({

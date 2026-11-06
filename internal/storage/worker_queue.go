@@ -24,14 +24,14 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 		OperationPrivate: map[string]domain.WorkerOperationPrivate{},
 		Histories:        map[string][]domain.WorkerHistory{},
 		Idempotency:      map[string]domain.WorkerIdempotency{},
-		Services:         map[string]domain.WorkerService{},
+		Workers:          map[string]domain.Worker{},
 		Placements:       map[string]domain.WorkerPlacement{},
 		SecretVersions:   map[string]domain.WorkerSecretVersion{},
 	}
 	if s.pool == nil {
 		return state, nil
 	}
-	rows, err := s.pool.Query(ctx, `SELECT operation_id, kind, org_id, service_id, env_name, state, build_id, version_id, expected_revision, config_revision, edge_revision, deployment_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at
+	rows, err := s.pool.Query(ctx, `SELECT operation_id, kind, org_id, worker_id, env_name, state, build_id, version_id, expected_revision, config_revision, edge_revision, deployment_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at
 		FROM krun_worker_operations
 		WHERE state NOT IN ('succeeded','failed','available','superseded') AND reconcile_after<=now() AND (state IN ('queued','committed') OR claimed_by=$2 OR claimed_at IS NULL OR claimed_at<now()-'60 seconds'::interval)
 		ORDER BY reconcile_after,created_at LIMIT $1`, limit, replica)
@@ -47,7 +47,7 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 		state.Operations[op.Operation.ID] = op.Operation
 		state.OperationPrivate[op.Operation.ID] = domain.WorkerOperationPrivate{Actor: op.Actor}
 	}
-	rows, err = s.pool.Query(ctx, `SELECT build_id, org_id, service_id, env_name, state, entrypoint, source_digest, profile, compatibility_date, compatibility_flags, job, artifact_id, error, repository, assets, created_at, finished_at, claimed_by, claimed_at
+	rows, err = s.pool.Query(ctx, `SELECT build_id, org_id, worker_id, env_name, state, entrypoint, source_digest, profile, compatibility_date, compatibility_flags, job, artifact_id, error, repository, assets, created_at, finished_at, claimed_by, claimed_at
 		FROM krun_worker_builds
 		WHERE state NOT IN ('succeeded','failed') AND reconcile_after<=now() AND (state='queued' OR claimed_by=$2 OR claimed_at IS NULL OR claimed_at<now()-'60 seconds'::interval)
 		ORDER BY reconcile_after,created_at LIMIT $1`, limit, replica)
@@ -89,7 +89,7 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 			}
 		}
 		if len(versionIDs) > 0 {
-			rows, err = s.pool.Query(ctx, `SELECT version_id, org_id, service_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message
+			rows, err = s.pool.Query(ctx, `SELECT version_id, org_id, worker_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message
 				FROM krun_worker_versions WHERE version_id = ANY($1)`, versionIDs)
 			if err != nil {
 				return state, err
@@ -102,24 +102,24 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 			if err := loadVersionStorage(ctx, s.pool, state.Versions); err != nil {
 				return state, err
 			}
-			serviceIDs := []string{}
+			workerIDs := []string{}
 			for _, version := range state.Versions {
-				serviceIDs = append(serviceIDs, version.Service)
+				workerIDs = append(workerIDs, version.Worker)
 			}
-			if len(serviceIDs) > 0 {
-				rows, err = s.pool.Query(ctx, `SELECT service_id, pool_id, org_id, network_profile, role, state, revision, created_at, updated_at
-					FROM krun_worker_service_placements WHERE service_id = ANY($1)`, serviceIDs)
+			if len(workerIDs) > 0 {
+				rows, err = s.pool.Query(ctx, `SELECT worker_id, pool_id, org_id, network_profile, role, state, revision, created_at, updated_at
+					FROM krun_worker_placements WHERE worker_id = ANY($1)`, workerIDs)
 				if err != nil {
 					return state, err
 				}
 				for rows.Next() {
 					var placement domain.WorkerPlacement
-					if err = rows.Scan(&placement.Service, &placement.Pool, &placement.Organization, &placement.NetworkProfile,
+					if err = rows.Scan(&placement.Worker, &placement.Pool, &placement.Organization, &placement.NetworkProfile,
 						&placement.Role, &placement.State, &placement.Revision, &placement.Created, &placement.Updated); err != nil {
 						rows.Close()
 						return state, err
 					}
-					state.Placements[domain.WorkerPlacementKey(placement.Service, placement.Pool)] = placement
+					state.Placements[domain.WorkerPlacementKey(placement.Worker, placement.Pool)] = placement
 				}
 				if err = rows.Err(); err != nil {
 					rows.Close()
@@ -172,7 +172,7 @@ func readVersionRows(rows pgx.Rows, state *domain.WorkerState) error {
 	for rows.Next() {
 		var r domain.WorkerVersion
 		var variables, flags []byte
-		if err := rows.Scan(&r.ID, &r.Organization, &r.Service, &r.Environment, &r.Artifact, &r.Profile, &r.ArchiveDigest, &r.ModuleDigest, &r.CompatibilityDate, &flags, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created, &r.VersionMetadata, &r.AssetsBinding, &r.Tag, &r.Message); err != nil {
+		if err := rows.Scan(&r.ID, &r.Organization, &r.Worker, &r.Environment, &r.Artifact, &r.Profile, &r.ArchiveDigest, &r.ModuleDigest, &r.CompatibilityDate, &flags, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created, &r.VersionMetadata, &r.AssetsBinding, &r.Tag, &r.Message); err != nil {
 			return err
 		}
 		if err := json.Unmarshal(flags, &r.CompatibilityFlags); err != nil {
@@ -219,7 +219,7 @@ func scanOperations(rows pgx.Rows) ([]struct {
 		}
 		op := &item.Operation
 		var steps []byte
-		if err := rows.Scan(&op.ID, &op.Kind, &op.Organization, &op.Service, &op.Environment, &op.State, &op.Build, &op.Version, &op.ExpectedRevision, &op.ConfigRevision, &op.EdgeRevision, &op.DeploymentRevision, &op.Error, &steps, &item.Actor.User, &item.Actor.Key, &item.Actor.AuthVersion, &op.Created, &op.Finished); err != nil {
+		if err := rows.Scan(&op.ID, &op.Kind, &op.Organization, &op.Worker, &op.Environment, &op.State, &op.Build, &op.Version, &op.ExpectedRevision, &op.ConfigRevision, &op.EdgeRevision, &op.DeploymentRevision, &op.Error, &steps, &item.Actor.User, &item.Actor.Key, &item.Actor.AuthVersion, &op.Created, &op.Finished); err != nil {
 			return nil, err
 		}
 		if len(steps) > 0 {
@@ -237,7 +237,7 @@ func scanBuilds(rows pgx.Rows) ([]domain.WorkerBuild, error) {
 	for rows.Next() {
 		var b domain.WorkerBuild
 		var repository, assets, flags []byte
-		if err := rows.Scan(&b.ID, &b.Organization, &b.Service, &b.Environment, &b.State, &b.Entrypoint, &b.SourceDigest, &b.Profile, &b.CompatibilityDate, &flags, &b.Job, &b.Artifact, &b.Error, &repository, &assets, &b.Created, &b.Finished, &b.ClaimedBy, &b.ClaimedAt); err != nil {
+		if err := rows.Scan(&b.ID, &b.Organization, &b.Worker, &b.Environment, &b.State, &b.Entrypoint, &b.SourceDigest, &b.Profile, &b.CompatibilityDate, &flags, &b.Job, &b.Artifact, &b.Error, &repository, &assets, &b.Created, &b.Finished, &b.ClaimedBy, &b.ClaimedAt); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(flags, &b.CompatibilityFlags); err != nil {

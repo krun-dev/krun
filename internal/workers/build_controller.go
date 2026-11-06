@@ -65,7 +65,7 @@ func (w *Controller) FailBuild(ctx context.Context, id, message, log string) err
 }
 
 func (w *Controller) ProcessBuild(ctx context.Context, b domain.WorkerBuild, private domain.WorkerBuildPrivate) error {
-	denied, e := w.AuthorizeActor(ctx, private.Actor, b.Service, b.Environment, "build.start")
+	denied, e := w.AuthorizeActor(ctx, private.Actor, b.Worker, b.Environment, "build.start")
 	if e != nil {
 		return e
 	}
@@ -164,7 +164,7 @@ func (w *Controller) ProcessBuild(ctx context.Context, b domain.WorkerBuild, pri
 	}
 	log := workerartifact.SafeWorkerLog(repositoryBuildLog(b) + w.Kube.BuildLog(ctx, b.Job))
 
-	denied, e = w.AuthorizeActor(ctx, private.Actor, b.Service, b.Environment, "build.start")
+	denied, e = w.AuthorizeActor(ctx, private.Actor, b.Worker, b.Environment, "build.start")
 	if e != nil {
 		return e
 	}
@@ -263,7 +263,7 @@ func (w *Controller) RunLocalBuild(b domain.WorkerBuild, private domain.WorkerBu
 		return
 	}
 
-	denied, e := w.AuthorizeActor(finishCtx, private.Actor, b.Service, b.Environment, "build.start")
+	denied, e := w.AuthorizeActor(finishCtx, private.Actor, b.Worker, b.Environment, "build.start")
 	if e != nil {
 		_ = w.FailBuild(finishCtx, b.ID, "Build permission check unavailable", log)
 		return

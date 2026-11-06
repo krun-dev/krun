@@ -164,13 +164,13 @@ const org = await api(
   201,
 );
 const site = await api(
-  "/api/v1/orgs/" + org.id + "/services",
+  "/api/v1/orgs/" + org.id + "/workers",
   "POST",
   { name: "Native storage fixture" },
   false,
   201,
 );
-const base = "/api/v1/orgs/" + org.id + "/services/" + site.id + "/workers";
+const base = "/api/v1/orgs/" + org.id + "/workers/" + site.id;
 const profiles = (await api("/api/v1/orgs/" + org.id + "/workers/network-profiles")).items;
 await api(base + "/network-profile", "PUT", {
   network_profile: profiles.find((p) => p.default)?.id || profiles[0].id,

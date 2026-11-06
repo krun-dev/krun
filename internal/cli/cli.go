@@ -247,7 +247,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		}
 		fmt.Fprintln(out, "Logged out.")
 		return nil
-	case "org", "orgs", "members", "groups", "roles", "keys", "services", "models":
+	case "org", "orgs", "members", "groups", "roles", "keys", "workers", "models":
 		return c.manage(ctx, command, rest)
 	case "build":
 		return c.buildLogs(ctx, rest)
@@ -540,7 +540,7 @@ func (c *Client) manage(ctx context.Context, command string, args []string) erro
 		default:
 			return errors.New("unknown keys operation")
 		}
-	case "services", "models":
+	case "workers", "models":
 		path = base + "/" + command
 		switch operation {
 		case "list":
@@ -583,7 +583,7 @@ const help = `krun — control-plane CLI
   krun groups add-member | remove-member --org ID --group ID --user ID
   krun roles list | grant | update | revoke --org ID [options]
     grant: --subject ID --subject-kind user|group --role ROLE
-           [--scope-kind service|model --scope-id ID --environments staging]
+           [--scope-kind worker|model --scope-id ID --environments staging]
     update: same grant options + --id ID --revision N
     revoke: --id ID
     System groups/roles: replace --org ID with --system
@@ -591,8 +591,8 @@ const help = `krun — control-plane CLI
   krun keys create --org ID --name NAME --policy FILE [--expires 24h|never]
   krun keys show | revoke --id ID
   krun keys update --id ID --name NAME --policy FILE --revision N
-  krun services|models list | create | get | update | delete --org ID [options]
-  krun build logs --org ID --service ID --build ID [--follow]
+  krun workers|models list | create | get | update | delete --org ID [options]
+  krun build logs --org ID --worker ID --build ID [--follow]
   krun check --action ACTION --kind KIND --id ID [--environment global]
   krun audit [--org ID] [--limit 50] [--cursor CURSOR]
   krun api --method METHOD --path /api/v1/... [--file FILE]

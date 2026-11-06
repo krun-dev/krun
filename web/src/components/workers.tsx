@@ -23,7 +23,7 @@ import {
   shortID,
   useWorkerData,
   type Build,
-  type WorkerServiceSummary,
+  type WorkerSummary,
   type Operation,
   type RepositoryBinding,
   type WorkerDomain,
@@ -71,7 +71,7 @@ import {
   workerURL,
 } from "./workers/shared";
 import { OperationPanel, VersionSummary } from "./workers/version";
-import { ServiceDomains } from "./workers/domains";
+import { WorkerDomains } from "./workers/domains";
 import { EnvironmentSettings, Invocation } from "./workers/environment";
 
 export function WorkersPage({
@@ -86,22 +86,22 @@ export function WorkersPage({
   notify: (message: string) => void;
 }) {
   useTranslation();
-  const [service, setService] = useState(
+  const [worker, setWorker] = useState(
     () => new URLSearchParams(location.search).get("worker") || "",
   );
   const [detailError, setDetailError] = useState("");
-  const [selected, setSelected] = useState<WorkerServiceSummary | null>(null);
+  const [selected, setSelected] = useState<WorkerSummary | null>(null);
   const [create, setCreate] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
-  const collection = useCollectionPage<WorkerServiceSummary>(
-    base + "/workers/services",
-    !system && !service,
+  const collection = useCollectionPage<WorkerSummary>(
+    base + "/workers",
+    !system && !worker,
     revision,
   );
-  const services = collection.items;
-  const error = service ? detailError : collection.error;
+  const workers = collection.items;
+  const error = worker ? detailError : collection.error;
   const [networkProfiles, setNetworkProfiles] = useState<
     WorkerNetworkProfile[]
   >([]);
@@ -135,12 +135,12 @@ export function WorkersPage({
   useEffect(() => {
     setSelected(null);
     setDetailError("");
-    if (system || !service) {
+    if (system || !worker) {
       return;
     }
     const controller = new AbortController();
-    void api<List<WorkerServiceSummary>>(
-      base + "/workers/services?service_id=" + encodeURIComponent(service),
+    void api<List<WorkerSummary>>(
+      base + "/workers?worker_id=" + encodeURIComponent(worker),
       "GET",
       undefined,
       controller.signal,
@@ -149,7 +149,7 @@ export function WorkersPage({
         if (!controller.signal.aborted) {
           setSelected(result.items[0] || null);
           if (!result.items[0]) {
-            setDetailError(t("服务不存在或无权访问"));
+            setDetailError(t("Worker不存在或无权访问"));
           }
         }
       })
@@ -159,17 +159,17 @@ export function WorkersPage({
         }
       });
     return () => controller.abort();
-  }, [base, system, service, revision]);
+  }, [base, system, worker, revision]);
   useEffect(() => {
     const onPopState = () => {
       const id = new URLSearchParams(location.search).get("worker") || "";
-      setService(id);
+      setWorker(id);
       if (!id) setRevision((v) => v + 1);
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
-  function openService(id: string) {
+  function openWorker(id: string) {
     const url = new URL(location.href);
     url.searchParams.set("page", "workers");
     url.searchParams.set("workspace", base.split("/").at(-1) || "");
@@ -177,7 +177,7 @@ export function WorkersPage({
     else url.searchParams.delete("worker");
     url.searchParams.delete("environment");
     history.pushState(null, "", url);
-    setService(id);
+    setWorker(id);
     if (!id) setRevision((v) => v + 1);
   }
   if (system)
@@ -226,18 +226,18 @@ export function WorkersPage({
           </Button>
         </div>
       ) : null}
-      {!service ? (
+      {!worker ? (
         <CollectionToolbar
           page={collection}
           label={t("搜索 Worker 名称或 ID")}
         />
       ) : null}
-      {service && !selected ? (
+      {worker && !selected ? (
         !detailError ? (
           <Loading />
         ) : (
-          <Button variant="outline" onClick={() => openService("")}>
-            {t("返回服务列表")}
+          <Button variant="outline" onClick={() => openWorker("")}>
+            {t("返回Worker列表")}
           </Button>
         )
       ) : selected ? (
@@ -245,25 +245,25 @@ export function WorkersPage({
           <Button
             variant="ghost"
             className="mb-5 -ml-3"
-            onClick={() => openService("")}
+            onClick={() => openWorker("")}
           >
             <ArrowLeft size={16} />
-            {t("返回服务列表")}
+            {t("返回Worker列表")}
           </Button>
           <WorkerDetail
             key={selected.id}
-            base={base + "/services/" + selected.id + "/workers"}
+            base={base + "/workers/" + selected.id}
             organizationBase={base}
-            service={selected}
+            worker={selected}
             networkProfiles={networkProfiles}
             notify={notify}
           />
         </>
-      ) : collection.loading || services === null ? (
+      ) : collection.loading || workers === null ? (
         !error ? (
           <Loading />
         ) : null
-      ) : services.length === 0 ? (
+      ) : workers.length === 0 ? (
         <Empty
           title={
             collection.search || collection.hasPrevious
@@ -273,7 +273,7 @@ export function WorkersPage({
           description={
             collection.search || collection.hasPrevious
               ? t("请调整搜索条件或返回上一页。")
-              : t("创建一个服务，关联代码仓库后开始构建。")
+              : t("创建一个Worker，关联代码仓库后开始构建。")
           }
         />
       ) : (
@@ -282,7 +282,7 @@ export function WorkersPage({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t("服务名称")}</TableHead>
+                  <TableHead>{t("Worker名称")}</TableHead>
                   <TableHead className="hidden md:table-cell">
                     {t("代码仓库")}
                   </TableHead>
@@ -296,12 +296,12 @@ export function WorkersPage({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {services.map((item) => (
+                {workers.map((item) => (
                   <TableRow key={item.id}>
                     <TableCell>
                       <button
                         className="text-sm font-medium hover:underline"
-                        onClick={() => openService(item.id)}
+                        onClick={() => openWorker(item.id)}
                       >
                         {item.name}
                       </button>
@@ -368,9 +368,9 @@ export function WorkersPage({
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => openService(item.id)}
+                        onClick={() => openWorker(item.id)}
                       >
-                        {t("查看服务")}
+                        {t("查看Worker")}
                         <ArrowRight size={14} />
                       </Button>
                     </TableCell>
@@ -381,7 +381,7 @@ export function WorkersPage({
           </CardContent>
         </Card>
       )}
-      {!service ? <CollectionPagination page={collection} /> : null}
+      {!worker ? <CollectionPagination page={collection} /> : null}
       <Dialog open={create} onOpenChange={setCreate}>
         <DialogContent>
           <DialogHeader>
@@ -396,18 +396,18 @@ export function WorkersPage({
               e.preventDefault();
               setBusy(true);
               try {
-                const r = await api<Resource>(base + "/services", "POST", {
+                const r = await api<Resource>(base + "/workers", "POST", {
                   name,
                 });
                 await api(
-                  base + "/services/" + r.id + "/workers/network-profile",
+                  base + "/workers/" + r.id + "/network-profile",
                   "PUT",
                   {
                     network_profile: networkProfile,
                     expected_revision: 0,
                   },
                 );
-                openService(r.id);
+                openWorker(r.id);
                 setRevision((v) => v + 1);
                 setCreate(false);
                 setName("");
@@ -477,13 +477,13 @@ export function WorkersPage({
 function WorkerDetail({
   base,
   organizationBase,
-  service,
+  worker,
   networkProfiles,
   notify,
 }: {
   base: string;
   organizationBase: string;
-  service: WorkerServiceSummary;
+  worker: WorkerSummary;
   networkProfiles: WorkerNetworkProfile[];
   notify: (s: string) => void;
 }) {
@@ -684,16 +684,16 @@ function WorkerDetail({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <h2 className="text-xl font-medium">{service.name}</h2>
+            <h2 className="text-xl font-medium">{worker.name}</h2>
             {routing?.network_profile.name ? (
               <Badge variant="outline">{routing.network_profile.name}</Badge>
             ) : null}
           </div>
-          <code className="text-xs text-muted-foreground">{service.id}</code>
+          <code className="text-xs text-muted-foreground">{worker.id}</code>
           <p className="mt-2 text-xs text-muted-foreground">
             {t("创建时间")} ·{" "}
-            <time dateTime={service.created_at}>
-              {new Date(service.created_at).toLocaleString()}
+            <time dateTime={worker.created_at}>
+              {new Date(worker.created_at).toLocaleString()}
             </time>
           </p>
         </div>
@@ -839,7 +839,7 @@ function WorkerDetail({
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-primary/25 bg-primary/5 px-4 py-3 text-sm">
                 <p className="text-muted-foreground">
                   {t(
-                    "此服务尚未绑定代码仓库；绑定后可直接从分支或 Tag 构建版本。",
+                    "此Worker尚未绑定代码仓库；绑定后可直接从分支或 Tag 构建版本。",
                   )}
                 </p>
                 <Button
@@ -1055,7 +1055,7 @@ function WorkerDetail({
             />
           </TabsContent>
           <TabsContent value="routing" className="mt-5 grid gap-5">
-            <ServiceDomains
+            <WorkerDomains
               base={base}
               domains={domains}
               networkProfiles={networkProfiles}

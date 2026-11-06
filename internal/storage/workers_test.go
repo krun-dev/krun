@@ -47,7 +47,7 @@ func TestWriteVersionsRejectsExistingDescriptorMutation(t *testing.T) {
 
 func TestSameWorkerPlacementUsesInstantEquality(t *testing.T) {
 	created := time.Date(2026, time.October, 29, 3, 4, 5, 6, time.FixedZone("test", 8*60*60))
-	placement := WorkerPlacement{Service: "service", Organization: "org", NetworkProfile: "default", Pool: "pool", Role: "primary", State: "active", Revision: 1, Created: created, Updated: created}
+	placement := WorkerPlacement{Worker: "worker", Organization: "org", NetworkProfile: "default", Pool: "pool", Role: "primary", State: "active", Revision: 1, Created: created, Updated: created}
 	other := placement
 	other.Created, other.Updated = created.UTC(), created.UTC()
 	if !sameWorkerPlacement(placement, other) || !sameWorkerPlacements(map[string]WorkerPlacement{"one": placement}, map[string]WorkerPlacement{"one": other}) {

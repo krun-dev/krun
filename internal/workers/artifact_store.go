@@ -165,8 +165,8 @@ func WorkerUploadKey(b domain.WorkerBuild) string {
 	return "uploads/" + b.Organization + "/" + b.ID + "/bundle.tar.gz"
 }
 
-func WorkerAssetObjectKey(prefix, organization, service, archiveDigest, name string) string {
-	return prefix + "/" + organization + "/" + service + "/" + archiveDigest + "/" + name
+func WorkerAssetObjectKey(prefix, organization, worker, archiveDigest, name string) string {
+	return prefix + "/" + organization + "/" + worker + "/" + archiveDigest + "/" + name
 }
 
 func WorkerAssetCacheControl(name string) string {
@@ -182,7 +182,7 @@ func (w *Controller) PutAssetObjects(ctx context.Context, b domain.WorkerBuild, 
 	keys := []string{}
 	for name := range code.AssetBytes {
 		for _, prefix := range []string{"pub", "int"} {
-			keys = append(keys, WorkerAssetObjectKey(prefix, b.Organization, b.Service, a.ArchiveDigest, name))
+			keys = append(keys, WorkerAssetObjectKey(prefix, b.Organization, b.Worker, a.ArchiveDigest, name))
 		}
 	}
 	if err := w.Service.Store.RegisterAssetObjects(ctx, a.ID, keys); err != nil {
@@ -224,8 +224,8 @@ func (w *Controller) PutAssetObjects(ctx context.Context, b domain.WorkerBuild, 
 
 // StaticAsset reads only immutable per-file asset metadata. Static domains have
 // the same visibility as the former pub/int origins, independently of pool placement.
-func (w *Controller) StaticAsset(ctx context.Context, prefix, organization, service, digest, name string) (workerartifact.WorkerManifestFile, error) {
-	key := WorkerAssetObjectKey(prefix, organization, service, digest, name)
+func (w *Controller) StaticAsset(ctx context.Context, prefix, organization, worker, digest, name string) (workerartifact.WorkerManifestFile, error) {
+	key := WorkerAssetObjectKey(prefix, organization, worker, digest, name)
 	info, err := w.S3.StatObject(ctx, w.Config.S3Bucket, key, objectstore.StatObjectOptions{})
 	if err != nil {
 		if objectstore.ToErrorResponse(err).Code == "NoSuchKey" {

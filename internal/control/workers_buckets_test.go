@@ -31,7 +31,7 @@ func enableTestObjectStorage(t *testing.T, s *Server) {
 func TestBucketAPIAndCloudflareBindings(t *testing.T) {
 	s, store, _ := cfTestServer(t)
 	enableTestObjectStorage(t, s)
-	base := "/api/v1/orgs/org-a/workers/buckets"
+	base := "/api/v1/orgs/org-a/buckets"
 	if out := request(s, "POST", base, "krun_cli_viewer", `{"name":"images"}`); out.Code != 403 {
 		t.Fatalf("viewer created bucket: %d %s", out.Code, out.Body.String())
 	}
@@ -63,10 +63,10 @@ func TestBucketAPIAndCloudflareBindings(t *testing.T) {
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
 		app := s.workerApplication(nil)
 		app.Require = func(*State, Principal, string, Target) error { return nil }
-		if err := app.StageBindings(st, Principal{}, workerapp.ServiceRef{Organization: "org-a", Service: "svc-a", Environment: "production"}, input); err != nil {
+		if err := app.StageBindings(st, Principal{}, workerapp.WorkerRef{Organization: "org-a", Worker: "svc-a", Environment: "production"}, input); err != nil {
 			return err
 		}
-		env := st.Workers.Services["svc-a"].Environments["production"]
+		env := st.Workers.Workers["svc-a"].Environments["production"]
 		version := workerapp.SnapshotVersion("org-a", "svc-a", "production", WorkerArtifact{}, env)
 		if version.R2Bindings["IMAGES"].BucketID != bucket.ID || version.R2Bindings["IMAGES"].StoreID != "primary" {
 			t.Fatal("binding not resolved")
@@ -90,13 +90,13 @@ func TestStorageCredentialAuthorizationAndDisable(t *testing.T) {
 	enableTestObjectStorage(t, s)
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
 		st.Workers.Buckets["bucket-test"] = domain.WorkerBucket{ID: "bucket-test", Organization: "org-a", Name: "images", Store: "primary", Enabled: true, Revision: 1, Created: now()}
-		service := st.Workers.Services["svc-a"]
+		service := st.Workers.Workers["svc-a"]
 		env := service.Environments["production"]
 		env.Enabled = true
 		env.Version = "version-test"
 		service.Environments["production"] = env
-		st.Workers.Services["svc-a"] = service
-		st.Workers.Versions["version-test"] = WorkerVersion{ID: "version-test", Organization: "org-a", Service: "svc-a", Environment: "production", R2Bindings: map[string]domain.WorkerR2Binding{"IMAGES": {BucketID: "bucket-test", BucketName: "images", StoreID: "primary"}}}
+		st.Workers.Workers["svc-a"] = service
+		st.Workers.Versions["version-test"] = WorkerVersion{ID: "version-test", Organization: "org-a", Worker: "svc-a", Environment: "production", R2Bindings: map[string]domain.WorkerR2Binding{"IMAGES": {BucketID: "bucket-test", BucketName: "images", StoreID: "primary"}}}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -145,7 +145,7 @@ func TestStorageCredentialAuthorizationAndDisable(t *testing.T) {
 			}
 		}
 	}
-	out := request(s, "PATCH", "/api/v1/orgs/org-a/workers/buckets/bucket-test", "krun_cli_admin", `{"enabled":false,"revision":1}`)
+	out := request(s, "PATCH", "/api/v1/orgs/org-a/buckets/bucket-test", "krun_cli_admin", `{"enabled":false,"revision":1}`)
 	if out.Code != 200 {
 		t.Fatal(out.Code, out.Body.String())
 	}

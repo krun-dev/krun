@@ -87,10 +87,10 @@ func OAuthActions(scope string) []string {
 	}
 	out := []string{}
 	if slices.Contains(scopes, "account:read") {
-		out = append(out, "organization.read", "service.list")
+		out = append(out, "organization.read", "worker.list")
 	}
 	if slices.Contains(scopes, "workers:write") || slices.Contains(scopes, "workers_scripts:write") {
-		out = append(out, "service.list", "service.create", "service.read", "service.update", "service.delete", "service.publish", "service.rollback", "service.version.read", "service.version.create", "service.invoke", "build.start", "source.read", "binding.attach", "binding.detach")
+		out = append(out, "worker.list", "worker.create", "worker.read", "worker.update", "worker.delete", "worker.publish", "worker.rollback", "worker.version.read", "worker.version.create", "worker.invoke", "build.start", "source.read", "binding.attach", "binding.detach")
 	}
 	return out
 }

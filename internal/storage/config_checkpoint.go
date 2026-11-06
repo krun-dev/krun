@@ -58,12 +58,12 @@ func (s *Store) RuntimeConfigRoute(ctx context.Context, host, pool string) (doma
 	var payload []byte
 	var revision int64
 	err := s.pool.QueryRow(ctx, `
-		SELECT r.service_id, r.host, r.pool, r.path, r.enabled, r.version_id, r.expires_at, c.payload,
+		SELECT r.worker_id, r.host, r.pool, r.path, r.enabled, r.version_id, r.expires_at, c.payload,
 			COALESCE((SELECT value::bigint FROM krun_meta WHERE key='worker_config_head'), 0)
 		FROM worker_config_routes r
 		LEFT JOIN worker_config_versions c ON c.version_id=r.version_id AND c.pool=r.pool
 		WHERE r.host=$1 AND r.pool=$2`, host, pool).Scan(
-		&route.Service, &route.Host, &route.Pool, &route.Path, &route.Enabled, &route.Version, &route.Expires, &payload, &revision)
+		&route.Worker, &route.Host, &route.Pool, &route.Path, &route.Enabled, &route.Version, &route.Expires, &payload, &revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, 0, domain.NotFound()
 	}

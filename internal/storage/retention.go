@@ -24,7 +24,7 @@ func (s *Store) RetainExpired(ctx context.Context) error {
 	at := now()
 	// Idle timeout and absolute expiry match the checks in authenticate.
 	sessionCutoff := at.Add(-30 * time.Minute)
-	if _, err := s.pool.Exec(ctx, `DELETE FROM krun_worker_deployments WHERE deployment_id IN(SELECT d.deployment_id FROM krun_worker_deployments d WHERE d.expires_at<=now() OR NOT EXISTS(SELECT 1 FROM krun_worker_environments e WHERE e.service_id=d.service_id AND e.env_name=d.env_name) ORDER BY d.expires_at LIMIT 1000)`); err != nil {
+	if _, err := s.pool.Exec(ctx, `DELETE FROM krun_worker_deployments WHERE deployment_id IN(SELECT d.deployment_id FROM krun_worker_deployments d WHERE d.expires_at<=now() OR NOT EXISTS(SELECT 1 FROM krun_worker_environments e WHERE e.worker_id=d.worker_id AND e.env_name=d.env_name) ORDER BY d.expires_at LIMIT 1000)`); err != nil {
 		return err
 	}
 	statements := []struct {
@@ -33,7 +33,7 @@ func (s *Store) RetainExpired(ctx context.Context) error {
 	}{
 		{`DELETE FROM krun_worker_asset_session_files WHERE NOT EXISTS(SELECT 1 FROM krun_worker_asset_sessions s WHERE s.session_id=krun_worker_asset_session_files.session_id AND s.expires_at > $1)`, []any{at}},
 		{`DELETE FROM krun_worker_asset_sessions WHERE expires_at <= $1`, []any{at}},
-		{`DELETE FROM krun_worker_scripts WHERE service_id IN(SELECT s.service_id FROM krun_worker_scripts s WHERE s.created_at < now()-interval '10 minutes' AND NOT EXISTS(SELECT 1 FROM krun_resources r WHERE r.resource_id=s.service_id AND r.org_id=s.org_id AND r.kind='service') LIMIT 1000)`, nil},
+		{`DELETE FROM krun_worker_scripts WHERE worker_id IN(SELECT s.worker_id FROM krun_worker_scripts s WHERE s.created_at < now()-interval '10 minutes' AND NOT EXISTS(SELECT 1 FROM krun_resources r WHERE r.resource_id=s.worker_id AND r.org_id=s.org_id AND r.kind='worker') LIMIT 1000)`, nil},
 		{`DELETE FROM krun_oauth_authorizations WHERE expires_at <= $1`, []any{at}},
 		{`DELETE FROM krun_oauth_refresh_tokens WHERE expires_at <= $1 OR NOT EXISTS(SELECT 1 FROM krun_oauth_grants g WHERE g.grant_id=krun_oauth_refresh_tokens.grant_id)`, []any{at}},
 		{`DELETE FROM krun_oauth_grants WHERE expires_at <= $1`, []any{at}},

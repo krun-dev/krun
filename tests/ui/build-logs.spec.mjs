@@ -26,7 +26,7 @@ test("build log transport reads signed objects and obeys the poll header", async
   await page.goto("/");
   const read = () => page.evaluate(async () => {
     const { readBuildLog } = await import("/src/lib/build-logs.ts");
-    return readBuildLog("/api/v1/orgs/org/services/svc/workers/builds/build/logs");
+    return readBuildLog("/api/v1/orgs/org/workers/svc/builds/build/logs");
   });
   expect(await read()).toEqual({ state: "building", log: "building\n", pollSeconds: 10 });
   expect(await read()).toEqual({ state: "succeeded", log: "building\nfinished\n", pollSeconds: null });

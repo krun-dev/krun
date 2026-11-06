@@ -214,7 +214,7 @@ func (s *Server) workerRuntimeStaticAssetURL(w http.ResponseWriter, r *http.Requ
 	out, err := s.runtimeApplication().StaticAssetURL(
 		r.Context(),
 		r.PathValue("organization"),
-		r.PathValue("service"),
+		r.PathValue("worker"),
 		r.PathValue("digest"),
 		r.PathValue("path"),
 		r.PathValue("prefix"),

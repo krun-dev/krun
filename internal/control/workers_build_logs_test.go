@@ -137,10 +137,10 @@ func TestWorkerBuildLogDelivery(t *testing.T) {
 				"schema_version": 1,
 				"statements": [{
 					"effect": "allow",
-					"actions": ["service.version.read"],
+					"actions": ["worker.version.read"],
 					"resource": {
 						"organization_id": "org-a",
-						"kind": "service",
+						"kind": "worker",
 						"ids": ["svc-a"]
 					},
 					"conditions": {}

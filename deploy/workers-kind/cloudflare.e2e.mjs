@@ -185,7 +185,7 @@ await check("official Wrangler deploy uploads modules and publishes production",
   code("first");
   const output = await wrangler(["deploy"]);
   const details = (await api(workerPath)).result;
-  native = "/api/v1/orgs/" + org.id + "/services/" + details.tag + "/workers";
+  native = "/api/v1/orgs/" + org.id + "/workers/" + details.tag;
   await invoke("production", { marker: "first", label: "production" });
   firstVersion = (await api(scriptPath + "/versions")).result.items[0].id;
   assert.match(firstVersion, /^[0-9a-f-]{36}$/);
@@ -578,7 +578,7 @@ await check("official Wrangler deploy supports an assets-only Worker", async () 
   );
   await wrangler(["deploy"]);
   const details = (await api(cf + "/workers/workers/" + other)).result;
-  const base = "/api/v1/orgs/" + org.id + "/services/" + details.tag + "/workers";
+  const base = "/api/v1/orgs/" + org.id + "/workers/" + details.tag;
   await assertEventually(async () => {
     const r = await api(base + "/environments/production/invoke", "POST", {
       path: "/",
@@ -802,9 +802,9 @@ await check("deleted Script names receive a fresh internal service identity", as
 });
 await check("native service deletion cannot resurrect a previous Script identity", async () => {
   const id = (await api(workerPath)).result.tag;
-  await api("/api/v1/orgs/" + org.id + "/services/" + id, "DELETE", undefined, false, 204);
+  await api("/api/v1/orgs/" + org.id + "/workers/" + id, "DELETE", undefined, false, 204);
   const response = await api(cf + "/workers/workers", "POST", { name: script }, false, 409);
   assert.equal(response.success, false);
-  await api("/api/v1/orgs/" + org.id + "/services/" + id, "GET", undefined, false, 404);
+  await api("/api/v1/orgs/" + org.id + "/workers/" + id, "GET", undefined, false, 404);
 });
 console.log("CF WRANGLER E2E PASSED " + results.length + " cases");

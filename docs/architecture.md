@@ -8,7 +8,7 @@
 | `internal/auth` | 身份源注册、会话认证、登录提交、验证码、CLI 设备授权、CSRF 凭据和退出流程 |
 | `internal/iam` | 组织、成员、用户组、角色分配、资源目录、API Key、邀请和初始化 |
 | `internal/authorization` | Cedar 编译和评估、用户与 Key 权限交集、策略校验、目标解析和只读请求缓存 |
-| `internal/workers` | 服务、资源池放置、构建、环境、发布、回滚、密钥、制品生命周期、配置投影和后台收敛 |
+| `internal/workers` | Worker、资源池放置、构建、环境、发布、回滚、密钥、制品生命周期、配置投影和后台收敛 |
 | `internal/repository` | 仓库配置、用户连接、OAuth 状态消费、凭据刷新租约与提交 |
 | `internal/runtimeconfig` | Runtime 增量 feed、制品和资产描述、密钥交付、路由查询与 ACK 校验 |
 | `internal/audit` | 审计记录、范围过滤、稳定游标和分页 |
@@ -33,7 +33,7 @@
 
 ## 文件定位
 
-- Workers 按服务、构建、环境、发布、授权、制品、配置分发及清理分文件；后台构建和发布分别位于 `build_controller.go`、`deployment_controller.go`。
+- Workers 按 Worker、构建、环境、发布、授权、制品、配置分发及清理分文件；后台构建和发布分别位于 `build_controller.go`、`deployment_controller.go`。
 - 基础设施实现按系统放在 `internal/adapters/`；Kubernetes 的连接、构建 Job、Pod 发现和 HTTPRoute 各有文件。S3 端口允许注入客户端，SDK 连接构造只在适配器内。
 - 身份提供商、制品和本地 builder 的纯模块测试与模块放在一起；HTTP 集成测试保留在 `internal/control`。
 - 表结构及查询定位见 [存储说明](storage.md) 和 [storage 包目录](../internal/storage/README.md)。

@@ -24,7 +24,7 @@ func testWorkerSecretsKey() string {
 
 func TestSameWorkerSecretVersionUsesInstantEquality(t *testing.T) {
 	created := time.Date(2026, time.October, 29, 3, 4, 5, 6, time.FixedZone("test", 8*60*60))
-	version := WorkerSecretVersion{ID: "secret-version", Organization: "org", Service: "service", Environment: "production", Name: "TOKEN", ValueDigest: "digest", KeyVersion: "v1", CreatedBy: "user", Created: created}
+	version := WorkerSecretVersion{ID: "secret-version", Organization: "org", Worker: "worker", Environment: "production", Name: "TOKEN", ValueDigest: "digest", KeyVersion: "v1", CreatedBy: "user", Created: created}
 	other := version
 	other.Created = created.UTC()
 	if !sameWorkerSecretVersion(version, other) {
@@ -44,7 +44,7 @@ func enableWorkerSecrets(config *appconfig.WorkersConfig) {
 func seedPublishedWorker(t *testing.T, store *Store) WorkerVersion {
 	t.Helper()
 	version := WorkerVersion{
-		ID: "rel_secret_base", Organization: "org-a", Service: "svc-a", Environment: "production",
+		ID: "rel_secret_base", Organization: "org-a", Worker: "svc-a", Environment: "production",
 		Artifact: "art_secret", ArchiveDigest: strings.Repeat("a", 64), ModuleDigest: strings.Repeat("b", 64),
 		ConfigRevision: 1, Variables: map[string]any{"PLAIN": "visible"}, Created: now(),
 		SecretVersions: map[string]string{},
@@ -55,7 +55,7 @@ func seedPublishedWorker(t *testing.T, store *Store) WorkerVersion {
 			ArchiveDigest: version.ArchiveDigest, ModuleDigest: version.ModuleDigest, Created: now(),
 		}
 		st.Workers.Versions[version.ID] = version
-		service := st.Workers.Services[version.Service]
+		service := st.Workers.Workers[version.Worker]
 		environment := service.Environments[version.Environment]
 		environment.Version, environment.Confirmed = version.ID, version.ID
 		environment.Revision = 3
@@ -63,7 +63,7 @@ func seedPublishedWorker(t *testing.T, store *Store) WorkerVersion {
 		environment.Variables = domain.CloneWorkerVariables(version.Variables)
 		environment.SecretVersions = map[string]string{}
 		service.Environments[version.Environment] = environment
-		st.Workers.Services[version.Service] = service
+		st.Workers.Workers[version.Worker] = service
 		return nil
 	})
 	if err != nil {
@@ -75,7 +75,7 @@ func seedPublishedWorker(t *testing.T, store *Store) WorkerVersion {
 func TestWorkerSecretEncryptionAuthenticatesScope(t *testing.T) {
 	config := testWorkersConfig()
 	enableWorkerSecrets(config)
-	encrypted, err := workerapp.EncryptWorkerSecret(config, "org", "service", "production", "API_TOKEN", "user", "super-secret")
+	encrypted, err := workerapp.EncryptWorkerSecret(config, "org", "worker", "production", "API_TOKEN", "user", "super-secret")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestWorkerSecretEncryptionAuthenticatesScope(t *testing.T) {
 		t.Fatalf("round trip: %q %v", plain, err)
 	}
 	tampered := encrypted
-	tampered.Version.Service = "other-service"
+	tampered.Version.Worker = "other-service"
 	if _, err = workerapp.DecryptWorkerSecret(config, tampered); err == nil {
 		t.Fatal("ciphertext was reusable in another service scope")
 	}
@@ -156,7 +156,7 @@ func TestWorkerSecretPutCreatesAndDeploysImmutableVersion(t *testing.T) {
 
 	var version WorkerVersion
 	if err := store.View(context.Background(), PartitionWorkers, func(st *State) error {
-		service := st.Workers.Services["svc-a"]
+		service := st.Workers.Workers["svc-a"]
 		environment := service.Environments["production"]
 		if len(environment.SecretVersions) != 1 || len(environment.SecretNames) != 1 || environment.SecretNames[0] != "API_TOKEN" {
 			t.Fatalf("environment secret metadata: %+v", environment)
@@ -219,12 +219,12 @@ func TestWorkerSecretPutCreatesAndDeploysImmutableVersion(t *testing.T) {
 
 	// Model convergence so a delete can create the next immutable version.
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
-		service := st.Workers.Services["svc-a"]
+		service := st.Workers.Workers["svc-a"]
 		environment := service.Environments["production"]
 		environment.Version, environment.Confirmed = version.ID, version.ID
 		environment.Revision = 4
 		service.Environments["production"] = environment
-		st.Workers.Services["svc-a"] = service
+		st.Workers.Workers["svc-a"] = service
 		completed := st.Workers.Operations[operation.ID]
 		completed.State = "available"
 		st.Workers.Operations[operation.ID] = completed
@@ -239,7 +239,7 @@ func TestWorkerSecretPutCreatesAndDeploysImmutableVersion(t *testing.T) {
 	var deleteOperation WorkerOperation
 	_ = json.Unmarshal(deleted.Body.Bytes(), &deleteOperation)
 	if err := store.View(context.Background(), PartitionWorkers, func(st *State) error {
-		service := st.Workers.Services["svc-a"]
+		service := st.Workers.Workers["svc-a"]
 		if len(service.Environments["production"].SecretVersions) != 0 {
 			t.Fatal("deleted secret remained in desired environment")
 		}

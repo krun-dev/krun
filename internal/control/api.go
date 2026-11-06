@@ -45,8 +45,10 @@ func (s *Server) apiRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/v1/api-keys/{key}", s.protected(false, s.keyDetail))
 	m.HandleFunc("PATCH /api/v1/api-keys/{key}", s.protected(true, s.keyUpdate))
 	m.HandleFunc("DELETE /api/v1/api-keys/{key}", s.protected(false, s.keyDelete))
-	for _, kind := range []string{"services", "models"} {
-		m.HandleFunc("GET /api/v1/orgs/{org}/"+kind, s.protected(false, s.resourceList))
+	for _, kind := range []string{"workers", "models"} {
+		if kind == "models" {
+			m.HandleFunc("GET /api/v1/orgs/{org}/"+kind, s.protected(false, s.resourceList))
+		}
 		m.HandleFunc("POST /api/v1/orgs/{org}/"+kind, s.protected(false, s.resourceCreate))
 		m.HandleFunc("GET /api/v1/orgs/{org}/"+kind+"/{resource}", s.protected(false, s.resourceDetail))
 		m.HandleFunc("PATCH /api/v1/orgs/{org}/"+kind+"/{resource}", s.protected(false, s.resourceUpdate))

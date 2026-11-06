@@ -154,3 +154,104 @@ func TestCLIControlOAuthLoginRefreshAndLogoutContract(t *testing.T) {
 		})
 	}
 }
+
+func TestCLIWorkerPermissionsAndAuditContract(t *testing.T) {
+	s, _ := testServer(t)
+	httpServer := httptest.NewServer(s)
+	defer httpServer.Close()
+	t.Setenv("KRUN_TOKEN", "")
+	t.Setenv("KRUN_ENDPOINT", "")
+	profilePath := filepath.Join(t.TempDir(), "profile.yaml")
+	run := func(token string, args ...string) (string, error) {
+		t.Helper()
+		profile := kruncli.Profile{Endpoint: httpServer.URL, Token: token}
+		raw, err := configfile.Marshal(profilePath, profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(profilePath, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		var output bytes.Buffer
+		args = append(args, "--config", profilePath)
+		err = kruncli.Run(context.Background(), args, strings.NewReader(""), &output, &output)
+		return output.String(), err
+	}
+	mustRun := func(token string, args ...string) string {
+		t.Helper()
+		output, err := run(token, args...)
+		if err != nil {
+			t.Fatalf("CLI %v: %v (%s)", args, err, output)
+		}
+		return output
+	}
+
+	created := mustRun("krun_cli_admin", "workers", "create", "--org", "org-a", "--name", "CLI Worker")
+	var worker Resource
+	if err := json.Unmarshal([]byte(created), &worker); err != nil || worker.Kind != "worker" || !strings.HasPrefix(worker.ID, "worker_") {
+		t.Fatalf("incorrect Worker identity: %s (%v)", created, err)
+	}
+	listed := mustRun("krun_cli_admin", "workers", "list", "--org", "org-a")
+	if !strings.Contains(listed, worker.ID) {
+		t.Fatal("created Worker missing from CLI list", listed)
+	}
+	mustRun("krun_cli_admin", "roles", "grant", "--org", "org-a", "--subject", "viewer", "--role", "member", "--scope-kind", "worker", "--scope-id", worker.ID)
+	mustRun("krun_cli_viewer", "workers", "update", "--org", "org-a", "--id", worker.ID, "--name", "Updated Worker", "--revision", "1")
+	if _, err := run("krun_cli_viewer", "workers", "update", "--org", "org-b", "--id", "svc-b", "--name", "Forbidden", "--revision", "1"); err == nil {
+		t.Fatal("Worker grant escaped its organization and resource scope")
+	}
+
+	policy := Policy{Version: 1, Statements: []Statement{{Effect: "allow", Actions: []string{"worker.read"}, Resource: Selector{Kind: "worker", Organization: "org-a", IDs: []string{worker.ID}}}}}
+	policyPath := filepath.Join(t.TempDir(), "policy.yaml")
+	raw, err := configfile.Marshal(policyPath, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(policyPath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	keyOutput := mustRun("krun_cli_admin", "keys", "create", "--org", "org-a", "--name", "Read Worker", "--policy", policyPath)
+	var key struct {
+		Token string `json:"key"`
+	}
+	if err := json.Unmarshal([]byte(keyOutput), &key); err != nil || key.Token == "" {
+		t.Fatal("missing Worker API Key", keyOutput, err)
+	}
+	mustRun(key.Token, "workers", "get", "--org", "org-a", "--id", worker.ID)
+	if _, err := run(key.Token, "workers", "update", "--org", "org-a", "--id", worker.ID, "--name", "Forbidden", "--revision", "2"); err == nil {
+		t.Fatal("read-only Worker policy permitted a write")
+	}
+
+	for _, path := range []string{"/api/v1/orgs/org-a/services", "/api/v1/orgs/org-a/services/" + worker.ID} {
+		response := request(s, http.MethodGet, path, "krun_cli_admin", "")
+		if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), "RESOURCE_NOT_FOUND") {
+			t.Fatal("legacy resource route remains", path, response.Code, response.Body.String())
+		}
+	}
+	if _, err := run("krun_cli_admin", "services", "list", "--org", "org-a"); err == nil {
+		t.Fatal("legacy CLI resource command remains")
+	}
+	if _, err := run("krun_cli_admin", "roles", "grant", "--org", "org-a", "--subject", "viewer", "--role", "member", "--scope-kind", "service", "--scope-id", worker.ID); err == nil {
+		t.Fatal("legacy role scope was accepted")
+	}
+	legacyPolicy := `{"name":"Legacy","expires_in":3600,"policy":{"schema_version":1,"statements":[{"effect":"allow","actions":["service.read"],"resource":{"kind":"service","organization_id":"org-a","ids":["` + worker.ID + `"]},"conditions":{}}]}}`
+	if response := request(s, http.MethodPost, "/api/v1/orgs/org-a/api-keys", "krun_cli_admin", legacyPolicy); response.Code != http.StatusUnprocessableEntity {
+		t.Fatal("legacy policy was accepted", response.Code, response.Body.String())
+	}
+
+	page := getAuditPage(t, s, "/api/v1/orgs/org-a/audit?limit=500", "krun_cli_admin")
+	createdAudit := false
+	updatedAudit := false
+	deniedAudit := false
+	for _, entry := range page.Items {
+		if strings.HasPrefix(entry.Action, "service.") {
+			t.Fatal("legacy action emitted to audit", entry.Action)
+		}
+		createdAudit = createdAudit || entry.Action == "worker.create" && entry.Allowed
+		updatedAudit = updatedAudit || entry.Action == "worker.update" && entry.Resource == worker.ID && entry.Allowed
+		deniedAudit = deniedAudit || entry.Action == "worker.update" && entry.Resource == worker.ID && !entry.Allowed && entry.KeyID != ""
+	}
+	if !createdAudit || !updatedAudit || !deniedAudit {
+		t.Fatalf("missing Worker audits: created=%v updated=%v denied=%v", createdAudit, updatedAudit, deniedAudit)
+	}
+}

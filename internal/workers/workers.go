@@ -10,12 +10,12 @@ import (
 	domain "github.com/krun-dev/krun/internal/domain"
 )
 
-type WorkerServiceDomainsUpdateInput struct {
+type WorkerRoutingDomainsUpdateInput struct {
 	Domains          []string `json:"domains"`
 	ExpectedRevision *int     `json:"expected_revision"`
 }
 
-type WorkerServiceNetworkProfileUpdateInput struct {
+type WorkerNetworkProfileUpdateInput struct {
 	Profile          string `json:"network_profile"`
 	ExpectedRevision *int   `json:"expected_revision"`
 }
@@ -25,62 +25,62 @@ type WorkerRepositoryUpdateInput struct {
 	Revision int                            `json:"expected_revision"`
 }
 
-func (s *Service) WorkerService(st *domain.State, t authorization.Target) domain.WorkerService {
+func (s *Service) Worker(st *domain.State, t authorization.Target) domain.Worker {
 	if st.Workers == nil {
 		st.Workers = domain.NewWorkerState()
 	}
-	ws, ok := st.Workers.Services[t.ID]
+	ws, ok := st.Workers.Workers[t.ID]
 	if !ok {
-		ws = domain.WorkerService{Service: t.ID, Organization: t.Organization, Domains: []string{}, Environments: map[string]domain.WorkerEnvironment{}}
+		ws = domain.Worker{Worker: t.ID, Organization: t.Organization, Domains: []string{}, Environments: map[string]domain.WorkerEnvironment{}}
 	}
 	ws.Organization = t.Organization
-	ws = s.NormalizeService(ws)
-	st.Workers.Services[t.ID] = ws
+	ws = s.NormalizeWorker(ws)
+	st.Workers.Workers[t.ID] = ws
 	s.EnsureWorkerPlacement(st, ws)
 	return ws
 }
 
-func (s *Service) EnsureWorkerPlacement(st *domain.State, ws domain.WorkerService) domain.WorkerPlacement {
-	if placement, ok := domain.ActiveWorkerPlacement(st.Workers, ws.Service); ok &&
+func (s *Service) EnsureWorkerPlacement(st *domain.State, ws domain.Worker) domain.WorkerPlacement {
+	if placement, ok := domain.ActiveWorkerPlacement(st.Workers, ws.Worker); ok &&
 		placement.NetworkProfile == ws.NetworkProfile && s.Config.Workers.PoolAllowedForProfile(ws.NetworkProfile, placement.Pool) {
 		return placement
 	}
-	pool, ok := s.Config.Workers.SelectPoolForService(ws.NetworkProfile, ws.Service)
+	pool, ok := s.Config.Workers.SelectPoolForWorker(ws.NetworkProfile, ws.Worker)
 	if !ok {
 		return domain.WorkerPlacement{}
 	}
 	return s.ReplaceWorkerPlacement(st, ws, pool.ID)
 }
 
-func (s *Service) ReplaceWorkerPlacement(st *domain.State, ws domain.WorkerService, pool string) domain.WorkerPlacement {
+func (s *Service) ReplaceWorkerPlacement(st *domain.State, ws domain.Worker, pool string) domain.WorkerPlacement {
 	for key, placement := range st.Workers.Placements {
-		if placement.Service == ws.Service && placement.Role == "primary" {
+		if placement.Worker == ws.Worker && placement.Role == "primary" {
 			delete(st.Workers.Placements, key)
 		}
 	}
 	timestamp := time.Now().UTC()
 	placement := domain.WorkerPlacement{
-		Service: ws.Service, Organization: ws.Organization, NetworkProfile: ws.NetworkProfile,
+		Worker: ws.Worker, Organization: ws.Organization, NetworkProfile: ws.NetworkProfile,
 		Pool: pool, Role: "primary", State: "active", Revision: 1, Created: timestamp, Updated: timestamp,
 	}
-	st.Workers.Placements[domain.WorkerPlacementKey(ws.Service, pool)] = placement
+	st.Workers.Placements[domain.WorkerPlacementKey(ws.Worker, pool)] = placement
 	return placement
 }
 
-// workerServiceView is the read-only form of workerService: it applies the same
+// workerView is the read-only form of worker: it applies the same
 // defaults to the returned value without touching the stored row. Read endpoints
-// must use this so a GET never mutates the service row.
+// must use this so a GET never mutates the worker row.
 //
-// The environment map is copied first: normalizeService writes into it in
+// The environment map is copied first: normalizeWorker writes into it in
 // place, so returning the stored map by reference would let a read mutate the
 // loaded state (and, in the memory store, be observed as a write).
-func (s *Service) WorkerServiceView(st *domain.State, t authorization.Target) domain.WorkerService {
+func (s *Service) WorkerView(st *domain.State, t authorization.Target) domain.Worker {
 	if st.Workers == nil {
 		st.Workers = domain.NewWorkerState()
 	}
-	ws, ok := st.Workers.Services[t.ID]
+	ws, ok := st.Workers.Workers[t.ID]
 	if !ok {
-		ws = domain.WorkerService{Service: t.ID, Organization: t.Organization, Domains: []string{}, Environments: map[string]domain.WorkerEnvironment{}}
+		ws = domain.Worker{Worker: t.ID, Organization: t.Organization, Domains: []string{}, Environments: map[string]domain.WorkerEnvironment{}}
 	}
 	ws.Organization = t.Organization
 	ws.Domains = append([]string(nil), ws.Domains...)
@@ -89,14 +89,14 @@ func (s *Service) WorkerServiceView(st *domain.State, t authorization.Target) do
 		environments[name] = env
 	}
 	ws.Environments = environments
-	return s.NormalizeService(ws)
+	return s.NormalizeWorker(ws)
 }
 
-// normalizeService applies catalog defaults and derives hosts. Hosts are never
+// normalizeWorker applies catalog defaults and derives hosts. Hosts are never
 // persisted: routing, the edge projection and API responses all compute them
 // here, so they cannot drift apart.
-func (s *Service) NormalizeService(ws domain.WorkerService) domain.WorkerService {
-	ws = s.Config.Workers.NormalizeServiceNetwork(ws)
+func (s *Service) NormalizeWorker(ws domain.Worker) domain.Worker {
+	ws = s.Config.Workers.NormalizeWorkerNetwork(ws)
 	if ws.Environments == nil {
 		ws.Environments = map[string]domain.WorkerEnvironment{}
 	}
@@ -123,7 +123,7 @@ func (s *Service) NormalizeService(ws domain.WorkerService) domain.WorkerService
 			env.SecretVersions = map[string]string{}
 		}
 		env.SecretNames = domain.WorkerSecretNames(env.SecretVersions)
-		s.SyncEnvironmentHosts(&env, ws.Organization, ws.Service, ws.Domains)
+		s.SyncEnvironmentHosts(&env, ws.Organization, ws.Worker, ws.Domains)
 		ws.Environments[name] = env
 	}
 	return ws
@@ -136,12 +136,12 @@ type WorkerOverviewEnvironment struct {
 	ConfirmedVersion *domain.WorkerVersion    `json:"confirmed_version,omitempty"`
 }
 
-func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
-	t, err := s.WorkerCollectionTarget(st, ref, "service.read", p)
+func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
+	t, err := s.WorkerCollectionTarget(st, ref, "worker.read", p)
 	if err != nil {
 		return nil, Read, err
 	}
-	ws := s.WorkerServiceView(st, t)
+	ws := s.WorkerView(st, t)
 	names := make([]string, 0, len(ws.Environments))
 	for name := range ws.Environments {
 		names = append(names, name)
@@ -160,8 +160,8 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 	versionVisible := map[string]bool{}
 	versionIDs := map[string]bool{}
 	for _, name := range names {
-		target := authorization.Target{Kind: "service", ID: t.ID, Organization: t.Organization, Environment: name}
-		read, authErr := authorization.Authorize(st, p, "service.read", target)
+		target := authorization.Target{Kind: "worker", ID: t.ID, Organization: t.Organization, Environment: name}
+		read, authErr := authorization.Authorize(st, p, "worker.read", target)
 		if authErr != nil {
 			return nil, Read, authErr
 		}
@@ -171,7 +171,7 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 		env := ws.Environments[name]
 		s.SyncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains)
 		entry := WorkerOverviewEnvironment{Environment: env, History: []domain.WorkerHistory{}}
-		versions, authErr := authorization.Authorize(st, p, "service.version.read", target)
+		versions, authErr := authorization.Authorize(st, p, "worker.version.read", target)
 		if authErr != nil {
 			return nil, Read, authErr
 		}
@@ -197,7 +197,7 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 
 	builds := []domain.WorkerBuild{}
 	for _, build := range st.Workers.Builds {
-		if build.Service == t.ID && build.Organization == t.Organization && versionVisible[build.Environment] {
+		if build.Worker == t.ID && build.Organization == t.Organization && versionVisible[build.Environment] {
 			builds = append(builds, build)
 		}
 	}
@@ -205,7 +205,7 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 
 	operations := []domain.WorkerOperation{}
 	for _, operation := range st.Workers.Operations {
-		if operation.Service == t.ID && operation.Organization == t.Organization && versionVisible[operation.Environment] {
+		if operation.Worker == t.ID && operation.Organization == t.Organization && versionVisible[operation.Environment] {
 			operations = append(operations, operation)
 		}
 	}
@@ -215,12 +215,12 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 	}
 	versions := map[string]domain.WorkerVersion{}
 	for id, version := range st.Workers.Versions {
-		if version.Service == t.ID && version.Organization == t.Organization && versionVisible[version.Environment] {
+		if version.Worker == t.ID && version.Organization == t.Organization && versionVisible[version.Environment] {
 			versionIDs[id] = true
 		}
 	}
 	for id := range versionIDs {
-		if version, ok := st.Workers.Versions[id]; ok && version.Service == t.ID && version.Organization == t.Organization && versionVisible[version.Environment] {
+		if version, ok := st.Workers.Versions[id]; ok && version.Worker == t.ID && version.Organization == t.Organization && versionVisible[version.Environment] {
 			versions[id] = PublicWorkerVersion(version)
 		}
 	}
@@ -231,28 +231,28 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 
 }
 
-func (s *Service) WorkerServiceDomains(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
-	t, e := s.WorkerTarget(st, ref, appconfig.WorkerBaseline, "service.read", p)
+func (s *Service) WorkerRoutingDomains(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
+	t, e := s.WorkerTarget(st, ref, appconfig.WorkerBaseline, "worker.read", p)
 	if e != nil {
 		return nil, Read, e
 	}
-	ws := s.WorkerServiceView(st, t)
+	ws := s.WorkerView(st, t)
 	profile, _ := s.Config.Workers.NetworkProfile(ws.NetworkProfile)
 	return map[string]any{
-		"selected": s.SyncServiceDomains(ws), "catalog": s.DomainCatalogForProfile(profile), "revision": ws.DomainsRevision,
+		"selected": s.SyncWorkerDomains(ws), "catalog": s.DomainCatalogForProfile(profile), "revision": ws.DomainsRevision,
 		"network_profile": WorkerNetworkProfileView{ID: profile.ID, Name: profile.Name, Description: profile.Description, ApprovalRequired: profile.Approval == "required", Default: profile.Default},
 	}, Read, nil
 
 }
 
-func (s *Service) WorkerServiceDomainsUpdate(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef, t authorization.Target, in WorkerServiceDomainsUpdateInput) (any, Outcome, error) {
+func (s *Service) WorkerRoutingDomainsUpdate(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, t authorization.Target, in WorkerRoutingDomainsUpdateInput) (any, Outcome, error) {
 	if len(in.Domains) == 0 {
 		return nil, Read, domain.Problem(422, "DOMAINS_INVALID", "Select at least one domain")
 	}
-	ws := s.WorkerService(st, t)
+	ws := s.Worker(st, t)
 	profile, ok := s.Config.Workers.NetworkProfile(ws.NetworkProfile)
 	if !ok {
-		return nil, Read, domain.Problem(409, "WORKER_NETWORK_PROFILE_INVALID", "The service network profile is no longer available")
+		return nil, Read, domain.Problem(409, "WORKER_NETWORK_PROFILE_INVALID", "The worker network profile is no longer available")
 	}
 	allowed := map[string]bool{}
 	for _, domain := range s.Config.Workers.DomainsForProfile(profile) {
@@ -276,14 +276,14 @@ func (s *Service) WorkerServiceDomainsUpdate(ctx context.Context, st *domain.Sta
 	}
 	ws.Domains = append([]string(nil), in.Domains...)
 	ws.DomainsRevision++
-	selected := s.SyncServiceHosts(&ws)
-	st.Workers.Services[t.ID] = ws
+	selected := s.SyncWorkerHosts(&ws)
+	st.Workers.Workers[t.ID] = ws
 	s.audit(st, p, "workers.domains.update", t.ID, true)
 	return map[string]any{"selected": selected, "catalog": s.DomainCatalogForProfile(profile), "revision": ws.DomainsRevision}, Read, nil
 
 }
 
-func (s *Service) WorkerServiceNetworkProfileUpdate(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef, t authorization.Target, in WorkerServiceNetworkProfileUpdateInput) (any, Outcome, error) {
+func (s *Service) WorkerNetworkProfileUpdate(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, t authorization.Target, in WorkerNetworkProfileUpdateInput) (any, Outcome, error) {
 	if in.ExpectedRevision == nil {
 		return nil, Read, domain.Problem(422, "NETWORK_PROFILE_INVALID", "expected_revision is required")
 	}
@@ -294,16 +294,16 @@ func (s *Service) WorkerServiceNetworkProfileUpdate(ctx context.Context, st *dom
 	if profile.Approval == "required" {
 		return nil, Read, domain.Problem(403, "NETWORK_PROFILE_APPROVAL_REQUIRED", "This network profile requires platform approval")
 	}
-	pool, ok := s.Config.Workers.SelectPoolForService(profile.ID, t.ID)
+	pool, ok := s.Config.Workers.SelectPoolForWorker(profile.ID, t.ID)
 	if !ok {
 		return nil, Read, domain.Problem(409, "NETWORK_PROFILE_UNAVAILABLE", "The selected network profile has no available runtime placement")
 	}
-	ws := s.WorkerService(st, t)
+	ws := s.Worker(st, t)
 	if ws.DomainsRevision != *in.ExpectedRevision {
 		return nil, Read, domain.Problem(409, "REVISION_CONFLICT", "Network configuration changed")
 	}
 	if ws.NetworkProfile == profile.ID {
-		return s.WorkerServiceDomains(ctx, st, p, ref)
+		return s.WorkerRoutingDomains(ctx, st, p, ref)
 	}
 	for _, env := range ws.Environments {
 		if env.Version != "" {
@@ -313,8 +313,8 @@ func (s *Service) WorkerServiceNetworkProfileUpdate(ctx context.Context, st *dom
 	ws.NetworkProfile = profile.ID
 	ws.Domains = s.Config.Workers.DefaultDomainsForProfile(profile)
 	ws.DomainsRevision++
-	selected := s.SyncServiceHosts(&ws)
-	st.Workers.Services[t.ID] = ws
+	selected := s.SyncWorkerHosts(&ws)
+	st.Workers.Workers[t.ID] = ws
 	s.ReplaceWorkerPlacement(st, ws, pool.ID)
 	s.audit(st, p, "workers.network-profile.update", t.ID, true)
 	return map[string]any{
@@ -324,18 +324,18 @@ func (s *Service) WorkerServiceNetworkProfileUpdate(ctx context.Context, st *dom
 
 }
 
-// syncEnvironmentHosts recomputes an environment's Hosts from the service's
+// syncEnvironmentHosts recomputes an environment's Hosts from the worker's
 // domain selection. Every write path funnels through it so persisted hosts, the
 // edge projection and the HTTPRoutes cannot drift apart. Domains that no longer
 // exist in the catalog are dropped.
-func (s *Service) SyncEnvironmentHosts(env *domain.WorkerEnvironment, organization, service string, serviceDomains []string) {
+func (s *Service) SyncEnvironmentHosts(env *domain.WorkerEnvironment, organization, worker string, workerDomains []string) {
 	if s.Config.Workers == nil || env == nil {
 		return
 	}
 	c := s.Config.Workers
-	slug := appconfig.WorkerSlug(organization, service)
+	slug := appconfig.WorkerSlug(organization, worker)
 	selected := map[string]bool{}
-	for _, id := range serviceDomains {
+	for _, id := range workerDomains {
 		selected[id] = true
 	}
 	// Emit in catalog order so Domains[i] and Hosts[i] stay aligned for clients.
@@ -356,24 +356,24 @@ func (s *Service) SyncEnvironmentHosts(env *domain.WorkerEnvironment, organizati
 	}
 }
 
-// syncServiceHosts applies the service's domain selection to every environment
+// syncWorkerHosts applies the worker's domain selection to every environment
 // and returns the normalised (catalog-ordered) selection.
-func (s *Service) SyncServiceHosts(ws *domain.WorkerService) []string {
+func (s *Service) SyncWorkerHosts(ws *domain.Worker) []string {
 	if s.Config.Workers == nil || ws == nil {
 		return nil
 	}
-	ws.Domains = s.SyncServiceDomains(*ws)
+	ws.Domains = s.SyncWorkerDomains(*ws)
 	for name, env := range ws.Environments {
-		s.SyncEnvironmentHosts(&env, ws.Organization, ws.Service, ws.Domains)
+		s.SyncEnvironmentHosts(&env, ws.Organization, ws.Worker, ws.Domains)
 		ws.Environments[name] = env
 	}
 	return ws.Domains
 }
 
-// syncServiceDomains returns the selection limited to catalog entries, in
+// syncWorkerDomains returns the selection limited to catalog entries, in
 // catalog order, without touching any environment. Read endpoints use it so a
-// GET never rewrites a service row.
-func (s *Service) SyncServiceDomains(ws domain.WorkerService) []string {
+// GET never rewrites a worker row.
+func (s *Service) SyncWorkerDomains(ws domain.Worker) []string {
 	if s.Config.Workers == nil {
 		return ws.Domains
 	}
@@ -393,7 +393,7 @@ func (s *Service) SyncServiceDomains(ws domain.WorkerService) []string {
 	return kept
 }
 
-type WorkerServiceSummary struct {
+type WorkerSummary struct {
 	domain.Resource
 	Repository     *domain.WorkerRepositorySource `json:"repository_source,omitempty"`
 	NetworkProfile WorkerNetworkProfileView       `json:"network_profile"`
@@ -418,12 +418,12 @@ type WorkerNetworkProfileView struct {
 	Default          bool   `json:"default"`
 }
 
-func (s *Service) WorkerNetworkProfiles(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
+func (s *Service) WorkerNetworkProfiles(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
 	target, err := s.orgTarget(st, ref)
 	if err != nil {
 		return nil, Read, err
 	}
-	if err := s.require(st, p, "service.list", target); err != nil {
+	if err := s.require(st, p, "worker.list", target); err != nil {
 		return nil, Read, err
 	}
 	out := []WorkerNetworkProfileView{}
@@ -460,12 +460,12 @@ func (s *Service) DomainCatalogForProfile(profile appconfig.WorkerNetworkProfile
 	return out
 }
 
-func (s *Service) WorkerDomains(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
+func (s *Service) WorkerDomains(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
 	target, err := s.orgTarget(st, ref)
 	if err != nil {
 		return nil, Read, err
 	}
-	if err := s.require(st, p, "service.list", target); err != nil {
+	if err := s.require(st, p, "worker.list", target); err != nil {
 		return nil, Read, err
 	}
 	seen := map[string]bool{}
@@ -485,29 +485,32 @@ func (s *Service) WorkerDomains(ctx context.Context, st *domain.State, p authori
 
 }
 
-func (s *Service) WorkerServiceList(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
+func (s *Service) WorkerList(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
 	target, err := s.orgTarget(st, ref)
 	if err != nil {
 		return nil, Read, err
 	}
-	if err := s.require(st, p, "service.list", target); err != nil {
+	if err := s.require(st, p, "worker.list", target); err != nil {
 		return nil, Read, err
 	}
-	out := make([]WorkerServiceSummary, 0)
+	out := make([]WorkerSummary, 0)
 	for _, resource := range st.Resources {
-		if resource.Kind != "service" || resource.Organization != target.ID {
+		if resource.Kind != "worker" || resource.Organization != target.ID {
 			continue
 		}
-		summary := WorkerServiceSummary{Resource: resource, Environments: []WorkerEnvironmentSummary{}}
-		service := s.Config.Workers.NormalizeServiceNetwork(st.Workers.Services[resource.ID])
-		if profile, ok := s.Config.Workers.NetworkProfile(service.NetworkProfile); ok {
-			summary.NetworkProfile = WorkerNetworkProfileView{ID: profile.ID, Name: profile.Name, Description: profile.Description, ApprovalRequired: profile.Approval == "required", Default: profile.Default}
+		summary := WorkerSummary{Resource: resource, Environments: []WorkerEnvironmentSummary{}}
+		worker := st.Workers.Workers[resource.ID]
+		if s.Config.Workers != nil {
+			worker = s.Config.Workers.NormalizeWorkerNetwork(worker)
+			if profile, ok := s.Config.Workers.NetworkProfile(worker.NetworkProfile); ok {
+				summary.NetworkProfile = WorkerNetworkProfileView{ID: profile.ID, Name: profile.Name, Description: profile.Description, ApprovalRequired: profile.Approval == "required", Default: profile.Default}
+			}
 		}
-		names := make([]string, 0, len(service.Environments)+1)
-		if _, exists := service.Environments[appconfig.WorkerBaseline]; !exists {
+		names := make([]string, 0, len(worker.Environments)+1)
+		if _, exists := worker.Environments[appconfig.WorkerBaseline]; !exists {
 			names = append(names, appconfig.WorkerBaseline)
 		}
-		for name := range service.Environments {
+		for name := range worker.Environments {
 			names = append(names, name)
 		}
 		sort.Slice(names, func(i, j int) bool {
@@ -521,7 +524,7 @@ func (s *Service) WorkerServiceList(ctx context.Context, st *domain.State, p aut
 		})
 		visible := false
 		for _, env := range names {
-			decision, err := authorization.Authorize(st, p, "service.read", authorization.Target{Kind: "service", ID: resource.ID, Organization: target.ID, Environment: env})
+			decision, err := authorization.Authorize(st, p, "worker.read", authorization.Target{Kind: "worker", ID: resource.ID, Organization: target.ID, Environment: env})
 			if err != nil {
 				return nil, Read, err
 			}
@@ -529,15 +532,17 @@ func (s *Service) WorkerServiceList(ctx context.Context, st *domain.State, p aut
 				continue
 			}
 			visible = true
-			if current, exists := service.Environments[env]; exists {
+			if current, exists := worker.Environments[env]; exists {
 				// Hosts are derived for display; the persisted row is not rewritten
 				// from a read path.
-				s.SyncEnvironmentHosts(&current, resource.Organization, resource.ID, s.SyncServiceDomains(service))
+				if s.Config.Workers != nil {
+					s.SyncEnvironmentHosts(&current, resource.Organization, resource.ID, s.SyncWorkerDomains(worker))
+				}
 				summary.Environments = append(summary.Environments, WorkerEnvironmentSummary{Name: env, Domains: current.Domains, Hosts: current.Hosts, Enabled: current.Enabled, Version: current.Version, Confirmed: current.Confirmed})
 			}
 		}
 		if visible {
-			summary.Repository = service.Repository
+			summary.Repository = worker.Repository
 			out = append(out, summary)
 		}
 	}
@@ -551,12 +556,12 @@ func (s *Service) WorkerServiceList(ctx context.Context, st *domain.State, p aut
 
 }
 
-func (s *Service) WorkerRepositoryProviders(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
+func (s *Service) WorkerRepositoryProviders(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
 	target, err := s.orgTarget(st, ref)
 	if err != nil {
 		return nil, Read, err
 	}
-	if err := s.require(st, p, "service.list", target); err != nil {
+	if err := s.require(st, p, "worker.list", target); err != nil {
 		return nil, Read, err
 	}
 	connected, err := s.Store.ConnectedRepositoryProviders(ctx, p.User.ID)
@@ -567,31 +572,31 @@ func (s *Service) WorkerRepositoryProviders(ctx context.Context, st *domain.Stat
 
 }
 
-func (s *Service) WorkerRepositoryGet(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
-	target, err := s.WorkerCollectionTarget(st, ref, "service.read", p)
+func (s *Service) WorkerRepositoryGet(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
+	target, err := s.WorkerCollectionTarget(st, ref, "worker.read", p)
 	if err != nil {
 		return nil, Read, err
 	}
-	service := s.WorkerServiceView(st, target)
-	return map[string]any{"source": service.Repository, "revision": service.RepositoryRevision}, Read, nil
+	worker := s.WorkerView(st, target)
+	return map[string]any{"source": worker.Repository, "revision": worker.RepositoryRevision}, Read, nil
 
 }
 
-func (s *Service) WorkerRepositoryUpdate(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef, target authorization.Target, in WorkerRepositoryUpdateInput) (any, Outcome, error) {
-	service := s.WorkerService(st, target)
-	if service.RepositoryRevision != in.Revision {
+func (s *Service) WorkerRepositoryUpdate(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, target authorization.Target, in WorkerRepositoryUpdateInput) (any, Outcome, error) {
+	worker := s.Worker(st, target)
+	if worker.RepositoryRevision != in.Revision {
 		return nil, Read, domain.Problem(409, "REVISION_CONFLICT", "Repository configuration changed")
 	}
 	if in.Source == nil {
-		service.Repository = nil
+		worker.Repository = nil
 	} else {
 		if _, err := s.Repository.ValidateRepositorySource(in.Source, target.Organization); err != nil {
 			return nil, Read, err
 		}
-		service.Repository = in.Source
+		worker.Repository = in.Source
 	}
-	service.RepositoryRevision++
-	st.Workers.Services[target.ID] = service
-	return map[string]any{"source": service.Repository, "revision": service.RepositoryRevision}, Read, nil
+	worker.RepositoryRevision++
+	st.Workers.Workers[target.ID] = worker
+	return map[string]any{"source": worker.Repository, "revision": worker.RepositoryRevision}, Read, nil
 
 }

@@ -19,8 +19,8 @@ type WorkerVersionUploadInput struct {
 	Key      string `json:"idempotency_key"`
 }
 
-func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef, in WorkerVersionUploadInput) (any, Outcome, error) {
-	target, err := s.WorkerTarget(st, ref, ref.Environment, "service.publish", p)
+func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, in WorkerVersionUploadInput) (any, Outcome, error) {
+	target, err := s.WorkerTarget(st, ref, ref.Environment, "worker.publish", p)
 	if err != nil {
 		return nil, Read, err
 	}
@@ -36,8 +36,8 @@ func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p a
 	} else if id != "" {
 		return st.Workers.Versions[id], Read, nil
 	}
-	service := s.WorkerService(st, target)
-	environment, ok := service.Environments[ref.Environment]
+	worker := s.Worker(st, target)
+	environment, ok := worker.Environments[ref.Environment]
 	if !ok {
 		return nil, Read, domain.NotFound()
 	}
@@ -50,7 +50,7 @@ func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p a
 			return nil, Read, domain.Problem(422, "WORKER_VERSION_INVALID", "Use build_id or artifact_id")
 		}
 		build, ok := st.Workers.Builds[in.Build]
-		if !ok || build.Service != ref.Service || build.Organization != ref.Organization {
+		if !ok || build.Worker != ref.Worker || build.Organization != ref.Organization {
 			return nil, Read, domain.NotFound()
 		}
 		if build.State != "succeeded" {
@@ -62,17 +62,17 @@ func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p a
 	if !ok || artifact.Organization != ref.Organization || artifact.State != "finalized" {
 		return nil, Read, domain.Problem(409, "ARTIFACT_UNAVAILABLE", "Artifact unavailable")
 	}
-	// Only a build belonging to this service or an existing version can authorize
+	// Only a build belonging to this worker or an existing version can authorize
 	// reusing an artifact. An organization-wide artifact ID is not a capability.
 	owned := false
 	for _, b := range st.Workers.Builds {
-		if b.Service == ref.Service && b.Organization == ref.Organization && b.Artifact == artifactID {
+		if b.Worker == ref.Worker && b.Organization == ref.Organization && b.Artifact == artifactID {
 			owned = true
 			break
 		}
 	}
 	for _, v := range st.Workers.Versions {
-		if v.Service == ref.Service && v.Organization == ref.Organization && v.Artifact == artifactID {
+		if v.Worker == ref.Worker && v.Organization == ref.Organization && v.Artifact == artifactID {
 			owned = true
 			break
 		}
@@ -87,14 +87,14 @@ func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p a
 	s.audit(st, p, "workers.version.create", target.ID+"/"+ref.Environment, true)
 	return version, Created, nil
 }
-func SnapshotVersion(org, service, environment string, artifact domain.WorkerArtifact, config domain.WorkerEnvironment) domain.WorkerVersion {
+func SnapshotVersion(org, worker, environment string, artifact domain.WorkerArtifact, config domain.WorkerEnvironment) domain.WorkerVersion {
 	return domain.WorkerVersion{
 		R2Bindings:         domain.CloneR2Bindings(config.R2Bindings),
 		ID:                 securetoken.UUID(),
 		VersionMetadata:    config.VersionMetadata,
 		AssetsBinding:      config.AssetsBinding,
 		Organization:       org,
-		Service:            service,
+		Worker:             worker,
 		Environment:        environment,
 		Artifact:           artifact.ID,
 		Profile:            artifact.Profile,
@@ -109,16 +109,16 @@ func SnapshotVersion(org, service, environment string, artifact domain.WorkerArt
 		Created:            time.Now().UTC(),
 	}
 }
-func (s *Service) WorkerVersionList(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
-	if _, err := s.WorkerCollectionTarget(st, ref, "service.version.read", p); err != nil {
+func (s *Service) WorkerVersionList(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
+	if _, err := s.WorkerCollectionTarget(st, ref, "worker.version.read", p); err != nil {
 		return nil, Read, err
 	}
 	out := []domain.WorkerVersion{}
 	for _, v := range st.Workers.Versions {
-		if v.Organization != ref.Organization || v.Service != ref.Service || ref.Environment != "" && v.Environment != ref.Environment {
+		if v.Organization != ref.Organization || v.Worker != ref.Worker || ref.Environment != "" && v.Environment != ref.Environment {
 			continue
 		}
-		if _, err := s.WorkerTarget(st, ref, v.Environment, "service.version.read", p); err == nil {
+		if _, err := s.WorkerTarget(st, ref, v.Environment, "worker.version.read", p); err == nil {
 			out = append(out, v)
 		}
 	}

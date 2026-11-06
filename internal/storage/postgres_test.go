@@ -86,10 +86,10 @@ func TestPostgresUsesSingleSchemaBaseline(t *testing.T) {
 	if err := store.pool.QueryRow(ctx, `SELECT
 		(SELECT count(*) FROM information_schema.columns
 		 WHERE table_schema=current_schema()
-		   AND table_name IN ('krun_worker_services','krun_worker_versions')
+		   AND table_name IN ('krun_workers','krun_worker_versions')
 		   AND column_name='pool'),
 		(SELECT count(*) FROM information_schema.tables
-		 WHERE table_schema=current_schema() AND table_name='krun_worker_service_placements')`).Scan(
+		 WHERE table_schema=current_schema() AND table_name='krun_worker_placements')`).Scan(
 		&poolColumns, &placementTables); err != nil {
 		t.Fatal(err)
 	}

@@ -50,7 +50,7 @@ type WorkerArtifact = domain.WorkerArtifact
 
 type WorkerEnvironment = domain.WorkerEnvironment
 
-type WorkerService = domain.WorkerService
+type Worker = domain.Worker
 
 type WorkerPlacement = domain.WorkerPlacement
 

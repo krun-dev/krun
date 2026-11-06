@@ -39,8 +39,8 @@ func entityType(kind string) string {
 		return "System"
 	case "organization":
 		return "Organization"
-	case "service":
-		return "Service"
+	case "worker":
+		return "Worker"
 	case "model":
 		return "Model"
 	}
@@ -144,7 +144,7 @@ func compileUser(st *domain.State, u domain.User) (*cedar.PolicySet, error) {
 		}
 		for _, action := range list {
 			actionResource := resource
-			if (a.ScopeKind == "service" || a.ScopeKind == "model") && (action == a.ScopeKind+".list" || action == "organization.read") {
+			if (a.ScopeKind == "worker" || a.ScopeKind == "model") && (action == a.ScopeKind+".list" || action == "organization.read") {
 				actionResource = "resource == " + uid("organization", ScopeOrganization(st, a))
 			}
 			body := fmt.Sprintf("permit (%s, action == Action::%q, %s) when { %s };", principal, action, actionResource, condition)
@@ -338,7 +338,7 @@ func Resolve(st *domain.State, kind, id, env string) (Target, error) {
 			return t, domain.NotFound()
 		}
 		t.Organization = id
-	case "service", "model":
+	case "worker", "model":
 		r, ok := st.Resources[id]
 		if !ok || r.Kind != kind {
 			return t, domain.NotFound()

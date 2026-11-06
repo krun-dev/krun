@@ -24,11 +24,11 @@ func publishedWorkerInvokeServer(t *testing.T) (*Server, *Store, string, string)
 	s.Config.Workers.Domains = []appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test", Label: "内网", Access: "private", Gateway: "internal", Default: true}}
 	var host string
 	if err := store.Update(context.Background(), PartitionAll, func(st *State) error {
-		service := s.workerService(st, Target{ID: "svc-a", Organization: "org-a"})
+		service := s.worker(st, Target{ID: "svc-a", Organization: "org-a"})
 		env := service.Environments["production"]
 		env.Version = "rel-test"
 		service.Environments["production"] = env
-		st.Workers.Services[service.Service] = service
+		st.Workers.Workers[service.Worker] = service
 		host = env.Hosts[0]
 		return nil
 	}); err != nil {

@@ -98,7 +98,7 @@ export function RepositorySettings({
       if (provider.connected) {
         await api(
           organizationBase +
-            "/workers/repository/" +
+            "/worker-repositories/" +
             encodeURIComponent(provider.id) +
             "/disconnect",
           "DELETE",
@@ -114,7 +114,7 @@ export function RepositorySettings({
       } else {
         const { authorization_url } = await api<{ authorization_url: string }>(
           organizationBase +
-            "/workers/repository/" +
+            "/worker-repositories/" +
             encodeURIComponent(provider.id) +
             "/connect",
           "POST",
@@ -209,7 +209,7 @@ export function RepositorySettings({
                 onChange={(e: ChangeEvent<HTMLInputElement>) =>
                   update("repository", e.target.value)
                 }
-                placeholder="team/worker-service"
+                placeholder="team/worker-worker"
                 maxLength={500}
                 disabled={busy}
               />
@@ -321,7 +321,7 @@ export function RepositoryBuild({
     setBusy(true);
     setError("");
     try {
-      // Builds are service-level: the artifact is environment-independent and
+      // Builds are worker-level: the artifact is environment-independent and
       // the target environment is chosen at publish time. The backend still
       // anchors build permission to a baseline environment.
       const payload = {
@@ -407,7 +407,7 @@ export function RepositoryBuild({
           </form>
         ) : (
           <p className="text-sm text-muted-foreground">
-            {t("此服务尚未绑定代码仓库，请先在“环境配置”中完成绑定。")}
+            {t("此Worker尚未绑定代码仓库，请先在“环境配置”中完成绑定。")}
           </p>
         )}
       </DialogContent>

@@ -10,11 +10,11 @@ import (
 // A scope is a query boundary, never an authorization decision. Handlers still
 // authorize every result against the actor's current grants.
 type ReadScope struct {
-	User, Key, Organization, Service, Kind, After string
-	Search                                        string
-	Limit                                         int
-	Summary                                       bool
-	ActorOnly, AllOrganizations                   bool
+	User, Key, Organization, Worker, Kind, After string
+	Search                                       string
+	Limit                                        int
+	Summary                                      bool
+	ActorOnly, AllOrganizations                  bool
 }
 
 type ReadScopeKey struct{}
@@ -40,20 +40,20 @@ func queueStateRead(ctx context.Context, b *pgx.Batch, query string) {
 	split := strings.SplitN(query, " ORDER BY ", 2)
 	query = split[0]
 	table := query[strings.LastIndex(query, " FROM ")+6:]
-	args := []any{scope.User, scope.Organization, scope.Service, scope.Key, scope.Kind, scope.After, scope.Limit, scope.Search}
+	args := []any{scope.User, scope.Organization, scope.Worker, scope.Key, scope.Kind, scope.After, scope.Limit, scope.Search}
 	resources := `SELECT resource_id FROM krun_resources WHERE org_id=$2 AND kind=$5 AND ($3='' OR resource_id=$3) AND ($3<>'' OR resource_id COLLATE "C">$6 COLLATE "C") AND ($8='' OR strpos(lower(name),lower($8))>0 OR strpos(lower(resource_id),lower($8))>0) ORDER BY resource_id COLLATE "C" LIMIT $7`
-	services := `service_id IN (` + resources + `)`
+	workers := `worker_id IN (` + resources + `)`
 	pred := "false"
 	switch table {
 	case "krun_worker_buckets":
 		pred = `org_id=$2`
 	case "krun_worker_environment_r2":
 		if !scope.Summary {
-			pred = services
+			pred = workers
 		}
 	case "krun_worker_version_r2":
 		if !scope.Summary {
-			pred = `version_id IN (SELECT version_id FROM krun_worker_versions WHERE ` + services + `)`
+			pred = `version_id IN (SELECT version_id FROM krun_worker_versions WHERE ` + workers + `)`
 		}
 	case "krun_users":
 		pred = `user_id=$1`
@@ -73,19 +73,19 @@ func queueStateRead(ctx context.Context, b *pgx.Batch, query string) {
 		pred = `key_id=$4`
 	case "krun_identity_sources", "krun_identity_providers", "krun_meta":
 		pred = `true`
-	case "krun_worker_services", "krun_worker_service_placements", "krun_worker_service_domains", "krun_worker_environments":
-		pred = services
+	case "krun_workers", "krun_worker_placements", "krun_worker_domains", "krun_worker_environments":
+		pred = workers
 	case "krun_worker_deployments", "krun_worker_builds", "krun_worker_versions", "krun_worker_operations", "krun_worker_history", "krun_worker_secret_versions", "krun_worker_environment_secrets":
 		if !scope.Summary {
-			pred = services
+			pred = workers
 		}
 	case "krun_worker_artifacts":
 		if !scope.Summary {
-			pred = `artifact_id IN (SELECT artifact_id FROM krun_worker_builds WHERE ` + services + ` UNION SELECT artifact_id FROM krun_worker_versions WHERE ` + services + `)`
+			pred = `artifact_id IN (SELECT artifact_id FROM krun_worker_builds WHERE ` + workers + ` UNION SELECT artifact_id FROM krun_worker_versions WHERE ` + workers + `)`
 		}
 	case "krun_worker_version_secrets":
 		if !scope.Summary {
-			pred = `version_id IN (SELECT version_id FROM krun_worker_versions WHERE ` + services + `)`
+			pred = `version_id IN (SELECT version_id FROM krun_worker_versions WHERE ` + workers + `)`
 		}
 	case "krun_worker_idempotency":
 		if !scope.Summary {
@@ -94,7 +94,7 @@ func queueStateRead(ctx context.Context, b *pgx.Batch, query string) {
 	}
 	if scope.ActorOnly {
 		actor := `(subject_kind='user' AND subject_id=$1 OR subject_kind='group' AND subject_id IN(SELECT group_id FROM krun_group_members WHERE user_id=$1))`
-		actorResources := `SELECT scope_id FROM krun_assignments WHERE ` + actor + ` AND scope_kind IN('service','model')`
+		actorResources := `SELECT scope_id FROM krun_assignments WHERE ` + actor + ` AND scope_kind IN('worker','model')`
 		switch table {
 		case "krun_resources":
 			pred = `resource_id IN(` + actorResources + `)`

@@ -35,19 +35,19 @@ test("Workers and R2 lists search across pages and keep details addressable", as
   const resources = { workers: [], buckets: [] };
   for (let index = 0; index < 23; index++) {
     const suffix = String(index).padStart(2, "0");
-    const service = await api(base + "/services", "POST", { name: "List Worker " + suffix });
-    await api(base + "/services/" + service.id + "/workers/network-profile", "PUT", {
+    const service = await api(base + "/workers", "POST", { name: "List Worker " + suffix });
+    await api(base + "/workers/" + service.id + "/network-profile", "PUT", {
       network_profile: profile,
       expected_revision: 0,
     });
     resources.workers.push(service);
     resources.buckets.push(
-      await api(base + "/workers/buckets", "POST", { name: "list-images-" + suffix }),
+      await api(base + "/buckets", "POST", { name: "list-images-" + suffix }),
     );
   }
   for (const kind of ["workers", "buckets"]) {
     const label = kind === "workers" ? "搜索 Worker 名称或 ID" : "搜索桶名称或 ID";
-    const back = kind === "workers" ? "返回服务列表" : "返回桶列表";
+    const back = kind === "workers" ? "返回Worker列表" : "返回桶列表";
     await page.goto("/?page=" + kind + "&workspace=" + org.id);
     await expect(page.locator("tbody tr")).toHaveCount(20);
     await expect(page.getByRole("columnheader", { name: "创建时间", exact: true })).toBeVisible();

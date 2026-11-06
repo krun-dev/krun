@@ -88,7 +88,7 @@ export function resourceLabel(value: string): string {
   const labels: Record<string, string> = {
     system: "系统",
     organization: "组织",
-    service: "服务",
+    worker: "Worker",
     model: "模型",
     api_key: "密钥",
   };

@@ -99,12 +99,12 @@ func applyWorkerConfigOps(ctx context.Context, tx pgx.Tx, revision int64, ops []
 			versionID = route.Version
 			payload, err = json.Marshal(route)
 			batch.Queue(`
-				INSERT INTO worker_config_routes(host, pool, path, enabled, version_id, service_id, shard, expires_at)
+				INSERT INTO worker_config_routes(host, pool, path, enabled, version_id, worker_id, shard, expires_at)
 				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 				ON CONFLICT (host) DO UPDATE SET
 					pool=excluded.pool, path=excluded.path, enabled=excluded.enabled,
-					version_id=excluded.version_id, service_id=excluded.service_id, shard=excluded.shard, expires_at=excluded.expires_at`,
-				op.Host, op.Pool, route.Path, route.Enabled, versionID, route.Service, bytesDigest([]byte(op.Host))[:2], route.Expires)
+					version_id=excluded.version_id, worker_id=excluded.worker_id, shard=excluded.shard, expires_at=excluded.expires_at`,
+				op.Host, op.Pool, route.Path, route.Enabled, versionID, route.Worker, bytesDigest([]byte(op.Host))[:2], route.Expires)
 		case "route_delete":
 			batch.Queue(`DELETE FROM worker_config_routes WHERE host=$1`, op.Host)
 		default:
@@ -140,8 +140,8 @@ func writeWorkerConfigCheckpoints(ctx context.Context, tx pgx.Tx, revision int64
 func acknowledgeWorkerConfig(ctx context.Context, tx pgx.Tx, ids []string, generations []int64) error {
 	_, err := tx.Exec(ctx, `
 		DELETE FROM worker_config_dirty d
-		USING unnest($1::text[], $2::bigint[]) AS incoming(service_id, generation)
-		WHERE d.service_id=incoming.service_id AND d.generation=incoming.generation`, ids, generations)
+		USING unnest($1::text[], $2::bigint[]) AS incoming(worker_id, generation)
+		WHERE d.worker_id=incoming.worker_id AND d.generation=incoming.generation`, ids, generations)
 	if err != nil {
 		return fmt.Errorf("acknowledge config dirty generations: %w", err)
 	}

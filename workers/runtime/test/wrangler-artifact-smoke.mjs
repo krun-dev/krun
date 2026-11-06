@@ -297,7 +297,7 @@ try {
   );
   version = {
     id: "rel_wrangler_runtime",
-    service_id: "svc",
+    worker_id: "svc",
     organization_id: "org",
     environment: "production",
     artifact_id: "art_wrangler_runtime",

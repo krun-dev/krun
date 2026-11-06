@@ -17,12 +17,12 @@ func (s *Server) workerDomains(st *State, p Principal, r *http.Request) (any, in
 	return out, workerHTTPStatus(outcome), err
 }
 
-func (s *Server) workerServiceList(st *State, p Principal, r *http.Request) (any, int, error) {
-	out, _, err := s.workerApplication(r).WorkerServiceList(r.Context(), st, p, workerRef(r))
+func (s *Server) workerList(st *State, p Principal, r *http.Request) (any, int, error) {
+	out, _, err := s.workerApplication(r).WorkerList(r.Context(), st, p, workerRef(r))
 	if err != nil {
 		return nil, 0, err
 	}
-	return workerServicePage(st, r, out.([]workerapp.WorkerServiceSummary))
+	return workerPage(st, r, out.([]workerapp.WorkerSummary))
 }
 
 func (s *Server) workerRepositoryProviders(st *State, p Principal, r *http.Request) (any, int, error) {
@@ -36,8 +36,8 @@ func (s *Server) workerRepositoryGet(st *State, p Principal, r *http.Request) (a
 }
 
 func (s *Server) workerRepositoryUpdate(st *State, p Principal, r *http.Request) (any, int, error) {
-	// Repository settings are shared by all environments of a service.
-	target, err := s.workerTarget(st, r, "global", "service.update", p)
+	// Repository settings are shared by all environments of a Worker.
+	target, err := s.workerTarget(st, r, "global", "worker.update", p)
 	if err != nil {
 		return nil, 0, err
 	}

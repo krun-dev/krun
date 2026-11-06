@@ -82,7 +82,7 @@ func TestObjectBrowserAuthorizationAndControlOnly(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	base := "/api/v1/orgs/org-a/workers/buckets/bkt-fixture/objects"
+	base := "/api/v1/orgs/org-a/buckets/bkt-fixture/objects"
 	for _, method := range []string{"DELETE", "POST"} {
 		path, data := base, ""
 		if method == "POST" {

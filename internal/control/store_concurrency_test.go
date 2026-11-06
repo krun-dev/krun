@@ -26,7 +26,7 @@ func TestPostgresIAMRevisionCASRejectsLostUpdate(t *testing.T) {
 	other := secondPostgresStore(t)
 	ctx := context.Background()
 	if err := store.Update(ctx, PartitionIAM, func(st *State) error {
-		st.Resources["svc-cas"] = Resource{ID: "svc-cas", Kind: "service", Organization: "org-cas", Name: "before", Revision: 1}
+		st.Resources["svc-cas"] = Resource{ID: "svc-cas", Kind: "worker", Organization: "org-cas", Name: "before", Revision: 1}
 		st.Revision++
 		return nil
 	}); err != nil {
@@ -299,7 +299,7 @@ func TestPostgresIAMRevisionsAndAuditsAreRequestLocal(t *testing.T) {
 	ctx := context.Background()
 	if err := store.Update(ctx, PartitionIAM, func(st *State) error {
 		for _, id := range []string{"svc-one", "svc-two"} {
-			st.Resources[id] = Resource{ID: id, Kind: "service", Organization: "org-revision", Name: id, Revision: 1}
+			st.Resources[id] = Resource{ID: id, Kind: "worker", Organization: "org-revision", Name: id, Revision: 1}
 		}
 		st.Revision++
 		return nil
@@ -521,17 +521,17 @@ func TestPostgresWorkersSnapshotExcludesSecretsAndBuildBlobs(t *testing.T) {
 	ctx := context.Background()
 	if err := store.Update(ctx, PartitionIAM, func(st *State) error {
 		st.Organizations["org"] = Organization{ID: "org", Name: "Org", Revision: 1}
-		st.Resources["service"] = Resource{ID: "service", Kind: "service", Organization: "org", Name: "Service", Revision: 1}
+		st.Resources["worker"] = Resource{ID: "worker", Kind: "worker", Organization: "org", Name: "Worker", Revision: 1}
 		st.Revision++
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
-		st.Workers.Services["service"] = WorkerService{Service: "service", Organization: "org", Environments: map[string]WorkerEnvironment{
+		st.Workers.Workers["worker"] = Worker{Worker: "worker", Organization: "org", Environments: map[string]WorkerEnvironment{
 			appconfig.WorkerBaseline: {Name: appconfig.WorkerBaseline, Enabled: true, ConfigRevision: 1, Variables: map[string]any{}},
 		}}
-		st.Workers.Builds["build-private"] = WorkerBuild{ID: "build-private", Organization: "org", Service: "service", Environment: "production", State: "queued", Created: now()}
+		st.Workers.Builds["build-private"] = WorkerBuild{ID: "build-private", Organization: "org", Worker: "worker", Environment: "production", State: "queued", Created: now()}
 		st.Workers.BuildPrivate["build-private"] = WorkerBuildPrivate{Actor: WorkerActor{User: "user"}, Files: map[string]string{"index.js": "secret source"}, LogKey: "build-logs/log"}
 		return nil
 	}); err != nil {

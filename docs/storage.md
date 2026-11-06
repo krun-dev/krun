@@ -31,7 +31,7 @@ IAM 与 Workers 是两套独立分区，**不共享事务**：
 | 分区 | 表 |
 | --- | --- |
 | IAM | `krun_users`、`krun_organizations`、`krun_org_sources`、`krun_members`、`krun_groups`、`krun_group_members`、`krun_assignments`、`krun_resources`、`krun_api_keys`、`krun_api_key_hashes`、`krun_invitations`、`krun_identity_sources`、`krun_identity_providers`、`krun_meta` |
-| Workers | `krun_worker_services`、`krun_worker_service_domains`、`krun_worker_environments`、`krun_worker_secret_versions`、`krun_worker_environment_secrets`、`krun_worker_builds`、`krun_worker_build_private`、`krun_worker_artifacts`、`krun_worker_versions`、`krun_worker_deployments`、`krun_worker_version_secrets`、`krun_worker_operations`、`krun_worker_history`、`krun_worker_idempotency`、`krun_repository_connections`、`krun_repository_connect_states` |
+| Workers | `krun_workers`、`krun_worker_domains`、`krun_worker_environments`、`krun_worker_secret_versions`、`krun_worker_environment_secrets`、`krun_worker_builds`、`krun_worker_build_private`、`krun_worker_artifacts`、`krun_worker_versions`、`krun_worker_deployments`、`krun_worker_version_secrets`、`krun_worker_operations`、`krun_worker_history`、`krun_worker_idempotency`、`krun_repository_connections`、`krun_repository_connect_states` |
 | 会话（不属于任何分区） | `krun_sessions`、`krun_browsers`、`krun_login_states`、`krun_email_logins`、`krun_oauth_authorizations`、`krun_oauth_grants`、`krun_oauth_refresh_tokens` |
 | 组织邀请（类型化方法，不进入 State） | `krun_org_invitation_links`、`krun_org_invitation_redemptions`；邀请、名额、成员和直接角色在有界 IAM 事务内提交 |
 | 旁路 | `krun_audits`、`worker_config_revisions`、`worker_config_routes`、`worker_config_versions`、`worker_config_ops`、`worker_config_dirty`、`worker_config_checkpoints`、`worker_asset_objects`、`worker_retention_scopes`、`worker_runtime_acks` |
@@ -72,14 +72,14 @@ UPDATE krun_worker_builds SET state='building', claimed_by=$2, claimed_at=now()
 
 ```sql
 UPDATE krun_worker_environments SET version_id=$4, deployment_revision=deployment_revision+1
- WHERE service_id=$1 AND env_name=$2 AND deployment_revision=$3 AND enabled;
+ WHERE worker_id=$1 AND env_name=$2 AND deployment_revision=$3 AND enabled;
 ```
 
 ## 边缘收敛
 
 站点变更进入有界 dirty 队列，发布者只读取变更站点并写入 normalized delta；对象存储保存 compact head 与 host-hash shard checkpoint。Runtime 通过增量 feed 收敛，冷 host 按需读取，ACK 仍用于观察收敛。细节及保留/清理机制见 [规模边界与验证](performance-scaling.md)。
 
-**Hosts 不再持久化。** 环境的主机名由域名目录 + 服务的域名选择现算，`workers.Service.NormalizeService`、`reconcile` 的 HTTPRoute 生成、边缘增量投影共用同一套推导，因此三者不会漂移。
+**Hosts 不再持久化。** 环境的主机名由域名目录 + 服务的域名选择现算，`workers.Service.NormalizeWorker`、`reconcile` 的 HTTPRoute 生成、边缘增量投影共用同一套推导，因此三者不会漂移。
 
 ## 认证数据
 

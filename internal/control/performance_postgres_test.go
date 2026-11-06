@@ -20,10 +20,10 @@ func seedPerformanceSites(t *testing.T, s *Store, n int) {
 		`INSERT INTO krun_organizations(org_id,name) VALUES('tenant','Tenant'),('other','Other')`,
 		`INSERT INTO krun_members(org_id,user_id) VALUES('tenant','actor')`,
 		`INSERT INTO krun_assignments(assignment_id,subject_kind,subject_id,role,scope_kind,scope_id) VALUES('grant','user','actor','org_admin','organization','tenant')`,
-		`INSERT INTO krun_resources(resource_id,kind,org_id,name) SELECT 'site-'||repeat('0',greatest(0,6-length(i::text)))||i::text,'service',CASE WHEN i%2=0 THEN 'tenant' ELSE 'other' END,'Site '||i FROM generate_series(1,$1::int)i`,
-		`INSERT INTO krun_worker_services(service_id,org_id,network_profile) SELECT resource_id,org_id,'default' FROM krun_resources`,
-		`INSERT INTO krun_worker_service_placements(service_id,pool_id,org_id,network_profile,role,state,revision,created_at,updated_at) SELECT resource_id,'default',org_id,'default','primary','active',1,now(),now() FROM krun_resources`,
-		`INSERT INTO krun_worker_environments(service_id,env_name,enabled,config_revision,variables) SELECT resource_id,'production',true,1,'{}'::jsonb FROM krun_resources`,
+		`INSERT INTO krun_resources(resource_id,kind,org_id,name) SELECT 'site-'||repeat('0',greatest(0,6-length(i::text)))||i::text,'worker',CASE WHEN i%2=0 THEN 'tenant' ELSE 'other' END,'Site '||i FROM generate_series(1,$1::int)i`,
+		`INSERT INTO krun_workers(worker_id,org_id,network_profile) SELECT resource_id,org_id,'default' FROM krun_resources`,
+		`INSERT INTO krun_worker_placements(worker_id,pool_id,org_id,network_profile,role,state,revision,created_at,updated_at) SELECT resource_id,'default',org_id,'default','primary','active',1,now(),now() FROM krun_resources`,
+		`INSERT INTO krun_worker_environments(worker_id,env_name,enabled,config_revision,variables) SELECT resource_id,'production',true,1,'{}'::jsonb FROM krun_resources`,
 	}
 	for _, query := range statements {
 		var args []any
@@ -40,28 +40,28 @@ func TestPostgresScopedSiteReadsAndPagination(t *testing.T) {
 	s := postgresTestStore(t)
 	seedPerformanceSites(t, s, 1000)
 	ctx := context.Background()
-	scope := stateReadScope{User: "actor", Organization: "tenant", Service: "site-000002", Kind: "service", Limit: 100}
+	scope := stateReadScope{User: "actor", Organization: "tenant", Worker: "site-000002", Kind: "worker", Limit: 100}
 	st, err := s.Open(withStateScope(ctx, scope), PartitionAll)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Resources) != 1 || len(st.Workers.Services) != 1 || len(st.Organizations) != 1 || len(st.Users) != 1 {
-		t.Fatalf("unbounded scoped load: resources=%d services=%d orgs=%d users=%d", len(st.Resources), len(st.Workers.Services), len(st.Organizations), len(st.Users))
+	if len(st.Resources) != 1 || len(st.Workers.Workers) != 1 || len(st.Organizations) != 1 || len(st.Users) != 1 {
+		t.Fatalf("unbounded scoped load: resources=%d services=%d orgs=%d users=%d", len(st.Resources), len(st.Workers.Workers), len(st.Organizations), len(st.Users))
 	}
 	p := Principal{User: st.Users["actor"]}
-	d, err := Authorize(st, p, "service.read", Target{Kind: "service", ID: scope.Service, Organization: "tenant", Environment: "production"})
+	d, err := Authorize(st, p, "worker.read", Target{Kind: "worker", ID: scope.Worker, Organization: "tenant", Environment: "production"})
 	if err != nil || !d.Allowed {
 		t.Fatalf("actor grant lost: %+v %v", d, err)
 	}
-	scope.Service = "site-000001"
+	scope.Worker = "site-000001"
 	st, err = s.Open(withStateScope(ctx, scope), PartitionAll)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Resources) != 0 || len(st.Workers.Services) != 0 {
+	if len(st.Resources) != 0 || len(st.Workers.Workers) != 0 {
 		t.Fatal("cross-tenant entity loaded")
 	}
-	scope.Service = ""
+	scope.Worker = ""
 	scope.Summary = true
 	scope.Limit = 37
 	seen := map[string]bool{}
@@ -70,7 +70,7 @@ func TestPostgresScopedSiteReadsAndPagination(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(st.Resources) > 37 || len(st.Workers.Services) > 37 || len(st.Workers.Builds) != 0 {
+		if len(st.Resources) > 37 || len(st.Workers.Workers) > 37 || len(st.Workers.Builds) != 0 {
 			t.Fatal("unbounded summary page")
 		}
 		for id := range st.Resources {
@@ -79,7 +79,7 @@ func TestPostgresScopedSiteReadsAndPagination(t *testing.T) {
 			}
 			seen[id] = true
 		}
-		r := httptest.NewRequest("GET", "/api/v1/orgs/tenant/services", nil).WithContext(withStateScope(ctx, scope))
+		r := httptest.NewRequest("GET", "/api/v1/orgs/tenant/workers", nil).WithContext(withStateScope(ctx, scope))
 		result, _, _ := resourcePageItems(st, r, nil)
 		next, _ := result.(map[string]any)["next_after"].(string)
 		if next == "" {
@@ -104,10 +104,10 @@ func TestPostgresDeltaPublisherOnlyWritesChangedSite(t *testing.T) {
 		t.Fatalf("initial delta: %d %v", rev, err)
 	}
 	var before string
-	if err = postgresTestPool(s).QueryRow(ctx, `SELECT xmin::text FROM worker_config_routes WHERE service_id='site-000004'`).Scan(&before); err != nil {
+	if err = postgresTestPool(s).QueryRow(ctx, `SELECT xmin::text FROM worker_config_routes WHERE worker_id='site-000004'`).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = postgresTestPool(s).Exec(ctx, `UPDATE krun_worker_environments SET enabled=false WHERE service_id='site-000002'`); err != nil {
+	if _, err = postgresTestPool(s).Exec(ctx, `UPDATE krun_worker_environments SET enabled=false WHERE worker_id='site-000002'`); err != nil {
 		t.Fatal(err)
 	}
 	rev, err = controller.PublishConfig(ctx)
@@ -116,7 +116,7 @@ func TestPostgresDeltaPublisherOnlyWritesChangedSite(t *testing.T) {
 	}
 	var after string
 	var count int
-	if err = postgresTestPool(s).QueryRow(ctx, `SELECT xmin::text FROM worker_config_routes WHERE service_id='site-000004'`).Scan(&after); err != nil {
+	if err = postgresTestPool(s).QueryRow(ctx, `SELECT xmin::text FROM worker_config_routes WHERE worker_id='site-000004'`).Scan(&after); err != nil {
 		t.Fatal(err)
 	}
 	if before != after {
@@ -125,12 +125,12 @@ func TestPostgresDeltaPublisherOnlyWritesChangedSite(t *testing.T) {
 	if err = postgresTestPool(s).QueryRow(ctx, `SELECT count(*) FROM worker_config_ops WHERE config_revision=2`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("single-route delta has %d ops: %v", count, err)
 	}
-	dirty, err := s.DirtyWorkerServices(ctx)
+	dirty, err := s.DirtyWorkers(ctx)
 	if err != nil || len(dirty) != 0 {
 		t.Fatalf("queue not acknowledged: %+v %v", dirty, err)
 	}
 	var route workerConfigRoute
-	row := postgresTestPool(s).QueryRow(ctx, `SELECT host FROM worker_config_routes WHERE service_id='site-000002'`)
+	row := postgresTestPool(s).QueryRow(ctx, `SELECT host FROM worker_config_routes WHERE worker_id='site-000002'`)
 	if err = row.Scan(&route.Host); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestPostgresDeltaPublisherOnlyWritesChangedSite(t *testing.T) {
 func TestPostgresWorkQueueRotatesPastFirstHundred(t *testing.T) {
 	s := postgresTestStore(t)
 	ctx := context.Background()
-	if _, err := postgresTestPool(s).Exec(ctx, `INSERT INTO krun_worker_builds(build_id,org_id,service_id,env_name,state,created_at) SELECT 'b-'||lpad(i::text,4,'0'),'org','site','production','queued',now()-'1 day'::interval FROM generate_series(1,250)i`); err != nil {
+	if _, err := postgresTestPool(s).Exec(ctx, `INSERT INTO krun_worker_builds(build_id,org_id,worker_id,env_name,state,created_at) SELECT 'b-'||lpad(i::text,4,'0'),'org','site','production','queued',now()-'1 day'::interval FROM generate_series(1,250)i`); err != nil {
 		t.Fatal(err)
 	}
 	first, err := s.PendingWork(ctx, 100)
@@ -192,18 +192,18 @@ func TestPostgresStaleDirtyGenerationCannotPublishOrDropNewerWork(t *testing.T) 
 	s := postgresTestStore(t)
 	seedPerformanceSites(t, s, 2)
 	ctx := context.Background()
-	dirty, err := s.DirtyWorkerServices(ctx)
+	dirty, err := s.DirtyWorkers(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = postgresTestPool(s).Exec(ctx, `UPDATE krun_worker_environments SET enabled=false WHERE service_id=$1`, dirty[0].ID); err != nil {
+	if _, err = postgresTestPool(s).Exec(ctx, `UPDATE krun_worker_environments SET enabled=false WHERE worker_id=$1`, dirty[0].ID); err != nil {
 		t.Fatal(err)
 	}
 	_, won, err := s.AppendConfigDelta(ctx, 0, dirty, []workerConfigOp{{Type: "route_delete", Pool: "default", Host: "stale.test"}})
 	if err != nil || won {
 		t.Fatalf("stale projection won=%v err=%v", won, err)
 	}
-	remaining, err := s.DirtyWorkerServices(ctx)
+	remaining, err := s.DirtyWorkers(ctx)
 	if err != nil || len(remaining) != 2 {
 		t.Fatalf("new mutation was lost: %v %v", remaining, err)
 	}

@@ -38,7 +38,7 @@ func (s *Server) cfAssetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err = s.cfCall(r, false, func(st *State, p Principal) error {
-		_, e := s.workerTarget(st, r, r.PathValue("environment"), "service.publish", p)
+		_, e := s.workerTarget(st, r, r.PathValue("environment"), "worker.publish", p)
 		return e
 	}); err != nil {
 		s.writeError(w, r, err)

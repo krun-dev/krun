@@ -1,6 +1,6 @@
-# Workers 服务列表与仓库构建
+# Workers Workers 列表与仓库构建
 
-Workers 导航先展示当前组织中有权查看的服务列表。服务名称、关联仓库和可见环境状态来自后端；点击服务才进入构建 / 发布详情。返回服务列表和浏览器返回均可用，详情 URL 可以直接打开。创建服务后进入新服务详情，不再自动打开第一个已有服务。
+Workers 导航先展示当前组织中有权查看的Workers 列表。服务名称、关联仓库和可见环境状态来自后端；点击服务才进入构建 / 发布详情。返回Workers 列表和浏览器返回均可用，详情 URL 可以直接打开。创建服务后进入新服务详情，不再自动打开第一个已有服务。
 
 “构建新版本”现在从 GitHub、GitLab.com 或管理员配置的自建 GitLab 拉取代码。用户填写仓库地址、分支 / Tag / Commit 和项目目录，保存为该服务的仓库配置；入口、静态资源与构建命令统一以项目内 Wrangler 配置为准，避免平台表单与项目配置出现两套真相。后续打开会恢复已保存配置。历史构建展示仓库、请求的 ref 与实际 commit，发布与回滚继续选用已成功构建的不可变制品。
 
@@ -56,14 +56,14 @@ link-local/unspecified 永远拒绝，不能把普通 OAuth 配置变成任意�
 
 ## 后端流程
 
-1. `PUT .../workers/repository` 使用 `service.update` 权限及 `expected_revision` 保存共享仓库配置。`GET .../workers/repository` 返回配置与修订号。
-2. `POST .../workers/builds` 传 `source_type: repository`、`repository_revision`、构建环境及幂等键，要求目标环境 `build.start`。先检查仓库配置修订号，防止构建请求与另一个用户的配置修改串用。入队时复制服务的仓库配置，后续配置修改不影响该构建。
+1. `PUT .../workers/{worker}/repository` 使用 `worker.update` 权限及 `expected_revision` 保存共享仓库配置。`GET .../workers/{worker}/repository` 返回配置与修订号。
+2. `POST .../workers/{worker}/builds` 传 `source_type: repository`、`repository_revision`、构建环境及幂等键，要求目标环境 `build.start`。先检查仓库配置修订号，防止构建请求与另一个用户的配置修改串用。入队时复制 Worker 的仓库配置，后续配置修改不影响该构建。
 3. 控制器在数据库事务外通过 Git smart HTTP 将 ref 解析为完整 commit，并先持久化 commit。下载中断后的重试仍使用该 commit。
 4. 对固定 commit 做有界浅克隆，在控制面内生成项目归档并检查目录边界、链接、特殊文件、路径和大小；拒绝 `.env`、`.dev.vars`、`.npmrc` 等本地凭据，并保留 Wrangler 配置、锁文件、框架配置及 Text/Data/Wasm 等二进制构建输入。仓库中任何脚本、hook 都不会在控制面执行。
 5. Kubernetes Job 根据唯一锁文件执行 frozen install，并由固定 Wrangler dry-run 构建已经配置好的 Workers 项目。安装和 custom build 在无上传凭据的 init container 中执行；可信 packer 在单独主容器校验输出、生成 `workerd-bundle-v2` 并上传。Job 不接收 Git 平台凭据或 S3 长期凭据。
 6. 选历史制品发布到 test / staging / production，沿用候选验证 → Version 提交 → 副本确认流程。
 
-`GET /api/v1/orgs/{org}/workers/services` 返回按用户环境权限过滤的列表；`GET /api/v1/orgs/{org}/workers/repository-providers` 返回当前组织启用的来源展示信息。源码上传与仓库构建是两种独立输入模式，产品页面使用仓库构建。
+`GET /api/v1/orgs/{org}/workers` 返回按用户环境权限过滤的列表；`GET /api/v1/orgs/{org}/workers/repository-providers` 返回当前组织启用的来源展示信息。源码上传与仓库构建是两种独立输入模式，产品页面使用仓库构建。
 
 ## 当前范围与网络
 

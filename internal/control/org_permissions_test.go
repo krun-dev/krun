@@ -37,7 +37,7 @@ func TestOrganizationPermissions(t *testing.T) {
 			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 				t.Fatal(err)
 			}
-			if result.Organization != "org-a" || !result.Actions["service.list"] || !result.Actions["apiKey.create"] || !result.Actions["storage.object.read"] {
+			if result.Organization != "org-a" || !result.Actions["worker.list"] || !result.Actions["apiKey.create"] || !result.Actions["storage.object.read"] {
 				t.Fatalf("missing user permissions: %+v", result)
 			}
 			for _, action := range []string{"member.read", "iam.read", "audit.read", "storage.object.write", "storage.bucket.create"} {
@@ -111,7 +111,7 @@ func TestOrganizationPermissionsRespectAPIKeyPolicy(t *testing.T) {
 	response := request(s, "POST", "/api/v1/orgs/org-a/api-keys", "krun_cli_admin", `{
 		"name":"navigation test", "expires_in":3600,
 		"policy":{"schema_version":1,"statements":[{
-			"effect":"allow", "actions":["organization.read","service.list"],
+			"effect":"allow", "actions":["organization.read","worker.list"],
 			"resource":{"kind":"organization","organization_id":"org-a","ids":["org-a"]},
 			"conditions":{}
 		}]}
@@ -130,7 +130,7 @@ func TestOrganizationPermissionsRespectAPIKeyPolicy(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if response.Code != 200 || !result.Actions["service.list"] || result.Actions["iam.read"] || result.Actions["member.read"] {
+	if response.Code != 200 || !result.Actions["worker.list"] || result.Actions["iam.read"] || result.Actions["member.read"] {
 		t.Fatalf("key policy was bypassed: %d %s", response.Code, response.Body.String())
 	}
 }

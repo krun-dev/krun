@@ -12,7 +12,7 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 	}
 	// IAM administration may edit other users and grants; it has a separate
 	// loading contract. Resource and Workers endpoints only need their target.
-	isResource := strings.Contains(r.Pattern, "/services") || strings.Contains(r.Pattern, "/models")
+	isResource := strings.Contains(r.Pattern, "/workers") || strings.Contains(r.Pattern, "/models")
 	cloudflare := strings.HasPrefix(r.URL.Path, cfPrefix)
 	simpleIAM := strings.HasPrefix(r.URL.Path, oauthPrefix+"/") ||
 		r.URL.Path == "/api/auth/me" ||
@@ -27,7 +27,7 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 	if !isResource && !strings.Contains(r.Pattern, "/workers/") && !simpleIAM && !cloudflare {
 		return r, nil
 	}
-	scope := stateReadScope{ActorOnly: simpleIAM || cloudflare && r.PathValue("org") == "", AllOrganizations: cloudflare && r.PathValue("org") == "" || r.URL.Path == "/api/v1/orgs" && r.Method == "GET", User: c.session.User, Key: c.keyID, Organization: r.PathValue("org"), Service: r.PathValue("resource"), Kind: resourceKind(r), Limit: 100, After: r.URL.Query().Get("after")}
+	scope := stateReadScope{ActorOnly: simpleIAM || cloudflare && r.PathValue("org") == "", AllOrganizations: cloudflare && r.PathValue("org") == "" || r.URL.Path == "/api/v1/orgs" && r.Method == "GET", User: c.session.User, Key: c.keyID, Organization: r.PathValue("org"), Worker: r.PathValue("resource"), Kind: resourceKind(r), Limit: 100, After: r.URL.Query().Get("after")}
 	if c.isKey {
 		owner, found, err := s.Store.APIKeyOwner(r.Context(), c.keyID)
 		if err != nil {
@@ -45,28 +45,28 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 		}
 		scope.Limit = n
 	}
-	if scope.Service == "" && strings.HasSuffix(r.URL.Path, "/workers/services") {
-		scope.Service = r.URL.Query().Get("service_id")
+	if scope.Worker == "" && strings.HasSuffix(r.URL.Path, "/workers") {
+		scope.Worker = r.URL.Query().Get("worker_id")
 	}
-	if r.Pattern == "GET /api/v1/orgs/{org}/workers/services" {
+	if r.Pattern == "GET /api/v1/orgs/{org}/workers" {
 		options, err := workerListOptions(r)
 		if err != nil {
 			return r, err
 		}
 		scope.Search = options.search
 		scope.Limit = options.limit + 1
-		if scope.Service != "" {
+		if scope.Worker != "" {
 			scope.Search = ""
 			scope.After = ""
 		}
 	}
-	scope.Summary = scope.Service == "" || strings.HasSuffix(r.URL.Path, "/workers/services")
+	scope.Summary = scope.Worker == "" || strings.HasSuffix(r.URL.Path, "/workers")
 	return r.WithContext(withStateScope(r.Context(), scope)), nil
 }
 
 func resourcePageItems(st *State, r *http.Request, v any) (any, int, error) {
 	out := map[string]any{"items": v}
-	if scope, ok := r.Context().Value(stateReadScopeKey{}).(stateReadScope); ok && scope.Service == "" && len(st.Resources) == scope.Limit {
+	if scope, ok := r.Context().Value(stateReadScopeKey{}).(stateReadScope); ok && scope.Worker == "" && len(st.Resources) == scope.Limit {
 		after := ""
 		for id := range st.Resources {
 			if id > after {

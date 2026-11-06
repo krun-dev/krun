@@ -1156,7 +1156,7 @@ async function worker(env, ctx, d, artifact, validation) {
   const validating = validation !== undefined;
   const mode = validating ? "validation" : "serving";
   return env.LOADER.get(
-    `${d.organization_id}/${d.service_id}/${d.environment}/${d.id}/${mode}/workerd-20260928/workerd-bundle-v2`,
+    `${d.organization_id}/${d.worker_id}/${d.environment}/${d.id}/${mode}/workerd-20260928/workerd-bundle-v2`,
     async () => {
       // The platform hands out a short-lived URL; artifact bytes go straight from
       // object storage to this Pod, never through the control plane. Candidate
@@ -1204,7 +1204,7 @@ async function worker(env, ctx, d, artifact, validation) {
         ...(d.variables || {}),
         ...secrets,
         KRUN_ENVIRONMENT: d.environment,
-        KRUN_SERVICE_ID: d.service_id,
+        KRUN_WORKER_ID: d.worker_id,
         KRUN_VERSION_ID: d.id,
       };
 
@@ -1222,7 +1222,7 @@ async function worker(env, ctx, d, artifact, validation) {
           props: {
             namespace: JSON.stringify([
               d.organization_id,
-              d.service_id,
+              d.worker_id,
               d.environment,
               validating ? "validation/" + d.id : "serving",
             ]),

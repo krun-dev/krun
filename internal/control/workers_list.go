@@ -40,19 +40,19 @@ func (query workerListQuery) matches(id, name string) bool {
 
 // The cursor follows the storage candidate order, including candidates hidden
 // by environment permissions, so a partially visible page can still advance.
-func workerServicePage(st *State, r *http.Request, summaries []workerapp.WorkerServiceSummary) (any, int, error) {
+func workerPage(st *State, r *http.Request, summaries []workerapp.WorkerSummary) (any, int, error) {
 	query, err := workerListOptions(r)
 	if err != nil {
 		return nil, 0, err
 	}
-	serviceID := r.URL.Query().Get("service_id")
+	workerID := r.URL.Query().Get("worker_id")
 	ids := []string{}
 	for _, resource := range st.Resources {
-		if resource.Kind != "service" || resource.Organization != r.PathValue("org") {
+		if resource.Kind != "worker" || resource.Organization != r.PathValue("org") {
 			continue
 		}
-		if serviceID != "" {
-			if resource.ID == serviceID {
+		if workerID != "" {
+			if resource.ID == workerID {
 				ids = append(ids, resource.ID)
 			}
 		} else if query.matches(resource.ID, resource.Name) {
@@ -69,7 +69,7 @@ func workerServicePage(st *State, r *http.Request, summaries []workerapp.WorkerS
 	for _, id := range ids {
 		included[id] = true
 	}
-	items := []workerapp.WorkerServiceSummary{}
+	items := []workerapp.WorkerSummary{}
 	for _, summary := range summaries {
 		if included[summary.ID] {
 			items = append(items, summary)

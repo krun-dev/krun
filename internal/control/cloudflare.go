@@ -141,7 +141,7 @@ func (s *Server) cfRequest(r *http.Request) (*http.Request, error) {
 		if !ok {
 			return r, notFound()
 		}
-		r.SetPathValue("resource", script.Service)
+		r.SetPathValue("resource", script.Worker)
 		r = r.WithContext(context.WithValue(r.Context(), cfScriptContext{}, script))
 	}
 	if name == "" && strings.HasSuffix(r.URL.Path, "/workers/scripts") {
@@ -214,19 +214,19 @@ func (s *Server) cfEnsureScript(r *http.Request, name string) (domain.WorkerScri
 			if e != nil {
 				return e
 			}
-			return s.require(st, p, r, "service.create", target)
+			return s.require(st, p, r, "worker.create", target)
 		})
 		if err != nil {
 			return script, err
 		}
-		candidate := domain.WorkerScript{Organization: org, Name: name, Service: securetoken.NewID("service"), WorkersDev: true, PreviewsEnabled: true}
+		candidate := domain.WorkerScript{Organization: org, Name: name, Worker: securetoken.NewID("worker"), WorkersDev: true, PreviewsEnabled: true}
 		script, err = s.Store.ReserveWorkerScript(r.Context(), candidate)
 		if err != nil {
 			return script, err
 		}
-		exists = script.Service != candidate.Service
+		exists = script.Worker != candidate.Worker
 	}
-	r.SetPathValue("resource", script.Service)
+	r.SetPathValue("resource", script.Worker)
 	r, err = s.scopedRequest(r, c)
 	if err != nil {
 		return script, err
@@ -236,14 +236,14 @@ func (s *Server) cfEnsureScript(r *http.Request, name string) (domain.WorkerScri
 		if e != nil {
 			return e
 		}
-		if _, ok := st.Resources[script.Service]; ok {
+		if _, ok := st.Resources[script.Worker]; ok {
 			return nil
 		}
 		target, e := s.orgTarget(st, r)
 		if e != nil {
 			return e
 		}
-		if e = s.require(st, p, r, "service.create", target); e != nil {
+		if e = s.require(st, p, r, "worker.create", target); e != nil {
 			return e
 		}
 		// An existing alias without its resource may be an interrupted first
@@ -252,19 +252,19 @@ func (s *Server) cfEnsureScript(r *http.Request, name string) (domain.WorkerScri
 		if exists {
 			return problem(409, "WORKER_IDENTITY_PENDING", "Worker identity is being created or cleaned up; retry after cleanup")
 		}
-		_, e = s.iam().EnsureWorkerResource(st, target, name, script.Service)
+		_, e = s.iam().EnsureWorkerResource(st, target, name, script.Worker)
 		return e
 	})
 	if err != nil {
 		return script, err
 	}
-	r.SetPathValue("resource", script.Service)
+	r.SetPathValue("resource", script.Worker)
 	err = s.cfCall(r, true, func(st *State, p Principal) error {
-		target, e := s.workerTarget(st, r, "production", "service.publish", p)
+		target, e := s.workerTarget(st, r, "production", "worker.publish", p)
 		if e != nil {
 			return e
 		}
-		s.workerApplication(r).WorkerService(st, target)
+		s.workerApplication(r).Worker(st, target)
 		return nil
 	})
 	return script, err

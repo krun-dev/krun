@@ -70,7 +70,7 @@ function artifactArchive(manifest, moduleFiles, assetFiles = {}) {
 }
 const version = {
   id: "rel_test",
-  service_id: "svc",
+  worker_id: "svc",
   organization_id: "org",
   environment: "production",
   artifact_id: "art",
@@ -545,6 +545,7 @@ await check(
     const response = await call(v2, "/api/load");
     assert.equal(response.status, 200);
     const loaded = await v2Env.__loaderConfig;
+    assert.ok(v2Env.__loaderKey.startsWith("org/svc/production/rel_v2/"));
     assert.match(v2Env.__loaderKey, /workerd-bundle-v2$/);
     assert.equal(loaded.compatibilityDate, "2026-09-28");
     assert.deepEqual(loaded.compatibilityFlags, ["nodejs_compat"]);
@@ -558,6 +559,8 @@ await check(
     assert.equal(loaded.modules["index.metadata"], undefined);
     assert.equal(Object.getPrototypeOf(loaded.env), Object.prototype);
     assert.equal(loaded.env.MODE, "test");
+    assert.equal(loaded.env.KRUN_WORKER_ID, v2Version.worker_id);
+    assert.equal(loaded.env.KRUN_SERVICE_ID, undefined);
     assert.equal(loaded.env.RUNTIME_TOKEN, undefined);
     assert.equal(loaded.env.STORAGE_ACCESS_KEY, undefined);
     assert.equal(loaded.env.STORAGE_SECRET_KEY, undefined);

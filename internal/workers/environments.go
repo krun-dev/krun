@@ -22,12 +22,12 @@ type WorkerEnvironmentUpdateInput struct {
 	Variables       map[string]any     `json:"variables"`
 }
 
-func (s *Service) WorkerEnvironments(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
-	t, e := s.WorkerCollectionTarget(st, ref, "service.read", p)
+func (s *Service) WorkerEnvironments(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
+	t, e := s.WorkerCollectionTarget(st, ref, "worker.read", p)
 	if e != nil {
 		return nil, Read, e
 	}
-	ws := s.WorkerServiceView(st, t)
+	ws := s.WorkerView(st, t)
 	names := make([]string, 0, len(ws.Environments))
 	for name := range ws.Environments {
 		names = append(names, name)
@@ -43,7 +43,7 @@ func (s *Service) WorkerEnvironments(ctx context.Context, st *domain.State, p au
 	})
 	out := []domain.WorkerEnvironment{}
 	for _, name := range names {
-		d, e := authorization.Authorize(st, p, "service.read", authorization.Target{Kind: "service", ID: t.ID, Organization: t.Organization, Environment: name})
+		d, e := authorization.Authorize(st, p, "worker.read", authorization.Target{Kind: "worker", ID: t.ID, Organization: t.Organization, Environment: name})
 		if e != nil {
 			return nil, Read, e
 		}
@@ -59,15 +59,15 @@ func (s *Service) WorkerEnvironments(ctx context.Context, st *domain.State, p au
 
 }
 
-func (s *Service) WorkerEnvironmentCreate(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef, in WorkerEnvironmentCreateInput) (any, Outcome, error) {
+func (s *Service) WorkerEnvironmentCreate(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, in WorkerEnvironmentCreateInput) (any, Outcome, error) {
 	if !appconfig.WorkerPreviewValid(in.Name) {
 		return nil, Read, domain.Problem(422, "ENVIRONMENT_INVALID", "Preview name must be a slug and cannot be production")
 	}
-	t, e := s.WorkerTarget(st, ref, in.Name, "service.update", p)
+	t, e := s.WorkerTarget(st, ref, in.Name, "worker.update", p)
 	if e != nil {
 		return nil, Read, e
 	}
-	ws := s.WorkerService(st, t)
+	ws := s.Worker(st, t)
 	if _, exists := ws.Environments[in.Name]; exists {
 		return nil, Read, domain.Problem(409, "ENVIRONMENT_EXISTS", "Preview environment already exists")
 	}
@@ -95,22 +95,22 @@ func (s *Service) WorkerEnvironmentCreate(ctx context.Context, st *domain.State,
 	s.SyncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains)
 	ws.Environments[in.Name] = env
 	ws.PreviewRevision++
-	st.Workers.Services[t.ID] = ws
+	st.Workers.Workers[t.ID] = ws
 	s.audit(st, p, "workers.environment.create", t.ID+"/"+in.Name, true)
 	return env, Created, nil
 
 }
 
-func (s *Service) WorkerEnvironmentDelete(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
+func (s *Service) WorkerEnvironmentDelete(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
 	env := ref.Environment
 	if env == appconfig.WorkerBaseline || !appconfig.WorkerEnvValid(env) {
 		return nil, Read, domain.NotFound()
 	}
-	t, e := s.WorkerTarget(st, ref, env, "service.update", p)
+	t, e := s.WorkerTarget(st, ref, env, "worker.update", p)
 	if e != nil {
 		return nil, Read, e
 	}
-	ws := s.WorkerService(st, t)
+	ws := s.Worker(st, t)
 	if _, exists := ws.Environments[env]; !exists {
 		return nil, Read, domain.NotFound()
 	}
@@ -119,14 +119,14 @@ func (s *Service) WorkerEnvironmentDelete(ctx context.Context, st *domain.State,
 	}
 	delete(ws.Environments, env)
 	ws.PreviewRevision++
-	st.Workers.Services[t.ID] = ws
+	st.Workers.Workers[t.ID] = ws
 	s.audit(st, p, "workers.environment.delete", t.ID+"/"+env, true)
 	return nil, Deleted, nil
 
 }
 
-func (s *Service) WorkerEnvironmentUpdate(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef, t authorization.Target, env string, in WorkerEnvironmentUpdateInput) (any, Outcome, error) {
-	ws := s.WorkerService(st, t)
+func (s *Service) WorkerEnvironmentUpdate(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, t authorization.Target, env string, in WorkerEnvironmentUpdateInput) (any, Outcome, error) {
+	ws := s.Worker(st, t)
 	current, exists := ws.Environments[env]
 	if !exists {
 		return nil, Read, domain.NotFound()
@@ -175,7 +175,7 @@ func (s *Service) WorkerEnvironmentUpdate(ctx context.Context, st *domain.State,
 	}
 	current.ConfigRevision++
 	ws.Environments[env] = current
-	st.Workers.Services[t.ID] = ws
+	st.Workers.Workers[t.ID] = ws
 	return current, Read, nil
 
 }

@@ -968,7 +968,7 @@ export default function App() {
                 key={`${scope}:${workersNavigation}`}
                 base={base}
                 system={system}
-                canCreate={permissions?.actions["service.create"] === true}
+                canCreate={permissions?.actions["worker.create"] === true}
                 notify={notify}
               />
             )

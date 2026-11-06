@@ -83,10 +83,10 @@ func (s Service) EnsureWorkerResource(st *domain.State, t authorization.Target, 
 		return domain.Resource{}, domain.Problem(422, "INVALID_REQUEST", "Name required")
 	}
 	if id == "" {
-		return domain.Resource{}, domain.Problem(422, "INVALID_REQUEST", "Worker service identity required")
+		return domain.Resource{}, domain.Problem(422, "INVALID_REQUEST", "Worker identity required")
 	}
 	if old, ok := st.Resources[id]; ok {
-		if old.Organization != t.ID || old.Kind != "service" {
+		if old.Organization != t.ID || old.Kind != "worker" {
 			return domain.Resource{}, domain.NotFound()
 		}
 		return old, nil
@@ -94,7 +94,7 @@ func (s Service) EnsureWorkerResource(st *domain.State, t authorization.Target, 
 	resource := domain.Resource{
 		ID:           id,
 		Organization: t.ID,
-		Kind:         "service",
+		Kind:         "worker",
 		Name:         name,
 		Revision:     1,
 		Created:      time.Now().UTC().Truncate(time.Microsecond),

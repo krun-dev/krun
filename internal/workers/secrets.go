@@ -75,12 +75,12 @@ func WorkerSecretNameValid(name string) bool {
 
 func WorkerSecretAAD(version domain.WorkerSecretVersion) []byte {
 	return []byte(strings.Join([]string{
-		"krun-worker-secret-v1", version.ID, version.Organization, version.Service,
+		"krun-worker-secret-v1", version.ID, version.Organization, version.Worker,
 		version.Environment, version.Name, version.KeyVersion,
 	}, "\x00"))
 }
 
-func EncryptWorkerSecret(config *appconfig.WorkersConfig, organization, service, environment, name, actor, value string) (domain.EncryptedWorkerSecret, error) {
+func EncryptWorkerSecret(config *appconfig.WorkersConfig, organization, worker, environment, name, actor, value string) (domain.EncryptedWorkerSecret, error) {
 	key, err := config.WorkerSecretKey(config.SecretsActiveKey)
 	if err != nil {
 		return domain.EncryptedWorkerSecret{}, err
@@ -100,7 +100,7 @@ func EncryptWorkerSecret(config *appconfig.WorkersConfig, organization, service,
 	digest := hmac.New(sha256.New, key)
 	_, _ = digest.Write([]byte(value))
 	version := domain.WorkerSecretVersion{
-		ID: securetoken.NewID("secv"), Organization: organization, Service: service,
+		ID: securetoken.NewID("secv"), Organization: organization, Worker: worker,
 		Environment: environment, Name: name, ValueDigest: hex.EncodeToString(digest.Sum(nil)),
 		KeyVersion: config.SecretsActiveKey, CreatedBy: actor, Created: time.Now().UTC(),
 	}
@@ -137,24 +137,24 @@ func DecryptWorkerSecret(config *appconfig.WorkersConfig, encrypted domain.Encry
 	return string(plaintext), nil
 }
 
-func (s *Service) WorkerSecretList(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef) (any, Outcome, error) {
+func (s *Service) WorkerSecretList(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
 	environment := ref.Environment
 	if !appconfig.WorkerEnvValid(environment) {
 		return nil, Read, domain.NotFound()
 	}
-	target, err := s.WorkerTarget(st, ref, environment, "service.read", p)
+	target, err := s.WorkerTarget(st, ref, environment, "worker.read", p)
 	if err != nil {
 		return nil, Read, err
 	}
-	service := s.WorkerService(st, target)
-	current, ok := service.Environments[environment]
+	worker := s.Worker(st, target)
+	current, ok := worker.Environments[environment]
 	if !ok {
 		return nil, Read, domain.NotFound()
 	}
 	summaries := make([]WorkerSecretSummary, 0, len(current.SecretVersions))
 	for name, versionID := range current.SecretVersions {
 		version, ok := st.Workers.SecretVersions[versionID]
-		if !ok || version.Service != target.ID || (version.Environment != environment && !(environment != appconfig.WorkerBaseline && version.Environment == domain.PreviewBaseName)) || version.Name != name {
+		if !ok || version.Worker != target.ID || (version.Environment != environment && !(environment != appconfig.WorkerBaseline && version.Environment == domain.PreviewBaseName)) || version.Name != name {
 			return nil, Read, errors.New("Worker secret metadata is inconsistent")
 		}
 		summaries = append(summaries, WorkerSecretSummary{Name: name, CreatedAt: version.Created})
@@ -165,7 +165,7 @@ func (s *Service) WorkerSecretList(ctx context.Context, st *domain.State, p auth
 }
 
 // WorkerSecretChange is the single-key convenience form of a bounded batch.
-func (s *Service) WorkerSecretChange(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef, target authorization.Target, environment, name string, deleting bool, in WorkerSecretInput) (any, Outcome, error) {
+func (s *Service) WorkerSecretChange(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, target authorization.Target, environment, name string, deleting bool, in WorkerSecretInput) (any, Outcome, error) {
 	value := &in.Value
 	if deleting {
 		value = nil
@@ -180,7 +180,7 @@ type WorkerSecretBatchInput struct {
 	Deploy   *bool              `json:"deploy,omitempty"`
 }
 
-func (s *Service) WorkerSecretBatch(ctx context.Context, st *domain.State, p authorization.Principal, ref ServiceRef, target authorization.Target, environment string, in WorkerSecretBatchInput) (any, Outcome, error) {
+func (s *Service) WorkerSecretBatch(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, target authorization.Target, environment string, in WorkerSecretBatchInput) (any, Outcome, error) {
 	if in.Key == "" || len(in.Key) > 128 || in.Revision < 0 || len(in.Secrets) == 0 || len(in.Secrets) > WorkerSecretMaxCount {
 		return nil, Read, domain.Problem(422, "WORKER_SECRET_INVALID", "A bounded secret batch, expected_revision and idempotency_key are required")
 	}
@@ -196,13 +196,13 @@ func (s *Service) WorkerSecretBatch(ctx context.Context, st *domain.State, p aut
 		}
 		return map[string]any{"configuration_revision": id}, Read, nil
 	}
-	service := s.WorkerService(st, target)
-	current, ok := service.Environments[environment]
+	worker := s.Worker(st, target)
+	current, ok := worker.Environments[environment]
 	base := environment == domain.PreviewBaseName
 	if base {
 		current = domain.WorkerEnvironment{Name: domain.PreviewBaseName, Enabled: true, Variables: map[string]any{}, SecretVersions: map[string]string{}}
-		if service.PreviewBase != nil {
-			current = *service.PreviewBase
+		if worker.PreviewBase != nil {
+			current = *worker.PreviewBase
 		}
 		ok = true
 	}
@@ -254,11 +254,11 @@ func (s *Service) WorkerSecretBatch(ctx context.Context, st *domain.State, p aut
 	current.SecretNames = domain.WorkerSecretNames(versions)
 	current.ConfigRevision++
 	if base {
-		service.PreviewBase = &current
+		worker.PreviewBase = &current
 	} else {
-		service.Environments[environment] = current
+		worker.Environments[environment] = current
 	}
-	st.Workers.Services[target.ID] = service
+	st.Workers.Workers[target.ID] = worker
 	s.audit(st, p, "workers.secret.change", target.ID+"/"+environment, true)
 	active, published := st.Workers.Versions[current.Version]
 	if base || !published {
@@ -277,7 +277,7 @@ func (s *Service) WorkerSecretBatch(ctx context.Context, st *domain.State, p aut
 		return version, Created, nil
 	}
 	operationID := securetoken.NewID("op")
-	op := domain.WorkerOperation{ID: operationID, Kind: "secret", Organization: target.Organization, Service: target.ID, Environment: environment, State: "queued", Version: version.ID, ExpectedRevision: in.Revision, ConfigRevision: current.ConfigRevision, Steps: []domain.WorkerStep{{Name: "artifact", State: "pending"}, {Name: "candidate", State: "pending"}, {Name: "commit", State: "pending"}, {Name: "synchronize", State: "pending"}}, Created: time.Now().UTC()}
+	op := domain.WorkerOperation{ID: operationID, Kind: "secret", Organization: target.Organization, Worker: target.ID, Environment: environment, State: "queued", Version: version.ID, ExpectedRevision: in.Revision, ConfigRevision: current.ConfigRevision, Steps: []domain.WorkerStep{{Name: "artifact", State: "pending"}, {Name: "candidate", State: "pending"}, {Name: "commit", State: "pending"}, {Name: "synchronize", State: "pending"}}, Created: time.Now().UTC()}
 	st.Workers.Operations[op.ID] = op
 	RememberDeployment(st, op)
 	st.Workers.OperationPrivate[op.ID] = domain.WorkerOperationPrivate{Actor: WorkerActor(p)}

@@ -20,7 +20,7 @@ func fixture() (iam.Service, *domain.State, domain.User) {
 	for _, org := range []string{"a", "b"} {
 		st.Organizations[org] = domain.Organization{ID: org, Name: org, Revision: 1}
 		st.Members[domain.MemberKey(org, user.ID)] = domain.Member{Organization: org, User: user.ID}
-		st.Resources["service-"+org] = domain.Resource{ID: "service-" + org, Kind: "service", Organization: org, Revision: 1}
+		st.Resources["service-"+org] = domain.Resource{ID: "service-" + org, Kind: "worker", Organization: org, Revision: 1}
 		st.Groups["group-"+org] = domain.Group{ID: "group-" + org, ScopeKind: "organization", ScopeID: org, Members: []string{user.ID}, Revision: 1}
 		st.Assignments["grant-"+org] = domain.Assignment{ID: "grant-" + org, SubjectKind: "group", SubjectID: "group-" + org, Role: "viewer", ScopeKind: "organization", ScopeID: org, Revision: 1}
 	}
@@ -39,7 +39,7 @@ func wantCode(t *testing.T, err error, code string) {
 
 func TestMemberRemovalRevokesOnlyItsOrganization(t *testing.T) {
 	svc, st, user := fixture()
-	st.Assignments["direct"] = domain.Assignment{ID: "direct", SubjectKind: "user", SubjectID: user.ID, Role: "member", ScopeKind: "service", ScopeID: "service-a"}
+	st.Assignments["direct"] = domain.Assignment{ID: "direct", SubjectKind: "user", SubjectID: user.ID, Role: "member", ScopeKind: "worker", ScopeID: "service-a"}
 	if err := svc.DeleteMember(st, target("a"), user.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -53,11 +53,11 @@ func TestMemberRemovalRevokesOnlyItsOrganization(t *testing.T) {
 		t.Fatal("group cleanup crossed organizations")
 	}
 	for _, org := range []string{"a", "b"} {
-		resource, err := authorization.Resolve(st, "service", "service-"+org, "production")
+		resource, err := authorization.Resolve(st, "worker", "service-"+org, "production")
 		if err != nil {
 			t.Fatal(err)
 		}
-		decision, err := authorization.Authorize(st, authorization.Principal{User: user}, "service.read", resource)
+		decision, err := authorization.Authorize(st, authorization.Principal{User: user}, "worker.read", resource)
 		if err != nil || decision.Allowed != (org == "b") {
 			t.Fatalf("%s: %+v %v", org, decision, err)
 		}
@@ -66,7 +66,7 @@ func TestMemberRemovalRevokesOnlyItsOrganization(t *testing.T) {
 
 func TestAssignmentsValidateMembershipAndScopeBeforeMutation(t *testing.T) {
 	svc, st, user := fixture()
-	input := iam.AssignmentInput{SubjectKind: "group", SubjectID: "group-b", Role: "member", ScopeKind: "service", ScopeID: "service-a"}
+	input := iam.AssignmentInput{SubjectKind: "group", SubjectID: "group-b", Role: "member", ScopeKind: "worker", ScopeID: "service-a"}
 	_, err := svc.WriteAssignment(st, target("a"), "", input, false)
 	wantCode(t, err, "POLICY_INVALID")
 	input.SubjectKind, input.SubjectID, input.ScopeID = "user", user.ID, "service-b"
@@ -85,7 +85,7 @@ func TestKeyPolicyIsACeilingOverCurrentRoles(t *testing.T) {
 	svc, st, user := fixture()
 	principal := authorization.Principal{User: user, Kind: "session"}
 	never := 0
-	policy := domain.Policy{Version: 1, Statements: []domain.Statement{{Effect: "allow", Actions: []string{"service.read"}, Resource: domain.Selector{Kind: "service", Organization: "a", IDs: []string{"service-b"}}}}}
+	policy := domain.Policy{Version: 1, Statements: []domain.Statement{{Effect: "allow", Actions: []string{"worker.read"}, Resource: domain.Selector{Kind: "worker", Organization: "a", IDs: []string{"service-b"}}}}}
 	_, err := svc.CreateKey(st, principal, target("a"), iam.KeyInput{Name: "deployment", Expires: &never, Policy: policy})
 	wantCode(t, err, "POLICY_INVALID")
 	if len(st.Keys) != 0 {
@@ -105,13 +105,13 @@ func TestKeyPolicyIsACeilingOverCurrentRoles(t *testing.T) {
 	}
 	key := st.Keys[created.ID]
 	principal.Key = &key
-	resource, _ := authorization.Resolve(st, "service", "service-a", "production")
-	decision, err := authorization.Authorize(st, principal, "service.read", resource)
+	resource, _ := authorization.Resolve(st, "worker", "service-a", "production")
+	decision, err := authorization.Authorize(st, principal, "worker.read", resource)
 	if err != nil || !decision.Allowed {
 		t.Fatalf("initial grant: %+v %v", decision, err)
 	}
 	delete(st.Assignments, "grant-a")
-	decision, err = authorization.Authorize(st, principal, "service.read", resource)
+	decision, err = authorization.Authorize(st, principal, "worker.read", resource)
 	if err != nil || decision.Allowed || !decision.KeyAllowed {
 		t.Fatalf("key bypassed revoked role: %+v %v", decision, err)
 	}

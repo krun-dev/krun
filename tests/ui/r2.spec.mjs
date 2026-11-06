@@ -29,8 +29,8 @@ test("UI manages buckets and persists environment and Preview Base R2 bindings",
   const run = randomUUID().slice(0, 8);
   const org = await api("/api/v1/orgs", "POST", { name: "R2 UI " + run });
   const organization = "/api/v1/orgs/" + org.id;
-  const service = await api(organization + "/services", "POST", { name: "R2 service " + run });
-  const workers = organization + "/services/" + service.id + "/workers";
+  const service = await api(organization + "/workers", "POST", { name: "R2 service " + run });
+  const workers = organization + "/workers/" + service.id;
   const profiles = await api(organization + "/workers/network-profiles");
   await api(workers + "/network-profile", "PUT", {
     network_profile: profiles.items.find((item) => item.default)?.id || profiles.items[0].id,
@@ -147,17 +147,17 @@ test("UI manages buckets and persists environment and Preview Base R2 bindings",
   await dialog.getByRole("button", { name: "确认", exact: true }).click();
   await expect(row.getByText("已启用", { exact: true })).toBeVisible();
   await row.getByRole("button", { name: "停用", exact: true }).click();
-  const bucket = (await api(organization + "/workers/buckets")).items.find(
+  const bucket = (await api(organization + "/buckets")).items.find(
     (item) => item.name === bucketName,
   );
-  await api(organization + "/workers/buckets/" + bucket.id, "PATCH", {
+  await api(organization + "/buckets/" + bucket.id, "PATCH", {
     enabled: true,
     revision: bucket.revision,
   });
   const conflict = page.waitForResponse(
     (response) =>
       response.request().method() === "PATCH" &&
-      response.url().endsWith("/workers/buckets/" + bucket.id),
+      response.url().endsWith("/buckets/" + bucket.id),
   );
   await dialog.getByRole("button", { name: "确认", exact: true }).click();
   expect((await conflict).status()).toBe(409);
@@ -171,7 +171,7 @@ test("UI manages buckets and persists environment and Preview Base R2 bindings",
   await expect(page.getByText("尚未配置 R2 绑定。", { exact: true })).toBeVisible();
 
   const other = await api("/api/v1/orgs", "POST", { name: "Other R2 UI " + run });
-  expect((await api("/api/v1/orgs/" + other.id + "/workers/buckets")).items).toEqual([]);
+  expect((await api("/api/v1/orgs/" + other.id + "/buckets")).items).toEqual([]);
   await page.goto(bucketsURL);
   await expect(row).toBeVisible();
   await page.screenshot({ path: ".data/ui-r2/desktop.png", fullPage: true });

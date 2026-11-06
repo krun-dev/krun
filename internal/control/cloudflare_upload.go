@@ -222,7 +222,7 @@ func (s *Server) cfUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	var actor WorkerActor
 	err = s.cfCall(r, false, func(st *State, p Principal) error {
-		_, e := s.workerTarget(st, r, r.PathValue("environment"), "service.publish", p)
+		_, e := s.workerTarget(st, r, r.PathValue("environment"), "worker.publish", p)
 		actor = workerapp.WorkerActor(p)
 		return e
 	})
@@ -270,11 +270,11 @@ func (s *Server) cfUpload(w http.ResponseWriter, r *http.Request) {
 		if !deploy {
 			return nil
 		}
-		target, e := s.workerTarget(st, r, ref.Environment, "service.publish", p)
+		target, e := s.workerTarget(st, r, ref.Environment, "worker.publish", p)
 		if e != nil {
 			return e
 		}
-		env := st.Workers.Services[script.Service].Environments[ref.Environment]
+		env := st.Workers.Workers[script.Worker].Environments[ref.Environment]
 		out, _, e = app.WorkerDeploymentCreate(r.Context(), st, p, ref, target, ref.Environment, "publish", workerapp.WorkerDeploymentCreateInput{Version: version.ID, Revision: env.Revision, Key: securetoken.UUID()})
 		if e == nil {
 			op = out.(WorkerOperation)
@@ -310,7 +310,7 @@ func (s *Server) cfUpload(w http.ResponseWriter, r *http.Request) {
 					result["id"] = script.Name
 					result["deployment_id"] = version.ID
 				}
-				env := st.Workers.Services[script.Service].Environments[r.PathValue("environment")]
+				env := st.Workers.Workers[script.Worker].Environments[r.PathValue("environment")]
 				result["env"] = cfEnvBindings(env)
 				return nil
 			}

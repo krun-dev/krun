@@ -17,17 +17,17 @@ func workerConfigFixture() (*State, *Store) {
 	store := memoryStore()
 	st, _, _ := fixture()
 	// Hosts are derived from the domain catalog, not stored.
-	ws := WorkerService{Service: "svc-a", Organization: "org-a", Domains: []string{"internal"}, Environments: map[string]WorkerEnvironment{
+	ws := Worker{Worker: "svc-a", Organization: "org-a", Domains: []string{"internal"}, Environments: map[string]WorkerEnvironment{
 		"production": {Name: "production", Enabled: true, Version: "rel-1"},
 		"preview":    {Name: "preview", Enabled: false, Version: "rel-1"},
 		"empty":      {Name: "empty", Enabled: true},
 	}}
-	st.Workers.Services["svc-a"] = ws
+	st.Workers.Workers["svc-a"] = ws
 	placed := now()
-	st.Workers.Placements[workerPlacementKey("svc-a", "default")] = WorkerPlacement{Service: "svc-a", Organization: "org-a", NetworkProfile: "default", Pool: "default", Role: "primary", State: "active", Revision: 1, Created: placed, Updated: placed}
-	st.Workers.Versions["rel-1"] = WorkerVersion{ID: "rel-1", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1", ArchiveDigest: "archive-1", ModuleDigest: "module-1", Variables: map[string]any{"A": "1"}}
-	st.Workers.Versions["rel-unused"] = WorkerVersion{ID: "rel-unused", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1"}
-	st.Workers.Services["svc-deleted"] = WorkerService{Service: "svc-deleted", Organization: "org-a", Environments: map[string]WorkerEnvironment{}}
+	st.Workers.Placements[workerPlacementKey("svc-a", "default")] = WorkerPlacement{Worker: "svc-a", Organization: "org-a", NetworkProfile: "default", Pool: "default", Role: "primary", State: "active", Revision: 1, Created: placed, Updated: placed}
+	st.Workers.Versions["rel-1"] = WorkerVersion{ID: "rel-1", Worker: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1", ArchiveDigest: "archive-1", ModuleDigest: "module-1", Variables: map[string]any{"A": "1"}}
+	st.Workers.Versions["rel-unused"] = WorkerVersion{ID: "rel-unused", Worker: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1"}
+	st.Workers.Workers["svc-deleted"] = Worker{Worker: "svc-deleted", Organization: "org-a", Environments: map[string]WorkerEnvironment{}}
 	_ = store.Update(context.Background(), PartitionAll, func(state *State) error { *state = *st; return nil })
 	return st, store
 }
@@ -120,7 +120,7 @@ func TestWorkerConfigDiffOrdering(t *testing.T) {
 			next.Routes[i].Version = "rel-2"
 		}
 	}
-	next.Versions["rel-2"] = WorkerVersion{ID: "rel-2", Service: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-2"}
+	next.Versions["rel-2"] = WorkerVersion{ID: "rel-2", Worker: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-2"}
 	ops = workerapp.DiffWorkerConfig(&first, next)
 	if len(ops) != 2 || ops[0].Type != "version_put" || ops[0].Version.ID != "rel-2" || ops[1].Type != "route_upsert" || ops[1].Host != prodHost {
 		t.Fatalf("unexpected migration ops: %+v", ops)

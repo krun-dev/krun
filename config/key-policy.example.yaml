@@ -1,10 +1,10 @@
 schema_version: 1
 statements:
   - effect: allow
-    actions: [service.read, service.version.read, build.start]
+    actions: [worker.read, worker.version.read, build.start]
     resource:
       organization_id: replace-org-id
-      kind: service
-      ids: [replace-service-id]
+      kind: worker
+      ids: [replace-worker-id]
     conditions:
       environments: [staging]

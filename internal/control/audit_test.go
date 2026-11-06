@@ -18,7 +18,7 @@ func seedAuditPages(t *testing.T, store *Store) {
 	err := store.Update(context.Background(), PartitionAll, func(st *State) error {
 		for i := 0; i < 237; i++ {
 			// Equal times deliberately exercise the ID tie breaker.
-			st.RecordAudit(Audit{ID: fmt.Sprintf("entry-%04d", i), Time: at.Add(time.Duration(i/3) * time.Second), Organization: "org-a", Actor: "admin", Action: "service.read", Resource: "svc-a", Allowed: true})
+			st.RecordAudit(Audit{ID: fmt.Sprintf("entry-%04d", i), Time: at.Add(time.Duration(i/3) * time.Second), Organization: "org-a", Actor: "admin", Action: "worker.read", Resource: "svc-a", Allowed: true})
 		}
 		st.RecordAudit(Audit{ID: "other-org", Time: at, Organization: "org-b", Resource: "svc-b"})
 		st.RecordAudit(Audit{ID: "old", Time: now().Add(-8 * 24 * time.Hour), Organization: "org-a"})

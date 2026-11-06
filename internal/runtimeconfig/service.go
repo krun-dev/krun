@@ -159,7 +159,7 @@ func (s *Service) AssetURL(ctx context.Context, version, name string, pool appco
 	if appconfig.RuntimePoolHasAccess(pool, "public") {
 		prefix = "pub"
 	}
-	key := workerapp.WorkerAssetObjectKey(prefix, assets.Version.Organization, assets.Version.Service, assets.Artifact.ArchiveDigest, name)
+	key := workerapp.WorkerAssetObjectKey(prefix, assets.Version.Organization, assets.Version.Worker, assets.Artifact.ArchiveDigest, name)
 	url, err := s.Controller.S3Runtime.PresignedGetObject(ctx, s.Config.S3Bucket, key, 15*time.Minute, nil)
 	if err != nil {
 		return AssetURL{}, domain.Problem(503, "ASSET_UNAVAILABLE", "Asset storage unavailable")

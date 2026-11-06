@@ -27,7 +27,7 @@ local-first 环境启动后，可以把示例发布到一个已有、未绑定�
 
 ```bash
 KRUN_VERIFY_ORG=org_xxx \
-KRUN_VERIFY_SERVICE=service_xxx \
+KRUN_VERIFY_WORKER=worker_xxx \
 npm --prefix examples/workers-fullstack run verify:local
 ```
 

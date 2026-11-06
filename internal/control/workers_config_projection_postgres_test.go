@@ -56,12 +56,12 @@ func TestPostgresWorkerConfigProjectionUsesCompactReadModel(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	seedPerformanceSites(t, store, 4)
-	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_worker_operations(operation_id,kind,org_id,service_id,env_name,state,steps,created_at) VALUES('broken','publish','tenant','site-000002','production','failed','{}'::jsonb,now())`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_worker_operations(operation_id,kind,org_id,worker_id,env_name,state,steps,created_at) VALUES('broken','publish','tenant','site-000002','production','failed','{}'::jsonb,now())`); err != nil {
 		t.Fatal(err)
 	}
 	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}})
 	projection, err := workerapp.LoadWorkerConfigProjection(ctx, store, []string{"site-000002"}, config)
-	if err != nil || len(projection.Routes) != 1 || projection.Routes[0].Service != "site-000002" {
+	if err != nil || len(projection.Routes) != 1 || projection.Routes[0].Worker != "site-000002" {
 		t.Fatalf("projection=%+v err=%v", projection, err)
 	}
 	// Prove the idle publisher does not read unrelated service data.
@@ -85,17 +85,17 @@ func TestPostgresDirtyQueueCoversProjectionChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	changes := []string{
-		`UPDATE krun_worker_environments SET enabled=false WHERE service_id='site-000002'`,
-		`UPDATE krun_worker_environments SET version_id='version-new' WHERE service_id='site-000002'`,
-		`INSERT INTO krun_worker_service_domains(service_id,domain_id) VALUES('site-000002','internal')`,
-		`UPDATE krun_worker_service_placements SET state='draining' WHERE service_id='site-000002'`,
+		`UPDATE krun_worker_environments SET enabled=false WHERE worker_id='site-000002'`,
+		`UPDATE krun_worker_environments SET version_id='version-new' WHERE worker_id='site-000002'`,
+		`INSERT INTO krun_worker_domains(worker_id,domain_id) VALUES('site-000002','internal')`,
+		`UPDATE krun_worker_placements SET state='draining' WHERE worker_id='site-000002'`,
 		`DELETE FROM krun_resources WHERE resource_id='site-000002'`,
 	}
 	for _, query := range changes {
 		if _, err := postgresTestPool(store).Exec(ctx, query); err != nil {
 			t.Fatal(err)
 		}
-		dirty, err := store.DirtyWorkerServices(ctx)
+		dirty, err := store.DirtyWorkers(ctx)
 		if err != nil || len(dirty) != 1 || dirty[0].ID != "site-000002" {
 			t.Fatalf("query=%s dirty=%+v err=%v", query, dirty, err)
 		}
@@ -103,10 +103,10 @@ func TestPostgresDirtyQueueCoversProjectionChanges(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := postgresTestPool(store).Exec(ctx, `UPDATE krun_worker_environments SET variables='{"A":"B"}'::jsonb WHERE service_id='site-000004'`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `UPDATE krun_worker_environments SET variables='{"A":"B"}'::jsonb WHERE worker_id='site-000004'`); err != nil {
 		t.Fatal(err)
 	}
-	if dirty, err := store.DirtyWorkerServices(ctx); err != nil || len(dirty) != 0 {
+	if dirty, err := store.DirtyWorkers(ctx); err != nil || len(dirty) != 0 {
 		t.Fatalf("unpublished variables affected runtime config: %+v %v", dirty, err)
 	}
 }

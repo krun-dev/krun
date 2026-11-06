@@ -27,7 +27,7 @@ func (s *Server) workerRepositoryConnect(st *State, p Principal, r *http.Request
 	if err != nil {
 		return nil, 0, err
 	}
-	if err = s.require(st, p, r, "service.list", target); err != nil {
+	if err = s.require(st, p, r, "worker.list", target); err != nil {
 		return nil, 0, err
 	}
 	url, err := s.repositoryApplication().StartConnection(r.Context(), st, p, target.ID, r.PathValue("provider"), digest(s.cookie(r, "browser")), r.Header.Get("X-Krun-Request-ID"))
@@ -91,7 +91,7 @@ func (s *Server) workerRepositoryDisconnect(st *State, p Principal, r *http.Requ
 	if err != nil {
 		return nil, 0, err
 	}
-	if err = s.require(st, p, r, "service.list", target); err != nil {
+	if err = s.require(st, p, r, "worker.list", target); err != nil {
 		return nil, 0, err
 	}
 	err = s.repositoryApplication().Disconnect(r.Context(), st, p, target.ID, r.PathValue("provider"), r.Header.Get("X-Krun-Request-ID"))

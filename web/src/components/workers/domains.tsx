@@ -19,11 +19,11 @@ import {
 } from "@/components/ui/dialog";
 import { workerURL } from "./shared";
 
-// ServiceDomains is the service-level routing configuration: which of the
-// platform's domains this service answers on. Every environment gets one host
-// per selected domain, so this is a property of the service, not of an
+// WorkerDomains is the worker-level routing configuration: which of the
+// platform's domains this worker answers on. Every environment gets one host
+// per selected domain, so this is a property of the worker, not of an
 // environment.
-export function ServiceDomains({
+export function WorkerDomains({
   base,
   domains,
   networkProfiles,
@@ -114,7 +114,7 @@ export function ServiceDomains({
         <Card className="py-0 shadow-none">
           <CardContent className="grid gap-4 p-5">
             <div>
-              <h3 className="font-medium">{t("服务网络")}</h3>
+              <h3 className="font-medium">{t("Worker网络")}</h3>
               <p className="mt-1 text-xs text-muted-foreground">
                 {t("选择这个 Worker 使用的网络策略。具体资源池和基础设施由平台管理。")}
               </p>
@@ -154,7 +154,7 @@ export function ServiceDomains({
             </div>
             {placementLocked ? (
               <p className="text-xs text-muted-foreground">
-                {t("首次发布后服务网络由平台固定；如需调整请联系平台管理员。")}
+                {t("首次发布后Worker网络由平台固定；如需调整请联系平台管理员。")}
               </p>
             ) : null}
           </CardContent>

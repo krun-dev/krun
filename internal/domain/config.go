@@ -9,7 +9,7 @@ import (
 // this stream.
 type WorkerConfigRoute struct {
 	Expires *time.Time `json:"expires_at,omitempty"`
-	Service string     `json:"service_id,omitempty"`
+	Worker  string     `json:"worker_id,omitempty"`
 	Host    string     `json:"host"`
 	Path    string     `json:"path,omitempty"`
 	Enabled bool       `json:"enabled"`
