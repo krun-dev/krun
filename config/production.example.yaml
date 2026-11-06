@@ -2,6 +2,9 @@
 # 所有实际地址、凭据、镜像仓库和网络范围由环境变量或密钥平台填充。
 listen: 0.0.0.0:8080
 internal_listen: 0.0.0.0:8081
+# 合并部署兼容开关：主端口把 /api/internal/workers/* 转发到本机 internal_listen。
+# 默认 false；开启后仍校验 pool 凭据，并且内部监听器仍需正常启动。
+merged_deployment: false
 public_url: ${KRUN_PUBLIC_URL:-https://krun.example.com}
 development: false
 static_dir: ""

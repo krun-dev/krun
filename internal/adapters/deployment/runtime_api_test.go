@@ -103,3 +103,41 @@ func TestRuntimeAPIURLRoutesAndPolicies(t *testing.T) {
 		})
 	}
 }
+
+func TestMergedDeploymentRoutesRuntimeAPIToMainService(t *testing.T) {
+	c := multiFixture(t)
+	c.MergedDeployment = true
+	c.Workers.RuntimeAPIURL = "https://runtime.example.com"
+	out := t.TempDir()
+	if err := Render(c, out); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(out, "resources.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list struct{ Items []map[string]any }
+	if err := json.Unmarshal(raw, &list); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range list.Items {
+		name := item["metadata"].(map[string]any)["name"]
+		if item["kind"] == "HTTPRoute" && name == "krun-runtime-api" {
+			spec := item["spec"].(map[string]any)
+			backend := spec["rules"].([]any)[0].(map[string]any)["backendRefs"].([]any)[0].(map[string]any)
+			if backend["name"] != "krun-control" || backend["port"] != float64(8080) {
+				t.Fatal("merged Runtime API did not use main service")
+			}
+			found = true
+		}
+		if item["kind"] == "NetworkPolicy" && name == "krun-control" {
+			if len(item["spec"].(map[string]any)["ingress"].([]any)) != 2 {
+				t.Fatal("merged mode unnecessarily exposed the internal listener to Gateway")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("runtime API route missing")
+	}
+}

@@ -136,7 +136,7 @@ func (r *renderer) networkPolicies() {
 		ingress([]any{podRole("krun-runtime"), podRole("krun-validator")}, integerPort(r.cfg.InternalListen)),
 	}
 	apiPort := r.runtimeAPIPort()
-	if apiPort != 0 {
+	if apiPort != 0 && !r.cfg.MergedDeployment {
 		controlIn = append(controlIn, ingress([]any{gatewayPeer(r.gateway)}, integerPort(r.cfg.InternalListen)))
 	}
 	r.policy("krun-control", map[string]string{"app": "krun-control"}, controlIn, controlOut)

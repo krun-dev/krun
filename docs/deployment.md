@@ -88,3 +88,23 @@ make check-secrets check-static-build
 
 只有输出包含 `publish_allowed=true` 且 `dist/console/` 中仅有静态产物时才上传。
 CI 还会运行 Go race 测试以及 builder/runtime 测试。
+
+## 合并部署兼容模式
+
+只暴露一个 HTTP 端口的发布平台可在主 YAML 中配置：
+
+```yaml
+listen: 0.0.0.0:8080
+internal_listen: 0.0.0.0:8081
+merged_deployment: true
+```
+
+默认 `false` 保持主端口与 Runtime API 入口分离。开启后，主端口仅将
+`/api/internal/workers` 及其子路径转发到本机内部监听器，不转发其他路径；
+通配绑定使用 loopback，指定本机地址时使用该绑定地址，不使用进程的 HTTP 代理。
+Authorization、X-Runtime-Pool、方法、请求体和查询参数保持原样，内部端口继续校验
+pool 凭据；匿名请求仍返回 403。内部监听不可用时返回 503，两个监听器仍都必须启动。
+
+`workers.runtime_api_url` 控制 workerd 回调地址；`merged_deployment` 控制主入口是否接收
+该回调。开启后，部署生成器将域名的 Runtime API 路由指向主 Service，已有平台可统一
+转发整个域名到主端口。此模式不拆分进程或改变后台任务认领机制。
