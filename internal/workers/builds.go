@@ -214,7 +214,15 @@ func (s *Service) WorkerBuildLogs(ctx context.Context, st *domain.State, p autho
 	if !ok {
 		private = domain.WorkerBuildPrivate{}
 	}
-	return map[string]any{"build_id": b.ID, "state": b.State, "log": private.Log}, Read, nil
+	expired := time.Since(b.Created) >= 7*24*time.Hour
+	if expired {
+		private.LogKey = ""
+	}
+	download, err := s.Controller.BuildLogURL(ctx, private.LogKey)
+	if err != nil {
+		return nil, Read, domain.Problem(503, "LOG_UNAVAILABLE", "Log storage unavailable")
+	}
+	return map[string]any{"build_id": b.ID, "state": b.State, "download_url": download, "expired": expired}, Read, nil
 
 }
 

@@ -67,6 +67,11 @@ func (w *Controller) CollectWorkerObjects(ctx context.Context) error {
 		return err
 	}
 	var failures []error
+	if err := w.RemoveWorkerObjects(ctx, "build-logs/", func(_ string, modified time.Time) bool {
+		return !modified.IsZero() && modified.Before(time.Now().UTC().Add(-7*24*time.Hour))
+	}); err != nil {
+		failures = append(failures, err)
+	}
 	for _, artifact := range artifacts {
 		if artifact.StorageLocation != w.Config.S3LocationID || artifact.Bucket != w.Config.S3Bucket {
 			blocked, blockErr := w.Service.Store.BlockGarbageArtifact(ctx, artifact.ID, w.Replica, artifact.UseRevision)

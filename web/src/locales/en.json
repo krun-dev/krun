@@ -420,6 +420,7 @@
   "未启用": "Disabled",
   "构建与发布": "Builds and versions",
   "构建代码，选择环境发布，并查看实际运行结果。": "Build code, publish to an environment, and inspect real runtime responses.",
+  "暂无构建日志。": "No build log available yet.",
   "构建尚未完成，日志将在完成后保存。": "Build is unfinished; logs are saved after completion.",
   "构建已提交。": "Build submitted.",
   "构建新版本": "Build new version",

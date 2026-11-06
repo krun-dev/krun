@@ -1,3 +1,4 @@
+import { readBuildLog } from "../lib/build-logs";
 import { PreviewBasePanel } from "./workers/preview-base";
 import { VersionsPanel } from "./workers/versions";
 import { useCallback, useEffect, useState } from "react";
@@ -517,8 +518,45 @@ function WorkerDetail({
   const [buildInfo, setBuildInfo] = useState<{
     build: Build;
     log: string;
+    pollSeconds: number | null;
     artifact?: unknown;
   } | null>(null);
+  const inspectedBuildID = buildInfo?.build.id;
+  const pollSeconds = buildInfo?.pollSeconds;
+  useEffect(() => {
+    if (!inspectedBuildID || !pollSeconds) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const result = await readBuildLog(
+          base + "/builds/" + inspectedBuildID + "/logs",
+          controller.signal,
+        );
+        const nextPoll = result.pollSeconds;
+        setBuildInfo((current) =>
+          current && current.build.id === inspectedBuildID
+            ? {
+                ...current,
+                log: result.log,
+                pollSeconds: nextPoll,
+                build: { ...current.build, state: result.state },
+              }
+            : current,
+        );
+        if (nextPoll) timer = setTimeout(poll, nextPoll * 1000);
+      } catch (e) {
+        if (!controller.signal.aborted) {
+          notify(errorMessage(e));
+        }
+      }
+    }
+    timer = setTimeout(poll, pollSeconds * 1000);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [base, inspectedBuildID, pollSeconds]);
   const [rollback, setRollback] = useState<{
     id: string;
     revision: number;
@@ -606,12 +644,12 @@ function WorkerDetail({
   async function inspectBuild(b: Build) {
     try {
       const [logs, artifact] = await Promise.all([
-        api<{ log: string }>(base + "/builds/" + b.id + "/logs"),
+        readBuildLog(base + "/builds/" + b.id + "/logs"),
         b.artifact_id
-          ? api(base + "/artifacts/" + b.artifact_id)
+          ? api(base + "/artifacts/" + b.artifact_id).catch(() => undefined)
           : Promise.resolve(undefined),
       ]);
-      setBuildInfo({ build: b, log: logs.log, artifact });
+      setBuildInfo({ build: b, log: logs.log, artifact, pollSeconds: logs.pollSeconds });
     } catch (e) {
       notify(errorMessage(e));
     }
@@ -1202,7 +1240,7 @@ function WorkerDetail({
             </pre>
           ) : null}
           <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-md bg-secondary p-4 text-xs">
-            {buildInfo?.log || t("构建尚未完成，日志将在完成后保存。")}
+            {buildInfo?.log || t("暂无构建日志。")}
           </pre>
           {buildInfo?.artifact ? (
             <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-md border p-4 text-xs">

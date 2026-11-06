@@ -53,10 +53,11 @@ type Controller struct {
 	routingChecked time.Time
 	objectGCAfter  map[string]string
 	// Local build executor state for builder_mode: local.
-	localMu     sync.Mutex
-	localBuilds map[string]*WorkerLocalBuild
-	localWG     sync.WaitGroup
-	lifecycle   context.Context
+	localMu      sync.Mutex
+	localBuilds  map[string]*WorkerLocalBuild
+	localWG      sync.WaitGroup
+	logPublished map[string]time.Time
+	lifecycle    context.Context
 	// replica identifies this process in claimed_by columns. It only needs to be
 	// unique among live replicas, not stable across restarts.
 	Replica string

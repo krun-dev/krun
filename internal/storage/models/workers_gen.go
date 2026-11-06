@@ -135,6 +135,7 @@ type BuildPrivate struct {
 	SourceKey        string          `bun:"source_key"`
 	Files            json.RawMessage `bun:"files,type:jsonb"`
 	Log              string          `bun:"log"`
+	LogKey           string          `bun:"log_key"`
 }
 
 type SourceUpload struct {

@@ -93,7 +93,7 @@ UPDATE krun_worker_environments SET version_id=$4, deployment_revision=deploymen
 | `krun_browsers` / `krun_login_states` / `krun_email_logins` / `krun_oauth_authorizations`、`krun_oauth_grants`、`krun_oauth_refresh_tokens` / `krun_repository_connect_states` / `krun_invitations` | 过期即删 |
 | `krun_audits` | 7 天 |
 | `krun_org_invitation_links` / `krun_org_invitation_redemptions` | 链接到期后 7 天一并清理，每批 1000 条；删除组织显式删除关联行；清理孤儿 redemption |
-| `krun_worker_builds` | 每服务最近 100 条终态；日志 7 天后清空 |
+| `krun_worker_builds` | 每服务最近 100 条终态；临时日志及对象键 7 天后清空；`build-logs/` 私有对象由后台清理器保留 7 天 |
 | `krun_worker_operations` | 终态保留 30 天 |
 | `krun_worker_artifacts` | 无 version 引用且超过 30 天 |
 | `krun_worker_idempotency` | 7 天 |

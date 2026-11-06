@@ -102,19 +102,19 @@ func (c *Client) clearCredentials() {
 	c.Profile.RefreshToken = ""
 	c.Profile.Expires = time.Time{}
 }
-func (c *Client) request(ctx context.Context, method, path string, input, output any, anonymous bool) error {
+func (c *Client) request(ctx context.Context, method, path string, input, output any, anonymous bool, headers ...func(http.Header)) error {
 	if !anonymous && c.Profile.RefreshToken != "" && !c.Profile.Expires.IsZero() && time.Until(c.Profile.Expires) < 30*time.Second {
 		if err := c.refreshOAuth(ctx); err != nil {
 			return err
 		}
 	}
-	err := c.requestOnce(ctx, method, path, input, output, anonymous)
+	err := c.requestOnce(ctx, method, path, input, output, anonymous, headers...)
 	var expired *responseError
 	if !anonymous && errors.As(err, &expired) && expired.Status == 401 && c.Profile.RefreshToken != "" {
 		if e := c.refreshOAuth(ctx); e != nil {
 			return e
 		}
-		return c.requestOnce(ctx, method, path, input, output, anonymous)
+		return c.requestOnce(ctx, method, path, input, output, anonymous, headers...)
 	}
 	return err
 }

@@ -52,6 +52,7 @@ type WorkerBuildPrivate struct {
 	SourceKey string
 	Files     map[string]string
 	Log       string
+	LogKey    string
 }
 
 type WorkerArtifact struct {

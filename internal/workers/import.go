@@ -43,7 +43,7 @@ func (w *Controller) ImportModules(ctx context.Context, ref ServiceRef, actor do
 	if err != nil {
 		return b, err
 	}
-	if err = w.Service.Store.FinishClaimedBuildWithArtifact(ctx, b.ID, owner, "succeeded", "", artifact, "Bundled module upload accepted"); err != nil {
+	if err = w.FinishBuildArtifact(ctx, b, owner, artifact, "Bundled module upload accepted"); err != nil {
 		return b, err
 	}
 	b.State = "succeeded"
