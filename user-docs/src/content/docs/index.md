@@ -69,4 +69,6 @@ krun login --endpoint {{KRUN_ORIGIN}} --device --browser=false
 
 ## 接下来
 
+从[示例总览](/docs/guides/worker-examples.html)选择一个项目，或直接查看 [R2 + Workers](/docs/guides/examples-r2-workers.html)、[Hono](/docs/guides/examples-hono.html)、[Astro](/docs/guides/examples-astro.html)和[静态页面](/docs/guides/examples-static-site.html)的部署指南。
+
 在控制台打开 Workers 或对象存储，探索你的组织有权使用的资源。运行 `krun help` 查看 CLI 支持的命令；使用 `krun api` 可以调用受授权的 `/api/v1/` 接口。CLI 主要用于身份、组织和权限管理；Worker 的构建与发布可在控制台完成。

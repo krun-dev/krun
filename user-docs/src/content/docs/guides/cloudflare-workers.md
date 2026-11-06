@@ -9,6 +9,8 @@ krun 支持使用 Cloudflare Wrangler 部署模块格式的 JavaScript 和 TypeS
 
 **仅兼容本文列出的 Wrangler 用法和[组件文档](/docs/guides/component-workers.html)列出的 API；很多 Cloudflare API 和产品不支持。**
 
+迁移已有项目时，先检查 [Wrangler 配置兼容范围](/docs/guides/wrangler-configuration.html)，确认配置文件、构建字段、binding 和环境配置是否适用于所选发布方式。
+
 ## 1. 准备账号
 
 准备 Node.js、npm、krun 控制台地址、组织 ID，以及有 Worker 发布权限的 krun API Key。可先通过 `krun org list` 查看组织 ID，并在控制台创建 API Key。
@@ -108,6 +110,8 @@ Worker 可以通过 `env.API_TOKEN` 读取该值。Secret 更新会基于当前�
 ## 使用仓库构建
 
 也可以在 krun 控制台的 Workers 页面创建 Worker、连接 Git 仓库，然后构建并发布。仓库需要包含 Wrangler 配置及一个 npm、pnpm、Yarn 或 Bun 锁文件。平台按仓库配置执行构建；构建成功后，在控制台选择产物和目标环境发布。
+
+可以从 [Worker 示例部署指南](/docs/guides/worker-examples.html) 开始，按照纯静态小站、Hono、Astro 和对象存储示例了解完整流程。纯静态示例仅声明 `assets`，无需编写 Worker 入口。
 
 Wrangler 配置的用法可参考 [Cloudflare 官方文档](https://developers.cloudflare.com/workers/wrangler/configuration/)；自定义构建命令可配置在 `build.command` 中，详见 [Custom builds](https://developers.cloudflare.com/workers/wrangler/custom-builds/)。
 

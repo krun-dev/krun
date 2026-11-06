@@ -51,7 +51,21 @@ export default defineConfig({
         },
         {
           label: "命令行工具",
-          items: ["guides/krun-cli", "guides/cloudflare-workers"],
+          items: [
+            "guides/krun-cli",
+            "guides/cloudflare-workers",
+            "guides/wrangler-configuration",
+          ],
+        },
+        {
+          label: "示例",
+          items: [
+            "guides/worker-examples",
+            "guides/examples-r2-workers",
+            "guides/examples-hono",
+            "guides/examples-astro",
+            "guides/examples-static-site",
+          ],
         },
       ],
       head: [{ tag: "script", attrs: { src: "/docs/docs-enhance.js", defer: true } }],
