@@ -225,29 +225,71 @@ func (s *Store) FailRepositoryConnectionRefresh(ctx context.Context, user, provi
 	return tag.RowsAffected() == 1, err
 }
 
-// connectedRepositoryProviders deliberately selects only provider IDs: the
-// provider-list endpoint must not materialize access tokens just to show a
-// boolean badge.
-func (s *Store) ConnectedRepositoryProviders(ctx context.Context, user string) (map[string]bool, error) {
-	out := map[string]bool{}
+// RepositoryConnectionStatuses projects only display state, never token values.
+func (s *Store) RepositoryConnectionStatuses(ctx context.Context, user string) (map[string]string, error) {
+	out := map[string]string{}
 	if s.pool == nil {
 		for _, connection := range s.memState().RepositoryConnections {
-			refreshable := connection.ExpiresAt.IsZero() || connection.ExpiresAt.After(now()) || connection.RefreshToken != ""
-			if connection.User == user && connection.AccessToken != "" && !connection.ReconnectRequired && refreshable {
-				out[connection.Provider] = true
+			if connection.User == user {
+				out[connection.Provider] = connection.Status(now())
 			}
 		}
 		return out, nil
 	}
-	var providers []string
-	err := s.orm.NewSelect().Model((*models.RepositoryConnection)(nil)).Column("provider_id").Where("user_id = ?", user).Where("access_token <> ''").Where("reconnect_required = false").Where("(expires_at IS NULL OR expires_at > now() OR refresh_token <> '')").Scan(ctx, &providers)
+	var rows []struct {
+		ProviderID string
+		Status     string
+	}
+	err := s.orm.NewSelect().Model((*models.RepositoryConnection)(nil)).
+		Column("provider_id").ColumnExpr(`CASE
+            WHEN access_token = '' OR reconnect_required THEN 'reconnect_required'
+            WHEN expires_at <= now() AND refresh_token = '' THEN 'reconnect_required'
+            WHEN expires_at <= now() THEN 'refresh_due'
+            ELSE 'connected' END AS status`).
+		Where("user_id = ?", user).Scan(ctx, &rows)
 	if err != nil {
 		return nil, err
 	}
-	for _, provider := range providers {
-		out[provider] = true
+	for _, row := range rows {
+		out[row.ProviderID] = row.Status
 	}
 	return out, nil
+}
+
+func (s *Store) ConnectedRepositoryProviders(ctx context.Context, user string) (map[string]bool, error) {
+	statuses, err := s.RepositoryConnectionStatuses(ctx, user)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(statuses))
+	for provider, status := range statuses {
+		out[provider] = status == "connected" || status == "refresh_due"
+	}
+	return out, nil
+}
+
+// Reject only the grant used by the failed request. A concurrent refresh,
+// disconnect or reconnect must not be overwritten.
+func (s *Store) RejectRepositoryConnection(ctx context.Context, grant domain.WorkerRepositoryConnection) error {
+	if s.pool == nil {
+		key := grant.User + "\x00" + grant.Provider
+		current, ok := s.memState().RepositoryConnections[key]
+		if ok && current.TokenRevision == grant.TokenRevision && current.AccessToken == grant.AccessToken && current.RefreshState != "refreshing" {
+			current.ReconnectRequired = true
+			current.AccessToken = ""
+			current.RefreshToken = ""
+			current.TokenRevision++
+			s.memState().RepositoryConnections[key] = current
+		}
+		return nil
+	}
+	_, err := s.orm.NewUpdate().Model((*models.RepositoryConnection)(nil)).
+		Set("reconnect_required = true").Set("access_token = ''").Set("refresh_token = ''").
+		Set("token_revision = token_revision + 1").
+		Where("user_id = ? AND provider_id = ?", grant.User, grant.Provider).
+		Where("token_revision = ? AND access_token = ? AND refresh_state <> 'refreshing'", grant.TokenRevision, grant.AccessToken).
+		Exec(ctx)
+	return err
 }
 
 func (s *Store) UpsertRepositoryConnectStateAudited(ctx context.Context, state string, pending domain.WorkerRepositoryConnectState, audits []domain.Audit) error {

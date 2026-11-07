@@ -5,6 +5,7 @@ export type Section =
   | "groups"
   | "roles"
   | "keys"
+  | "git-authorizations"
   | "check"
   | "audit"
   | "users"
@@ -36,6 +37,7 @@ export function canOpenSection(
   }
   const allowed = (action: string) => permissions.actions[action] === true;
   switch (section) {
+    case "git-authorizations":
     case "workers":
       return allowed("worker.list");
     case "buckets":

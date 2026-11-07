@@ -96,7 +96,7 @@ func (s *Service) CompleteConnection(ctx context.Context, in ConnectInput) (Conn
 		}
 		return failed(domain.Problem(400, "WORKER_REPOSITORY_OAUTH_DENIED", "Provider rejected the connection"))
 	}
-	connection := domain.WorkerRepositoryConnection{User: pending.User, Provider: pending.Provider, AccessToken: token.AccessToken, TokenType: token.TokenType, RefreshToken: token.RefreshToken, ExpiresAt: token.Expiry, ConnectedAt: time.Now().UTC(), RefreshState: "ready"}
+	connection := domain.WorkerRepositoryConnection{User: pending.User, Provider: authorizationKey(provider), AccessToken: token.AccessToken, TokenType: token.TokenType, RefreshToken: token.RefreshToken, ExpiresAt: token.Expiry, ConnectedAt: time.Now().UTC(), RefreshState: "ready"}
 	entry := AuditEntry(authorization.Principal{User: domain.User{ID: pending.User}, Kind: "session"}, in.RequestID, "workers.repository.connect", pending.Provider, pending.Organization, true)
 	if s.Store.Persistent() {
 		err = s.Store.UpsertRepositoryConnectionAudited(ctx, connection, []domain.Audit{entry})
@@ -112,14 +112,15 @@ func (s *Service) CompleteConnection(ctx context.Context, in ConnectInput) (Conn
 	return out, err
 }
 func (s *Service) Disconnect(ctx context.Context, st *domain.State, p authorization.Principal, organization, provider, requestID string) error {
-	if _, err := s.RepositoryProvider(provider, organization); err != nil {
+	configured, err := s.RepositoryProvider(provider, organization)
+	if err != nil {
 		return err
 	}
 	st.RecordAudit(AuditEntry(p, requestID, "workers.repository.disconnect", provider, organization, true))
 	if s.Store.Persistent() {
 		audits := append([]domain.Audit(nil), st.PendingAudits...)
 		st.PendingAudits = nil
-		return s.Store.DeleteRepositoryConnectionAudited(ctx, p.User.ID, provider, audits)
+		return s.Store.DeleteRepositoryConnectionAudited(ctx, p.User.ID, authorizationKey(configured), audits)
 	}
-	return s.Store.DeleteRepositoryConnection(ctx, p.User.ID, provider)
+	return s.Store.DeleteRepositoryConnection(ctx, p.User.ID, authorizationKey(configured))
 }

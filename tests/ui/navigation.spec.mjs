@@ -134,6 +134,7 @@ test("viewer deep links retain allowed pages and hide administration and Worker 
     "资源目录",
     "权限检查",
     "API 密钥",
+    "Git 仓库授权",
   ]);
   await expect(page.getByRole("button", { name: "创建 Worker", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "平台管理", exact: true })).toHaveCount(0);

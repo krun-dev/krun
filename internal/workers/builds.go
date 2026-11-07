@@ -90,8 +90,14 @@ func (s *Service) WorkerBuildCreate(ctx context.Context, st *domain.State, p aut
 		if in.Ref != "" {
 			source.Ref = in.Ref
 		}
-		if _, err := s.Repository.ValidateRepositorySource(&source, t.Organization); err != nil {
+		provider, err := s.Repository.ValidateRepositorySource(&source, t.Organization)
+		if err != nil {
 			return nil, Read, err
+		}
+		if source.AuthorizationUser != "" {
+			if err := s.Repository.CheckBindingAuthorization(ctx, provider, source.AuthorizationUser); err != nil {
+				return nil, Read, err
+			}
 		}
 		repository = &domain.WorkerBuildRepository{WorkerRepositorySource: source}
 	case "", "upload":

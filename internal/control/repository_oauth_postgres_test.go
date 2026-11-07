@@ -72,4 +72,19 @@ func TestPostgresRepositoryRefreshClaimHasSingleWinner(t *testing.T) {
 	if err != nil || !ok || current.AccessToken != "new-access" || current.RefreshToken != "new-refresh" || current.TokenRevision != 3 || current.RefreshState != "ready" {
 		t.Fatalf("rotated grant was not committed atomically: revision=%d state=%q ok=%v err=%v", current.TokenRevision, current.RefreshState, ok, err)
 	}
+	if err := store.RejectRepositoryConnection(ctx, connection); err != nil {
+		t.Fatal(err)
+	}
+	statuses, err := store.RepositoryConnectionStatuses(ctx, current.User)
+	if err != nil || statuses[current.Provider] != "connected" {
+		t.Fatalf("stale rejection changed refreshed grant: %v %v", statuses, err)
+	}
+	if err := store.RejectRepositoryConnection(ctx, current); err != nil {
+		t.Fatal(err)
+	}
+	statuses, err = store.RepositoryConnectionStatuses(ctx, current.User)
+	if err != nil || statuses[current.Provider] != "reconnect_required" {
+		t.Fatalf("rejected grant status: %v %v", statuses, err)
+	}
+
 }

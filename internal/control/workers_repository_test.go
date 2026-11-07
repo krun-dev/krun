@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -332,6 +333,15 @@ func TestRepositoryConnectionLifecycle(t *testing.T) {
 	if strings.Contains(r.Body.String(), "tok") {
 		t.Fatal("access token leaked in provider listing")
 	}
+	s.Config.Workers.RepositoryProviders[0].GitHubAppSlug = "test-app"
+	r = request(s, "GET", "/api/v1/orgs/org-a/workers/repository-providers", "krun_cli_admin", "")
+	if err := json.Unmarshal(r.Body.Bytes(), &out); err != nil || r.Code != 200 || len(out.Items) != 1 {
+		t.Fatalf("GitHub App provider: %d %s", r.Code, r.Body)
+	}
+	if out.Items[0].Connected || out.Items[0].AuthorizationStatus != "not_connected" || out.Items[0].InstallURL == "" {
+		t.Fatal("GitHub App must not inherit the broad OAuth App grant")
+	}
+
 }
 
 func TestRepositoryOAuthGETCallbackStoresConnectionAndReturnsToWorkspace(t *testing.T) {
@@ -369,7 +379,7 @@ func TestRepositoryOAuthGETCallbackStoresConnectionAndReturnsToWorkspace(t *test
 		t.Fatalf("callback status=%d body=%s", res.Code, res.Body.String())
 	}
 	location, err := url.Parse(res.Header().Get("Location"))
-	if err != nil || location.Query().Get("page") != "workers" || location.Query().Get("workspace") != "org-a" || location.Query().Get("repository_status") != "connected" {
+	if err != nil || location.Query().Get("page") != "workers" || location.Query().Get("workspace") != "org-a" || location.Query().Get("repository_status") != "connected" || location.Query().Get("repository_resume") != digest(state) {
 		t.Fatalf("callback location=%q err=%v", res.Header().Get("Location"), err)
 	}
 	connection, ok, err := store.RepositoryConnection(context.Background(), "admin", "gitlab")
@@ -554,7 +564,7 @@ func TestRepositoryCredentialRejectedRefreshRequiresReconnect(t *testing.T) {
 		t.Fatal(err)
 	}
 	token, err := s.repositoryCredential(context.Background(), provider, "admin")
-	if err == nil || token != "" || !strings.Contains(err.Error(), "reconnect") {
+	if err == nil || token != "" || !strings.Contains(err.Error(), "WORKER_REPOSITORY_RECONNECT_REQUIRED") {
 		t.Fatalf("rejected grant token=%q err=%v", token, err)
 	}
 	var connected map[string]bool
@@ -566,5 +576,105 @@ func TestRepositoryCredentialRejectedRefreshRequiresReconnect(t *testing.T) {
 	}
 	if connected["gitlab"] {
 		t.Fatal("provider still shown as connected after invalid_grant")
+	}
+}
+
+func TestRepositoryCatalogUsesOwnGrantAndRefreshesOnlyOnDemand(t *testing.T) {
+	var refreshes, lists atomic.Int64
+	var revoked atomic.Bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/oauth/token":
+			refreshes.Add(1)
+			_, _ = io.WriteString(w, `{"access_token":"renewed","token_type":"bearer","refresh_token":"next","expires_in":7200}`)
+		case "/api/v4/projects":
+			lists.Add(1)
+			if r.Header.Get("Authorization") != "Bearer renewed" || r.URL.Query().Get("membership") != "true" {
+				t.Error("catalog did not use the renewed personal grant")
+			}
+			if revoked.Load() {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = io.WriteString(w, `[{"path_with_namespace":"team/worker","visibility":"private"},{"path_with_namespace":"team/excluded","visibility":"private"}]`)
+		default:
+			t.Errorf("unexpected upstream endpoint %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer upstream.Close()
+
+	s, store, base := workerTestServer(t)
+	s.Config.Workers.RepositoryProviders = []appconfig.WorkerRepositoryProvider{{
+		ID: "gitlab", Type: "gitlab", Enabled: true, BaseURL: upstream.URL,
+		ClientID: "catalog-client", ClientSecret: "catalog-secret", Token: "shared-fixture",
+		AllowedRepositories: []string{"team/worker"},
+	}}
+	ctx := context.Background()
+	if err := store.Update(ctx, PartitionWorkers, func(*State) error {
+		return store.UpsertRepositoryConnection(ctx, WorkerRepositoryConnection{
+			User: "admin", Provider: "gitlab", AccessToken: "expired",
+			RefreshToken: "old-refresh", ExpiresAt: now().Add(-time.Minute),
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	providers := "/api/v1/orgs/org-a/workers/repository-providers"
+	catalog := "/api/v1/orgs/org-a/worker-repositories/gitlab/repositories"
+	status := request(s, "GET", providers, "krun_cli_admin", "")
+	if status.Code != 200 || !strings.Contains(status.Body.String(), "refresh_due") || refreshes.Load() != 0 {
+		t.Fatalf("status should report expiry without contacting the provider: %d %s", status.Code, status.Body)
+	}
+	other := request(s, "POST", catalog, "krun_cli_viewer", `{"page":1}`)
+	if other.Code != 409 || lists.Load() != 0 || refreshes.Load() != 0 {
+		t.Fatalf("another member could use the grant: %d %s", other.Code, other.Body)
+	}
+	list := request(s, "POST", catalog, "krun_cli_admin", `{"page":1}`)
+	if list.Code != 200 || !strings.Contains(list.Body.String(), "team/worker") ||
+		strings.Contains(list.Body.String(), "team/excluded") || refreshes.Load() != 1 || lists.Load() != 1 {
+		t.Fatalf("renewed catalog: %d %s", list.Code, list.Body)
+	}
+
+	bind := request(s, "PUT", base+"/repository", "krun_cli_admin", `{
+		"source":{"provider_id":"gitlab","repository":"team/worker","root_directory":".","authorization_user":"viewer"},
+		"use_authorization":true,"expected_revision":0
+	}`)
+	if bind.Code != 200 || !strings.Contains(bind.Body.String(), `"authorization_user":"admin"`) {
+		t.Fatalf("binding must use the authenticated member's grant: %d %s", bind.Code, bind.Body)
+	}
+
+	if err := store.Update(ctx, PartitionIAM, func(st *State) error {
+		member := st.Assignments["viewer"]
+		member.Role = "member"
+		st.Assignments["viewer"] = member
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sharedBuild := request(s, "POST", base+"/builds", "krun_cli_viewer", `{
+        "source_type":"repository","repository_revision":1,"environment":"fix-demo","idempotency_key":"shared-build"
+    }`)
+	var queued WorkerBuild
+	if err := json.Unmarshal(sharedBuild.Body.Bytes(), &queued); err != nil || sharedBuild.Code != 202 ||
+		queued.Repository == nil || queued.Repository.AuthorizationUser != "admin" {
+		t.Fatalf("member build must retain the binding owner's grant: %d %s", sharedBuild.Code, sharedBuild.Body)
+	}
+
+	revoked.Store(true)
+	list = request(s, "POST", catalog, "krun_cli_admin", `{"page":1}`)
+	if list.Code != 409 || !strings.Contains(list.Body.String(), "WORKER_REPOSITORY_RECONNECT_REQUIRED") {
+		t.Fatalf("revoked grant: %d %s", list.Code, list.Body)
+	}
+	status = request(s, "GET", base+"/repository", "krun_cli_viewer", "")
+	if status.Code != 200 || !strings.Contains(status.Body.String(), "reconnect_required") {
+		t.Fatalf("bound authorization status: %d %s", status.Code, status.Body)
+	}
+	build := request(s, "POST", base+"/builds", "krun_cli_admin", `{
+		"source_type":"repository","repository_revision":1,"environment":"production","idempotency_key":"revoked"
+	}`)
+	if build.Code != 409 || !strings.Contains(build.Body.String(), "WORKER_REPOSITORY_RECONNECT_REQUIRED") {
+		t.Fatalf("revoked binding must not fall back to shared credentials: %d %s", build.Code, build.Body)
 	}
 }

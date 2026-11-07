@@ -264,5 +264,9 @@
   "Select code_version_id or build_id": "请选择当前代码版本或首次部署使用的构建。",
   "Current code version changed": "当前代码版本已改变，请重新核对。",
   "Wait for the current deployment to synchronize": "请等待当前部署同步完成。",
-  "Saved configuration is no longer available": "已保存的配置不再可用，请重新加载配置历史。"
+  "Saved configuration is no longer available": "已保存的配置不再可用，请重新加载配置历史。",
+  "Repository authorization expired or was removed; reconnect the account": "仓库授权已过期或已移除，请重新授权或重新绑定仓库。",
+  "Repository listing was denied; check the Git provider permissions or reconnect": "无法读取仓库列表，请检查 Git 平台权限或重新授权。",
+  "Repository listing is temporarily unavailable; retry": "仓库列表暂时不可用，请重试。",
+  "Repository authorization changed; retry the request": "仓库授权已变更，请重试。"
 }

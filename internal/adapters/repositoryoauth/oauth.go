@@ -25,9 +25,12 @@ func (s *Client) RepositoryOAuthConfig(p appconfig.WorkerRepositoryProvider) *oa
 	if p.Type == "github" {
 		endpoint = oauth2.Endpoint{AuthURL: "https://github.com/login/oauth/authorize", TokenURL: "https://github.com/login/oauth/access_token"}
 	}
-	scopes := []string{"read_repository"}
+	scopes := []string{"read_repository", "read_api"}
 	if p.Type == "github" {
 		scopes = []string{"repo"}
+		if p.GitHubAppSlug != "" {
+			scopes = nil
+		}
 	}
 	return &oauth2.Config{ClientID: p.ClientID, ClientSecret: p.ClientSecret, Endpoint: endpoint, Scopes: scopes, RedirectURL: s.Config.PublicURL + "/api/v1/workers/repository/" + p.ID + "/callback"}
 }
@@ -41,7 +44,11 @@ func (s *Client) RepositoryOAuthContext(parent context.Context, provider appconf
 	if provider.Type == "github" {
 		tokenURL = "https://github.com/login/oauth/access_token"
 	}
-	endpoint, err := url.Parse(tokenURL)
+	return s.repositoryHTTPContext(parent, provider, tokenURL, RepositoryOAuthResponseLimitBytes)
+}
+
+func (s *Client) repositoryHTTPContext(parent context.Context, provider appconfig.WorkerRepositoryProvider, upstream string, limit int64) (context.Context, context.CancelFunc, error) {
+	endpoint, err := url.Parse(upstream)
 	if err != nil || endpoint.Hostname() == "" {
 		return nil, nil, errors.New("invalid repository OAuth token endpoint")
 	}
@@ -89,7 +96,7 @@ func (s *Client) RepositoryOAuthContext(parent context.Context, provider appconf
 		},
 	}
 	client := &http.Client{
-		Transport: RepositoryOAuthResponseLimit{base: transport},
+		Transport: RepositoryOAuthResponseLimit{base: transport, limit: limit},
 		Timeout:   15 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return identityprovider.ErrUpstreamRedirect
@@ -106,13 +113,14 @@ func (s *Client) RepositoryOAuthContext(parent context.Context, provider appconf
 const RepositoryOAuthResponseLimitBytes = 64 << 10
 
 type RepositoryOAuthResponseLimit struct {
-	base http.RoundTripper
+	base  http.RoundTripper
+	limit int64
 }
 
 func (t RepositoryOAuthResponseLimit) RoundTrip(request *http.Request) (*http.Response, error) {
 	response, err := t.base.RoundTrip(request)
 	if err == nil && response.Body != nil {
-		response.Body = &RepositoryOAuthBody{body: response.Body, remaining: RepositoryOAuthResponseLimitBytes}
+		response.Body = &RepositoryOAuthBody{body: response.Body, remaining: t.limit}
 	}
 	return response, err
 }
