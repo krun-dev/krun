@@ -124,6 +124,7 @@ test("all literal translation keys are cataloged", async () => {
     "../components/workers/variables.tsx",
     "../components/workers/secrets.tsx",
     "../components/workers-repository.tsx",
+    "../components/repository-authorizations.tsx",
     "../components/language.tsx",
     "../components/ui/dialog.tsx",
     "./api.ts",

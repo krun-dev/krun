@@ -23,6 +23,19 @@ type WorkerRepositoryConnection struct {
 	ReconnectRequired bool      `json:"-"`
 }
 
+func (c WorkerRepositoryConnection) Status(at time.Time) string {
+	if c.ReconnectRequired || c.AccessToken == "" {
+		return "reconnect_required"
+	}
+	if !c.ExpiresAt.IsZero() && !c.ExpiresAt.After(at) {
+		if c.RefreshToken == "" {
+			return "reconnect_required"
+		}
+		return "refresh_due"
+	}
+	return "connected"
+}
+
 // WorkerRepositoryConnectState is a pending OAuth connect handshake.
 type WorkerRepositoryConnectState struct {
 	User         string    `json:"user"`
@@ -33,10 +46,11 @@ type WorkerRepositoryConnectState struct {
 }
 
 type WorkerRepositorySource struct {
-	ProviderID    string `json:"provider_id"`
-	Repository    string `json:"repository"`
-	Ref           string `json:"ref"`
-	RootDirectory string `json:"root_directory"`
+	ProviderID        string `json:"provider_id"`
+	Repository        string `json:"repository"`
+	Ref               string `json:"ref"`
+	RootDirectory     string `json:"root_directory"`
+	AuthorizationUser string `json:"authorization_user,omitempty"`
 }
 
 type WorkerBuildRepository struct {

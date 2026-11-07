@@ -1,7 +1,13 @@
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 import { GitBranch, LoaderCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api, APIError } from "@/lib/api";
+import { connectRepository, repositoryEndpoint } from "@/lib/repository-authorization";
+import {
+  repositoryAuthorizationError,
+  repositoryStatusLabel,
+  useRepositoryProviders,
+} from "@/lib/repository-providers";
 import { Field, SelectField } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,31 +32,6 @@ export function errorMessage(e: unknown): string {
   return String(e);
 }
 
-function useProviders(organizationBase: string, open: boolean) {
-  const [providers, setProviders] = useState<RepositoryProvider[] | null>(null);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    if (!open) return;
-    const controller = new AbortController();
-    setProviders(null);
-    setError("");
-    void api<{ items: RepositoryProvider[] }>(
-      organizationBase + "/workers/repository-providers",
-      "GET",
-      undefined,
-      controller.signal,
-    )
-      .then((p) => {
-        if (!controller.signal.aborted) setProviders(p.items);
-      })
-      .catch((e) => {
-        if (!controller.signal.aborted) setError(errorMessage(e));
-      });
-    return () => controller.abort();
-  }, [open, organizationBase]);
-  return { providers, setProviders, error, setError };
-}
-
 // ---------------------------------------------------------------------------
 // Settings panel: bind the repository once (provider, repo and project
 // directory) and manage the per-user connection. Wrangler owns build inputs.
@@ -59,6 +40,7 @@ export function RepositorySettings({
   base,
   organizationBase,
   bound,
+  authorizationStatus,
   revision,
   onSaved,
   notify,
@@ -66,52 +48,73 @@ export function RepositorySettings({
   base: string;
   organizationBase: string;
   bound: RepositorySource | null;
+  authorizationStatus?: RepositoryBinding["authorization_status"];
   revision: number;
   onSaved: (binding: RepositoryBinding) => void;
   notify: (message: string) => void;
 }) {
   const { t } = useTranslation();
-  const { providers, setProviders, error, setError } = useProviders(organizationBase, true);
+  const { providers, setProviders, error, setError } = useRepositoryProviders(organizationBase);
+  const [picker, setPicker] = useState(false);
+  const [useAuthorization, setUseAuthorization] = useState(false);
+  const [resumeProvider, setResumeProvider] = useState(
+    () => new URLSearchParams(location.search).get("repository_pick") || "",
+  );
   const [source, setSource] = useState<RepositorySource>(bound || emptySource);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     setSource(bound || emptySource);
+    setUseAuthorization(false);
   }, [bound]);
   const provider = providers?.find((p) => p.id === source.provider_id);
+  useEffect(() => {
+    if (!resumeProvider || !providers) return;
+    const url = new URL(location.href);
+    url.searchParams.delete("repository_pick");
+    history.replaceState(null, "", url);
+    setResumeProvider("");
+    if (providers.some((item) => item.id === resumeProvider && item.connected)) {
+      setSource((previous) => ({ ...previous, provider_id: resumeProvider }));
+      setUseAuthorization(false);
+      setPicker(true);
+    }
+  }, [resumeProvider, providers]);
+
   function update(key: keyof RepositorySource, value: string) {
+    if (key === "provider_id" || key === "repository") {
+      setUseAuthorization(false);
+    }
     setSource((previous) => ({ ...previous, [key]: value }));
   }
-  async function toggleConnection() {
+
+  const markReconnectRequired = useCallback(
+    (id: string) => {
+      setProviders(
+        (previous) =>
+          previous?.map((item) =>
+            item.id === id
+              ? { ...item, connected: false, authorization_status: "reconnect_required" }
+              : item,
+          ) ?? null,
+      );
+    },
+    [setProviders],
+  );
+
+  async function authorize() {
     if (!provider) return;
     setBusy(true);
+    setError("");
     try {
-      if (provider.connected) {
-        await api(
-          organizationBase +
-            "/worker-repositories/" +
-            encodeURIComponent(provider.id) +
-            "/disconnect",
-          "DELETE",
-        );
-        setProviders((previous) =>
-          previous
-            ? previous.map((p) => (p.id === provider.id ? { ...p, connected: false } : p))
-            : previous,
-        );
-        notify(t("已断开仓库账号连接。"));
-      } else {
-        const { authorization_url } = await api<{ authorization_url: string }>(
-          organizationBase + "/worker-repositories/" + encodeURIComponent(provider.id) + "/connect",
-          "POST",
-        );
-        window.location.assign(authorization_url);
-      }
-    } catch (e) {
-      setError(errorMessage(e));
+      await connectRepository(organizationBase, provider.id);
+    } catch (error) {
+      setPicker(false);
+      setError(errorMessage(error));
     } finally {
       setBusy(false);
     }
   }
+
   async function save() {
     setBusy(true);
     setError("");
@@ -119,6 +122,7 @@ export function RepositorySettings({
       const result = await api<RepositoryBinding>(base + "/repository", "PUT", {
         source,
         expected_revision: revision,
+        use_authorization: useAuthorization,
       });
       onSaved(result);
       notify(t("仓库配置已保存。"));
@@ -149,6 +153,14 @@ export function RepositorySettings({
     return <p className="text-sm text-muted-foreground">{t("管理员尚未启用代码仓库来源。")}</p>;
   return (
     <div className="grid gap-4">
+      {authorizationStatus === "reconnect_required" && (
+        <p
+          role="status"
+          className="text-sm text-destructive"
+        >
+          {t("当前绑定的仓库授权已失效。请由授权人重新授权，或使用你的授权重新绑定仓库。")}
+        </p>
+      )}
       {error ? (
         <p
           role="alert"
@@ -208,28 +220,83 @@ export function RepositorySettings({
               />
             </Field>
           </div>
-          {provider ? (
-            <div className="flex items-center justify-between gap-3 rounded-md border bg-background/50 px-3 py-2.5">
+          {provider && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-background/50 px-3 py-2.5">
               <p className="text-xs text-muted-foreground">
-                {provider.connected
-                  ? t("已连接你的账号，私有仓库按你的权限可见。")
-                  : provider.oauth
-                    ? t("连接你的账号后可构建你有权限的私有仓库。")
-                    : t("公开仓库匿名拉取；私有仓库需管理员配置共享凭据。")}
+                {provider.oauth
+                  ? t(
+                      repositoryStatusLabel[provider.authorization_status] ??
+                        (provider.connected ? "已授权" : "未授权"),
+                    )
+                  : t("公开仓库匿名拉取；私有仓库需管理员配置共享凭据。")}
               </p>
-              {provider.oauth ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => void toggleConnection()}
-                >
-                  {provider.connected ? t("断开") : t("连接账号")}
-                </Button>
-              ) : null}
+              <div className="flex flex-wrap gap-2">
+                {provider.install_url && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    asChild
+                  >
+                    <a
+                      href={provider.install_url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {t("安装或管理 GitHub App")}
+                    </a>
+                  </Button>
+                )}
+                {provider.oauth &&
+                  (provider.connected ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => setPicker(true)}
+                    >
+                      {t("选择已授权仓库")}
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => void authorize()}
+                    >
+                      {t(
+                        provider.authorization_status === "reconnect_required"
+                          ? "重新授权"
+                          : "连接账号",
+                      )}
+                    </Button>
+                  ))}
+              </div>
             </div>
-          ) : null}
+          )}
+          {useAuthorization && (
+            <p className="text-xs text-muted-foreground">
+              {t("保存后，有构建权限的成员可以通过此授权构建该 Worker 的绑定仓库。")}
+            </p>
+          )}
+          {picker && provider && (
+            <RepositoryPicker
+              key={provider.id}
+              organizationBase={organizationBase}
+              provider={provider}
+              close={() => setPicker(false)}
+              authorize={() => void authorize()}
+              busy={busy}
+              onExpired={markReconnectRequired}
+              select={(repository) => {
+                setSource((previous) => ({ ...previous, repository }));
+                setUseAuthorization(true);
+                setPicker(false);
+              }}
+            />
+          )}
           <div className="grid gap-4 sm:grid-cols-2">
             <Field
               label={t("项目目录")}
@@ -278,6 +345,166 @@ export function RepositorySettings({
         </>
       ) : null}
     </div>
+  );
+}
+
+type AuthorizedRepository = { name: string; private: boolean };
+
+function RepositoryPicker({
+  organizationBase,
+  provider,
+  close,
+  authorize,
+  busy,
+  onExpired,
+  select,
+}: {
+  organizationBase: string;
+  provider: RepositoryProvider;
+  close: () => void;
+  authorize: () => void;
+  busy: boolean;
+  onExpired: (provider: string) => void;
+  select: (repository: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [items, setItems] = useState<AuthorizedRepository[]>([]);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [reconnect, setReconnect] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setError("");
+    void api<{ items: AuthorizedRepository[]; has_more: boolean }>(
+      repositoryEndpoint(organizationBase, provider.id) + "/repositories",
+      "POST",
+      { page },
+      controller.signal,
+    )
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        setItems((current) => (page === 1 ? result.items : [...current, ...result.items]));
+        setHasMore(result.has_more);
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        if (repositoryAuthorizationError(error)) {
+          onExpired(provider.id);
+          setReconnect(true);
+        } else if (error instanceof APIError && error.code === "WORKER_REPOSITORY_LIST_DENIED") {
+          setReconnect(true);
+        }
+        setError(errorMessage(error));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [organizationBase, provider.id, page, attempt, onExpired]);
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !busy) close();
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("选择已授权仓库")}</DialogTitle>
+          <DialogDescription>
+            {provider.name} · {t("仅显示当前账号可用的仓库。")}
+          </DialogDescription>
+        </DialogHeader>
+        {error && (
+          <p
+            role="alert"
+            className="text-sm text-destructive"
+          >
+            {error}
+          </p>
+        )}
+        <div className="grid max-h-[45vh] gap-1 overflow-y-auto">
+          {items.map((item) => (
+            <Button
+              key={item.name}
+              type="button"
+              variant="ghost"
+              className="justify-between"
+              onClick={() => select(item.name)}
+            >
+              <span className="truncate">{item.name}</span>
+              <span className="text-xs text-muted-foreground">
+                {t(item.private ? "私有" : "公开")}
+              </span>
+            </Button>
+          ))}
+        </div>
+        {!items.length && !loading && !error && (
+          <p className="text-sm text-muted-foreground">
+            {t("没有可用仓库，请检查 Git 平台授权范围。")}
+          </p>
+        )}
+        {loading && (
+          <p
+            role="status"
+            className="text-sm"
+          >
+            {t("加载中…")}
+          </p>
+        )}
+        <div className="flex flex-wrap justify-end gap-2">
+          {provider.install_url && !loading && (
+            <Button
+              type="button"
+              variant="outline"
+              asChild
+            >
+              <a
+                href={provider.install_url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {t("安装或管理 GitHub App")}
+              </a>
+            </Button>
+          )}
+          {reconnect ? (
+            <Button
+              type="button"
+              disabled={busy}
+              onClick={authorize}
+            >
+              {t("重新授权")}
+            </Button>
+          ) : error ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setAttempt((n) => n + 1)}
+            >
+              {t("重试")}
+            </Button>
+          ) : (
+            hasMore && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={loading}
+                onClick={() => setPage((n) => n + 1)}
+              >
+                {t("加载更多")}
+              </Button>
+            )
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	objectstore "github.com/krun-dev/krun/internal/adapters/objectstore"
@@ -24,10 +25,17 @@ func (w *Controller) PrepareRepositoryBuild(ctx context.Context, build domain.Wo
 		return build, private, storage.ErrBuildClaimLost
 	}
 	build.State = "fetching"
-	// Resolve the fetch credential once: the connecting user's OAuth grant,
-	// falling back to the provider's shared PAT.
-	fetchToken, err := w.Service.Repository.RepositoryCredential(ctx, provider, private.Actor.User)
+	var fetchToken string
+	if source.AuthorizationUser != "" {
+		fetchToken, err = w.Service.Repository.BoundRepositoryCredential(ctx, provider, source.AuthorizationUser)
+	} else {
+		fetchToken, err = w.Service.Repository.RepositoryCredential(ctx, provider, private.Actor.User)
+	}
 	if err != nil {
+		var problem *domain.APIError
+		if errors.As(err, &problem) {
+			err = errors.New(problem.Message)
+		}
 		return build, private, err
 	}
 	if source.Commit == "" {

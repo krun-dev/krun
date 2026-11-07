@@ -12,27 +12,67 @@ import (
 	storage "github.com/krun-dev/krun/internal/storage"
 )
 
-// repositoryCredential picks the token for a clone: the connecting user's OAuth
-// grant first, the provider's shared PAT as a fallback.
+// RepositoryCredential is used by ordinary bindings, including public and
+// administrator-configured repository sources.
 func (s *Service) RepositoryCredential(ctx context.Context, provider appconfig.WorkerRepositoryProvider, userID string) (string, error) {
 	if userID == "" {
 		return provider.Token, nil
 	}
-	connection, ok, err := s.ReadRepositoryConnection(ctx, userID, provider.ID)
+	grant, ok, err := s.userRepositoryGrant(ctx, provider, userID)
 	if err != nil {
 		return "", err
 	}
 	if !ok {
 		return provider.Token, nil
 	}
+	return grant.AccessToken, nil
+}
 
-	if connection.ReconnectRequired || connection.AccessToken == "" {
-		return "", fmt.Errorf("Repository connection expired; reconnect %s", provider.Name)
+// BoundRepositoryCredential cannot switch accounts or fall back to the
+// administrator token after a user explicitly binds their own authorization.
+func (s *Service) BoundRepositoryCredential(ctx context.Context, provider appconfig.WorkerRepositoryProvider, userID string) (string, error) {
+	if provider.ClientID == "" {
+		return "", reconnectRequired()
 	}
-	if connection.ExpiresAt.IsZero() || connection.ExpiresAt.After(time.Now().UTC().Add(time.Minute)) {
-		return connection.AccessToken, nil
+	grant, ok, err := s.userRepositoryGrant(ctx, provider, userID)
+	if err != nil {
+		return "", err
 	}
-	return s.RefreshRepositoryCredential(ctx, provider, connection)
+	if !ok {
+		return "", reconnectRequired()
+	}
+	return grant.AccessToken, nil
+}
+
+func reconnectRequired() error {
+	return domain.Problem(409, "WORKER_REPOSITORY_RECONNECT_REQUIRED", "Repository authorization expired or was removed; reconnect the account")
+}
+
+func (s *Service) userRepositoryGrant(ctx context.Context, provider appconfig.WorkerRepositoryProvider, userID string) (domain.WorkerRepositoryConnection, bool, error) {
+	grant, ok, err := s.ReadRepositoryConnection(ctx, userID, authorizationKey(provider))
+	if err != nil || !ok {
+		return grant, ok, err
+	}
+	if grant.ReconnectRequired || grant.AccessToken == "" {
+		return grant, true, reconnectRequired()
+	}
+	now := time.Now().UTC()
+	if grant.ExpiresAt.IsZero() || grant.ExpiresAt.After(now.Add(time.Minute)) ||
+		(grant.RefreshToken == "" && grant.ExpiresAt.After(now)) {
+		return grant, true, nil
+	}
+	token, err := s.RefreshRepositoryCredential(ctx, provider, grant)
+	if err != nil {
+		return grant, true, err
+	}
+	grant, ok, err = s.ReadRepositoryConnection(ctx, userID, authorizationKey(provider))
+	if err != nil {
+		return grant, ok, err
+	}
+	if !ok || grant.AccessToken != token || grant.ReconnectRequired {
+		return grant, true, domain.Problem(409, "WORKER_REPOSITORY_AUTHORIZATION_CHANGED", "Repository authorization changed; retry the request")
+	}
+	return grant, true, nil
 }
 
 func (s *Service) ReadRepositoryConnection(ctx context.Context, user, provider string) (domain.WorkerRepositoryConnection, bool, error) {
@@ -111,7 +151,7 @@ func (s *Service) RefreshRepositoryCredential(ctx context.Context, provider appc
 	waitUntil := time.Now().UTC().Add(10 * time.Second)
 	for {
 		if connection.ReconnectRequired || connection.AccessToken == "" {
-			return "", fmt.Errorf("Repository connection expired; reconnect %s", provider.Name)
+			return "", reconnectRequired()
 		}
 		if connection.ExpiresAt.IsZero() || connection.ExpiresAt.After(time.Now().UTC().Add(time.Minute)) {
 			return connection.AccessToken, nil
@@ -147,7 +187,7 @@ func (s *Service) RefreshClaimedRepositoryCredential(ctx context.Context, provid
 		if err := s.SettleRepositoryCredentialRefresh(claimed, claimRevision, true); err != nil {
 			return "", err
 		}
-		return "", fmt.Errorf("Repository connection expired; reconnect %s", provider.Name)
+		return "", reconnectRequired()
 	}
 	if provider.ClientID == "" {
 		_ = s.SettleRepositoryCredentialRefresh(claimed, claimRevision, true)
@@ -160,13 +200,13 @@ func (s *Service) RefreshClaimedRepositoryCredential(ctx context.Context, provid
 			return "", versionErr
 		}
 		if permanent {
-			return "", fmt.Errorf("Repository connection expired; reconnect %s", provider.Name)
+			return "", reconnectRequired()
 		}
 		return "", fmt.Errorf("Repository authorization refresh is temporarily unavailable; retry the build")
 	}
 	if refreshed.AccessToken == "" {
 		_ = s.SettleRepositoryCredentialRefresh(claimed, claimRevision, true)
-		return "", fmt.Errorf("Repository connection expired; reconnect %s", provider.Name)
+		return "", reconnectRequired()
 	}
 	updated := claimed
 	updated.AccessToken = refreshed.AccessToken
