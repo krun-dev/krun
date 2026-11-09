@@ -46,6 +46,8 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/network-profiles", protect(false, s.workerNetworkProfiles))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/repository-providers", protect(false, s.workerRepositoryProviders))
 	m.HandleFunc("POST /api/v1/orgs/{org}/worker-repositories/{provider}/connect", protect(true, s.workerRepositoryConnect))
+	m.HandleFunc("POST /api/v1/orgs/{org}/worker-repositories/{provider}/authorize", protect(true, s.workerRepositoryCLILaunch))
+	m.HandleFunc("GET /api/v1/orgs/{org}/worker-repositories/{provider}/authorize", protect(true, s.workerRepositoryBrowserOpen))
 	m.HandleFunc("POST /api/v1/orgs/{org}/worker-repositories/{provider}/repositories", protect(true, s.workerRepositoryCatalog))
 	m.HandleFunc("DELETE /api/v1/orgs/{org}/worker-repositories/{provider}/disconnect", protect(true, s.workerRepositoryDisconnect))
 	m.HandleFunc("GET /api/v1/workers/repository/{provider}/callback", s.workerRepositoryCallback)

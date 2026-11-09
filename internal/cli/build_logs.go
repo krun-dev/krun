@@ -13,21 +13,18 @@ import (
 )
 
 func (c *Client) buildLogs(ctx context.Context, args []string) error {
-	if len(args) == 0 || args[0] != "logs" {
-		return errors.New("use build logs --org ID --worker ID --build ID [--follow]")
-	}
 	f := flags("build logs", c.Err)
-	org := f.String("org", "", "Organization ID")
-	worker := f.String("worker", "", "Worker ID")
+	target := c.workerFlags(f)
 	build := f.String("build", "", "Build ID")
 	follow := f.Bool("follow", false, "Follow until the build finishes")
-	if err := f.Parse(args[1:]); err != nil {
+	base, err := target.path(f, args)
+	if err != nil {
 		return err
 	}
-	if *org == "" || *worker == "" || *build == "" || f.NArg() != 0 {
-		return errors.New("--org, --worker and --build required")
+	if err := requireID(*build, "build"); err != nil {
+		return err
 	}
-	path := "/api/v1/orgs/" + url.PathEscape(*org) + "/workers/" + url.PathEscape(*worker) + "/builds/" + url.PathEscape(*build) + "/logs"
+	path := base + "/builds/" + url.PathEscape(*build) + "/logs"
 	previous := ""
 	for {
 		pollSeconds := 0

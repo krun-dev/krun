@@ -173,7 +173,7 @@
   "unexpected positional arguments": "包含不支持的位置参数",
   "unique provider IDs and source IDs required": "提供商 ID 和身份来源 ID 必须唯一",
   "unknown action or incompatible resource kind": "动作未知或与资源类型不兼容",
-  "unknown command %q; use krun help": "未知命令 %q；请运行 krun help",
+  "unknown command %q; use krun --help": "未知命令 %q；请运行 krun --help",
   "unknown command %q; use serve, bootstrap or invite": "未知命令 %q；请使用 serve、bootstrap 或 invite",
   "unknown environment": "未知环境",
   "unknown groups operation": "未知的用户组操作",

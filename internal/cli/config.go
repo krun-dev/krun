@@ -2,61 +2,106 @@ package cli
 
 import (
 	"errors"
+	"flag"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
 const configHelp = `Usage:
   krun config set endpoint URL
-  krun config get endpoint
+  krun config set org ORG
+  krun config get endpoint|org
+  krun config unset org
   krun config show
 
-The endpoint is the console origin, without /api. Changing it clears saved credentials.
---config FILE selects the profile to edit.
+Changing the endpoint clears saved credentials and the default organization.
+--profile NAME selects a named profile; an explicit YAML path also works.
 `
 
-func (c *Client) configure(args []string) error {
-	if len(args) == 0 || args[0] == "--help" || args[0] == "help" {
-		fmt.Fprint(c.Out, configHelp)
-		return nil
-	}
-	if len(args) == 1 && args[0] == "show" {
-		// Reload the saved profile so temporary flags and environment overrides
-		// never appear as persistent configuration or get written back to disk.
-		profile, err := loadProfile(c.Path)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(c.Out, "Config: %s\nEndpoint: %s\nCredentials saved: %t\n", c.Path, profile.Endpoint, profile.Token != "" || profile.RefreshToken != "")
-		return nil
-	}
-	if len(args) < 2 || args[1] != "endpoint" {
-		return errors.New("use config set endpoint URL, config get endpoint or config show")
-	}
-	profile, err := loadProfile(c.Path)
-	if err != nil {
+var organizationID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+
+func (c *Client) orgFlag(f *flag.FlagSet) *string {
+	return f.String("org", c.Profile.Organization, "Organization short name or ID (overrides the profile default)")
+}
+
+func (c *Client) configure(args []string, saved Profile) error {
+	if len(args) == 0 || args[0] == "--help" {
+		_, err := fmt.Fprint(c.Out, configHelp)
 		return err
 	}
-	switch {
-	case args[0] == "get" && len(args) == 2:
-		fmt.Fprintln(c.Out, profile.Endpoint)
-		return nil
-	case args[0] == "set" && len(args) == 3:
-		endpoint := strings.TrimRight(args[2], "/")
-		if err := validateEndpoint(endpoint); err != nil {
-			return err
+
+	// Config commands use the saved profile, independently of endpoint and token overrides.
+	const usageError = "use krun config --help to see valid commands"
+	var result string
+	switch args[0] {
+	case "show":
+		if len(args) != 1 {
+			return errors.New(usageError)
 		}
-		c.Profile = profile
-		if strings.TrimRight(profile.Endpoint, "/") != endpoint {
-			c.clearCredentials()
+		_, err := fmt.Fprintf(c.Out, "Config: %s\nEndpoint: %s\nOrganization: %s\nCredentials saved: %t\n",
+			c.Path, saved.Endpoint, saved.Organization, saved.Token != "" || saved.RefreshToken != "")
+		return err
+	case "get":
+		if len(args) != 2 {
+			return errors.New(usageError)
 		}
-		c.Profile.Endpoint = endpoint
-		if err := c.save(); err != nil {
-			return err
+		switch args[1] {
+		case "endpoint":
+			result = saved.Endpoint
+		case "org":
+			result = saved.Organization
+		default:
+			return errors.New(usageError)
 		}
-		fmt.Fprintln(c.Out, "Endpoint saved:", endpoint)
-		return nil
+		_, err := fmt.Fprintln(c.Out, result)
+		return err
+	case "set":
+		if len(args) != 3 {
+			return errors.New(usageError)
+		}
+		switch args[1] {
+		case "endpoint":
+			endpoint := strings.TrimRight(args[2], "/")
+			if err := validateEndpoint(endpoint); err != nil {
+				return err
+			}
+			previous := saved.Endpoint
+			if previous == "" {
+				previous = defaultEndpoint
+			}
+			if strings.TrimRight(previous, "/") != endpoint {
+				saved.clearCredentials()
+				saved.Organization = ""
+			}
+			saved.Endpoint = endpoint
+			result = "Endpoint saved: " + endpoint
+		case "org":
+			if !organizationID.MatchString(args[2]) {
+				return errors.New("use an organization short name or ID from krun org list")
+			}
+			saved.Organization = args[2]
+			result = "Organization saved: " + saved.Organization
+		default:
+			return errors.New(usageError)
+		}
+	case "unset":
+		if len(args) != 2 || args[1] != "org" {
+			return errors.New(usageError)
+		}
+		if saved.Organization == "" {
+			return nil
+		}
+		saved.Organization = ""
+		result = "Default organization cleared."
 	default:
-		return errors.New("use config set endpoint URL or config get endpoint")
+		return errors.New(usageError)
 	}
+
+	c.Profile = saved
+	if err := c.save(); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintln(c.Out, result)
+	return err
 }

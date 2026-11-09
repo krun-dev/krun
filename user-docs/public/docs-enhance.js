@@ -12,6 +12,9 @@ if (article) {
       origin,
     );
   }
+  for (const button of article.querySelectorAll(".expressive-code button[data-code]")) {
+    button.dataset.code = button.dataset.code.replaceAll("{{KRUN_ORIGIN}}", origin);
+  }
 }
 if (copy && source) {
   copy.hidden = false;

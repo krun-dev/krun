@@ -20,7 +20,7 @@ func TestConfigureEndpoint(t *testing.T) {
 	run := func(args ...string) error {
 		t.Helper()
 		out.Reset()
-		args = append(args, "--config", path)
+		args = append(args, "--profile", path)
 		return Run(context.Background(), args, strings.NewReader(""), &out, &out)
 	}
 	if err := run("config", "set", "endpoint", "https://console.example.com/"); err != nil {
@@ -38,6 +38,7 @@ func TestConfigureEndpoint(t *testing.T) {
 		t.Fatalf("get endpoint: %q, %v", out.String(), err)
 	}
 
+	profile.Organization = "org_saved"
 	profile.Token = "saved-access-secret"
 	profile.RefreshToken = "saved-refresh-secret"
 	profile.Expires = time.Now().Add(time.Hour).UTC().Truncate(time.Second)
@@ -53,6 +54,7 @@ func TestConfigureEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "Endpoint: https://console.example.com") ||
+		!strings.Contains(out.String(), "Organization: org_saved") ||
 		!strings.Contains(out.String(), "Credentials saved: true") || strings.Contains(out.String(), "secret") {
 		t.Fatalf("config show leaked credentials or showed an override: %q", out.String())
 	}
@@ -71,8 +73,8 @@ func TestConfigureEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	changed, err := loadProfile(path)
-	if err != nil || changed.Endpoint != "https://new.example.com" || changed.Token != "" || changed.RefreshToken != "" || !changed.Expires.IsZero() {
-		t.Fatal("switching endpoint did not clear credentials", err)
+	if err != nil || changed.Endpoint != "https://new.example.com" || changed.Organization != "" || changed.Token != "" || changed.RefreshToken != "" || !changed.Expires.IsZero() {
+		t.Fatal("switching endpoint did not clear credentials and organization", err)
 	}
 }
 
@@ -95,9 +97,11 @@ func TestConfigureRejectsInvalidInputWithoutWriting(t *testing.T) {
 		{"config", "set", "token", "secret"},
 		{"config", "set", "server", "https://console.example.com"},
 		{"config", "get", "endpoint", "extra"},
+		{"config", "set", "org", "../other"},
+		{"config", "set", "org", ""},
 	} {
 		var out bytes.Buffer
-		if err := Run(context.Background(), append(args, "--config", path), strings.NewReader(""), &out, &out); err == nil {
+		if err := Run(context.Background(), append(args, "--profile", path), strings.NewReader(""), &out, &out); err == nil {
 			t.Fatalf("accepted invalid arguments: %v", args)
 		}
 		after, err := os.ReadFile(path)
@@ -110,7 +114,7 @@ func TestConfigureRejectsInvalidInputWithoutWriting(t *testing.T) {
 func TestCLIRejectsUnknownEndpointNames(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "profile.yaml")
 	var out bytes.Buffer
-	if err := Run(context.Background(), []string{"login", "--server", "https://console.example.com", "--config", path}, strings.NewReader(""), &out, &out); err == nil {
+	if err := Run(context.Background(), []string{"login", "--server", "https://console.example.com", "--profile", path}, strings.NewReader(""), &out, &out); err == nil {
 		t.Fatal("unknown endpoint flag was accepted")
 	}
 	if err := os.WriteFile(path, []byte("server: https://console.example.com\n"), 0600); err != nil {
@@ -150,7 +154,7 @@ func TestEndpointPrecedenceDoesNotWriteProfile(t *testing.T) {
 			}
 			t.Setenv("KRUN_TOKEN", "")
 			t.Setenv("KRUN_ENDPOINT", "")
-			args := []string{"whoami", "--config", path}
+			args := []string{"whoami", "--profile", path}
 			switch source {
 			case "environment":
 				t.Setenv("KRUN_ENDPOINT", server.URL)
@@ -167,5 +171,88 @@ func TestEndpointPrecedenceDoesNotWriteProfile(t *testing.T) {
 				t.Fatal("temporary endpoint selection changed the profile", err)
 			}
 		})
+	}
+}
+
+func TestDefaultOrganizationScope(t *testing.T) {
+	paths := make(chan string, 1)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths <- r.URL.Path
+		_, _ = w.Write([]byte("{}"))
+	})
+	savedEndpoint := httptest.NewServer(handler)
+	defer savedEndpoint.Close()
+	otherEndpoint := httptest.NewServer(handler)
+	defer otherEndpoint.Close()
+	t.Setenv("KRUN_ENDPOINT", "")
+	t.Setenv("KRUN_TOKEN", "")
+	path := filepath.Join(t.TempDir(), "profile.yaml")
+	run := func(args ...string) (string, error) {
+		t.Helper()
+		var out bytes.Buffer
+		err := Run(t.Context(), append(args, "--profile", path), strings.NewReader(""), &out, &out)
+		return out.String(), err
+	}
+	for _, args := range [][]string{
+		{"config", "set", "endpoint", savedEndpoint.URL},
+		{"config", "set", "org", "org-default"},
+	} {
+		if _, err := run(args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, err := run("config", "get", "org"); err != nil || out != "org-default\n" {
+		t.Fatalf("get org = %q, %v", out, err)
+	}
+	for _, test := range []struct {
+		args []string
+		path string
+	}{
+		{[]string{"workers", "list"}, "/api/v1/orgs/org-default/workers"},
+		{[]string{"workers", "repository", "providers"}, "/api/v1/orgs/org-default/workers/repository-providers"},
+		{[]string{"workers", "list", "--org", "org-explicit"}, "/api/v1/orgs/org-explicit/workers"},
+		{[]string{"build", "logs", "--worker", "worker", "--build", "build"}, "/api/v1/orgs/org-default/workers/worker/builds/build/logs"},
+		{[]string{"r2", "bucket", "list"}, "/api/v1/orgs/org-default/buckets"},
+		{[]string{"members", "list"}, "/api/v1/orgs/org-default/members"},
+		{[]string{"groups", "list", "--system"}, "/api/v1/system/groups"},
+		{[]string{"audit"}, "/api/v1/orgs/org-default/audit"},
+		{[]string{"audit", "--system"}, "/api/v1/system/audit"},
+		{[]string{"org", "list"}, "/api/v1/orgs"},
+		{[]string{"workers", "list", "--endpoint", otherEndpoint.URL, "--org", "org-other"}, "/api/v1/orgs/org-other/workers"},
+	} {
+		if _, err := run(test.args...); err != nil {
+			t.Fatalf("%v: %v", test.args, err)
+		}
+		select {
+		case got := <-paths:
+			if got != test.path {
+				t.Fatalf("%v requested %q, want %q", test.args, got, test.path)
+			}
+		default:
+			t.Fatalf("%v made no HTTP request", test.args)
+		}
+	}
+	for _, args := range [][]string{
+		{"workers", "list", "--endpoint", otherEndpoint.URL},
+		{"audit", "--system", "--org", "org-explicit"},
+		{"audit", "--org="},
+	} {
+		if _, err := run(args...); err == nil {
+			t.Fatalf("%v should fail before making a request", args)
+		}
+		select {
+		case got := <-paths:
+			t.Fatalf("%v unexpectedly requested %q", args, got)
+		default:
+		}
+	}
+	if out, err := run("config", "get", "org"); err != nil || out != "org-default\n" {
+		t.Fatalf("overrides changed the saved org: %q, %v", out, err)
+	}
+	if _, err := run("config", "unset", "org"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("workers", "list"); err == nil {
+		t.Fatal("workers list accepted an unset organization")
 	}
 }

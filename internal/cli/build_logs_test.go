@@ -23,7 +23,7 @@ func TestBuildLogsFollowUsesHeaderRatherThanBuildState(t *testing.T) {
 	defer server.Close()
 	var out bytes.Buffer
 	c := Client{Profile: Profile{Endpoint: server.URL}, Out: &out, Err: &out}
-	if err := c.buildLogs(context.Background(), []string{"logs", "--org", "o", "--worker", "s", "--build", "b", "--follow"}); err != nil {
+	if err := c.buildLogs(context.Background(), []string{"--org", "o", "--worker", "s", "--build", "b", "--follow"}); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 {
@@ -41,7 +41,7 @@ func TestBuildLogsFollowCanBeCancelledWhileWaiting(t *testing.T) {
 	defer cancel()
 	var out bytes.Buffer
 	c := Client{Profile: Profile{Endpoint: server.URL}, Out: &out, Err: &out}
-	if err := c.buildLogs(ctx, []string{"logs", "--org", "o", "--worker", "s", "--build", "b", "--follow"}); !errors.Is(err, context.DeadlineExceeded) {
+	if err := c.buildLogs(ctx, []string{"--org", "o", "--worker", "s", "--build", "b", "--follow"}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal(err)
 	}
 }

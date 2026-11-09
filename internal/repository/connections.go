@@ -32,18 +32,72 @@ func (s *Service) StartConnection(ctx context.Context, st *domain.State, p autho
 	}
 	state := securetoken.Random()
 	pending := domain.WorkerRepositoryConnectState{User: p.User.ID, Provider: provider.ID, Organization: organization, Browser: browser, Expires: time.Now().UTC().Add(10 * time.Minute)}
-	st.RecordAudit(AuditEntry(p, requestID, "workers.repository.connect.start", provider.ID, organization, true))
-	if s.Store.Persistent() {
-		audits := append([]domain.Audit(nil), st.PendingAudits...)
-		st.PendingAudits = nil
-		err = s.Store.UpsertRepositoryConnectStateAudited(ctx, state, pending, audits)
-	} else {
-		err = s.Store.UpsertRepositoryConnectState(ctx, state, pending)
-	}
-	if err != nil {
+	if err := s.saveConnectState(ctx, st, p, state, pending, requestID); err != nil {
 		return "", err
 	}
 	return conf.AuthCodeURL(state), nil
+}
+
+func (s *Service) saveConnectState(ctx context.Context, st *domain.State, p authorization.Principal, state string, pending domain.WorkerRepositoryConnectState, requestID string) error {
+	st.RecordAudit(AuditEntry(p, requestID, "workers.repository.connect.start", pending.Provider, pending.Organization, true))
+	if s.Store.Persistent() {
+		audits := append([]domain.Audit(nil), st.PendingAudits...)
+		st.PendingAudits = nil
+		return s.Store.UpsertRepositoryConnectStateAudited(ctx, state, pending, audits)
+	}
+	return s.Store.UpsertRepositoryConnectState(ctx, state, pending)
+}
+
+func browserLaunchKey(ticket string) string {
+	return "cli-launch:" + securetoken.Digest(ticket)
+}
+
+func browserLaunchBinding(user, organization, provider string) string {
+	return "cli-user:" + securetoken.Digest(user+"\x00"+organization+"\x00"+provider)
+}
+
+// IssueBrowserLaunch hands a CLI request to the same krun user in their browser.
+func (s *Service) IssueBrowserLaunch(ctx context.Context, st *domain.State, p authorization.Principal, organization, providerID, requestID string) (string, error) {
+	provider, err := s.RepositoryProvider(providerID, organization)
+	if err != nil {
+		return "", err
+	}
+	if (&repooauth.Client{Config: s.Config}).RepositoryOAuthConfig(provider) == nil {
+		return "", domain.Problem(409, "WORKER_REPOSITORY_OAUTH_DISABLED", "This provider is not configured for user connections")
+	}
+	ticket := securetoken.Random()
+	pending := domain.WorkerRepositoryConnectState{
+		User: p.User.ID, Provider: provider.ID, Organization: organization,
+		Browser: browserLaunchBinding(p.User.ID, organization, provider.ID),
+		Expires: time.Now().UTC().Add(5 * time.Minute),
+	}
+	return ticket, s.saveConnectState(ctx, st, p, browserLaunchKey(ticket), pending, requestID)
+}
+
+func (s *Service) OpenBrowserLaunch(ctx context.Context, p authorization.Principal, organization, provider, ticket, browser, requestID string) (string, error) {
+	if ticket == "" || len(ticket) > 128 {
+		return "", domain.Problem(403, "WORKER_REPOSITORY_STATE_INVALID", "Connect request expired; try again")
+	}
+	key := browserLaunchKey(ticket)
+	binding := browserLaunchBinding(p.User.ID, organization, provider)
+	var redirect string
+	open := func(st *domain.State) error {
+		_, ok, err := s.Store.ConsumeRepositoryConnectState(ctx, key, binding)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return domain.Problem(403, "WORKER_REPOSITORY_STATE_INVALID", "Connect request expired or belongs to a different krun account")
+		}
+		redirect, err = s.StartConnection(ctx, st, p, organization, provider, browser, requestID)
+		return err
+	}
+	if s.Store.Persistent() {
+		err := open(&domain.State{})
+		return redirect, err
+	}
+	err := s.Store.Update(ctx, storage.PartitionWorkers, open)
+	return redirect, err
 }
 
 type ConnectInput struct {

@@ -432,6 +432,11 @@ func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, b
 		if r.URL.Path == "/api/auth/logout" {
 			s.setCookie(w, "session", "", -1)
 		}
+		if redirect, ok := out.(repositoryBrowserRedirect); ok {
+			s.setCookie(w, "browser", redirect.browserToken, 900)
+			http.Redirect(w, r, redirect.url, http.StatusSeeOther)
+			return
+		}
 		if redirect, ok := out.(objectRedirect); ok {
 			w.Header().Set("Cache-Control", "private, no-store")
 			w.Header().Set("Referrer-Policy", "no-referrer")
