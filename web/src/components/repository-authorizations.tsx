@@ -111,21 +111,6 @@ export default function RepositoryAuthorizations({
                   <p className="mt-1 text-xs text-muted-foreground">{provider.base_url}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {provider.install_url && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      asChild
-                    >
-                      <a
-                        href={provider.install_url}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {t("安装或管理 GitHub App")}
-                      </a>
-                    </Button>
-                  )}
                   {provider.connected && (
                     <Button
                       size="sm"
@@ -142,7 +127,13 @@ export default function RepositoryAuthorizations({
                     disabled={Boolean(busy)}
                     onClick={() => void act(provider, "connect")}
                   >
-                    {t(status === "not_connected" ? "连接账号" : "重新授权")}
+                    {t(
+                      status !== "not_connected"
+                        ? "重新授权"
+                        : provider.type === "github"
+                          ? "连接 GitHub"
+                          : "连接账号",
+                    )}
                   </Button>
                   {status !== "not_connected" && (
                     <Button
