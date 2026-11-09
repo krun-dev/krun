@@ -1,7 +1,7 @@
 import { t } from "@/lib/i18n";
 import { useTranslation } from "react-i18next";
 import { useEffect, useState, type ReactNode } from "react";
-import { ArrowUpRight, LoaderCircle, Moon, ShieldCheck, Sun, Terminal, X } from "lucide-react";
+import { ArrowUpRight, LoaderCircle, Moon, ShieldCheck, Sun, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -9,20 +9,18 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 export function Logo({ dark = false }: { dark?: boolean }) {
-  useTranslation();
   return (
-    <div className="flex items-center gap-2.5">
-      <div
-        className={cn(
-          "flex size-8 items-center justify-center rounded-md border border-primary/20 bg-primary/10 text-primary",
-          dark && "bg-card/10",
-        )}
-      >
-        <Terminal size={18} />
-      </div>
-      <span className="text-xl font-semibold tracking-tight">
-        RUN<span className="text-primary">.</span>
-      </span>
+    <div
+      className="flex items-center gap-2.5"
+      data-theme={dark ? "dark" : "light"}
+    >
+      <img
+        src="/brand/krun-symbol-yellow.png"
+        alt=""
+        aria-hidden="true"
+        className="size-8 shrink-0 object-contain"
+      />
+      <span className="text-xl font-semibold tracking-tight">krun</span>
     </div>
   );
 }
