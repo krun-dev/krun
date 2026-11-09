@@ -54,10 +54,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS krun_users_identity ON krun_users (source, sub
 
 CREATE TABLE IF NOT EXISTS krun_organizations (
 	org_id     text PRIMARY KEY,
+ short_name text NOT NULL DEFAULT '',
 	name       text NOT NULL,
 	revision   integer NOT NULL DEFAULT 1,
 	created_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS krun_organizations_short_name ON krun_organizations(short_name) WHERE short_name <> '';
 
 CREATE TABLE IF NOT EXISTS krun_org_sources (
 	org_id text NOT NULL,
@@ -103,12 +106,15 @@ CREATE INDEX IF NOT EXISTS krun_assignments_subject ON krun_assignments (subject
 
 CREATE TABLE IF NOT EXISTS krun_resources (
 	resource_id text PRIMARY KEY,
+ locator text NOT NULL DEFAULT '',
 	kind        text NOT NULL,
 	org_id      text NOT NULL,
 	name        text NOT NULL,
 	revision    integer NOT NULL DEFAULT 1,
 	created_at  timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS krun_resources_locator ON krun_resources(org_id, kind, locator) WHERE locator <> '';
 
 CREATE INDEX IF NOT EXISTS krun_resources_org_kind_cursor ON krun_resources (org_id, kind, resource_id COLLATE "C");
 
@@ -679,17 +685,6 @@ CREATE TABLE IF NOT EXISTS worker_runtime_acks (
 );
 
 CREATE OR REPLACE TRIGGER deployment_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_deployments FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
-
--- Cloudflare protocol identities are stable and independent of display names.
-CREATE TABLE IF NOT EXISTS krun_worker_scripts (
- org_id text NOT NULL,
- script_name text NOT NULL,
- worker_id text NOT NULL UNIQUE,
- workers_dev boolean NOT NULL DEFAULT true,
- previews_enabled boolean NOT NULL DEFAULT true,
- created_at timestamptz NOT NULL DEFAULT now(),
- PRIMARY KEY(org_id,script_name)
-);
 
 CREATE TABLE IF NOT EXISTS krun_oauth_authorizations (
  auth_hash text PRIMARY KEY,

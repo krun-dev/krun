@@ -12,9 +12,9 @@ func writeOrganizations(ctx context.Context, tx ormTransaction, before, after ma
 		if existed && previous.Name == organization.Name && previous.Revision == organization.Revision && sameStrings(previous.Sources, organization.Sources) {
 			continue
 		}
-		row := models.Organization{OrgID: id, Name: organization.Name, Revision: organization.Revision}
+		row := models.Organization{OrgID: id, ShortName: organization.ShortName, Name: organization.Name, Revision: organization.Revision}
 		if !existed {
-			if err := ormCAS(ctx, "Organization changed", tx.orm.NewInsert().Model(&row).Column("org_id", "name", "revision").On("CONFLICT (org_id) DO NOTHING").Returning("NULL")); err != nil {
+			if err := insertLocator(ctx, "Organization short name already exists", tx.orm.NewInsert().Model(&row).Column("org_id", "short_name", "name", "revision").On("CONFLICT DO NOTHING").Returning("NULL")); err != nil {
 				return err
 			}
 		} else if err := ormCAS(ctx, "Organization changed", tx.orm.NewUpdate().Model(&row).Column("name", "revision").WherePK().Where("revision = ?", previous.Revision)); err != nil {

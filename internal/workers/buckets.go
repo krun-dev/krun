@@ -38,11 +38,24 @@ func (s *Service) BucketGet(st *domain.State, p authorization.Principal, organiz
 	if err := s.require(st, p, "organization.read", target); err != nil {
 		return domain.WorkerBucket{}, err
 	}
-	bucket, exists := st.Workers.Buckets[id]
-	if !exists || bucket.Organization != organization {
+	bucket, exists := findBucket(st, organization, id, false)
+	if !exists {
 		return domain.WorkerBucket{}, domain.NotFound()
 	}
 	return bucket, nil
+}
+
+// findBucket checks the organization for both native references and Cloudflare names.
+func findBucket(st *domain.State, org, ref string, nameOnly bool) (domain.WorkerBucket, bool) {
+	if bucket, ok := st.Workers.Buckets[ref]; !nameOnly && ok && bucket.Organization == org {
+		return bucket, true
+	}
+	for _, bucket := range st.Workers.Buckets {
+		if bucket.Organization == org && bucket.Name == ref {
+			return bucket, true
+		}
+	}
+	return domain.WorkerBucket{}, false
 }
 
 func (s *Service) BucketCreate(st *domain.State, p authorization.Principal, organization, name string) (domain.WorkerBucket, error) {
@@ -94,8 +107,8 @@ func (s *Service) BucketSetEnabled(st *domain.State, p authorization.Principal, 
 	if err := s.require(st, p, "storage.bucket.update", target); err != nil {
 		return domain.WorkerBucket{}, err
 	}
-	bucket, exists := st.Workers.Buckets[id]
-	if !exists || bucket.Organization != organization {
+	bucket, exists := findBucket(st, organization, id, false)
+	if !exists {
 		return domain.WorkerBucket{}, domain.NotFound()
 	}
 	if bucket.Revision != revision {
@@ -103,8 +116,8 @@ func (s *Service) BucketSetEnabled(st *domain.State, p authorization.Principal, 
 	}
 	bucket.Enabled = enabled
 	bucket.Revision++
-	st.Workers.Buckets[id] = bucket
-	s.audit(st, p, "workers.bucket.update", id, true)
+	st.Workers.Buckets[bucket.ID] = bucket
+	s.audit(st, p, "workers.bucket.update", bucket.ID, true)
 	return bucket, nil
 }
 

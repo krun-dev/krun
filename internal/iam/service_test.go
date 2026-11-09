@@ -124,7 +124,7 @@ func TestKeyPolicyIsACeilingOverCurrentRoles(t *testing.T) {
 
 func TestOrganizationCreationAndRevisionConflict(t *testing.T) {
 	svc, st, user := fixture()
-	created, err := svc.CreateOrganization(st, authorization.Principal{User: user}, iam.NameInput{Name: "new workspace"})
+	created, err := svc.CreateOrganization(st, authorization.Principal{User: user}, iam.OrganizationCreateInput{Name: "new workspace"})
 	if err != nil {
 		t.Fatal(err)
 	}

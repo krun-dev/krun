@@ -25,7 +25,7 @@ func (s *Server) orgCreate(st *State, p Principal, r *http.Request) (any, int, e
 	} else if p.Kind != "session" && p.Kind != "cli_session" {
 		return nil, 0, forbidden()
 	}
-	var in iam.NameInput
+	var in iam.OrganizationCreateInput
 	if e := body(r, &in); e != nil {
 		return nil, 0, e
 	}

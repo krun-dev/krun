@@ -78,6 +78,26 @@ Session Cookie：生产 `__Host-krun_session`，Secure/HttpOnly/SameSite=Lax/Pat
 
 ## 管理 API
 
+### 资源定位
+
+原生 API 使用组织短名与资源定位符，例如
+`GET /api/v1/orgs/platform/workers/tu-pian-chu-li`。可复制的资源路径为
+`platform/workers/tu-pian-chu-li`。模型使用 `models`，对象桶使用 `buckets`，
+Worker 的版本和部署沿 Worker 路径继续定位。
+
+创建组织可传 `short_name`，创建 Worker 或模型可传 `locator`，省略时从 `name`
+生成。中文显示名原样保存，定位符按字转写为无声调拼音，例如「图片处理」生成
+`tu-pian-chu-li`。原生名称统一转成小写字母、数字和连字符。组织短名最多 32
+字符，Worker 与模型定位符最多 63 字符，超过时截断。组织短名全局唯一，资源定位符
+在组织和类型内唯一。转换或截断后重名时返回 409 `LOCATOR_CONFLICT`。
+显示名上限为 128 UTF-8 字节，修改显示名不改变定位符。
+
+响应同时提供内部 `id`、组织的 `short_name` 或 Worker / 模型的 `locator`。
+Worker、模型与桶还返回完整的 `resource_path`。
+桶用规范化后的 `name` 定位，长度为 3–63 字符。资源路径可以用于权限检查的
+`resource_id`、角色授权的 `scope_id` 和 Key 策略的 `ids`，授权在保存时绑定到
+内部 ID。同名重建的资源具有新的内部 ID。Worker 列表可用 `?worker=<locator>` 筛选。
+
 ### 组织角色
 
 组织提供三个固定角色，`GET /api/v1/roles` 同时返回独立的 `system_admin` 系统角色：

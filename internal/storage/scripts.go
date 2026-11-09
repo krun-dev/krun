@@ -2,110 +2,38 @@ package storage
 
 import (
 	"context"
-	"database/sql"
-	"errors"
+	"slices"
+	"strings"
 
 	"github.com/krun-dev/krun/internal/domain"
-	"github.com/krun-dev/krun/internal/storage/models"
 )
 
-func scriptKey(org, name string) string { return org + "/" + name }
-func (s *Store) WorkerScript(ctx context.Context, org, name string) (domain.WorkerScript, bool, error) {
+// WorkerScripts projects the same Worker identities used by native resource
+// routes into the Cloudflare list, with no independent name registry.
+func (s *Store) WorkerScripts(ctx context.Context, org string) ([]domain.Resource, error) {
+	out := []domain.Resource{}
 	if s.pool == nil {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		v, ok := s.scripts[scriptKey(org, name)]
-		return v, ok, nil
-	}
-	var row models.Script
-	err := s.orm.NewSelect().Model(&row).Where("org_id = ?", org).Where("script_name = ?", name).Scan(ctx)
-	if errors.Is(err, sql.ErrNoRows) {
-		return domain.WorkerScript{}, false, nil
-	}
-	return domain.WorkerScript{Organization: row.OrgID, Name: row.ScriptName, Worker: row.WorkerID, WorkersDev: row.WorkersDev, PreviewsEnabled: row.PreviewsEnabled}, err == nil, err
-}
-func (s *Store) BindWorkerScript(ctx context.Context, script domain.WorkerScript) error {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.scripts == nil {
-			s.scripts = map[string]domain.WorkerScript{}
-		}
-		key := scriptKey(script.Organization, script.Name)
-		if old, ok := s.scripts[key]; ok && old.Worker != script.Worker {
-			return domain.Problem(409, "REVISION_CONFLICT", "Worker name already bound")
-		}
-		s.scripts[key] = script
-		return nil
-	}
-	row := models.Script{OrgID: script.Organization, ScriptName: script.Name, WorkerID: script.Worker, WorkersDev: script.WorkersDev, PreviewsEnabled: script.PreviewsEnabled}
-	result, err := s.orm.NewInsert().Model(&row).Column("org_id", "script_name", "worker_id", "workers_dev", "previews_enabled").On("CONFLICT (org_id, script_name) DO UPDATE").Set("workers_dev = EXCLUDED.workers_dev").Set("previews_enabled = EXCLUDED.previews_enabled").Where("krun_worker_scripts.worker_id = EXCLUDED.worker_id").Returning("NULL").Exec(ctx)
-	if err != nil {
-		return err
-	}
-	count, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if count != 1 {
-		return domain.Problem(409, "REVISION_CONFLICT", "Worker name already bound")
-	}
-	return nil
-}
-func (s *Store) DeleteWorkerScript(ctx context.Context, org, name string) error {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		delete(s.scripts, scriptKey(org, name))
-		return nil
-	}
-	_, err := s.orm.NewDelete().Model((*models.Script)(nil)).Where("org_id = ?", org).Where("script_name = ?", name).Exec(ctx)
-	return err
-}
-func (s *Store) WorkerScripts(ctx context.Context, org string) ([]domain.WorkerScript, error) {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		out := []domain.WorkerScript{}
-		for _, v := range s.scripts {
-			if v.Organization == org {
-				out = append(out, v)
+		for _, resource := range s.memory.Resources {
+			if resource.Organization == org && resource.Kind == "worker" && resource.Locator != "" {
+				out = append(out, resource)
 			}
 		}
-		return out, nil
+		slices.SortFunc(out, func(a, b domain.Resource) int { return strings.Compare(a.Locator, b.Locator) })
+		return out[:min(len(out), 200)], nil
 	}
-	rows := []models.Script{}
-	err := s.orm.NewSelect().Model(&rows).Where("org_id = ?", org).Order("script_name").Limit(200).Scan(ctx)
-	out := make([]domain.WorkerScript, 0, len(rows))
-	for _, v := range rows {
-		out = append(out, domain.WorkerScript{Organization: v.OrgID, Name: v.ScriptName, Worker: v.WorkerID, WorkersDev: v.WorkersDev, PreviewsEnabled: v.PreviewsEnabled})
+	rows, err := s.pool.Query(ctx, `SELECT resource_id, locator FROM krun_resources WHERE org_id=$1 AND kind='worker' AND locator<>'' ORDER BY locator LIMIT 200`, org)
+	if err != nil {
+		return nil, err
 	}
-	return out, err
-}
-
-// ReserveWorkerScript atomically chooses one identity for concurrent first
-// uploads. Recreating a deleted Script always receives a fresh worker ID.
-func (s *Store) ReserveWorkerScript(ctx context.Context, script domain.WorkerScript) (domain.WorkerScript, error) {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.scripts == nil {
-			s.scripts = map[string]domain.WorkerScript{}
+	defer rows.Close()
+	for rows.Next() {
+		resource := domain.Resource{Organization: org, Kind: "worker"}
+		if err := rows.Scan(&resource.ID, &resource.Locator); err != nil {
+			return nil, err
 		}
-		key := scriptKey(script.Organization, script.Name)
-		if old, ok := s.scripts[key]; ok {
-			return old, nil
-		}
-		s.scripts[key] = script
-		return script, nil
+		out = append(out, resource)
 	}
-	row := models.Script{OrgID: script.Organization, ScriptName: script.Name, WorkerID: script.Worker, WorkersDev: script.WorkersDev, PreviewsEnabled: script.PreviewsEnabled}
-	if _, err := s.orm.NewInsert().Model(&row).Column("org_id", "script_name", "worker_id", "workers_dev", "previews_enabled").On("CONFLICT (org_id,script_name) DO NOTHING").Returning("NULL").Exec(ctx); err != nil {
-		return script, err
-	}
-	got, ok, err := s.WorkerScript(ctx, script.Organization, script.Name)
-	if err == nil && !ok {
-		err = domain.Problem(409, "REVISION_CONFLICT", "Worker identity changed")
-	}
-	return got, err
+	return out, rows.Err()
 }

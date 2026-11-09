@@ -1,6 +1,7 @@
 import { t } from "./i18n";
 
 export type WorkerBucket = {
+  resource_path?: string;
   id: string;
   organization_id: string;
   name: string;

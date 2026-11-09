@@ -13,13 +13,13 @@ krun 支持使用 Cloudflare Wrangler 部署模块格式的 JavaScript 和 TypeS
 
 ## 1. 准备账号
 
-准备 Node.js、npm、krun 控制台地址、组织 ID，以及有 Worker 发布权限的 krun API Key。可先通过 `krun org list` 查看组织 ID，并在控制台创建 API Key。
+准备 Node.js、npm、krun 控制台地址、组织短名或 ID，以及有 Worker 发布权限的 krun API Key。可先通过 `krun org list` 查看组织短名（`short_name`）和 ID，并在控制台创建 API Key。
 
-在终端配置连接，将组织 ID 和 API Key 替换为自己的值：
+在终端配置连接，将组织短名或 ID 和 API Key 替换为自己的值：
 
 ```sh
 export CLOUDFLARE_API_BASE_URL={{KRUN_ORIGIN}}/api/v1/cloudflare/client/v4
-export CLOUDFLARE_ACCOUNT_ID=replace-with-organization-id
+export CLOUDFLARE_ACCOUNT_ID=replace-with-organization-short-name
 export CLOUDFLARE_API_TOKEN=replace-with-krun-api-key
 ```
 

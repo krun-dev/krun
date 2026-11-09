@@ -14,6 +14,9 @@ func (s Service) CreateKey(st *domain.State, p authorization.Principal, t author
 	}
 	org := t.Organization
 	scope := t.Kind
+	if err := authorization.ResolvePolicyReferences(st, &in.Policy); err != nil {
+		return CreatedKey{}, err
+	}
 	if e := authorization.ValidatePolicy(st, p, org, scope, in.Policy); e != nil {
 		return CreatedKey{}, e
 	}
@@ -64,6 +67,9 @@ func (s Service) UpdateKey(st *domain.State, p authorization.Principal, t author
 	}
 	if !nameValid(in.Name) {
 		return domain.APIKey{}, domain.Problem(422, "INVALID_REQUEST", "Name required")
+	}
+	if err := authorization.ResolvePolicyReferences(st, &in.Policy); err != nil {
+		return domain.APIKey{}, err
 	}
 	if e := authorization.ValidatePolicy(st, p, k.Organization, k.ScopeKind, in.Policy); e != nil {
 		return domain.APIKey{}, e

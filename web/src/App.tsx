@@ -181,8 +181,11 @@ export default function App() {
   const [orgCatalog, setOrgCatalog] = useState<Organization[]>([]);
   const [orgDialog, setOrgDialog] = useState(false),
     [orgName, setOrgName] = useState(""),
+    [orgShortName, setOrgShortName] = useState(""),
     [saving, setSaving] = useState(false),
     [copied, setCopied] = useState(false);
+  const org = orgs.find((organization) => organization.id === scope);
+  const orgReference = org?.short_name || scope;
   const oauthLogin =
     new URLSearchParams(window.location.search).has("oauth") ||
     new URLSearchParams(window.location.search).has("oauth_device");
@@ -245,10 +248,10 @@ export default function App() {
       url.searchParams.delete("bucket");
       url.searchParams.delete("prefix");
     }
-    if (scope) url.searchParams.set("workspace", scope);
+    if (scope) url.searchParams.set("workspace", orgReference);
     else url.searchParams.delete("workspace");
     if (url.toString() !== location.href) history.replaceState(null, "", url);
-  }, [section, scope, system, me, oauthLogin, joining]);
+  }, [section, orgReference, system, me, oauthLogin, joining]);
   useEffect(() => {
     let active = true;
     Promise.all([
@@ -292,8 +295,11 @@ export default function App() {
           setOrgs(data.items);
           setOrgCatalog(data.items);
           setOrgsLoaded(true);
-          setScope((current) =>
-            data.items.some((o) => o.id === current) ? current : (data.items[0]?.id ?? ""),
+          setScope(
+            (current) =>
+              data.items.find((o) => o.id === current || o.short_name === current)?.id ??
+              data.items[0]?.id ??
+              "",
           );
         }
       })
@@ -309,7 +315,6 @@ export default function App() {
     window.addEventListener("focus", refreshPermissions);
     return () => window.removeEventListener("focus", refreshPermissions);
   }, [reload]);
-  const org = orgs.find((o) => o.id === scope);
   useEffect(() => {
     setPermissionsError("");
     if (!me || !org || system || oauthLogin) {
@@ -321,7 +326,7 @@ export default function App() {
     setPermissions((current) => (current?.organization_id === org.id ? current : null));
     const controller = new AbortController();
     api<OrganizationPermissions>(
-      `/api/v1/orgs/${encodeURIComponent(org.id)}/permissions`,
+      `/api/v1/orgs/${encodeURIComponent(org.short_name || org.id)}/permissions`,
       "GET",
       undefined,
       controller.signal,
@@ -338,7 +343,7 @@ export default function App() {
         }
       });
     return () => controller.abort();
-  }, [me?.user.user_id, me?.revision, org?.id, system, refresh, oauthLogin]);
+  }, [me?.user.user_id, me?.revision, org?.id, org?.short_name, system, refresh, oauthLogin]);
   const canOpen = (page: Section) =>
     (page !== "git-authorizations" || me?.workers_configured !== false) &&
     canOpenSection(
@@ -384,7 +389,7 @@ export default function App() {
   function sectionHref(page: Section) {
     const params = new URLSearchParams();
     if (scope) {
-      params.set("workspace", scope);
+      params.set("workspace", orgReference);
     }
     if (system) {
       params.set("view", "system");
@@ -466,7 +471,7 @@ export default function App() {
         />
       </Suspense>
     );
-  const base = system ? "/api/v1/system" : `/api/v1/orgs/${encodeURIComponent(scope)}`;
+  const base = system ? "/api/v1/system" : `/api/v1/orgs/${encodeURIComponent(orgReference)}`;
   return (
     <div className="min-h-screen lg:pl-[232px]">
       <aside
@@ -550,7 +555,7 @@ export default function App() {
                         if (n.id === "workers") {
                           const url = new URL(location.href);
                           url.searchParams.set("page", "workers");
-                          if (scope) url.searchParams.set("workspace", scope);
+                          if (scope) url.searchParams.set("workspace", orgReference);
                           url.searchParams.delete("worker");
                           url.searchParams.delete("environment");
                           history.replaceState(null, "", url);
@@ -985,10 +990,12 @@ export default function App() {
               await mutate(async () => {
                 const organization = await api<Organization>("/api/v1/orgs", "POST", {
                   name: orgName,
+                  short_name: orgShortName,
                 });
                 setScope(organization.id);
                 setOrgDialog(false);
                 setOrgName("");
+                setOrgShortName("");
               }, t("组织已创建。"));
             }}
           >
@@ -1000,6 +1007,17 @@ export default function App() {
                 required
                 placeholder={t("例如：Platform Engineering")}
               />
+            </Field>
+            <Field label={t("组织短名（可选）")}>
+              <Input
+                value={orgShortName}
+                onChange={(e) => setOrgShortName(e.target.value)}
+                placeholder="platform"
+                maxLength={128}
+              />
+              <p className="text-xs text-muted-foreground">
+                {t("留空时从组织名称生成，最多 32 个字符，创建后固定。")}
+              </p>
             </Field>
             <Button
               type="submit"

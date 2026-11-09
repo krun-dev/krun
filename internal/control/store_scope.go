@@ -7,13 +7,18 @@ import (
 )
 
 func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Request, error) {
+	cloudflare := strings.HasPrefix(r.URL.Path, cfPrefix)
+	if !cloudflare && (c.hasSession || c.keyID != "") {
+		if err := s.resolveNativeRoute(r); err != nil {
+			return r, err
+		}
+	}
 	if !s.Store.Persistent() {
 		return r, nil
 	}
 	// IAM administration may edit other users and grants; it has a separate
 	// loading contract. Resource and Workers endpoints only need their target.
 	isResource := strings.Contains(r.Pattern, "/workers") || strings.Contains(r.Pattern, "/models")
-	cloudflare := strings.HasPrefix(r.URL.Path, cfPrefix)
 	simpleIAM := strings.HasPrefix(r.URL.Path, oauthPrefix+"/") ||
 		r.URL.Path == "/api/auth/me" ||
 		r.URL.Path == "/api/auth/logout" ||
@@ -46,7 +51,7 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 		scope.Limit = n
 	}
 	if scope.Worker == "" && strings.HasSuffix(r.URL.Path, "/workers") {
-		scope.Worker = r.URL.Query().Get("worker_id")
+		scope.Worker = workerFilter(r)
 	}
 	if r.Pattern == "GET /api/v1/orgs/{org}/workers" {
 		options, err := workerListOptions(r)

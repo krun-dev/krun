@@ -38,7 +38,6 @@ func (s *Store) RetainExpired(ctx context.Context) error {
 	}{
 		{`DELETE FROM krun_worker_asset_session_files WHERE NOT EXISTS(SELECT 1 FROM krun_worker_asset_sessions s WHERE s.session_id=krun_worker_asset_session_files.session_id AND s.expires_at > $1)`, []any{at}},
 		{`DELETE FROM krun_worker_asset_sessions WHERE expires_at <= $1`, []any{at}},
-		{`DELETE FROM krun_worker_scripts WHERE worker_id IN(SELECT s.worker_id FROM krun_worker_scripts s WHERE s.created_at < now()-interval '10 minutes' AND NOT EXISTS(SELECT 1 FROM krun_resources r WHERE r.resource_id=s.worker_id AND r.org_id=s.org_id AND r.kind='worker') LIMIT 1000)`, nil},
 		{`DELETE FROM krun_oauth_authorizations WHERE expires_at <= $1`, []any{at}},
 		{`DELETE FROM krun_oauth_refresh_tokens WHERE expires_at <= $1 OR NOT EXISTS(SELECT 1 FROM krun_oauth_grants g WHERE g.grant_id=krun_oauth_refresh_tokens.grant_id)`, []any{at}},
 		{`DELETE FROM krun_oauth_grants WHERE expires_at <= $1`, []any{at}},

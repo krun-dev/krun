@@ -47,12 +47,13 @@ func writeResources(ctx context.Context, tx ormTransaction, before, after map[st
 			ResourceID: id,
 			Kind:       resource.Kind,
 			OrgID:      resource.Organization,
+			Locator:    resource.Locator,
 			Name:       resource.Name,
 			Revision:   resource.Revision,
 			CreatedAt:  resource.Created,
 		}
 		if !existed {
-			if err := ormCAS(ctx, "Resource changed", tx.orm.NewInsert().Model(&row).Column("resource_id", "kind", "org_id", "name", "revision", "created_at").On("CONFLICT (resource_id) DO NOTHING").Returning("NULL")); err != nil {
+			if err := insertLocator(ctx, "Resource locator already exists", tx.orm.NewInsert().Model(&row).Column("resource_id", "kind", "org_id", "locator", "name", "revision", "created_at").On("CONFLICT DO NOTHING").Returning("NULL")); err != nil {
 				return err
 			}
 		} else if err := ormCAS(ctx, "Resource changed", tx.orm.NewUpdate().Model(&row).Column("kind", "org_id", "name", "revision").WherePK().Where("revision = ?", previous.Revision)); err != nil {
@@ -73,5 +74,5 @@ func writeResources(ctx context.Context, tx ormTransaction, before, after map[st
 
 func sameResource(a, b domain.Resource) bool {
 	return a.ID == b.ID && a.Kind == b.Kind && a.Organization == b.Organization &&
-		a.Name == b.Name && a.Revision == b.Revision && a.Created.Equal(b.Created)
+		a.Locator == b.Locator && a.Name == b.Name && a.Revision == b.Revision && a.Created.Equal(b.Created)
 }

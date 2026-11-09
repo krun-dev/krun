@@ -1,4 +1,9 @@
 {
+  "组织短名（可选）": "Organization short name (optional)",
+  "留空时从组织名称生成，最多 32 个字符，创建后固定。": "Leave blank to generate a short name from the organization name. It has up to 32 characters and stays fixed after creation.",
+  "Worker 定位符（可选）": "Worker locator (optional)",
+  "留空时从 Worker 名称生成，最多 63 个字符，可用于 Wrangler 部署。": "Leave blank to generate a locator from the Worker name. It has up to 63 characters and can be used with Wrangler.",
+  "桶在本组织内共享。名称会转换为 3–63 位小写字母、数字或连字符。": "Buckets are shared within the organization. Names are converted to 3–63 lowercase letters, digits, or hyphens.",
   "概览": "Overview",
   "组织成员": "Organization members",
   "用户组": "Groups",

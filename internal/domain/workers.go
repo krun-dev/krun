@@ -261,10 +261,3 @@ type WorkerState struct {
 }
 
 // WorkerScript is a protocol identity, not a mutable resource display name.
-type WorkerScript struct {
-	Organization    string
-	Name            string
-	Worker          string
-	WorkersDev      bool
-	PreviewsEnabled bool
-}

@@ -4,19 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/krun-dev/krun/internal/domain"
-	"github.com/krun-dev/krun/internal/securetoken"
 	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
 const cfPrefix = "/api/v1/cloudflare/client/v4"
 
-type cfScriptContext struct{}
 type cfScriptsContext struct{}
 
 var cfScriptName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
@@ -131,23 +130,25 @@ func (s *Server) cfRequest(r *http.Request) (*http.Request, error) {
 	if !c.hasSession && c.keyID == "" {
 		return r, problem(401, "UNAUTHENTICATED", "Authentication required")
 	}
-	r.SetPathValue("org", r.PathValue("account"))
+	if err = s.resolveCloudflareAccount(r); err != nil {
+		return r, err
+	}
+	org := r.PathValue("org")
 	name := r.PathValue("script")
 	if name != "" {
-		script, ok, err := s.Store.WorkerScript(r.Context(), r.PathValue("account"), name)
+		id, err := s.Store.ResourceID(r.Context(), org, "worker", name, false)
 		if err != nil {
 			return r, err
 		}
-		if !ok {
+		if expected := r.PathValue("resource"); expected != "" && expected != id {
 			return r, notFound()
 		}
-		r.SetPathValue("resource", script.Worker)
-		r = r.WithContext(context.WithValue(r.Context(), cfScriptContext{}, script))
+		r.SetPathValue("resource", id)
 	}
 	if name == "" && strings.HasSuffix(r.URL.Path, "/workers/scripts") {
-		scripts, e := s.Store.WorkerScripts(r.Context(), r.PathValue("account"))
-		if e != nil {
-			return r, e
+		scripts, err := s.Store.WorkerScripts(r.Context(), org)
+		if err != nil {
+			return r, err
 		}
 		r = r.WithContext(context.WithValue(r.Context(), cfScriptsContext{}, scripts))
 	}
@@ -183,92 +184,77 @@ func (s *Server) cfCall(r *http.Request, write bool, fn func(*State, Principal) 
 		return fn(st, p)
 	})
 }
-func (s *Server) cfEnsureScript(r *http.Request, name string) (domain.WorkerScript, error) {
+func (s *Server) cfEnsureScript(r *http.Request, name string) (string, error) {
 	if s.Config.Workers == nil {
-		return domain.WorkerScript{}, problem(503, "WORKERS_NOT_CONFIGURED", "Workers is not configured")
+		return "", problem(503, "WORKERS_NOT_CONFIGURED", "Workers is not configured")
 	}
 	if !cfScriptName.MatchString(name) {
-		return domain.WorkerScript{}, problem(422, "INVALID_REQUEST", "Invalid Worker name")
+		return "", problem(422, "INVALID_REQUEST", "Invalid Worker name")
 	}
-	org := r.PathValue("account")
-	r.SetPathValue("org", org)
 	c, err := s.readCredentials(r)
 	if err != nil {
-		return domain.WorkerScript{}, err
+		return "", err
 	}
-	r, err = s.scopedRequest(r, c)
+	if !c.hasSession && c.keyID == "" {
+		return "", problem(401, "UNAUTHENTICATED", "Authentication required")
+	}
+	if err = s.resolveCloudflareAccount(r); err != nil {
+		return "", err
+	}
+	org := r.PathValue("org")
+	id, err := s.Store.ResourceID(r.Context(), org, "worker", name, false)
+	if isProblem(err, "RESOURCE_NOT_FOUND") {
+		id, err = s.cfCreateScriptResource(r, c, name)
+		if isProblem(err, "LOCATOR_CONFLICT") {
+			// Both API surfaces race on the same unique locator. Load the
+			// winning identity and authorize publishing to it below.
+			id, err = s.Store.ResourceID(r.Context(), org, "worker", name, false)
+		}
+	}
 	if err != nil {
-		return domain.WorkerScript{}, err
+		return "", err
 	}
-	script, exists, err := s.Store.WorkerScript(r.Context(), org, name)
-	if err != nil {
-		return script, err
-	}
-	if !exists {
-		err = s.Store.Mutate(r.Context(), PartitionIAM, 0, func(st *State) error {
-			p, e := s.protectedPrincipal(st, c, r, false)
-			if e != nil {
-				return e
-			}
-			target, e := s.orgTarget(st, r)
-			if e != nil {
-				return e
-			}
-			return s.require(st, p, r, "worker.create", target)
-		})
-		if err != nil {
-			return script, err
-		}
-		candidate := domain.WorkerScript{Organization: org, Name: name, Worker: securetoken.NewID("worker"), WorkersDev: true, PreviewsEnabled: true}
-		script, err = s.Store.ReserveWorkerScript(r.Context(), candidate)
-		if err != nil {
-			return script, err
-		}
-		exists = script.Worker != candidate.Worker
-	}
-	r.SetPathValue("resource", script.Worker)
-	r, err = s.scopedRequest(r, c)
-	if err != nil {
-		return script, err
-	}
-	err = s.Store.Mutate(r.Context(), PartitionIAM, PartitionIAM, func(st *State) error {
-		p, e := s.protectedPrincipal(st, c, r, false)
-		if e != nil {
-			return e
-		}
-		if _, ok := st.Resources[script.Worker]; ok {
-			return nil
-		}
-		target, e := s.orgTarget(st, r)
-		if e != nil {
-			return e
-		}
-		if e = s.require(st, p, r, "worker.create", target); e != nil {
-			return e
-		}
-		// An existing alias without its resource may be an interrupted first
-		// creation or a native service deletion. Never resurrect its identity
-		// and thereby reconnect historical Versions or Secret references.
-		if exists {
-			return problem(409, "WORKER_IDENTITY_PENDING", "Worker identity is being created or cleaned up; retry after cleanup")
-		}
-		_, e = s.iam().EnsureWorkerResource(st, target, name, script.Worker)
-		return e
-	})
-	if err != nil {
-		return script, err
-	}
-	r.SetPathValue("resource", script.Worker)
+	r.SetPathValue("resource", id)
 	err = s.cfCall(r, true, func(st *State, p Principal) error {
-		target, e := s.workerTarget(st, r, "production", "worker.publish", p)
-		if e != nil {
-			return e
+		target, err := s.workerTarget(st, r, "production", "worker.publish", p)
+		if err != nil {
+			return err
 		}
 		s.workerApplication(r).Worker(st, target)
 		return nil
 	})
-	return script, err
+	return id, err
 }
+
+func (s *Server) cfCreateScriptResource(r *http.Request, c authCredentials, name string) (string, error) {
+	r, err := s.scopedRequest(r, c)
+	if err != nil {
+		return "", err
+	}
+	var resource domain.Resource
+	err = s.Store.Mutate(r.Context(), PartitionIAM, PartitionIAM, func(st *State) error {
+		p, err := s.protectedPrincipal(st, c, r, false)
+		if err != nil {
+			return err
+		}
+		target, err := s.orgTarget(st, r)
+		if err != nil {
+			return err
+		}
+		if err = s.require(st, p, r, "worker.create", target); err != nil {
+			return err
+		}
+		resource, err = s.iam().CreateWorkerScript(st, target, name)
+		return err
+	})
+	return resource.ID, err
+}
+
+func isProblem(err error, code string) bool {
+	var problem *domain.APIError
+	return errors.As(err, &problem) && problem.Code == code
+}
+
 func (s *Server) cloudflareRoutes(m *http.ServeMux) {
 	base := cfPrefix + "/accounts/{account}"
 	m.HandleFunc("GET "+base+"/r2/buckets", s.cfProtected(s.cfBucketList))

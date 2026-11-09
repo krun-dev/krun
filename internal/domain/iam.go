@@ -16,10 +16,11 @@ type User struct {
 }
 
 type Organization struct {
-	ID       string   `json:"id"`
-	Name     string   `json:"name"`
-	Sources  []string `json:"allowed_sources"`
-	Revision int      `json:"revision"`
+	ShortName string   `json:"short_name,omitempty"`
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Sources   []string `json:"allowed_sources"`
+	Revision  int      `json:"revision"`
 }
 
 type Member struct {
@@ -52,6 +53,8 @@ type Assignment struct {
 }
 
 type Resource struct {
+	Locator      string    `json:"locator,omitempty"`
+	ResourcePath string    `json:"resource_path,omitempty"`
 	ID           string    `json:"id"`
 	Kind         string    `json:"kind"`
 	Organization string    `json:"organization_id"`

@@ -49,14 +49,14 @@ func (s *Server) cfScripts(st *State, p Principal, r *http.Request) (any, int, e
 	if err = s.require(st, p, r, "worker.list", t); err != nil {
 		return nil, 0, err
 	}
-	scripts, _ := r.Context().Value(cfScriptsContext{}).([]domain.WorkerScript)
+	scripts, _ := r.Context().Value(cfScriptsContext{}).([]domain.Resource)
 	out := []any{}
 	for _, script := range scripts {
-		ref := workerapp.WorkerRef{Organization: script.Organization, Worker: script.Worker}
+		ref := workerapp.WorkerRef{Organization: script.Organization, Worker: script.ID}
 		if _, err := s.workerApplication(r).WorkerCollectionTarget(st, ref, "worker.read", p); err != nil {
 			continue
 		}
-		out = append(out, map[string]any{"id": script.Name, "name": script.Name, "tag": script.Worker})
+		out = append(out, map[string]any{"id": script.Locator, "name": script.Locator, "tag": script.ID})
 	}
 	return out, 200, nil
 }
@@ -136,10 +136,11 @@ func (s *Server) cfScriptDetails(st *State, p Principal, r *http.Request) (any, 
 	if err != nil {
 		return nil, 0, err
 	}
-	script, _ := r.Context().Value(cfScriptContext{}).(domain.WorkerScript)
+	name := r.PathValue("script")
+	workerID := r.PathValue("resource")
 	version := st.Workers.Versions[env.Version]
 	settings := map[string]any{"bindings": cfBindings(env), "compatibility_date": version.CompatibilityDate, "compatibility_flags": version.CompatibilityFlags, "logpush": false, "tail_consumers": []any{}}
-	subdomain := map[string]any{"enabled": script.WorkersDev, "previews_enabled": script.PreviewsEnabled, "url": s.cfURL(env)}
+	subdomain := map[string]any{"enabled": true, "previews_enabled": true, "url": s.cfURL(env)}
 	if strings.HasSuffix(r.URL.Path, "/settings") || strings.HasSuffix(r.URL.Path, "/script-settings") {
 		return settings, 200, nil
 	}
@@ -150,7 +151,7 @@ func (s *Server) cfScriptDetails(st *State, p Principal, r *http.Request) (any, 
 	if service.PreviewBase != nil {
 		base = *service.PreviewBase
 	}
-	return map[string]any{"id": script.Name, "name": script.Name, "tag": script.Worker, "subdomain": subdomain, "previews_base_config": map[string]any{"env": cfEnvBindings(base)}, "default_environment": map[string]any{"environment": "production", "script": map[string]any{"id": script.Name, "tag": script.Worker, "last_deployed_from": "api", "compatibility_date": version.CompatibilityDate, "compatibility_flags": version.CompatibilityFlags, "bindings": cfBindings(env)}}}, 200, nil
+	return map[string]any{"id": name, "name": name, "tag": workerID, "subdomain": subdomain, "previews_base_config": map[string]any{"env": cfEnvBindings(base)}, "default_environment": map[string]any{"environment": "production", "script": map[string]any{"id": name, "tag": workerID, "last_deployed_from": "api", "compatibility_date": version.CompatibilityDate, "compatibility_flags": version.CompatibilityFlags, "bindings": cfBindings(env)}}}, 200, nil
 }
 func cfVersion(v WorkerVersion, number int) map[string]any {
 	return map[string]any{"id": v.ID, "number": number, "metadata": map[string]any{"created_on": v.Created, "has_preview": false, "source": "api", "author_id": "krun", "author_email": ""}, "annotations": map[string]any{"workers/tag": v.Tag, "workers/message": v.Message}, "resources": map[string]any{"script": map[string]any{"etag": v.ArchiveDigest, "handlers": []string{"fetch"}}, "script_runtime": map[string]any{"compatibility_date": v.CompatibilityDate, "compatibility_flags": v.CompatibilityFlags}, "bindings": cfBindings(WorkerEnvironment{R2Bindings: v.R2Bindings, Variables: v.Variables, SecretVersions: v.SecretVersions, VersionMetadata: v.VersionMetadata, AssetsBinding: v.AssetsBinding})}}

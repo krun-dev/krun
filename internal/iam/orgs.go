@@ -5,6 +5,7 @@ import (
 
 	"github.com/krun-dev/krun/internal/authorization"
 	"github.com/krun-dev/krun/internal/domain"
+	"github.com/krun-dev/krun/internal/resourcename"
 	"github.com/krun-dev/krun/internal/securetoken"
 )
 
@@ -24,11 +25,20 @@ func (s Service) Organizations(st *domain.State, p authorization.Principal) ([]d
 	return out, nil
 }
 
-func (s Service) CreateOrganization(st *domain.State, p authorization.Principal, in NameInput) (domain.Organization, error) {
+func (s Service) CreateOrganization(st *domain.State, p authorization.Principal, in OrganizationCreateInput) (domain.Organization, error) {
 	if !nameValid(in.Name) {
 		return domain.Organization{}, domain.Problem(422, "INVALID_REQUEST", "Name required (max 128 bytes)")
 	}
-	org := domain.Organization{ID: securetoken.NewID("org"), Name: in.Name, Sources: []string{}, Revision: 1}
+	shortName, err := resourcename.Make(firstName(in.ShortName, in.Name), 1, resourcename.OrganizationMax)
+	if err != nil {
+		return domain.Organization{}, err
+	}
+	for _, existing := range st.Organizations {
+		if existing.ShortName == shortName {
+			return domain.Organization{}, domain.Problem(409, "LOCATOR_CONFLICT", "Organization short name already exists")
+		}
+	}
+	org := domain.Organization{ShortName: shortName, ID: securetoken.NewID("org"), Name: in.Name, Sources: []string{}, Revision: 1}
 	st.Organizations[org.ID] = org
 	st.Members[domain.MemberKey(org.ID, p.User.ID)] = domain.Member{Organization: org.ID, User: p.User.ID}
 	id := securetoken.NewID("role")

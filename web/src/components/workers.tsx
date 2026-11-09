@@ -83,6 +83,7 @@ export function WorkersPage({
   const [selected, setSelected] = useState<WorkerSummary | null>(null);
   const [create, setCreate] = useState(false);
   const [name, setName] = useState("");
+  const [locator, setLocator] = useState("");
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
   const collection = useCollectionPage<WorkerSummary>(
@@ -128,7 +129,7 @@ export function WorkersPage({
     }
     const controller = new AbortController();
     void api<List<WorkerSummary>>(
-      base + "/workers?worker_id=" + encodeURIComponent(worker),
+      base + "/workers?worker=" + encodeURIComponent(worker),
       "GET",
       undefined,
       controller.signal,
@@ -244,7 +245,7 @@ export function WorkersPage({
           </Button>
           <WorkerDetail
             key={selected.id}
-            base={base + "/workers/" + selected.id}
+            base={base + "/workers/" + encodeURIComponent(selected.locator || selected.id)}
             organizationBase={base}
             worker={selected}
             networkProfiles={networkProfiles}
@@ -285,11 +286,13 @@ export function WorkersPage({
                     <TableCell>
                       <button
                         className="text-sm font-medium hover:underline"
-                        onClick={() => openWorker(item.id)}
+                        onClick={() => openWorker(item.locator || item.id)}
                       >
                         {item.name}
                       </button>
-                      <p className="mt-1 font-mono text-xs text-muted-foreground">{item.id}</p>
+                      <p className="mt-1 font-mono text-xs text-muted-foreground">
+                        {item.locator || item.id}
+                      </p>
                       <p className="mt-1 text-xs text-muted-foreground md:hidden">
                         {t("创建时间")} · {new Date(item.created_at).toLocaleString()}
                       </p>
@@ -349,7 +352,7 @@ export function WorkersPage({
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => openWorker(item.id)}
+                        onClick={() => openWorker(item.locator || item.id)}
                       >
                         {t("查看Worker")}
                         <ArrowRight size={14} />
@@ -382,15 +385,22 @@ export function WorkersPage({
               try {
                 const r = await api<Resource>(base + "/workers", "POST", {
                   name,
+                  locator,
                 });
-                await api(base + "/workers/" + r.id + "/network-profile", "PUT", {
-                  network_profile: networkProfile,
-                  expected_revision: 0,
-                });
-                openWorker(r.id);
-                setRevision((v) => v + 1);
+                const reference = r.locator || r.id;
                 setCreate(false);
                 setName("");
+                setLocator("");
+                openWorker(reference);
+                await api(
+                  base + "/workers/" + encodeURIComponent(reference) + "/network-profile",
+                  "PUT",
+                  {
+                    network_profile: networkProfile,
+                    expected_revision: 0,
+                  },
+                );
+                setRevision((v) => v + 1);
                 notify(t("Worker 已创建。"));
               } catch (e) {
                 notify(errorMessage(e));
@@ -406,6 +416,17 @@ export function WorkersPage({
                 required
                 maxLength={128}
               />
+            </Field>
+            <Field label={t("Worker 定位符（可选）")}>
+              <Input
+                value={locator}
+                onChange={(e) => setLocator(e.target.value)}
+                placeholder="image-resize"
+                maxLength={128}
+              />
+              <p className="text-xs text-muted-foreground">
+                {t("留空时从 Worker 名称生成，最多 63 个字符，可用于 Wrangler 部署。")}
+              </p>
             </Field>
             {networkProfiles.length > 1 ? (
               <Field label={t("网络环境")}>
@@ -674,7 +695,9 @@ function WorkerDetail({
               <Badge variant="outline">{routing.network_profile.name}</Badge>
             ) : null}
           </div>
-          <code className="text-xs text-muted-foreground">{worker.id}</code>
+          <code className="block break-all text-xs text-muted-foreground">
+            {worker.resource_path || worker.locator || worker.id}
+          </code>
           <p className="mt-2 text-xs text-muted-foreground">
             {t("创建时间")} ·{" "}
             <time dateTime={worker.created_at}>{new Date(worker.created_at).toLocaleString()}</time>

@@ -10,13 +10,16 @@ import (
 	"net/textproto"
 	"strings"
 	"testing"
-
-	"github.com/krun-dev/krun/internal/domain"
 )
 
 func cfTestServer(t *testing.T) (*Server, *Store, string) {
 	s, store, _ := workerTestServer(t)
-	if err := store.BindWorkerScript(context.Background(), domain.WorkerScript{Organization: "org-a", Name: "fixture", Worker: "svc-a", WorkersDev: true, PreviewsEnabled: true}); err != nil {
+	if err := store.Mutate(context.Background(), PartitionIAM, PartitionIAM, func(st *State) error {
+		resource := st.Resources["svc-a"]
+		resource.Locator = "fixture"
+		st.Resources[resource.ID] = resource
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	return s, store, cfPrefix + "/accounts/org-a/workers/scripts/fixture"
@@ -101,31 +104,6 @@ func TestCloudflareMultipartRetainsNestedModuleNames(t *testing.T) {
 	}
 }
 
-func TestCloudflarePostgresScriptRegistry(t *testing.T) {
-	store := postgresTestStore(t)
-	ctx := context.Background()
-	script := domain.WorkerScript{Organization: "org-fixture", Name: "stable", Worker: "service-fixture", WorkersDev: true, PreviewsEnabled: true}
-	for i := 0; i < 2; i++ {
-		if err := store.BindWorkerScript(ctx, script); err != nil {
-			t.Fatal(err)
-		}
-	}
-	got, ok, err := store.WorkerScript(ctx, script.Organization, script.Name)
-	if err != nil || !ok || got != script {
-		t.Fatalf("registry %v %v %v", got, ok, err)
-	}
-	scripts, err := store.WorkerScripts(ctx, script.Organization)
-	if err != nil || len(scripts) != 1 {
-		t.Fatalf("scripts %v %v", scripts, err)
-	}
-	if err = store.DeleteWorkerScript(ctx, script.Organization, script.Name); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok, err = store.WorkerScript(ctx, script.Organization, script.Name); err != nil || ok {
-		t.Fatal("deleted binding remains")
-	}
-}
-
 func TestCloudflareMergePatchBodies(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(`{"env":{"TOKEN":{"type":"secret_text","text":"fixture"}},"annotations":{"workers/message":"Updated secret"}}`))
 	r.Header.Set("Content-Type", "application/merge-patch+json")
@@ -139,21 +117,17 @@ func TestCloudflareMergePatchBodies(t *testing.T) {
 }
 
 func TestCloudflareDoesNotResurrectNativeDeletedResource(t *testing.T) {
-	s, store, _ := cfTestServer(t)
-	script := domain.WorkerScript{Organization: "org-a", Name: "native-deleted", Worker: "old-service", WorkersDev: true, PreviewsEnabled: true}
-	if err := store.BindWorkerScript(context.Background(), script); err != nil {
-		t.Fatal(err)
+	s, _, base := cfTestServer(t)
+	deleted := request(s, "DELETE", "/api/v1/orgs/org-a/workers/fixture", "krun_cli_admin", "")
+	if deleted.Code != 204 {
+		t.Fatalf("delete: %d %s", deleted.Code, deleted.Body)
 	}
-	r := request(s, "POST", cfPrefix+"/accounts/org-a/workers/workers", "krun_cli_admin", `{"name":"native-deleted"}`)
-	if r.Code != 409 {
-		t.Fatalf("orphan identity recreated: %d %s", r.Code, r.Body.String())
+	missing := request(s, "GET", base+"/settings", "krun_cli_admin", "")
+	if missing.Code != 404 {
+		t.Fatalf("deleted locator still resolves: %d %s", missing.Code, missing.Body)
 	}
-	if err := store.View(context.Background(), PartitionAll, func(st *State) error {
-		if _, ok := st.Resources[script.Worker]; ok {
-			t.Fatal("deleted IAM resource resurrected")
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+	created := request(s, "POST", cfPrefix+"/accounts/org-a/workers/workers", "krun_cli_admin", `{"name":"fixture"}`)
+	if created.Code != 200 || strings.Contains(created.Body.String(), "svc-a") {
+		t.Fatalf("expected a fresh Worker identity: %d %s", created.Code, created.Body)
 	}
 }

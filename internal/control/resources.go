@@ -43,6 +43,9 @@ func (s *Server) resourceList(st *State, p Principal, r *http.Request) (any, int
 	if err != nil {
 		return nil, 0, err
 	}
+	for i := range out {
+		out[i] = presentResource(st, out[i])
+	}
 	return resourcePageItems(st, r, out)
 }
 
@@ -55,12 +58,12 @@ func (s *Server) resourceCreate(st *State, p Principal, r *http.Request) (any, i
 	if e = s.require(st, p, r, kind+".create", t); e != nil {
 		return nil, 0, e
 	}
-	var in iam.NameInput
+	var in iam.ResourceCreateInput
 	if e = body(r, &in); e != nil {
 		return nil, 0, e
 	}
 	out, err := s.iam().CreateResource(st, t, kind, in)
-	return out, 201, err
+	return presentResource(st, out), 201, err
 }
 
 func (s *Server) resourceDetail(st *State, p Principal, r *http.Request) (any, int, error) {
@@ -74,7 +77,7 @@ func (s *Server) resourceDetail(st *State, p Principal, r *http.Request) (any, i
 		}
 		return nil, 0, e
 	}
-	return st.Resources[t.ID], 200, nil
+	return presentResource(st, st.Resources[t.ID]), 200, nil
 }
 
 func (s *Server) resourceUpdate(st *State, p Principal, r *http.Request) (any, int, error) {
@@ -90,7 +93,7 @@ func (s *Server) resourceUpdate(st *State, p Principal, r *http.Request) (any, i
 		return nil, 0, e
 	}
 	out, err := s.iam().UpdateResource(st, t, in)
-	return out, 200, err
+	return presentResource(st, out), 200, err
 }
 
 func (s *Server) resourceDelete(st *State, p Principal, r *http.Request) (any, int, error) {

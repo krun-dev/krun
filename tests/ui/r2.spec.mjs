@@ -39,16 +39,16 @@ test("UI manages buckets and persists environment and Preview Base R2 bindings",
     network_profile: profiles.items.find((item) => item.default)?.id || profiles.items[0].id,
     expected_revision: 0,
   });
-  const bucketName = "ui-images-" + run;
+  const bucketName = "tu-pian-" + run;
   const bucketsURL = "/?page=buckets&workspace=" + org.id;
   const workerURL = "/?page=workers&workspace=" + org.id + "&worker=" + worker.id;
   await page.goto(bucketsURL);
   await expect(page.getByRole("heading", { name: "对象存储", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "创建桶", exact: true }).click();
   const dialog = page.getByRole("dialog");
-  await dialog.getByRole("textbox", { name: "桶名称", exact: true }).fill("INVALID");
+  await dialog.getByRole("textbox", { name: "桶名称", exact: true }).fill(" ");
   await expect(dialog.getByRole("button", { name: "创建桶", exact: true })).toBeDisabled();
-  await dialog.getByRole("textbox", { name: "桶名称", exact: true }).fill(bucketName);
+  await dialog.getByRole("textbox", { name: "桶名称", exact: true }).fill("图片 " + run);
   await dialog.getByRole("button", { name: "创建桶", exact: true }).click();
   await expect(dialog).not.toBeVisible();
   const row = page.getByRole("row").filter({ hasText: bucketName });
@@ -60,7 +60,7 @@ test("UI manages buckets and persists environment and Preview Base R2 bindings",
   expect(cloudflare.result.buckets.some((bucket) => bucket.name === bucketName)).toBe(true);
 
   await page.getByRole("button", { name: "创建桶", exact: true }).click();
-  await dialog.getByRole("textbox", { name: "桶名称", exact: true }).fill(bucketName);
+  await dialog.getByRole("textbox", { name: "桶名称", exact: true }).fill(bucketName.toUpperCase());
   await dialog.getByRole("button", { name: "创建桶", exact: true }).click();
   await expect(dialog.getByRole("alert")).toBeVisible();
   await page.keyboard.press("Escape");
@@ -166,7 +166,7 @@ test("UI manages buckets and persists environment and Preview Base R2 bindings",
   });
   const conflict = page.waitForResponse(
     (response) =>
-      response.request().method() === "PATCH" && response.url().endsWith("/buckets/" + bucket.id),
+      response.request().method() === "PATCH" && response.url().endsWith("/buckets/" + bucket.name),
   );
   await dialog.getByRole("button", { name: "确认", exact: true }).click();
   expect((await conflict).status()).toBe(409);

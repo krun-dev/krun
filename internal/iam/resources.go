@@ -1,10 +1,12 @@
 package iam
 
 import (
+	"strings"
 	"time"
 
 	"github.com/krun-dev/krun/internal/authorization"
 	"github.com/krun-dev/krun/internal/domain"
+	"github.com/krun-dev/krun/internal/resourcename"
 	"github.com/krun-dev/krun/internal/securetoken"
 )
 
@@ -26,14 +28,43 @@ func (s Service) Resources(st *domain.State, p authorization.Principal, t author
 	return out, nil
 }
 
-func (s Service) CreateResource(st *domain.State, t authorization.Target, kind string, in NameInput) (domain.Resource, error) {
-	if !nameValid(in.Name) {
-		return domain.Resource{}, domain.Problem(422, "INVALID_REQUEST", "Name required")
+func (s Service) CreateResource(st *domain.State, t authorization.Target, kind string, in ResourceCreateInput) (domain.Resource, error) {
+	locator, err := resourcename.Make(firstName(in.Locator, in.Name), 1, resourcename.ResourceMax)
+	if err != nil {
+		return domain.Resource{}, err
+	}
+	return s.createResource(st, t, kind, in.Name, locator)
+}
+
+func (s Service) CreateWorkerScript(st *domain.State, t authorization.Target, name string) (domain.Resource, error) {
+	// Native routes accept internal IDs as well. Keep that namespace
+	// disjoint from user-supplied script names.
+	if strings.HasPrefix(name, "worker_") && len(name) == len("worker_")+16 {
+		return domain.Resource{}, domain.Problem(422, "LOCATOR_INVALID", "Choose a different Worker locator")
+	}
+	return s.createResource(st, t, "worker", name, name)
+}
+
+func (s Service) createResource(st *domain.State, t authorization.Target, kind, name, locator string) (domain.Resource, error) {
+	if !nameValid(name) {
+		return domain.Resource{}, domain.Problem(422, "INVALID_REQUEST", "Name required (max 128 bytes)")
+	}
+	if kind == "worker" {
+		switch locator {
+		case "domains", "network-profiles", "repository-providers":
+			return domain.Resource{}, domain.Problem(422, "LOCATOR_INVALID", "Choose a different Worker locator")
+		}
+	}
+	for _, existing := range st.Resources {
+		if existing.Organization == t.ID && existing.Kind == kind && existing.Locator == locator {
+			return domain.Resource{}, domain.Problem(409, "LOCATOR_CONFLICT", "Resource locator already exists")
+		}
 	}
 	res := domain.Resource{
 		ID:           securetoken.NewID(kind),
 		Kind:         kind,
-		Name:         in.Name,
+		Name:         name,
+		Locator:      locator,
 		Organization: t.ID,
 		Revision:     1,
 		Created:      time.Now().UTC().Truncate(time.Microsecond),
@@ -74,32 +105,4 @@ func (s Service) DeleteResource(st *domain.State, t authorization.Target) error 
 	}
 	st.Revision++
 	return nil
-}
-
-// EnsureWorkerResource gives protocol retries a stable IAM identity. IAM and
-// Workers remain separate commits; retrying can finish a partially created Worker.
-func (s Service) EnsureWorkerResource(st *domain.State, t authorization.Target, name, id string) (domain.Resource, error) {
-	if !nameValid(name) {
-		return domain.Resource{}, domain.Problem(422, "INVALID_REQUEST", "Name required")
-	}
-	if id == "" {
-		return domain.Resource{}, domain.Problem(422, "INVALID_REQUEST", "Worker identity required")
-	}
-	if old, ok := st.Resources[id]; ok {
-		if old.Organization != t.ID || old.Kind != "worker" {
-			return domain.Resource{}, domain.NotFound()
-		}
-		return old, nil
-	}
-	resource := domain.Resource{
-		ID:           id,
-		Organization: t.ID,
-		Kind:         "worker",
-		Name:         name,
-		Revision:     1,
-		Created:      time.Now().UTC().Truncate(time.Microsecond),
-	}
-	st.Resources[id] = resource
-	st.Revision++
-	return resource, nil
 }

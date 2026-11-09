@@ -76,13 +76,13 @@ func TestWorkerSearchPaginationAndCreationTime(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &renamed); err != nil || response.Code != 200 || !renamed.Created.Equal(resource.Created) {
 		t.Fatalf("creation time changed on rename: %d %s", response.Code, response.Body.String())
 	}
-	// The CF script registry and envelope remain independent of console paging.
+	// The CF projection includes native Workers and has its own paging contract.
 	response = request(s, "GET", cfPrefix+"/accounts/org-a/workers/scripts?q=missing&limit=1", "krun_cli_admin", "")
 	var cf struct {
 		Success bool                  `json:"success"`
 		Result  []struct{ ID string } `json:"result"`
 	}
-	if err := json.Unmarshal(response.Body.Bytes(), &cf); err != nil || !cf.Success || len(cf.Result) != 1 || cf.Result[0].ID != "fixture" {
+	if err := json.Unmarshal(response.Body.Bytes(), &cf); err != nil || !cf.Success || len(cf.Result) != 2 || cf.Result[0].ID != "fixture" || cf.Result[1].ID != "fresh-worker" {
 		t.Fatalf("CF scripts changed: %d %s", response.Code, response.Body.String())
 	}
 }

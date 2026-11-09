@@ -23,6 +23,23 @@ func nameValid(name string) bool { return len(name) > 0 && len(name) <= 128 }
 type NameInput struct {
 	Name string `json:"name"`
 }
+type OrganizationCreateInput struct {
+	Name      string `json:"name"`
+	ShortName string `json:"short_name"`
+}
+
+type ResourceCreateInput struct {
+	Name    string `json:"name"`
+	Locator string `json:"locator"`
+}
+
+func firstName(preferred, name string) string {
+	if preferred != "" {
+		return preferred
+	}
+	return name
+}
+
 type RevisionNameInput struct {
 	Name     string `json:"name"`
 	Revision int    `json:"expected_revision"`

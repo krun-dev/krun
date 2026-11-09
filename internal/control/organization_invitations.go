@@ -64,6 +64,10 @@ func (s *Server) organizationInvitationManage(w http.ResponseWriter, r *http.Req
 		s.writeError(w, r, err)
 		return
 	}
+	if err = s.resolveNativeRoute(r); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	var input iam.OrganizationInvitationInput
 	if r.Method == http.MethodPost {
 		r.Body = http.MaxBytesReader(w, r.Body, apiJSONBodyMax)
