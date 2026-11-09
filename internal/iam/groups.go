@@ -62,6 +62,7 @@ func (s Service) DeleteGroup(st *domain.State, t authorization.Target, id string
 	if err != nil {
 		return err
 	}
+	hadAdmin := t.Kind == "organization" && s.hasOrganizationAdmin(st, t.ID)
 	delete(st.Groups, g.ID)
 	for id, a := range st.Assignments {
 		if a.SubjectKind == "group" && a.SubjectID == g.ID {
@@ -69,6 +70,11 @@ func (s Service) DeleteGroup(st *domain.State, t authorization.Target, id string
 		}
 	}
 	st.Revision++
+	if t.Kind == "organization" {
+		if err := s.finishOrganizationAdminChange(st, t.ID, hadAdmin); err != nil {
+			return err
+		}
+	}
 	if e := s.ensureAdmin(st); e != nil {
 		return e
 	}
@@ -89,6 +95,8 @@ func (s Service) SetGroupMember(st *domain.State, t authorization.Target, id, us
 			return domain.Group{}, domain.Problem(422, "INVALID_REQUEST", "Organization membership required")
 		}
 	}
+	changesAdmin := t.Kind == "organization" && !add
+	hadAdmin := changesAdmin && s.hasOrganizationAdmin(st, t.ID)
 	g.Members = remove(g.Members, user)
 	if add {
 		g.Members = append(g.Members, user)
@@ -96,6 +104,11 @@ func (s Service) SetGroupMember(st *domain.State, t authorization.Target, id, us
 	g.Revision++
 	st.Groups[g.ID] = g
 	st.Revision++
+	if changesAdmin {
+		if err := s.finishOrganizationAdminChange(st, t.ID, hadAdmin); err != nil {
+			return domain.Group{}, err
+		}
+	}
 	if e := s.ensureAdmin(st); e != nil {
 		return domain.Group{}, e
 	}

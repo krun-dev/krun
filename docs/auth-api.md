@@ -133,7 +133,7 @@ Key 范围和撤权检查逐请求生效。模型执行相关动作仍是预留�
 | GET /orgs/:org/groups | S K | iam.read |
 | POST/PATCH/DELETE /orgs/:org/groups[/:group] | S | iam.grant/revoke |
 | PUT/DELETE /orgs/:org/groups/:group/members/:user | S | iam.grant/revoke；必须是有效组织成员 |
-| GET/POST/PUT/DELETE /orgs/:org/role-assignments[/:assignment] | GET S K，其余 S | iam.read/grant/revoke；组织与资源范围验证 |
+| GET/POST/PUT/DELETE /orgs/:org/role-assignments[/:assignment] | GET S K，其余 S | iam.read/grant/revoke；组织与资源范围验证。列表中最后一条有效的组织管理员授权返回 `revoke_blocked: true`；撤销该授权返回 409 `LAST_ORG_ADMIN` |
 | /system/groups、/system/role-assignments | GET S K，其余 S | 上述组/授权接口的系统范围；只允许 system_admin |
 | POST /orgs/:org/api-keys、/system/api-keys | S | 当前用户所有；所有用户支持组织 / 跨工作空间 Key，始终受当前用户权限约束 |
 | GET /orgs/:org/api-keys、/system/api-keys | S K | 逐 Key apiKey.read 后过滤 |

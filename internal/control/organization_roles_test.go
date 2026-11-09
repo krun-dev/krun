@@ -103,6 +103,88 @@ func TestRoleCatalogRejectsRemovedRoles(t *testing.T) {
 	}
 }
 
+func TestLastOrganizationAdministratorCanRevokeAfterHandoff(t *testing.T) {
+	server, store := testServer(t)
+	grant := grantOrganizationRole(t, server, "org_admin")
+	const base = "/api/v1/orgs/org-a"
+	const self = "krun_cli_viewer"
+	const systemAdmin = "krun_cli_admin"
+	grantPath := base + "/role-assignments/" + grant.ID
+
+	assertBlocked := func(method, path, token, body string) {
+		t.Helper()
+		response := request(server, method, path, token, body)
+		var result struct {
+			Error APIError `json:"error"`
+		}
+		if response.Code != http.StatusConflict || json.Unmarshal(response.Body.Bytes(), &result) != nil || result.Error.Code != "LAST_ORG_ADMIN" {
+			t.Fatalf("%s %s: %d %s", method, path, response.Code, response.Body.String())
+		}
+	}
+	assertRevokeBlocked := func(expectedID string) {
+		t.Helper()
+		response := request(server, http.MethodGet, base+"/role-assignments", self, "")
+		var result struct {
+			Items []struct {
+				ID            string `json:"assignment_id"`
+				RevokeBlocked bool   `json:"revoke_blocked"`
+			} `json:"items"`
+		}
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil || len(result.Items) == 0 {
+			t.Fatalf("list grants: %d %s", response.Code, response.Body.String())
+		}
+		for _, item := range result.Items {
+			if item.RevokeBlocked != (item.ID == expectedID) {
+				t.Errorf("grant %s: revoke_blocked = %v, only grant %q should be blocked", item.ID, item.RevokeBlocked, expectedID)
+			}
+		}
+	}
+	assertRevokeBlocked(grant.ID)
+	assertBlocked(http.MethodDelete, grantPath, self, "")
+	assertBlocked(http.MethodDelete, grantPath, systemAdmin, "")
+	assertBlocked(http.MethodDelete, base+"/members/viewer", self, "")
+	assertBlocked(http.MethodPut, grantPath, self, fmt.Sprintf(`{
+		"subject_kind":"user", "subject_id":"viewer", "role_id":"member",
+		"scope_kind":"organization", "scope_id":"org-a", "expected_revision":%d
+	}`, grant.Revision))
+
+	if err := store.Update(context.Background(), PartitionIAM, func(st *State) error {
+		st.Groups["handoff"] = Group{
+			ID: "handoff", Name: "Handoff", ScopeKind: "organization", ScopeID: "org-a", Revision: 1,
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	response := request(server, http.MethodPost, base+"/role-assignments", self, `{
+		"subject_kind":"group", "subject_id":"handoff", "role_id":"org_admin",
+		"scope_kind":"organization", "scope_id":"org-a"
+	}`)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("grant administrator to group: %d %s", response.Code, response.Body.String())
+	}
+	assertRevokeBlocked(grant.ID)
+	assertBlocked(http.MethodDelete, grantPath, self, "")
+
+	groupPath := base + "/groups/handoff"
+	groupMemberPath := groupPath + "/members/admin"
+	response = request(server, http.MethodPut, groupMemberPath, self, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("add successor: %d %s", response.Code, response.Body.String())
+	}
+	assertRevokeBlocked("")
+	response = request(server, http.MethodDelete, grantPath, self, "")
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("revoke after handoff: %d %s", response.Code, response.Body.String())
+	}
+	response = request(server, http.MethodGet, base+"/role-assignments", self, "")
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("previous administrator retained management access: %d %s", response.Code, response.Body.String())
+	}
+	assertBlocked(http.MethodDelete, groupPath, systemAdmin, "")
+	assertBlocked(http.MethodDelete, groupMemberPath, systemAdmin, "")
+}
+
 func TestRoleChangesRestrictExistingAPIKey(t *testing.T) {
 	server, _ := testServer(t)
 	grant := grantOrganizationRole(t, server, "member")

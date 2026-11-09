@@ -30,6 +30,7 @@ func (s Service) DeleteMember(st *domain.State, t authorization.Target, user str
 	if _, ok := st.Members[domain.MemberKey(t.ID, user)]; !ok {
 		return domain.NotFound()
 	}
+	hadAdmin := s.hasOrganizationAdmin(st, t.ID)
 	delete(st.Members, domain.MemberKey(t.ID, user))
 	for id, g := range st.Groups {
 		if g.ScopeKind == "organization" && g.ScopeID == t.ID {
@@ -44,5 +45,5 @@ func (s Service) DeleteMember(st *domain.State, t authorization.Target, user str
 		}
 	}
 	st.Revision++
-	return nil
+	return s.finishOrganizationAdminChange(st, t.ID, hadAdmin)
 }

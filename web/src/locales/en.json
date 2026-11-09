@@ -165,6 +165,7 @@
   "全部环境": "All environments",
   "撤销": "Revoke",
   "撤销后，下一次请求立即使用新的授权状态。": "The next request will immediately use the new authorization state.",
+  "请先将组织管理员角色授予另一名有效成员。": "Grant another active member the organization administrator role first.",
   "角色授权已撤销。": "Role assignment revoked.",
   "用户组名称": "Group name",
   "例如：Platform Developers": "For example: Platform Developers",

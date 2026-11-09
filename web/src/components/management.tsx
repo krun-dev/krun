@@ -564,16 +564,24 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
             {
               title: t("操作"),
               render: (a) => (
-                <Confirm
-                  label={t("撤销")}
-                  description={t("撤销后，下一次请求立即使用新的授权状态。")}
-                  onConfirm={() =>
-                    run(
-                      () => api(p.base + "/role-assignments/" + a.assignment_id, "DELETE"),
-                      t("角色授权已撤销。"),
-                    )
-                  }
-                />
+                <div className="grid justify-items-start gap-1">
+                  <Confirm
+                    label={t("撤销")}
+                    description={t("撤销后，下一次请求立即使用新的授权状态。")}
+                    disabled={a.revoke_blocked}
+                    onConfirm={() =>
+                      run(
+                        () => api(p.base + "/role-assignments/" + a.assignment_id, "DELETE"),
+                        t("角色授权已撤销。"),
+                      )
+                    }
+                  />
+                  {a.revoke_blocked && (
+                    <p className="max-w-56 text-xs text-muted-foreground">
+                      {t("请先将组织管理员角色授予另一名有效成员。")}
+                    </p>
+                  )}
+                </div>
               ),
             },
           ]}

@@ -61,12 +61,28 @@ func assignmentScope(st *domain.State, a domain.Assignment, t authorization.Targ
 	return a.ScopeKind != "system" && authorization.ScopeOrganization(st, a) == t.ID
 }
 
-func (s Service) Assignments(st *domain.State, t authorization.Target) ([]domain.Assignment, error) {
-	out := []domain.Assignment{}
-	for _, a := range st.Assignments {
-		if assignmentScope(st, a, t) {
-			out = append(out, a)
+type ListedAssignment struct {
+	domain.Assignment
+	RevokeBlocked bool `json:"revoke_blocked,omitempty"`
+}
+
+func (s Service) Assignments(st *domain.State, t authorization.Target) ([]ListedAssignment, error) {
+	out := []ListedAssignment{}
+	activeAdminGrants := 0
+	lastAdminIndex := 0
+
+	for _, assignment := range st.Assignments {
+		if !assignmentScope(st, assignment, t) {
+			continue
 		}
+		if t.Kind == "organization" && s.isActiveOrganizationAdminGrant(st, t.ID, assignment) {
+			activeAdminGrants++
+			lastAdminIndex = len(out)
+		}
+		out = append(out, ListedAssignment{Assignment: assignment})
+	}
+	if activeAdminGrants == 1 {
+		out[lastAdminIndex].RevokeBlocked = true
 	}
 	return out, nil
 }
@@ -77,6 +93,7 @@ func (s Service) WriteAssignment(st *domain.State, t authorization.Target, assig
 	}
 	id := securetoken.NewID("role")
 	rev := 1
+	changesAdmin := t.Kind == "organization" && in.Role == "org_admin"
 	if update {
 		id = assignmentID
 		old, ok := st.Assignments[id]
@@ -87,10 +104,17 @@ func (s Service) WriteAssignment(st *domain.State, t authorization.Target, assig
 			return domain.Assignment{}, domain.Problem(409, "REVISION_CONFLICT", "Assignment changed")
 		}
 		rev = old.Revision + 1
+		changesAdmin = changesAdmin || (t.Kind == "organization" && old.Role == "org_admin")
 	}
+	hadAdmin := changesAdmin && s.hasOrganizationAdmin(st, t.ID)
 	a := domain.Assignment{ID: id, SubjectKind: in.SubjectKind, SubjectID: in.SubjectID, Role: in.Role, ScopeKind: in.ScopeKind, ScopeID: in.ScopeID, Conditions: in.Conditions, Revision: rev}
 	st.Assignments[id] = a
 	st.Revision++
+	if changesAdmin {
+		if err := s.finishOrganizationAdminChange(st, t.ID, hadAdmin); err != nil {
+			return domain.Assignment{}, err
+		}
+	}
 	if e := s.ensureAdmin(st); e != nil {
 		return domain.Assignment{}, e
 	}
@@ -102,8 +126,15 @@ func (s Service) DeleteAssignment(st *domain.State, t authorization.Target, id s
 	if !ok || !assignmentScope(st, a, t) {
 		return domain.NotFound()
 	}
+	changesAdmin := t.Kind == "organization" && a.Role == "org_admin"
+	hadAdmin := changesAdmin && s.hasOrganizationAdmin(st, t.ID)
 	delete(st.Assignments, a.ID)
 	st.Revision++
+	if changesAdmin {
+		if err := s.finishOrganizationAdminChange(st, t.ID, hadAdmin); err != nil {
+			return err
+		}
+	}
 	if e := s.ensureAdmin(st); e != nil {
 		return e
 	}
