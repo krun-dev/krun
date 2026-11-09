@@ -28,6 +28,7 @@ func (s *Server) apiRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/v1/orgs/{org}/members", s.protected(true, s.memberAdd))
 	m.HandleFunc("DELETE /api/v1/orgs/{org}/members/{user}", s.protected(true, s.memberDelete))
 	for _, base := range []string{"/api/v1/orgs/{org}", "/api/v1/system"} {
+		m.HandleFunc("GET "+base+"/audit/export", s.protected(false, s.auditExport))
 		m.HandleFunc("GET "+base+"/groups", s.protected(false, s.groupList))
 		m.HandleFunc("POST "+base+"/groups", s.protected(true, s.groupCreate))
 		m.HandleFunc("PATCH "+base+"/groups/{group}", s.protected(true, s.groupUpdate))

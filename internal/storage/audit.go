@@ -3,12 +3,12 @@ package storage
 import (
 	"context"
 	"errors"
-	models "github.com/krun-dev/krun/internal/storage/models"
 	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/krun-dev/krun/internal/domain"
+	"github.com/krun-dev/krun/internal/storage/models"
 )
 
 // flushAudits writes a request-local batch atomically. IAM mutations call the
@@ -89,11 +89,19 @@ func PruneMemoryAudits(entries []domain.Audit, at time.Time) []domain.Audit {
 	return kept
 }
 
-// readAudits returns entries newer than cutoff, newest first, optionally
+// ReadAudits returns entries newer than cutoff, newest first, optionally
 // scoped to an organization.
 func (s *Store) ReadAudits(ctx context.Context, cutoff time.Time, organization string, limit int) ([]domain.Audit, error) {
+	return s.ReadAuditSnapshot(ctx, cutoff, now(), organization, limit)
+}
+
+// ReadAuditSnapshot applies the time window before limiting the result so newer
+// records cannot displace rows from a previous snapshot.
+func (s *Store) ReadAuditSnapshot(ctx context.Context, cutoff, asOf time.Time, organization string, limit int) ([]domain.Audit, error) {
 	if s.pool != nil {
-		rows, err := s.pool.Query(ctx, `SELECT id, time, actor, credential, key_id, action, resource, organization_id, allowed, request_id, revision FROM krun_audits WHERE time >= $1 AND ($2 = '' OR organization_id = $2) ORDER BY time DESC, id DESC LIMIT $3`, cutoff, organization, limit)
+		rows, err := s.pool.Query(ctx, `SELECT id, time, actor, credential, key_id, action, resource, organization_id, allowed, request_id, revision FROM krun_audits WHERE time BETWEEN $1 AND $2
+			  AND ($3 = '' OR organization_id = $3)
+			ORDER BY time DESC, id DESC LIMIT $4`, cutoff, asOf, organization, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -108,7 +116,7 @@ func (s *Store) ReadAudits(ctx context.Context, cutoff time.Time, organization s
 		}
 		return out, rows.Err()
 	}
-	// No lock here: auditList runs inside protected()'s Update transaction,
+	// No lock here: audit queries run inside protected()'s Update transaction,
 	// so taking mu would self-deadlock. Tests using the memory store are
 	// single-threaded.
 	all := PruneMemoryAudits(append([]domain.Audit(nil), s.memoryAudits...), now())
@@ -120,7 +128,7 @@ func (s *Store) ReadAudits(ctx context.Context, cutoff time.Time, organization s
 	})
 	out := []domain.Audit{}
 	for _, a := range all {
-		if a.Time.Before(cutoff) || (organization != "" && a.Organization != organization) {
+		if a.Time.Before(cutoff) || a.Time.After(asOf) || (organization != "" && a.Organization != organization) {
 			continue
 		}
 		out = append(out, a)

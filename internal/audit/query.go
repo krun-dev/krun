@@ -38,48 +38,48 @@ func EncodeCursor(cursor Cursor) string {
 }
 
 type Reader interface {
-	ReadAudits(context.Context, time.Time, string, int) ([]domain.Audit, error)
+	ReadAuditSnapshot(context.Context, time.Time, time.Time, string, int) ([]domain.Audit, error)
 }
 
-func List(ctx context.Context, store Reader, st *domain.State, t authorization.Target, limit int, current string, at time.Time) (Page, error) {
-	cursor := Cursor{Scope: t.Kind + ":" + t.ID, AsOf: at}
+const snapshotLimit = 5000
+
+func readSnapshot(ctx context.Context, store Reader, t authorization.Target, current string, at time.Time) (Cursor, []domain.Audit, error) {
+	scope := t.Kind + ":" + t.ID
+	cursor := Cursor{Scope: scope, AsOf: at}
 	if current != "" {
 		if len(current) > 2048 {
-			return Page{}, domain.Problem(400, "INVALID_REQUEST", "Invalid audit cursor")
+			return Cursor{}, nil, domain.Problem(400, "INVALID_REQUEST", "Invalid audit cursor")
 		}
 		raw, err := base64.RawURLEncoding.DecodeString(current)
-		if err != nil || configfile.DecodeJSON(raw, &cursor) != nil || cursor.Scope != t.Kind+":"+t.ID || cursor.AsOf.IsZero() || cursor.AsOf.After(at) || (cursor.Before == nil) != (cursor.ID == "") || (cursor.Before != nil && cursor.Before.After(cursor.AsOf)) {
-			return Page{}, domain.Problem(400, "INVALID_REQUEST", "Invalid audit cursor")
+		if err != nil || configfile.DecodeJSON(raw, &cursor) != nil || cursor.Scope != scope || cursor.AsOf.IsZero() || cursor.AsOf.After(at) ||
+			(cursor.Before == nil) != (cursor.ID == "") || (cursor.Before != nil && cursor.Before.After(cursor.AsOf)) {
+			return Cursor{}, nil, domain.Problem(400, "INVALID_REQUEST", "Invalid audit cursor")
 		}
 		if cursor.AsOf.Before(at.Add(-storage.AuditRetention)) {
-			return Page{}, domain.Problem(409, "AUDIT_CURSOR_EXPIRED", "Audit pagination expired. Refresh the list.")
+			return Cursor{}, nil, domain.Problem(409, "AUDIT_CURSOR_EXPIRED", "Audit pagination expired. Refresh the list.")
 		}
-	} else {
+	}
+
+	organization := ""
+	if t.Kind != "system" {
+		organization = t.ID
+	}
+	entries, err := store.ReadAuditSnapshot(ctx, at.Add(-storage.AuditRetention), cursor.AsOf, organization, snapshotLimit)
+	if err != nil {
+		return Cursor{}, nil, domain.Problem(503, "AUTHORIZATION_UNAVAILABLE", "Control service unavailable")
+	}
+	return cursor, entries, nil
+}
+
+func List(ctx context.Context, store Reader, t authorization.Target, limit int, current string, at time.Time) (Page, error) {
+	cursor, matching, err := readSnapshot(ctx, store, t, current, at)
+	if err != nil {
+		return Page{}, err
+	}
+	if current == "" {
 		current = EncodeCursor(cursor)
 	}
-	scope := ""
-	if t.Kind != "system" {
-		scope = t.ID
-	}
-	cutoff := at.Add(-storage.AuditRetention)
-	entries, err := store.ReadAudits(ctx, cutoff, scope, 5000)
-	if err != nil {
-		return Page{}, domain.Problem(503, "AUTHORIZATION_UNAVAILABLE", "Control service unavailable")
-	}
-	matching := []domain.Audit{}
-	for _, entry := range entries {
-		if entry.Time.After(cursor.AsOf) {
-			continue
-		}
-		if t.Kind == "system" || entry.Organization == t.ID {
-			matching = append(matching, entry)
-			continue
-		}
-		resource, ok := st.Resources[entry.Resource]
-		if ok && resource.Organization == t.ID {
-			matching = append(matching, entry)
-		}
-	}
+
 	page := Page{Items: []domain.Audit{}, Total: len(matching), Limit: limit, Cursor: current, AsOf: cursor.AsOf, RetentionDays: 7}
 	for _, entry := range matching {
 		if cursor.Before != nil && (entry.Time.After(*cursor.Before) || (entry.Time.Equal(*cursor.Before) && entry.ID >= cursor.ID)) {
@@ -97,5 +97,4 @@ func List(ctx context.Context, store Reader, st *domain.State, t authorization.T
 		page.NextCursor = EncodeCursor(cursor)
 	}
 	return page, nil
-
 }

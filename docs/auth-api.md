@@ -141,6 +141,7 @@ Key 范围和撤权检查逐请求生效。模型执行相关动作仍是预留�
 | GET/POST /orgs/:org/workers、/models | S K | list/create，对列表逐资源 read 检查 |
 | GET/PATCH/DELETE /orgs/:org/workers/:resource、/models/:resource | S K | read/update/delete；路径组织与实际归属一致 |
 | GET /system/audit、/orgs/:org/audit | S K | audit.read，游标分页，仅最近 7 天；limit 默认 50、最大 500 |
+| GET /system/audit/export、/orgs/:org/audit/export | S K | audit.read，下载当前范围的 CSV，默认脱敏 |
 
 JSON DTO 拒绝未知字段和重复键，正文上限 1 MiB。资源/组/Key/Assignment 的更新需要 expected_revision，不匹配 409。创建返回稳定随机 ID；删除后不会复用。名单、组织成员和组写入读取最新事实，禁止跨组织组/角色；错误的用户或资源不会被隐式创建。
 
@@ -174,6 +175,10 @@ Workers 的构建、发布、回滚与调用接口见 [Workers 后端](workers-b
 
 响应为 `{items,total,limit,has_more,cursor,next_cursor,as_of,retention_days}`；最后一页 `has_more:false, next_cursor:""`。按 time / id 倒序，首个请求固定 `as_of` 快照；翻页和返回之前的 `cursor` 不受新日志插入影响。刷新时不传 cursor 获取最新快照。`total` 统计该快照中仍处于保留期且属于请求范围的记录；若翻页期间记录跨过 7 天边界，过期记录仍会被删除。超过保留期的游标返回 409 `AUDIT_CURSOR_EXPIRED`，无效、篡改、跨范围游标及非法 limit 返回 400。
 
-审计仅保留滚动最近 7 天。后台保留任务每分钟清理过期行，空闲时也生效；未提供长期归档。
+列表与 CSV 导出共用同一快照查询，最多包含范围内最近的 5,000 条记录。审计仅保留滚动最近 7 天。后台保留任务每分钟清理过期行，空闲时也生效；未提供长期归档。
+
+在控制台审计页选择「导出 CSV」可下载当前组织或全平台的整个快照。导出默认启用「脱敏导出」，遮盖记录、主体、API Key、资源、组织和请求的标识，保留时间、凭据类型、动作、决策和 revision。取消勾选后可导出完整标识。
+
+API 为 `GET /api/v1/system/audit/export` 或 `GET /api/v1/orgs/:org/audit/export`，返回带 UTF-8 BOM 的 `krun-audit.csv`。可传入列表响应的 `cursor` 复用其快照时间，CSV 不受该游标的页位置影响；不传则导出最新快照。`redact=true` 为默认值，显式传入 `redact=false` 可保留完整标识。导出与列表检查相同的 `audit.read` 权限。
 
 CLI 同步支持 `krun audit --org ID --limit 100 --cursor CURSOR`；不指定 org 查询系统审计，仍要求系统审计权限。
