@@ -46,7 +46,7 @@ func TestCLIControlOAuthLoginRefreshAndLogoutContract(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			done := make(chan error, 1)
-			args := []string{"login", "--browser=false", "--endpoint", httpServer.URL, "--config", profilePath}
+			args := []string{"login", "--browser=false", "--endpoint", httpServer.URL, "--profile", profilePath}
 			if device {
 				args = append(args, "--device")
 			} else {
@@ -135,14 +135,14 @@ func TestCLIControlOAuthLoginRefreshAndLogoutContract(t *testing.T) {
 				t.Fatal(err)
 			}
 			var status bytes.Buffer
-			if err := kruncli.Run(context.Background(), []string{"whoami", "--config", profilePath}, strings.NewReader(""), &status, &status); err != nil {
+			if err := kruncli.Run(context.Background(), []string{"whoami", "--profile", profilePath}, strings.NewReader(""), &status, &status); err != nil {
 				t.Fatal("automatic refresh failed", err)
 			}
 			current := load()
 			if current.Token == initial.Token || current.RefreshToken == initial.RefreshToken {
 				t.Fatal("CLI refresh did not rotate and save")
 			}
-			if err := kruncli.Run(context.Background(), []string{"logout", "--config", profilePath}, strings.NewReader(""), &status, &status); err != nil {
+			if err := kruncli.Run(context.Background(), []string{"logout", "--profile", profilePath}, strings.NewReader(""), &status, &status); err != nil {
 				t.Fatal(err)
 			}
 			if profile := load(); profile.Token != "" || profile.RefreshToken != "" {
@@ -173,7 +173,7 @@ func TestCLIWorkerPermissionsAndAuditContract(t *testing.T) {
 			t.Fatal(err)
 		}
 		var output bytes.Buffer
-		args = append(args, "--config", profilePath)
+		args = append(args, "--profile", profilePath)
 		err = kruncli.Run(context.Background(), args, strings.NewReader(""), &output, &output)
 		return output.String(), err
 	}

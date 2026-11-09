@@ -49,7 +49,7 @@ krun logout
 ```
 
 默认启动本机 8976 端口接收回调，可用 `--callback-port 0` 选择空闲端口。SSH 等不便
-接收本机回调的场景使用 `--device`。`--browser=false` / `--no-browser` 打印链接。
+接收本机回调的场景使用 `--device`。`--browser=false` 打印链接。
 已有 API Key 仍可通过 `--token-stdin` 保存；不参与 OAuth 刷新。
 CLI 配置文件权限为 0600，包含 access/refresh 和到期时间；请求前自动续期，认证返回
 401 时最多刷新一次重试。切换 server 或使用显式 KRUN_TOKEN 时不会携带旧刷新凭据。
@@ -201,4 +201,4 @@ Workers 的构建、发布、回滚与调用接口见 [Workers 后端](workers-b
 
 API 为 `GET /api/v1/system/audit/export` 或 `GET /api/v1/orgs/:org/audit/export`，返回带 UTF-8 BOM 的 `krun-audit.csv`。可传入列表响应的 `cursor` 复用其快照时间，CSV 不受该游标的页位置影响；不传则导出最新快照。`redact=true` 为默认值，显式传入 `redact=false` 可保留完整标识。导出与列表检查相同的 `audit.read` 权限。
 
-CLI 同步支持 `krun audit --org ID --limit 100 --cursor CURSOR`；不指定 org 查询系统审计，仍要求系统审计权限。
+CLI 同步支持 `krun audit --org ID --limit 100 --cursor CURSOR`。配置默认组织后可省略 `--org`。使用 `krun audit --system` 查询系统审计，需要系统审计权限。

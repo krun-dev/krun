@@ -90,17 +90,17 @@ func (c *Client) refreshOAuth(ctx context.Context) error {
 	if err != nil {
 		var invalid *responseError
 		if errors.As(err, &invalid) && invalid.Code == "invalid_grant" {
-			c.clearCredentials()
+			c.Profile.clearCredentials()
 			_ = c.save()
 		}
 		return err
 	}
 	return c.acceptOAuth(t)
 }
-func (c *Client) clearCredentials() {
-	c.Profile.Token = ""
-	c.Profile.RefreshToken = ""
-	c.Profile.Expires = time.Time{}
+func (p *Profile) clearCredentials() {
+	p.Token = ""
+	p.RefreshToken = ""
+	p.Expires = time.Time{}
 }
 func (c *Client) request(ctx context.Context, method, path string, input, output any, anonymous bool, headers ...func(http.Header)) error {
 	if !anonymous && c.Profile.RefreshToken != "" && !c.Profile.Expires.IsZero() && time.Until(c.Profile.Expires) < 30*time.Second {

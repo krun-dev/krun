@@ -20,7 +20,7 @@ func TestLanguageNegotiation(t *testing.T) {
 }
 
 func TestOutputPreservesValuesAndErrorIdentity(t *testing.T) {
-	if got := Text(Chinese, `unknown command "测试"; use krun help`); got != `未知命令 "测试"；请运行 krun help` {
+	if got := Text(Chinese, `unknown command "测试"; use krun --help`); got != `未知命令 "测试"；请运行 krun --help` {
 		t.Fatal(got)
 	}
 	if got := Format(Chinese, "environment variable %s is unset or empty", "KRUN_DB"); got != "环境变量 KRUN_DB 未设置或为空" {

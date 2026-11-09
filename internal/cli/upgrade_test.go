@@ -210,13 +210,11 @@ func TestVersionDoesNotRequireAProfile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("invalid: ["), 0600); err != nil {
 		t.Fatal(err)
 	}
-	for _, command := range []string{"version", "--version"} {
-		var out bytes.Buffer
-		if err := Run(context.Background(), []string{command, "--config", path}, strings.NewReader(""), &out, &out); err != nil {
-			t.Fatal(err)
-		}
-		if out.String() != "krun "+Version+"\n" {
-			t.Fatal(out.String())
-		}
+	var out bytes.Buffer
+	if err := Run(context.Background(), []string{"--version", "--profile", path}, strings.NewReader(""), &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "krun "+Version+"\n" {
+		t.Fatal(out.String())
 	}
 }

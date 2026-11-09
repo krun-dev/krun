@@ -32,6 +32,10 @@ local-first 私有对象存储验收使用 `deploy/workers-dev/storage.e2e.mjs`�
 同时设置 `KRUN_STORAGE_PREFIX`。它覆盖真实上传、构建、发布、静态资产、浏览器调用
 和业务 Worker 的出站隔离。
 
+原生 CLI 的私有仓库与 R2 验收见[从私有仓库构建并发布带 R2 的 Worker](../user-docs/src/content/docs/guides/krun-cli.md#从私有仓库构建并发布带-r2-的-worker)。local-first 验收从同源入口调用 CLI，控制面需运行 Workers reconciler，且应通过 `workers.validator_pool` 选中已启动的独立 validator。确认 validator 的 `/ready` 返回 `role: validator` 和 `validation_protocol: 1`，再提交发布。
+
+验收时先确认私库拒绝匿名 Git 读取，并通过已授权的 provider 绑定仓库。受控 HTTPS Git 仓库可以验证 krun 的 OAuth、私有 checkout、构建、发布和 R2 链路。实际 GitHub App 或 GitLab 的仓库访问权限需使用目标 provider 验证。记录构建的提交 SHA 和制品 ID，发布后核对操作进入 `available`，且目标环境的确认版本与发布版本一致。最后分别执行 CLI 上传后由 Worker 读取、Worker 写入后由 CLI 下载，两次比较对象内容。验收报告仅记录资源 ID、提交 SHA、构建和操作状态、HTTP 状态及比较结果。
+
 权限、组织自助创建与对象浏览器可在独立 schema 和临时 MinIO 上验收：
 
 ```sh

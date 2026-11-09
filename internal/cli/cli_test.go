@@ -32,7 +32,7 @@ func TestBuildLogs(t *testing.T) {
 	defer server.Close()
 	var out bytes.Buffer
 	c := Client{Profile: Profile{Endpoint: server.URL, Token: "krun_cli_test"}, Out: &out, Err: &out}
-	if err := c.buildLogs(context.Background(), []string{"logs", "--org", "org", "--worker", "svc", "--build", "bld", "--follow"}); err != nil {
+	if err := c.buildLogs(context.Background(), []string{"--org", "org", "--worker", "svc", "--build", "bld", "--follow"}); err != nil {
 		t.Fatal(err)
 	}
 	if out.String() != "build complete\n" {
@@ -52,7 +52,7 @@ func TestTokenLoginPermissionsAndLogout(t *testing.T) {
 	defer server.Close()
 	path := filepath.Join(t.TempDir(), "nested", "profile.yaml")
 	var out, errOut bytes.Buffer
-	args := []string{"login", "--token-stdin", "--endpoint", server.URL, "--config", path}
+	args := []string{"login", "--token-stdin", "--endpoint", server.URL, "--profile", path}
 	if e := Run(context.Background(), args, strings.NewReader("krun_key_test\n"), &out, &errOut); e != nil {
 		t.Fatal(e)
 	}
@@ -68,7 +68,7 @@ func TestTokenLoginPermissionsAndLogout(t *testing.T) {
 	if profile.Token != "krun_key_test" {
 		t.Fatal("token not saved")
 	}
-	if e = Run(context.Background(), []string{"logout", "--config", path}, strings.NewReader(""), &out, &errOut); e != nil {
+	if e = Run(context.Background(), []string{"logout", "--profile", path}, strings.NewReader(""), &out, &errOut); e != nil {
 		t.Fatal(e)
 	}
 	raw, _ = os.ReadFile(path)
@@ -90,7 +90,7 @@ func TestServerSwitchDoesNotLeakSavedToken(t *testing.T) {
 	raw, _ := configfile.Marshal(path, Profile{Endpoint: "https://old.example.com", Token: "saved-secret"})
 	_ = os.WriteFile(path, raw, 0600)
 	var out bytes.Buffer
-	if e := Run(context.Background(), []string{"whoami", "--endpoint", server.URL, "--config", path}, strings.NewReader(""), &out, &out); e != nil {
+	if e := Run(context.Background(), []string{"whoami", "--endpoint", server.URL, "--profile", path}, strings.NewReader(""), &out, &out); e != nil {
 		t.Fatal(e)
 	}
 	if received != "" {
@@ -144,7 +144,7 @@ statements:
 			profile, _ := configfile.Marshal(config, Profile{Endpoint: server.URL, Token: "krun_cli_test"})
 			_ = os.WriteFile(config, profile, 0600)
 			var out bytes.Buffer
-			e := Run(context.Background(), []string{"keys", "create", "--system", "--name", "test", "--policy", policyFile, "--expires", tc.flag, "--config", config}, strings.NewReader(""), &out, &out)
+			e := Run(context.Background(), []string{"keys", "create", "--system", "--name", "test", "--policy", policyFile, "--expires", tc.flag, "--profile", config}, strings.NewReader(""), &out, &out)
 			if (e == nil) != tc.valid || called != tc.valid {
 				t.Fatalf("valid=%t called=%t error=%v", tc.valid, called, e)
 			}
@@ -167,12 +167,12 @@ func TestAuditPaginationFlags(t *testing.T) {
 	raw, _ := configfile.Marshal(config, Profile{Endpoint: server.URL, Token: "krun_cli_test"})
 	_ = os.WriteFile(config, raw, 0600)
 	var out bytes.Buffer
-	err := Run(context.Background(), []string{"audit", "--org", "org-a", "--limit", "100", "--cursor", "opaque+/=cursor", "--config", config}, strings.NewReader(""), &out, &out)
+	err := Run(context.Background(), []string{"audit", "--org", "org-a", "--limit", "100", "--cursor", "opaque+/=cursor", "--profile", config}, strings.NewReader(""), &out, &out)
 	if err != nil || !called {
 		t.Fatal("audit pagination request failed", err)
 	}
 	called = false
-	err = Run(context.Background(), []string{"audit", "--limit", "501", "--config", config}, strings.NewReader(""), &out, &out)
+	err = Run(context.Background(), []string{"audit", "--limit", "501", "--profile", config}, strings.NewReader(""), &out, &out)
 	if err == nil || called {
 		t.Fatal("invalid page size reached server")
 	}
@@ -204,7 +204,7 @@ func TestYAMLInputReachesJSONAPI(t *testing.T) {
 	defer server.Close()
 	config := filepath.Join(dir, "profile.yaml")
 	var out bytes.Buffer
-	args := []string{"api", "--method", "POST", "--path", "/api/v1/test", "--file", input, "--endpoint", server.URL, "--config", config}
+	args := []string{"api", "--method", "POST", "--path", "/api/v1/test", "--file", input, "--endpoint", server.URL, "--profile", config}
 	if err := Run(context.Background(), args, strings.NewReader(""), &out, &out); err != nil || !called {
 		t.Fatal("YAML request failed", err)
 	}
@@ -222,7 +222,7 @@ func TestYAMLInputReachesJSONAPI(t *testing.T) {
 func TestCLIRejectsJSONProfiles(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "profile.json")
 	var out bytes.Buffer
-	if err := Run(context.Background(), []string{"logout", "--config", path}, strings.NewReader(""), &out, &out); err == nil {
+	if err := Run(context.Background(), []string{"logout", "--profile", path}, strings.NewReader(""), &out, &out); err == nil {
 		t.Fatal("new JSON config accepted")
 	}
 	if err := os.WriteFile(path, []byte(`{"server":"http://127.0.0.1:8080","token":"old-token"}`), 0600); err != nil {
@@ -239,7 +239,7 @@ func TestCLIRejectsJSONProfiles(t *testing.T) {
 func TestLoginRejectsAmbiguousFlowFlags(t *testing.T) {
 	for _, args := range [][]string{{"login", "--device", "--token-stdin"}, {"login", "--device", "--callback-port", "8976"}, {"login", "unexpected"}} {
 		var out bytes.Buffer
-		err := Run(context.Background(), append(args, "--config", filepath.Join(t.TempDir(), "profile.yaml")), strings.NewReader(""), &out, &out)
+		err := Run(context.Background(), append(args, "--profile", filepath.Join(t.TempDir(), "profile.yaml")), strings.NewReader(""), &out, &out)
 		if err == nil {
 			t.Fatal("ambiguous login accepted", args)
 		}

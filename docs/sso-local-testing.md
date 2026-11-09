@@ -79,10 +79,10 @@ CloudSSO / RAM 控制台登录、SAML、公司自定义 ticket / 签名验票不
 4. 用独立 CLI 配置测试浏览器批准、API 调用和退出：
 
    ```bash
-   ./bin/krun --config .data/cli-sso-test.yaml login --endpoint http://127.0.0.1:5173
-   ./bin/krun --config .data/cli-sso-test.yaml whoami
-   ./bin/krun --config .data/cli-sso-test.yaml org list
-   ./bin/krun --config .data/cli-sso-test.yaml logout
+   ./bin/krun --profile .data/cli-sso-test.yaml login --endpoint http://127.0.0.1:5173
+   ./bin/krun --profile .data/cli-sso-test.yaml whoami
+   ./bin/krun --profile .data/cli-sso-test.yaml org list
+   ./bin/krun --profile .data/cli-sso-test.yaml logout
    ```
 
    终端应核对确认码；批准后的 token 只能领取一次，logout 后立即失效。

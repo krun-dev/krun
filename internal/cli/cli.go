@@ -19,25 +19,36 @@ import (
 	"github.com/krun-dev/krun/internal/configfile"
 )
 
+const defaultEndpoint = "http://127.0.0.1:8080"
+
 type Profile struct {
 	Endpoint     string    `json:"endpoint"`
+	Organization string    `json:"org,omitempty"`
 	Token        string    `json:"token"`
 	RefreshToken string    `json:"refresh_token,omitempty"`
 	Expires      time.Time `json:"expires_at,omitempty"`
 }
 type Client struct {
-	Profile  Profile
-	Path     string
-	Out, Err io.Writer
-	In       io.Reader
-	HTTP     *http.Client
+	Profile    Profile
+	configPath string
+	Path       string
+	Out, Err   io.Writer
+	In         io.Reader
+	HTTP       *http.Client
 }
 type responseError struct {
 	Status        int
 	Code, Message string
+	RequestID     string
 }
 
-func (e *responseError) Error() string { return e.Code + ": " + e.Message }
+func (e *responseError) Error() string {
+	message := e.Code + ": " + e.Message
+	if e.RequestID != "" {
+		message += " (request ID: " + e.RequestID + ")"
+	}
+	return message
+}
 func validateEndpoint(endpoint string) error {
 	u, e := url.Parse(endpoint)
 	if e != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" && u.Path != "/" {
@@ -95,7 +106,7 @@ func (c *Client) requestOnce(ctx context.Context, method, path string, input any
 		if json.Unmarshal(data, &envelope) != nil {
 			return fmt.Errorf("API returned HTTP %d", response.StatusCode)
 		}
-		return &responseError{response.StatusCode, envelope.Error.Code, envelope.Error.Message}
+		return &responseError{Status: response.StatusCode, Code: envelope.Error.Code, Message: envelope.Error.Message, RequestID: response.Header.Get("X-Request-ID")}
 	}
 	if len(headers) > 0 {
 		headers[0](response.Header)
@@ -136,20 +147,11 @@ func (c *Client) save() error {
 	return os.Rename(name, c.Path)
 }
 func (c *Client) call(ctx context.Context, method, path string, input any) error {
-	var out any
+	var out json.RawMessage
 	if e := c.request(ctx, method, path, input, &out, false); e != nil {
 		return e
 	}
-	if out == nil {
-		fmt.Fprintln(c.Out, "Done.")
-		return nil
-	}
-	raw, e := json.MarshalIndent(out, "", "  ")
-	if e != nil {
-		return e
-	}
-	fmt.Fprintln(c.Out, string(raw))
-	return nil
+	return c.outputJSON(out)
 }
 func defaultPath() string {
 	root, e := os.UserConfigDir()
@@ -164,71 +166,89 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 			result = nil
 		}
 	}()
-	path := defaultPath()
+	var profileSelection, configPath string
 	endpoint := os.Getenv("KRUN_ENDPOINT")
 	filtered := []string{}
 	for i := 0; i < len(args); i++ {
-		if args[i] == "--endpoint" || args[i] == "--config" {
-			if i+1 >= len(args) {
-				return errors.New("missing global flag value")
+		if args[i] == "--" {
+			filtered = append(filtered, args[i:]...)
+			break
+		}
+		name, value, inline := strings.Cut(args[i], "=")
+		if name == "--endpoint" || name == "--config" || name == "--profile" {
+			if !inline {
+				if i+1 >= len(args) {
+					return fmt.Errorf("%s requires a value", name)
+				}
+				i++
+				value = args[i]
 			}
-			value := args[i+1]
-			if args[i] == "--endpoint" {
+			if value == "" {
+				return fmt.Errorf("%s requires a value", name)
+			}
+			switch name {
+			case "--endpoint":
 				endpoint = value
-			} else {
-				path = value
+			case "--profile":
+				profileSelection = value
+			case "--config":
+				configPath = value
 			}
-			i++
 		} else {
 			filtered = append(filtered, args[i])
 		}
 	}
-	if len(filtered) > 0 && (filtered[0] == "version" || filtered[0] == "--version") {
+	if len(filtered) > 0 && filtered[0] == "--version" {
 		if len(filtered) != 1 {
-			return errors.New("version does not accept arguments")
+			return errors.New("--version does not accept arguments")
 		}
 		fmt.Fprintln(out, "krun", Version)
 		return nil
 	}
-	c := &Client{Path: path, In: in, Out: out, Err: errOut}
-	profile, e := loadProfile(path)
-	if e != nil {
-		return e
-	}
-	c.Profile = profile
-	if endpoint != "" && strings.TrimRight(endpoint, "/") != strings.TrimRight(c.Profile.Endpoint, "/") {
-		c.clearCredentials()
-		c.Profile.Endpoint = endpoint
-	}
-	if c.Profile.Endpoint == "" {
-		c.Profile.Endpoint = "http://127.0.0.1:8080"
-	}
-	if token := os.Getenv("KRUN_TOKEN"); token != "" {
-		c.clearCredentials()
-		c.Profile.Token = token
-	}
-	if len(filtered) == 0 || filtered[0] == "help" || filtered[0] == "--help" {
+	if len(filtered) == 0 || filtered[0] == "--help" {
 		fmt.Fprint(out, help)
 		return nil
 	}
-	if filtered[0] == "auth" {
-		filtered = filtered[1:]
-		if len(filtered) == 0 {
-			return errors.New("use auth login, logout or status")
-		}
-	}
 	command := filtered[0]
 	rest := filtered[1:]
+	if configPath != "" && command != "deploy" {
+		return errors.New("--config selects a Wrangler file for deploy --dry-run; use --profile to select CLI credentials")
+	}
+	path, e := profilePath(profileSelection)
+	if e != nil {
+		return e
+	}
+	c := &Client{Path: path, configPath: configPath, In: in, Out: out, Err: errOut}
+	token := os.Getenv("KRUN_TOKEN")
+	if command == "deploy" {
+		return c.deploy(ctx, command, rest, func() error {
+			_, _, err := c.loadSession(endpoint, token)
+			return err
+		})
+	}
+	profile, temporaryEndpoint, e := c.loadSession(endpoint, token)
+	if e != nil {
+		return e
+	}
 	switch command {
 	case "config":
-		return c.configure(rest)
+		return c.configure(rest, profile)
 	case "upgrade":
 		return c.upgrade(ctx, rest)
 	case "login":
 		return c.login(ctx, rest)
-	case "whoami", "status":
+	case "whoami":
+		if len(rest) != 0 {
+			return errors.New("whoami does not accept arguments")
+		}
 		return c.call(ctx, "GET", "/api/v1/me", nil)
 	case "logout":
+		if len(rest) != 0 {
+			return errors.New("logout does not accept arguments")
+		}
+		if temporaryEndpoint || token != "" {
+			return errors.New("logout requires the saved profile; remove temporary endpoint and KRUN_TOKEN overrides")
+		}
 		if c.Profile.RefreshToken != "" {
 			if e = c.oauthForm(ctx, "/revoke", url.Values{"client_id": {cliOAuthClient}, "token": {c.Profile.RefreshToken}}, nil); e != nil {
 				return e
@@ -241,22 +261,34 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 				}
 			}
 		}
-		c.clearCredentials()
+		c.Profile.clearCredentials()
 		if e = c.save(); e != nil {
 			return e
 		}
 		fmt.Fprintln(out, "Logged out.")
 		return nil
-	case "org", "orgs", "members", "groups", "roles", "keys", "workers", "models":
+	case "workers":
+		return c.workers(ctx, rest)
+	case "r2":
+		return c.r2(ctx, rest)
+	case "rollback":
+		return c.deploy(ctx, command, rest, nil)
+	case "deployments":
+		return c.deployments(ctx, rest)
+	case "versions":
+		return c.versions(ctx, rest)
+	case "secret":
+		return c.secret(ctx, rest)
+	case "org", "members", "groups", "roles", "keys", "models":
 		return c.manage(ctx, command, rest)
 	case "build":
-		return c.buildLogs(ctx, rest)
+		return c.build(ctx, rest)
 	case "check":
 		f := flags("check", errOut)
 		action := f.String("action", "", "Action")
 		kind := f.String("kind", "", "Resource kind")
 		id := f.String("id", "", "Resource ID")
-		environment := f.String("environment", "global", "Target environment")
+		environment := f.String("env", "global", "Target environment")
 		if e = f.Parse(rest); e != nil {
 			return e
 		}
@@ -266,7 +298,8 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		return c.call(ctx, "POST", "/api/v1/authz/check", map[string]string{"action": *action, "resource_kind": *kind, "resource_id": *id, "environment": *environment})
 	case "audit":
 		f := flags("audit", errOut)
-		org := f.String("org", "", "Organization (omit for system)")
+		org := c.orgFlag(f)
+		system := f.Bool("system", false, "Query system audit instead of organization audit")
 		limit := f.Int("limit", 50, "Audit page size (1–500)")
 		cursor := f.String("cursor", "", "Cursor returned by the previous audit page")
 		if e = f.Parse(rest); e != nil {
@@ -275,8 +308,16 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		if *limit < 1 || *limit > 500 || f.NArg() != 0 {
 			return errors.New("audit requires --limit between 1 and 500 and no positional arguments")
 		}
+		if flagSet(f, "org") {
+			if *system {
+				return errors.New("--system and --org cannot be combined")
+			}
+			if *org == "" {
+				return errors.New("--org requires an organization ID")
+			}
+		}
 		base := "/api/v1/system"
-		if *org != "" {
+		if !*system && *org != "" {
 			base = "/api/v1/orgs/" + url.PathEscape(*org)
 		}
 		query := url.Values{"limit": {strconv.Itoa(*limit)}}
@@ -301,7 +342,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		}
 		return c.call(ctx, *method, *path, input)
 	default:
-		return fmt.Errorf("unknown command %q; use krun help", command)
+		return fmt.Errorf("unknown command %q; use krun --help", command)
 	}
 }
 func flags(name string, errOut io.Writer) *flag.FlagSet {
@@ -312,7 +353,6 @@ func flags(name string, errOut io.Writer) *flag.FlagSet {
 func (c *Client) login(ctx context.Context, args []string) error {
 	f := flags("login", c.Err)
 	stdin := f.Bool("token-stdin", false, "Read API Key from stdin")
-	noBrowser := f.Bool("no-browser", false, "Print URL without opening browser")
 	browser := f.Bool("browser", true, "Open the sign-in page in a browser")
 	device := f.Bool("device", false, "Use a device code instead of a loopback callback")
 	port := f.Int("callback-port", 8976, "Loopback callback port; 0 chooses a free port")
@@ -342,7 +382,7 @@ func (c *Client) login(ctx context.Context, args []string) error {
 		if !strings.HasPrefix(token, "krun_key_") {
 			return errors.New("krun API Key required")
 		}
-		c.clearCredentials()
+		c.Profile.clearCredentials()
 		c.Profile.Token = token
 		var me any
 		if e = c.request(ctx, "GET", "/api/v1/me", nil, &me, false); e != nil {
@@ -359,9 +399,31 @@ func (c *Client) login(ctx context.Context, args []string) error {
 		requested += " offline_access"
 	}
 	if *device {
-		return c.deviceLogin(ctx, *browser && !*noBrowser, requested)
+		return c.deviceLogin(ctx, *browser, requested)
 	}
-	return c.browserLogin(ctx, *browser && !*noBrowser, *port, requested)
+	return c.browserLogin(ctx, *browser, *port, requested)
+}
+
+func (c *Client) loadSession(endpoint, token string) (Profile, bool, error) {
+	profile, err := loadProfile(c.Path)
+	if err != nil {
+		return profile, false, err
+	}
+	c.Profile = profile
+	if c.Profile.Endpoint == "" {
+		c.Profile.Endpoint = defaultEndpoint
+	}
+	temporaryEndpoint := endpoint != "" && strings.TrimRight(endpoint, "/") != strings.TrimRight(c.Profile.Endpoint, "/")
+	if temporaryEndpoint {
+		c.Profile.clearCredentials()
+		c.Profile.Endpoint = endpoint
+		c.Profile.Organization = ""
+	}
+	if token != "" {
+		c.Profile.clearCredentials()
+		c.Profile.Token = token
+	}
+	return profile, temporaryEndpoint, nil
 }
 
 func loadProfile(path string) (Profile, error) {
@@ -400,7 +462,7 @@ func (c *Client) manage(ctx context.Context, command string, args []string) erro
 	}
 	operation := args[0]
 	f := flags(command, c.Err)
-	org := f.String("org", "", "Organization short name or ID")
+	org := c.orgFlag(f)
 	system := f.Bool("system", false, "System scope")
 	id := f.String("id", "", "Resource / key / assignment ID")
 	name := f.String("name", "", "Name")
@@ -424,27 +486,29 @@ func (c *Client) manage(ctx context.Context, command string, args []string) erro
 	if f.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
-	if command == "workers" || command == "models" {
-		if strings.Contains(*id, "/") {
-			parts := strings.Split(*id, "/")
-			if len(parts) != 3 || parts[0] == "" || parts[1] != command || parts[2] == "" || *system || (*org != "" && *org != parts[0]) {
-				return errors.New("invalid resource path")
-			}
-			*org, *id = parts[0], parts[2]
+	if command == "models" && strings.Contains(*id, "/") {
+		if *system {
+			return errors.New("invalid resource path")
+		}
+		if err := resolveResourcePath(f, command, org, id); err != nil {
+			return err
 		}
 	}
 	base := "/api/v1/orgs/" + url.PathEscape(*org)
 	if *system {
+		if flagSet(f, "org") {
+			return errors.New("--system and --org cannot be combined")
+		}
 		base = "/api/v1/system"
 	}
-	if command != "org" && command != "orgs" && !(command == "keys" && (operation == "show" || operation == "revoke" || operation == "update")) && *org == "" && !*system {
-		return errors.New("--org or --system required")
+	if command != "org" && !(command == "keys" && (operation == "show" || operation == "revoke" || operation == "update")) && *org == "" && !*system {
+		return errors.New("specify --org, set a default with krun config set org, or use --system for system scope")
 	}
 	method := "GET"
 	path := ""
 	var input any
 	switch command {
-	case "org", "orgs":
+	case "org":
 		path = "/api/v1/orgs"
 		switch operation {
 		case "list":
@@ -555,7 +619,7 @@ func (c *Client) manage(ctx context.Context, command string, args []string) erro
 		default:
 			return errors.New("unknown keys operation")
 		}
-	case "workers", "models":
+	case "models":
 		path = base + "/" + command
 		switch operation {
 		case "list":
@@ -591,11 +655,25 @@ func (c *Client) manage(ctx context.Context, command string, args []string) erro
 
 const help = `krun — control-plane CLI
 
-  krun version
+Workers
+  krun workers --help
+  krun build --help
+  krun deploy [--org ID] --worker ID --env NAME [--build ID]
+  krun deploy --dry-run [--config FILE] [--outdir DIR]
+  krun rollback VERSION_ID [--org ID] --worker ID --env NAME
+  krun deployments --help
+  krun versions --help
+  krun secret --help
+  krun r2 --help
+
+Account and configuration
+  krun --version
   krun upgrade [--check]
-  krun config set endpoint URL | get endpoint | show
-  krun login [--endpoint URL] [--browser=false] [--device | --token-stdin] [--callback-port PORT]
+  krun config --help
+  krun login [--browser=false] [--device | --token-stdin] [--callback-port PORT]
   krun whoami | logout
+
+Organizations and access
   krun org list | create --name NAME
   krun members list | add | remove --org ID [--user ID]
   krun groups list | create | delete --org ID [--name NAME | --id ID]
@@ -610,13 +688,16 @@ const help = `krun — control-plane CLI
   krun keys create --org ID --name NAME --policy FILE [--expires 24h|never]
   krun keys show | revoke --id ID
   krun keys update --id ID --name NAME --policy FILE --revision N
-  krun workers|models list | create | get | update | delete --org ID [options]
-  krun build logs --org ID --worker ID --build ID [--follow]
-  krun check --action ACTION --kind KIND --id ID [--environment global]
-  krun audit [--org ID] [--limit 50] [--cursor CURSOR]
+  krun models list | create | get | update | delete --org ID [options]
+
+Diagnostics
+  krun check --action ACTION --kind KIND --id ID [--env global]
+  krun audit [--org ID | --system] [--limit 50] [--cursor CURSOR]
   krun api --method METHOD --path /api/v1/... [--file FILE]
 
-Global options: --endpoint URL, --config FILE
+Global options: --endpoint URL, --profile NAME|PATH
+Local dry-run option: --config WRANGLER_FILE
+Organization commands use the profile default unless --org ID is specified.
 Environment: KRUN_ENDPOINT, KRUN_TOKEN (for automation)
 Browser-approved CLI sessions permit IAM administration; API Keys remain restricted.
 `

@@ -1,6 +1,10 @@
 ---
 import DefaultPageTitle from "@astrojs/starlight/components/PageTitle.astro";
-const id = Astro.locals.starlightRoute.entry.id.replace(/\.(md|mdx)$/, "") || "index";
+import TableOfContents from "@astrojs/starlight/components/TableOfContents.astro";
+
+const { entry, toc } = Astro.locals.starlightRoute;
+const hasSections = toc?.items.some((item) => item.slug !== "_top" || item.children.length > 0);
+const id = entry.id.replace(/\.(md|mdx)$/, "") || "index";
 const source = `/docs/${id}.md${import.meta.env.DEV ? "" : ".txt"}`;
 const workerPages = [
   "guides/component-workers",
@@ -9,13 +13,16 @@ const workerPages = [
   "guides/github-integration",
   "guides/workers-runtime-compatibility",
 ];
-const section = ["guides/krun-cli", "guides/cloudflare-workers"].includes(id)
-  ? ["命令行工具"]
-  : workerPages.includes(id)
-    ? ["组件", "计算 · Workers", ...(id.endsWith("-integration") ? ["Git 仓库集成"] : [])]
-    : id === "guides/component-object-storage"
-      ? ["组件"]
-      : ["开始使用"];
+const wranglerPages = ["guides/cloudflare-workers", "guides/wrangler-configuration"];
+const section = wranglerPages.includes(id)
+  ? ["命令行工具", "Wrangler 使用指南"]
+  : id === "guides/krun-cli"
+    ? ["命令行工具"]
+    : workerPages.includes(id)
+      ? ["组件", "计算 · Workers", ...(id.endsWith("-integration") ? ["Git 仓库集成"] : [])]
+      : id === "guides/component-object-storage"
+        ? ["组件"]
+        : ["开始使用"];
 ---
 <div class="krun-breadcrumb">文档 <span>/</span> {section.map((label) => <>{label} <span>/</span>{" "}</>)} {Astro.locals.starlightRoute.entry.data.title}</div>
 <div class="krun-title-row">
@@ -30,3 +37,8 @@ const section = ["guides/krun-cli", "guides/cloudflare-workers"].includes(id)
   </div>
 </div>
 <p class="krun-copy-error" data-doc-error role="alert" hidden>复制失败，请打开 Markdown 原文手动复制。</p>
+{hasSections && (
+  <div class="krun-inline-toc">
+    <TableOfContents />
+  </div>
+)}

@@ -31,8 +31,25 @@ export default defineConfig({
       defaultLocale: "root",
       locales: { root: { label: "简体中文", lang: "zh-CN" } },
       customCss: ["./src/styles/custom.css"],
+      tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 4 },
+      expressiveCode: {
+        plugins: [
+          {
+            name: "Shell prompts",
+            hooks: {
+              postprocessRenderedLine({ codeBlock, line, lineIndex, renderData }) {
+                if (!["sh", "bash", "zsh"].includes(codeBlock.language)) return;
+                const previousLine = lineIndex > 0 ? codeBlock.getLine(lineIndex - 1)?.text.trimEnd() : undefined;
+                if (!/^[^\s#]/.test(line.text) || previousLine?.endsWith("\\")) return;
+                renderData.lineAst.properties.className.push("krun-shell-command");
+              },
+            },
+          },
+        ],
+      },
       components: {
         PageTitle: "./src/components/PageTitle.astro",
+        TwoColumnContent: "./src/components/SingleColumnContent.astro",
         SiteTitle: "./src/components/SiteTitle.astro",
         ThemeProvider: "./src/components/ThemeProvider.astro",
         ThemeSelect: "./src/components/ThemeSelect.astro",
@@ -66,8 +83,14 @@ export default defineConfig({
           label: "命令行工具",
           items: [
             "guides/krun-cli",
-            "guides/cloudflare-workers",
-            "guides/wrangler-configuration",
+            {
+              label: "Wrangler 使用指南",
+              collapsed: true,
+              items: [
+                { label: "部署 Workers", slug: "guides/cloudflare-workers" },
+                { label: "配置兼容范围", slug: "guides/wrangler-configuration" },
+              ],
+            },
           ],
         },
         {

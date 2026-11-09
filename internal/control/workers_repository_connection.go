@@ -9,6 +9,7 @@ import (
 	repooauth "github.com/krun-dev/krun/internal/adapters/repositoryoauth"
 	appconfig "github.com/krun-dev/krun/internal/config"
 	repositories "github.com/krun-dev/krun/internal/repository"
+	"github.com/krun-dev/krun/internal/securetoken"
 	"golang.org/x/oauth2"
 )
 
@@ -42,6 +43,52 @@ func (s *Server) workerRepositoryConnect(st *State, p Principal, r *http.Request
 		"authorization_url": redirect,
 		"resume_key":        digest(authorizationURL.Query().Get("state")),
 	}, 200, nil
+}
+
+func (s *Server) workerRepositoryCLILaunch(st *State, p Principal, r *http.Request) (any, int, error) {
+	target, err := s.orgTarget(st, r)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := s.require(st, p, r, "worker.list", target); err != nil {
+		return nil, 0, err
+	}
+	provider := r.PathValue("provider")
+	ticket, err := s.repositoryApplication().IssueBrowserLaunch(r.Context(), st, p, target.ID, provider, r.Header.Get("X-Krun-Request-ID"))
+	if err != nil {
+		return nil, 0, err
+	}
+	path := "/api/v1/orgs/" + url.PathEscape(target.ID) + "/worker-repositories/" + url.PathEscape(provider) + "/authorize"
+	return map[string]string{"browser_path": path + "?" + url.Values{"ticket": {ticket}}.Encode()}, 200, nil
+}
+
+type repositoryBrowserRedirect struct {
+	url          string
+	browserToken string
+}
+
+func (s *Server) workerRepositoryBrowserOpen(st *State, p Principal, r *http.Request) (any, int, error) {
+	if r.Method != http.MethodGet || p.Kind != "session" {
+		return nil, 0, forbidden()
+	}
+	target, err := s.orgTarget(st, r)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := s.require(st, p, r, "worker.list", target); err != nil {
+		return nil, 0, err
+	}
+	browser := s.cookie(r, "browser")
+	if browser == "" {
+		browser = securetoken.Random()
+	}
+	return deferredResponse{run: func(ctx context.Context) (any, int, error) {
+		redirect, err := s.repositoryApplication().OpenBrowserLaunch(
+			ctx, p, target.ID, r.PathValue("provider"), r.URL.Query().Get("ticket"),
+			digest(browser), r.Header.Get("X-Krun-Request-ID"),
+		)
+		return repositoryBrowserRedirect{url: redirect, browserToken: browser}, 200, err
+	}}, 200, nil
 }
 
 // workerRepositoryCallback exchanges the OAuth code and stores the user connection.
