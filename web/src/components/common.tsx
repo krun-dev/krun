@@ -1,7 +1,7 @@
 import { t } from "@/lib/i18n";
 import { useTranslation } from "react-i18next";
-import type { ReactNode } from "react";
-import { ArrowUpRight, LoaderCircle, ShieldCheck, Terminal, X } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { ArrowUpRight, LoaderCircle, Moon, ShieldCheck, Sun, Terminal, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -24,6 +24,44 @@ export function Logo({ dark = false }: { dark?: boolean }) {
         RUN<span className="text-primary">.</span>
       </span>
     </div>
+  );
+}
+export function ThemeToggle({ className = "" }: { className?: string }) {
+  useTranslation();
+  const [theme, setTheme] = useState<"light" | "dark">(() =>
+    document.documentElement.classList.contains("dark") ? "dark" : "light",
+  );
+
+  useEffect(() => {
+    const syncTheme = () => {
+      setTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
+    };
+    window.addEventListener("krun-theme-change", syncTheme);
+    return () => window.removeEventListener("krun-theme-change", syncTheme);
+  }, []);
+
+  function toggleTheme() {
+    const nextTheme = theme === "light" ? "dark" : "light";
+    document.documentElement.classList.toggle("dark", nextTheme === "dark");
+    setTheme(nextTheme);
+    try {
+      localStorage.setItem("krun.theme", nextTheme);
+    } catch {
+      /* Theme still works without storage. */
+    }
+    window.dispatchEvent(new Event("krun-theme-change"));
+  }
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      className={className}
+      aria-label={t(theme === "dark" ? "切换浅色主题" : "切换深色主题")}
+      onClick={toggleTheme}
+    >
+      {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+    </Button>
   );
 }
 export function Field({
@@ -107,16 +145,19 @@ export function Empty({
 export function Loading() {
   useTranslation();
   return (
-    <div
-      role="status"
-      className="flex min-h-52 items-center justify-center gap-2 text-muted-foreground"
-    >
-      <LoaderCircle
-        className="animate-spin"
-        size={18}
-      />
-      {t("加载中…")}
-    </div>
+    <>
+      <ThemeToggle className="fixed right-5 top-4" />
+      <div
+        role="status"
+        className="flex min-h-screen items-center justify-center gap-2 text-muted-foreground"
+      >
+        <LoaderCircle
+          className="animate-spin"
+          size={18}
+        />
+        {t("加载中…")}
+      </div>
+    </>
   );
 }
 export function PageHeader({

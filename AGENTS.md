@@ -63,6 +63,9 @@
 - 所有请求用**同源相对路径**：`/api/auth/*`、`/api/v1/*`。永远不要拼 `http://host:port`。
 - 页面内导航保持**查询参数**（如 `/?page=workers&workspace=...`），不需要 SPA 路径回退。
 - 不得在运行期注入后端域名 / 端口 / 凭据；不得读非公开环境变量决定行为。
+- 所有前端页面都必须支持浅色与深色两种配色，并提供可见的主题切换入口；首页、登录/加载页和登录后的控制台页面都要覆盖。
+- 主题状态全站共享：用根元素 `.dark` class 和 `localStorage` 的 `krun.theme` 保存；页面切换不得重置用户选择，也不得另设页面专属主题键。
+- 新增或修改页面时，检查两种主题下的文字、背景、边框、控件与状态提示对比度；优先使用主题 token 和 `dark:` 样式，避免只适用于单一配色的硬编码颜色。
 - 前端**不得**写入任何需要服务端运行时的东西：SSR、Server Actions、API Routes、middleware、SSR-only 动态路由、服务端数据预取。
 - 前端**不得** import 服务端模块：`fs` / `net` / `tls` / `http` / `https` / `child_process` / 数据库或 Redis 客户端 / 服务端 SDK。
 - 不引入 Service Worker / 前端侧 serverless 运行时；不做 BFF、不做 CORS 代理、不做运行时代理注入。

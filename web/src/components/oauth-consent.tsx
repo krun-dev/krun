@@ -20,7 +20,7 @@ import { api, type Me, type Provider } from "@/lib/api";
 import { t, errorMessage, locale } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Logo } from "./common";
+import { Logo, ThemeToggle } from "./common";
 import { LanguageSwitch } from "./language";
 import { Login } from "./login";
 
@@ -166,7 +166,10 @@ export function OAuthConsent({
         >
           <Logo />
         </a>
-        <LanguageSwitch />
+        <div className="flex items-center gap-2">
+          <ThemeToggle />
+          <LanguageSwitch />
+        </div>
       </header>
       <main className="mx-auto grid max-w-6xl gap-10 px-6 pb-14 pt-5 md:grid-cols-[.9fr_1fr] md:gap-16 md:px-10 md:pt-14">
         <section className="relative hidden flex-col justify-between overflow-hidden rounded-3xl border bg-card p-7 text-card-foreground md:flex md:min-h-[570px] md:p-10">

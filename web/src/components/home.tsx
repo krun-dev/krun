@@ -16,7 +16,7 @@ import {
   Layers3,
   Terminal,
 } from "lucide-react";
-import { Logo } from "./common";
+import { Logo, ThemeToggle } from "./common";
 import { LanguageSwitch } from "./language";
 import { t } from "@/lib/i18n";
 import "./home.css";
@@ -130,6 +130,17 @@ function StoragePreview() {
 
 export function Home() {
   const { i18n } = useTranslation();
+  const [theme, setTheme] = useState<"light" | "dark">(() =>
+    document.documentElement.classList.contains("dark") ? "dark" : "light",
+  );
+
+  useEffect(() => {
+    const syncTheme = () => {
+      setTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
+    };
+    window.addEventListener("krun-theme-change", syncTheme);
+    return () => window.removeEventListener("krun-theme-change", syncTheme);
+  }, []);
 
   useEffect(() => {
     document.title = "RUN · Run anything.";
@@ -139,7 +150,10 @@ export function Home() {
   }, [i18n.resolvedLanguage]);
 
   return (
-    <div className="dark run-home">
+    <div
+      className="run-home"
+      data-theme={theme}
+    >
       <a
         className="run-skip-link"
         href="#main"
@@ -153,7 +167,7 @@ export function Home() {
             aria-label={t("RUN 首页")}
             className="run-brand"
           >
-            <Logo dark />
+            <Logo dark={theme === "dark"} />
           </a>
           <nav
             className="run-navigation"
@@ -165,6 +179,7 @@ export function Home() {
           </nav>
           <div className="run-header-actions">
             <LanguageSwitch />
+            <ThemeToggle className="run-theme-toggle" />
             <a
               className="run-button run-button-small run-button-secondary"
               href="/?page=login"
@@ -188,9 +203,9 @@ export function Home() {
           <h1 id="run-title">
             Run <span>anything.</span>
           </h1>
-          <p className="run-hero-lead">{t("静态网站、API、完整应用。")}</p>
+          <p className="run-hero-lead">{t("低成本 Serverless 计算，运行网站、API 与全栈应用。")}</p>
           <p className="run-hero-description">
-            {t("用 Workers 运行代码，用 Storage 存储文件。")}
+            {t("按需运行应用代码，无需管理常驻服务器。")}
             <br className="run-desktop-break" />
             {t("让你的下一个想法，在 RUN 跑起来。")}
           </p>
@@ -199,7 +214,7 @@ export function Home() {
               className="run-button run-button-primary"
               href="/?page=workers"
             >
-              {t("开始构建")}
+              {t("开始 Run")}
               <ArrowRight size={16} />
             </a>
             <a
@@ -237,9 +252,9 @@ export function Home() {
           <div className="run-section-heading">
             <div>
               <p className="run-section-label">THE PLATFORM</p>
-              <h2 id="run-products-title">{t("应用需要的，从这里开始。")}</h2>
+              <h2 id="run-products-title">{t("为 Agent 而建的应用运行基础设施。")}</h2>
             </div>
-            <p>{t("运行代码，交付页面，存储文件。")}</p>
+            <p>{t("让 Agent 构建和部署应用，由 RUN 提供低成本 Serverless 计算与存储能力。")}</p>
           </div>
           <div className="run-product-grid">
             <article className="run-product-card run-workers-card">
@@ -321,13 +336,13 @@ export function Home() {
           <div className="run-workflow-copy">
             <p className="run-section-label">BUILT FOR YOUR WORKFLOW</p>
             <h2 id="run-workflow-title">
-              {t("写你熟悉的代码。")}
+              {t("让 Agent 编写和部署。")}
               <br />
-              {t("运行你的下一个应用。")}
+              {t("让 RUN 承载应用运行。")}
             </h2>
             <p>
               {t(
-                "连接 Git 仓库，在控制台构建和发布；也可以使用 Wrangler，从终端部署。静态资源与 Worker 代码，一起交付。",
+                "RUN 为 Agent 提供构建、部署和运行应用所需的基础设施，让应用代码、页面与文件在同一平台上协同交付。",
               )}
             </p>
             <a
@@ -406,14 +421,14 @@ export function Home() {
         <section className="run-final-cta">
           <div className="run-container run-final-inner">
             <div>
-              <h2>{t("下一个想法，现在开跑。")}</h2>
+              <h2>{t("让 Agent 构建应用，在 RUN 上运行。")}</h2>
               <p>{t("一个页面，一个 API，或者一个全新的应用。")}</p>
             </div>
             <a
               className="run-button run-button-primary"
               href="/?page=workers"
             >
-              {t("开始构建")}
+              {t("开始 Run")}
               <ArrowRight size={16} />
             </a>
           </div>
@@ -426,7 +441,7 @@ export function Home() {
           aria-label={t("RUN 首页")}
           className="run-brand"
         >
-          <Logo dark />
+          <Logo dark={theme === "dark"} />
         </a>
         <span>Run anything.</span>
         <nav aria-label={t("页脚导航")}>
