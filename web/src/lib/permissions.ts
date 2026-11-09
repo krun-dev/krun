@@ -76,6 +76,7 @@ export function buildPolicy(
 export function parseSelections(
   policy: Policy,
   registry: Record<string, string[]>,
+  availableEnvironments: string[],
   scope: string,
   system: boolean,
 ): { selections: Selections; envs: string[] } | null {
@@ -109,9 +110,7 @@ export function parseSelections(
     const environments = conditions.environments ?? [];
     if (
       !Array.isArray(environments) ||
-      !environments.every((env) =>
-        ["global", "development", "test", "staging", "production"].includes(env),
-      )
+      !environments.every((env) => availableEnvironments.includes(env))
     )
       return null;
     if (envs && [...envs].sort().join() !== [...environments].sort().join()) return null;

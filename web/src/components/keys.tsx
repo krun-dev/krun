@@ -1,4 +1,4 @@
-import { errorMessage, t, locale, environmentLabel } from "@/lib/i18n";
+import { errorMessage, t, locale } from "@/lib/i18n";
 import { useTranslation } from "react-i18next";
 import { useState } from "react";
 import {
@@ -38,7 +38,15 @@ import {
   type Selection,
 } from "@/lib/permissions";
 import { Empty, Field, Loading, PageHeader, SelectField } from "./common";
-import { Confirm, DataTable, ErrorState, useData, type Props } from "./management";
+import {
+  Confirm,
+  DataTable,
+  EnvironmentConditions,
+  ErrorState,
+  useData,
+  usePermissionCatalog,
+  type Props,
+} from "./management";
 
 const presets: { id: Preset; label: string }[] = [
   { id: "all", label: "全部 API" },
@@ -85,7 +93,7 @@ function PolicySummary({ policy }: { policy: Policy }) {
 export function KeysPage(p: Props) {
   useTranslation();
   const { data, error, loading } = useData<List<APIKey>>(p.base + "/api-keys", p.refresh);
-  const registry = useData<{ actions: Record<string, string[]> }>("/api/v1/roles", 0);
+  const registry = usePermissionCatalog();
   const [open, setOpen] = useState(false),
     [secret, setSecret] = useState(""),
     [busy, setBusy] = useState(false),
@@ -103,6 +111,7 @@ export function KeysPage(p: Props) {
     [detail, setDetail] = useState<APIKey | null>(null);
   const groups = resourceKinds.filter((k) => p.system || k.kind !== "system");
   const catalog = registry.data?.actions ?? {};
+  const environments = registry.data?.environments ?? [];
   const choicesFor = (kind: string) =>
     Object.entries(catalog)
       .filter(([, kinds]) => kinds.includes(kind))
@@ -151,7 +160,7 @@ export function KeysPage(p: Props) {
       setAdvanced(true);
     } else {
       try {
-        const parsed = parseSelections(JSON.parse(raw), catalog, p.scope, p.system);
+        const parsed = parseSelections(JSON.parse(raw), catalog, environments, p.scope, p.system);
         if (!parsed)
           throw new Error(
             t("该策略包含可视化表单无法表达的规则，请继续在 JSON 中编辑，以保留全部限制。"),
@@ -659,37 +668,18 @@ export function KeysPage(p: Props) {
                       </div>
                     </>
                   )}
-                  <div className="space-y-3 border-t pt-4">
-                    <p className="text-sm font-medium">
-                      {t("环境条件")}{" "}
-                      <span className="ml-2 text-xs font-normal text-muted-foreground">
-                        {t("不选则允许全部环境")}
-                      </span>
-                    </p>
-                    <div className="flex flex-wrap gap-5">
-                      {["global", "development", "test", "staging", "production"].map((env) => (
-                        <label
-                          key={env}
-                          className="flex items-center gap-2 text-xs"
-                        >
-                          <Checkbox
-                            checked={envs.includes(env)}
-                            onCheckedChange={(value) =>
-                              setEnvs((current) =>
-                                value === true
-                                  ? [...current, env]
-                                  : current.filter((e) => e !== env),
-                              )
-                            }
-                          />
-                          {environmentLabel(env)}
-                        </label>
-                      ))}
+                  {environments.length > 0 && (
+                    <div className="space-y-3 border-t pt-4">
+                      <EnvironmentConditions
+                        environments={environments}
+                        selected={envs}
+                        onChange={setEnvs}
+                      />
+                      <p className="text-[11px] text-muted-foreground">
+                        {t("全局详情读取需要 global。")}
+                      </p>
                     </div>
-                    <p className="text-[11px] text-muted-foreground">
-                      {t("全局详情读取需要 global。")}
-                    </p>
-                  </div>
+                  )}
                 </TabsContent>
                 <TabsContent value="json">
                   <Textarea

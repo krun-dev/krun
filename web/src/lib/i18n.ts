@@ -62,8 +62,6 @@ export function environmentLabel(value: string): string {
   const labels: Record<string, string> = {
     global: "全局",
     development: "开发",
-    test: "测试",
-    staging: "预发布",
     production: "生产",
   };
   return t(labels[value] ?? value);

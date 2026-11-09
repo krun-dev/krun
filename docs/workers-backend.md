@@ -230,7 +230,7 @@ header 与该 pool 独立 token，不能只信任 header：
 
 ```json
 {
-  "environment": "test",
+  "environment": "production",
   "entrypoint": "src/index.ts",
   "source_upload": "uploads/{org}/src/src_xxx/source.tar.gz",
   "compatibility_date": "2026-09-28",

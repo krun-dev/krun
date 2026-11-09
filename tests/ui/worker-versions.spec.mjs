@@ -58,7 +58,7 @@ async function fixture(page) {
     confirmed_version_id: "version-current",
   };
   const state = {
-    environments: [production, environment("staging")],
+    environments: [production, environment("preview")],
     versions: {
       "version-current": {
         id: "version-current",
@@ -422,13 +422,13 @@ test("configuration changes block creation until reviewed again in the same envi
   const { state, errors } = await fixture(page);
   await page.goto(origin + location);
   await page
-    .getByRole("button", { name: /staging/ })
+    .getByRole("button", { name: /preview/ })
     .first()
     .click();
   const dialog = await openCreate(page);
-  await expect(dialog).toContainText("staging");
+  await expect(dialog).toContainText("preview");
   state.environments[1].configuration_revision++;
-  state.environments[1].variables.MODE = "updated-staging";
+  state.environments[1].variables.MODE = "updated-preview";
   await dialog.getByRole("button", { name: "创建待部署版本", exact: true }).click();
   await expect(dialog.getByRole("alert")).toHaveText(
     "环境配置已改变，请关闭后重新创建并核对配置。",
@@ -441,16 +441,16 @@ test("configuration changes block creation until reviewed again in the same envi
   ]);
   const refreshed = await openCreate(page);
   await refreshed.getByText("普通变量（1）", { exact: true }).click();
-  await expect(refreshed.locator("pre")).toContainText("updated-staging");
+  await expect(refreshed.locator("pre")).toContainText("updated-preview");
   await refreshed.getByRole("button", { name: "创建待部署版本", exact: true }).click();
   const candidate = page.locator('[aria-label="版本 version-candidate"]');
   await expect(candidate).toBeVisible();
-  expect(state.creates[1].path).toBe(workerBase + "/environments/staging/versions");
+  expect(state.creates[1].path).toBe(workerBase + "/environments/preview/versions");
   expect(state.creates[1].input.expected_configuration_revision).toBe(5);
   await expect(page.locator('[aria-label="版本 version-current"]')).toHaveCount(0);
   await page.reload();
   await expect(candidate).toBeVisible();
-  await expect(page.getByText("staging · 版本列表", { exact: true })).toBeVisible();
+  await expect(page.getByText("preview · 版本列表", { exact: true })).toBeVisible();
   expect(errors).toEqual([]);
 });
 
@@ -483,7 +483,7 @@ test("direct publishing stays available without creating an undeployed version f
   page,
 }) => {
   const { state, errors } = await fixture(page);
-  await page.goto(origin + location + "&worker_tab=versions&environment=staging");
+  await page.goto(origin + location + "&worker_tab=versions&environment=preview");
   await expect(
     page.getByText("此环境还没有版本。可以直接发布成功构建，或先创建待部署版本。", { exact: true }),
   ).toBeVisible();

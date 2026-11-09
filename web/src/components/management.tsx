@@ -17,6 +17,7 @@ import {
 } from "./organization-invitations";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -51,6 +52,7 @@ export function useData<T>(path: string, refresh: number) {
     [error, setError] = useState(""),
     [loading, setLoading] = useState(true);
   useEffect(() => {
+    if (!path) return;
     let active = true;
     setLoading(true);
     setError("");
@@ -70,6 +72,51 @@ export function useData<T>(path: string, refresh: number) {
   }, [path, refresh]);
   return { data, error, loading };
 }
+export function usePermissionCatalog(enabled = true) {
+  return useData<{ actions: Record<string, string[]>; environments: string[] }>(
+    enabled ? "/api/v1/roles" : "",
+    0,
+  );
+}
+
+export function EnvironmentConditions({
+  environments,
+  selected,
+  onChange,
+}: {
+  environments: string[];
+  selected: string[];
+  onChange: (environments: string[]) => void;
+}) {
+  useTranslation();
+  return (
+    <fieldset className="space-y-3">
+      <legend className="text-sm font-medium">
+        {t("环境条件")}{" "}
+        <span className="ml-2 text-xs font-normal text-muted-foreground">
+          {t("不选则允许全部环境")}
+        </span>
+      </legend>
+      <div className="flex flex-wrap gap-5">
+        {environments.map((env) => (
+          <label
+            key={env}
+            className="flex items-center gap-2 text-xs"
+          >
+            <Checkbox
+              checked={selected.includes(env)}
+              onCheckedChange={(value) =>
+                onChange(value === true ? [...selected, env] : selected.filter((e) => e !== env))
+              }
+            />
+            {environmentLabel(env)}
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
 export function ErrorState({ error }: { error: string }) {
   useTranslation();
   return (
@@ -210,7 +257,11 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
     [role, setRole] = useState(p.system ? "system_admin" : "viewer"),
     [scopeKind, setScopeKind] = useState(p.system ? "system" : "organization"),
     [scopeID, setScopeID] = useState(""),
-    [envs, setEnvs] = useState("");
+    [envs, setEnvs] = useState<string[]>([]);
+  const canLimitEnvironments = section === "roles" && !p.system && role !== "org_admin";
+  const catalog = usePermissionCatalog(section === "roles" && !p.system);
+  const environments = catalog.data?.environments ?? [];
+  const environmentConditionsReady = !catalog.loading && !catalog.error && environments.length > 0;
   const [membersView, setMembersView] = useState("members");
   const labels = {
     members: {
@@ -243,6 +294,7 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
     }
   }
   async function submit() {
+    if (canLimitEnvironments && !environmentConditionsReady) return;
     await run(async () => {
       if (section === "members") await api(p.base + "/members", "POST", { user_id: user });
       if (section === "groups") await api(p.base + "/groups", "POST", { name });
@@ -254,7 +306,7 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
           scope_kind: scopeKind,
           scope_id: scopeKind === "organization" || scopeKind === "system" ? p.scope : scopeID,
           conditions: {
-            environments: envs ? envs.split(",").map((s) => s.trim()) : [],
+            environments: canLimitEnvironments ? envs : [],
           },
         });
       setOpen(false);
@@ -286,7 +338,10 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
             ) : null}
             <Button
               variant={section === "members" ? "outline" : "default"}
-              onClick={() => setOpen(true)}
+              onClick={() => {
+                setEnvs([]);
+                setOpen(true);
+              }}
             >
               <Plus size={16} />
               {l.action}
@@ -618,18 +673,18 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
                             />
                           </Field>
                         )}
-                        <Field
-                          label={t("环境条件（可选）")}
-                          hint={t(
-                            "逗号分隔：global, development, test, staging, production。留空表示全部环境。",
-                          )}
-                        >
-                          <Input
-                            value={envs}
-                            onChange={(e) => setEnvs(e.target.value)}
-                            placeholder={t("例如：staging,production")}
-                          />
-                        </Field>
+                        {canLimitEnvironments &&
+                          (catalog.loading ? (
+                            <Loading />
+                          ) : catalog.error ? (
+                            <ErrorState error={catalog.error} />
+                          ) : (
+                            <EnvironmentConditions
+                              environments={environments}
+                              selected={envs}
+                              onChange={setEnvs}
+                            />
+                          ))}
                       </>
                     )}
                   </>
@@ -638,7 +693,7 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
             )}
             <Button
               type="submit"
-              disabled={busy}
+              disabled={busy || (canLimitEnvironments && !environmentConditionsReady)}
             >
               {busy && (
                 <LoaderCircle
@@ -660,10 +715,15 @@ export function CheckPage({ scope, system }: { scope: string; system: boolean })
   const [kind, setKind] = useState(system ? "system" : "organization"),
     [id, setID] = useState(scope),
     [action, setAction] = useState(system ? "system.role.read" : "organization.read"),
-    [environment, setEnvironment] = useState("global"),
+    [selectedEnvironment, setEnvironment] = useState(""),
     [decision, setDecision] = useState<Decision | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
+  const catalog = usePermissionCatalog();
+  const environments = catalog.data?.environments ?? [];
+  const environment = environments.includes(selectedEnvironment)
+    ? selectedEnvironment
+    : (environments[0] ?? "");
   useEffect(() => {
     setKind(system ? "system" : "organization");
     setID(scope);
@@ -688,6 +748,7 @@ export function CheckPage({ scope, system }: { scope: string; system: boolean })
               className="grid gap-5"
               onSubmit={async (e) => {
                 e.preventDefault();
+                if (!environment || catalog.loading || catalog.error) return;
                 setBusy(true);
                 setError("");
                 setDecision(null);
@@ -740,9 +801,10 @@ export function CheckPage({ scope, system }: { scope: string; system: boolean })
               <Field label={t("目标环境")}>
                 <SelectField
                   value={environment}
+                  disabled={!environment || catalog.loading || !!catalog.error}
                   onChange={setEnvironment}
                 >
-                  {["global", "development", "test", "staging", "production"].map((env) => (
+                  {environments.map((env) => (
                     <option
                       key={env}
                       value={env}
@@ -752,8 +814,10 @@ export function CheckPage({ scope, system }: { scope: string; system: boolean })
                   ))}
                 </SelectField>
               </Field>
+              {catalog.loading && <Loading />}
+              {catalog.error && <ErrorState error={catalog.error} />}
               <Button
-                disabled={busy}
+                disabled={busy || !environment || catalog.loading || !!catalog.error}
                 type="submit"
               >
                 {t("检查权限")}
@@ -773,16 +837,16 @@ export function CheckPage({ scope, system }: { scope: string; system: boolean })
             ) : decision ? (
               <div>
                 <div
-                  className={`mb-6 rounded-lg border p-6 ${decision.allowed ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50"}`}
+                  className={`mb-6 rounded-lg border p-6 ${decision.allowed ? "border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950" : "border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950"}`}
                 >
                   {decision.allowed ? (
                     <ShieldCheck
-                      className="mb-3 text-emerald-600"
+                      className="mb-3 text-emerald-600 dark:text-emerald-400"
                       size={28}
                     />
                   ) : (
                     <ShieldAlert
-                      className="mb-3 text-red-600"
+                      className="mb-3 text-red-600 dark:text-red-400"
                       size={28}
                     />
                   )}
