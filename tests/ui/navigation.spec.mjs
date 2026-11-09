@@ -86,6 +86,18 @@ async function fixture(page, options = {}) {
         revision: 1,
         workers_configured: true,
       };
+    } else if (path === "/api/v1/roles" && state.permissionCatalog) {
+      data = state.permissionCatalog;
+    } else if (path === "/api/auth/csrf") {
+      data = { csrf_token: "ui-fixture" };
+    } else if (path === "/api/v1/authz/check") {
+      data = {
+        allowed: true,
+        user_allowed: true,
+        key_allowed: true,
+        reason: "ALLOWED",
+        revision: 1,
+      };
     } else if (path === "/api/v1/orgs") {
       data = { items: state.orgs };
     } else if (path.endsWith("/permissions")) {
@@ -147,6 +159,46 @@ test("removed resource catalog links open the current organization overview", as
   await expect(page).toHaveURL(origin + "/?workspace=org-a");
   expect(requests).not.toContain("/api/v1/orgs/org-a/workers");
   expect(requests).not.toContain("/api/v1/orgs/org-a/models");
+});
+
+test("permission forms use the environments advertised by the API", async ({ page }) => {
+  await fixture(page, {
+    actions: { "org-a": admin },
+    permissionCatalog: {
+      actions: { "worker.read": ["worker"] },
+      environments: ["global", "production"],
+    },
+  });
+
+  await page.goto(origin + "/?page=check&workspace=org-a");
+  const target = page.getByRole("combobox", { name: "目标环境", exact: true });
+  await expect(target.locator("option")).toHaveText(["全局", "生产"]);
+  await expect(target).toHaveValue("global");
+  await target.selectOption("production");
+  const checkRequest = page.waitForRequest((request) =>
+    request.url().endsWith("/api/v1/authz/check"),
+  );
+  await page.getByRole("button", { name: "检查权限", exact: true }).click();
+  expect((await checkRequest).postDataJSON().environment).toBe("production");
+  const result = page.getByRole("heading", { name: "允许访问", exact: true });
+  await expect(result).toBeVisible();
+  await page.getByRole("button", { name: "切换深色主题", exact: true }).click();
+  await expect(result).toBeVisible();
+  await expect(page.locator("html")).toHaveClass(/dark/);
+
+  await page.goto(origin + "/?page=roles&workspace=org-a");
+  await page.getByRole("button", { name: "授予角色", exact: true }).first().click();
+  const grant = page.getByRole("dialog");
+  await expect(grant.getByRole("checkbox")).toHaveCount(2);
+  await expect(grant.getByRole("checkbox", { name: "全局", exact: true })).toBeVisible();
+  await expect(grant.getByRole("checkbox", { name: "生产", exact: true })).toBeVisible();
+
+  await page.goto(origin + "/?page=keys&workspace=org-a");
+  await page.getByRole("button", { name: "创建 API Key", exact: true }).first().click();
+  const conditions = page.getByRole("group", { name: /环境条件/ });
+  await expect(conditions.getByRole("checkbox")).toHaveCount(2);
+  await expect(conditions.getByRole("checkbox", { name: "全局", exact: true })).toBeVisible();
+  await expect(conditions.getByRole("checkbox", { name: "生产", exact: true })).toBeVisible();
 });
 
 test("unauthorized direct URLs fall back without requesting protected page data", async ({

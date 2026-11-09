@@ -7,4 +7,4 @@ statements:
       kind: worker
       ids: [replace-worker-id]
     conditions:
-      environments: [staging]
+      environments: [production]

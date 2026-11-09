@@ -583,7 +583,7 @@ const help = `krun — control-plane CLI
   krun groups add-member | remove-member --org ID --group ID --user ID
   krun roles list | grant | update | revoke --org ID [options]
     grant: --subject ID --subject-kind user|group --role ROLE
-           [--scope-kind worker|model --scope-id ID --environments staging]
+           [--scope-kind worker|model --scope-id ID --environments production]
     update: same grant options + --id ID --revision N
     revoke: --id ID
     System groups/roles: replace --org ID with --system

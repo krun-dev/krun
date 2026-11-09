@@ -60,7 +60,7 @@ Access Token、Refresh Token 和到期时间保存在控制面的私有凭据表
 3. 控制器在数据库事务外通过 Git smart HTTP 将 ref 解析为完整 commit，并先持久化 commit。下载中断后的重试仍使用该 commit。
 4. 对固定 commit 做有界浅克隆，在控制面内生成项目归档并检查目录边界、链接、特殊文件、路径和大小；拒绝 `.env`、`.dev.vars`、`.npmrc` 等本地凭据，并保留 Wrangler 配置、锁文件、框架配置及 Text/Data/Wasm 等二进制构建输入。仓库中任何脚本、hook 都不会在控制面执行。
 5. Kubernetes Job 根据唯一锁文件执行 frozen install，并由固定 Wrangler dry-run 构建已经配置好的 Workers 项目。安装和 custom build 在无上传凭据的 init container 中执行；可信 packer 在单独主容器校验输出、生成 `workerd-bundle-v2` 并上传。Job 不接收 Git 平台凭据或 S3 长期凭据。
-6. 选历史制品发布到 test / staging / production，沿用候选验证 → Version 提交 → 副本确认流程。
+6. 选历史制品发布到生产环境（`production`）或该 Worker 已创建的预览环境，沿用候选验证 → Version 提交 → 副本确认流程。
 
 `GET /api/v1/orgs/{org}/workers` 返回按用户环境权限过滤的列表；`GET /api/v1/orgs/{org}/workers/repository-providers` 返回当前组织启用的来源和当前用户的授权状态。用户在 `POST /api/v1/orgs/{org}/worker-repositories/{provider}/repositories` 中传入 `page`，按需验证授权并读取自己可用的仓库。源码上传与仓库构建是两种独立输入模式，产品页面使用仓库构建。
 

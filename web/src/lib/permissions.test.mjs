@@ -8,6 +8,7 @@ import {
   presetActions,
 } from "./permissions.ts";
 
+const environments = ["global", "development", "production"];
 const actions = [
   "worker.read",
   "worker.list",
@@ -36,7 +37,7 @@ test("multiple resource types retain their own selectors and conditions", () => 
     ids: "model-a, model-b",
     organization: "",
   };
-  const policy = buildPolicy(selections, ["staging"], "org-a", false);
+  const policy = buildPolicy(selections, ["production"], "org-a", false);
   assert.equal(policy.statements.length, 2);
   assert.deepEqual(policy.statements[0].resource, {
     kind: "worker",
@@ -45,19 +46,12 @@ test("multiple resource types retain their own selectors and conditions", () => 
   });
   assert.deepEqual(policy.statements[1].resource.ids, ["model-a", "model-b"]);
   assert.deepEqual(policy.statements[1].conditions, {
-    environments: ["staging"],
+    environments: ["production"],
   });
   const registry = { "worker.read": ["worker"], "model.read": ["model"] };
-  assert.deepEqual(
-    buildPolicy(
-      parseSelections(policy, registry, "org-a", false).selections,
-      ["staging"],
-      "org-a",
-      false,
-    ),
-    policy,
-  );
-  assert.equal(parseSelections(policy, registry, "org-b", false), null);
+  const parsed = parseSelections(policy, registry, environments, "org-a", false);
+  assert.deepEqual(buildPolicy(parsed.selections, parsed.envs, "org-a", false), policy);
+  assert.equal(parseSelections(policy, registry, environments, "org-b", false), null);
 });
 test("cross-workspace wildcards retain the selected resource kind", () => {
   const selections = initialSelections();
@@ -67,7 +61,9 @@ test("cross-workspace wildcards retain the selected resource kind", () => {
     kind: "worker",
     all_in_system: true,
   });
-  assert.ok(parseSelections(policy, { "log.read": ["worker", "model"] }, "system", true));
+  assert.ok(
+    parseSelections(policy, { "log.read": ["worker", "model"] }, environments, "system", true),
+  );
 });
 test("JSON conversion refuses rules that would lose restrictions", () => {
   const selections = initialSelections();
@@ -78,6 +74,7 @@ test("JSON conversion refuses rules that would lose restrictions", () => {
     parseSelections(
       { ...policy, statements: [{ ...policy.statements[0], effect: "deny" }] },
       registry,
+      environments,
       "org-a",
       false,
     ),
@@ -87,6 +84,7 @@ test("JSON conversion refuses rules that would lose restrictions", () => {
     parseSelections(
       { ...policy, statements: [...policy.statements, ...policy.statements] },
       registry,
+      environments,
       "org-a",
       false,
     ),
@@ -99,11 +97,14 @@ test("JSON conversion refuses rules that would lose restrictions", () => {
         statements: [{ ...policy.statements[0], conditions: { future_rule: true } }],
       },
       registry,
+      environments,
       "org-a",
       false,
     ),
     null,
   );
+  const previewPolicy = buildPolicy(selections, ["feature-preview"], "org-a", false);
+  assert.equal(parseSelections(previewPolicy, registry, environments, "org-a", false), null);
 });
 test("permanent keys stay active while revocation and finite deadlines win", () => {
   assert.equal(keyState({ revoked: false, expires_at: null }), "active");
