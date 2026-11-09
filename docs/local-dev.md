@@ -175,13 +175,17 @@ nginx 保留完整 Host，分别转发到域名绑定的 Gateway。
 
 - 域名本身就是路由 host，nginx 不再改写 Host，只把它转发到该域名绑定的网关实例。
 - 服务在「路由与域名」里选择用哪些域名；每个环境在选中的每个域名下各有一个地址。
-- **隔离边界**：每个网关实例的路由表里只有绑定到它的域名。在 A 实例上伪造 B 的 Host 匹配不到任何路由，返回 404；静态资产同理。
+- **隔离边界**：内网和公网入口必须使用[互不重叠的通配域名](workers-domains.md#路由与隔离)。这样把一个入口的 Host 发到另一个 Gateway 才会返回 404。
 
-在 kind 宿主机上验证（NodePort 32284 = 公网，30739 = 内网）：
+在 kind 宿主机上验证（NodePort 32284 = 公网，30739 = 内网）。将
+`EXTERNAL_WORKER_HOST` 和 `INTERNAL_WORKER_HOST` 设为已发布 Worker 的公网和内网主机名，
+`NODE_ADDRESS` 设为 kind 节点地址：
 
 ```bash
-curl -o /dev/null -w '%{http_code}\n' -H 'Host: w-x-production.workers.test'        http://<node>:32284/  # 404
-curl -o /dev/null -w '%{http_code}\n' -H 'Host: w-x-production.public.workers.test' http://<node>:32284/  # 200
+curl -o /dev/null -w '%{http_code}\n' -H "Host: $INTERNAL_WORKER_HOST" "http://$NODE_ADDRESS:32284/"  # 404
+curl -o /dev/null -w '%{http_code}\n' -H "Host: $EXTERNAL_WORKER_HOST" "http://$NODE_ADDRESS:30739/"  # 404
+curl -o /dev/null -w '%{http_code}\n' -H "Host: $EXTERNAL_WORKER_HOST" "http://$NODE_ADDRESS:32284/"  # 200
+curl -o /dev/null -w '%{http_code}\n' -H "Host: $INTERNAL_WORKER_HOST" "http://$NODE_ADDRESS:30739/"  # 200
 ```
 
 ## 远端 runtime 的前置条件

@@ -82,7 +82,7 @@ func TestCloneResolvesCommitAndReadsTree(t *testing.T) {
 		t.Fatalf("resolved %s, want %s", commit, head)
 	}
 
-	files, raw, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{
+	files, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{
 		WorkerRepositorySource: WorkerRepositorySource{Ref: "master"},
 		Commit:                 head,
 	}, "")
@@ -94,9 +94,6 @@ func TestCloneResolvesCommitAndReadsTree(t *testing.T) {
 	}
 	if _, ok := files["src/index.ts"]; !ok {
 		t.Fatalf("entrypoint not read from clone: %v", keys(files))
-	}
-	if len(raw) == 0 {
-		t.Fatal("archive for asset extraction is empty")
 	}
 	// The .git directory must never leak into the build inputs.
 	for name := range files {
@@ -119,7 +116,7 @@ func TestCloneHonoursRootDirectoryAndWrangler(t *testing.T) {
 	provider := localProvider(dir)
 	s := &Server{}
 
-	files, raw, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{
+	files, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{
 		WorkerRepositorySource: WorkerRepositorySource{Ref: "master", RootDirectory: "apps/demo"},
 		Commit:                 head,
 	}, "")
@@ -140,9 +137,8 @@ func TestCloneHonoursRootDirectoryAndWrangler(t *testing.T) {
 	if entry != "src/index.ts" || assets.Directory != "public" {
 		t.Fatalf("resolved %q %q", entry, assets.Directory)
 	}
-	assetFiles, err := workerartifact.ExtractRepositoryAssets(raw, "apps/demo", assets.Directory)
-	if err != nil || len(assetFiles) != 1 {
-		t.Fatalf("assets: %v %v", keys(assetFiles), err)
+	if got := files[assets.Directory+"/a.html"]; got != "<!doctype html><title>a</title>" {
+		t.Fatalf("asset missing from the build project: %q", got)
 	}
 }
 
@@ -179,7 +175,7 @@ func TestRepositoryCommitPinningSurvivesMove(t *testing.T) {
 	}
 
 	s := &Server{}
-	files, _, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{
+	files, err := s.fetchRepositorySource(context.Background(), provider, WorkerBuildRepository{
 		WorkerRepositorySource: WorkerRepositorySource{Ref: "master"},
 		Commit:                 head,
 	}, "")
@@ -245,7 +241,7 @@ func TestRepositoryFetchRemovesCloneDirectory(t *testing.T) {
 	dir, head, _ := newLocalGitRepo(t, map[string]string{"src/index.ts": "export const revision = 'second'"})
 	cloneBase := t.TempDir()
 	s := &Server{Config: appconfig.Config{Workers: &appconfig.WorkersConfig{CloneDirectory: cloneBase}}}
-	_, _, err := s.fetchRepositorySource(context.Background(), localProvider(dir), WorkerBuildRepository{
+	_, err := s.fetchRepositorySource(context.Background(), localProvider(dir), WorkerBuildRepository{
 		WorkerRepositorySource: WorkerRepositorySource{Ref: "master"},
 		Commit:                 head,
 	}, "")
@@ -267,7 +263,7 @@ func TestRepositoryFetchRejectsLargeBlobBeforeReadingIt(t *testing.T) {
 	})
 	cloneBase := t.TempDir()
 	s := &Server{Config: appconfig.Config{Workers: &appconfig.WorkersConfig{CloneDirectory: cloneBase}}}
-	_, _, err := s.fetchRepositorySource(context.Background(), localProvider(dir), WorkerBuildRepository{
+	_, err := s.fetchRepositorySource(context.Background(), localProvider(dir), WorkerBuildRepository{
 		WorkerRepositorySource: WorkerRepositorySource{Ref: "master"},
 		Commit:                 head,
 	}, "")

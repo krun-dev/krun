@@ -237,9 +237,8 @@ func (s *Service) ResolveRepositoryCommit(ctx context.Context, provider appconfi
 	return (&gitadapter.Client{Config: s.Config}).ResolveRepositoryCommit(ctx, provider, source, token)
 }
 
-// fetchRepositorySource clones the pinned commit and returns the files needed
-// for the build decision plus a tarball of the tree for asset extraction.
-func (s *Service) FetchRepositorySource(ctx context.Context, provider appconfig.WorkerRepositoryProvider, source domain.WorkerBuildRepository, token string) (map[string]string, []byte, error) {
+// FetchRepositorySource reads the complete build project from a pinned commit.
+func (s *Service) FetchRepositorySource(ctx context.Context, provider appconfig.WorkerRepositoryProvider, source domain.WorkerBuildRepository, token string) (map[string]string, error) {
 	return (&gitadapter.Client{Config: s.Config}).FetchRepositorySource(ctx, provider, source, token)
 }
 

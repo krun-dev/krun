@@ -22,7 +22,6 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 	simpleIAM := strings.HasPrefix(r.URL.Path, oauthPrefix+"/") ||
 		r.URL.Path == "/api/auth/me" ||
 		r.URL.Path == "/api/auth/logout" ||
-		r.URL.Path == "/api/v1/me" ||
 		r.URL.Path == "/api/v1/roles" ||
 		r.URL.Path == "/api/v1/orgs" ||
 		r.Pattern == "GET /api/v1/orgs/{org}" ||

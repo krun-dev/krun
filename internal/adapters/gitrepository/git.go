@@ -279,9 +279,8 @@ func SanitizeGitError(err error) string {
 	return msg
 }
 
-// fetchRepositorySource clones the pinned commit and returns the files needed
-// for the build decision plus a tarball of the tree for asset extraction.
-func (s *Client) FetchRepositorySource(ctx context.Context, provider appconfig.WorkerRepositoryProvider, source domain.WorkerBuildRepository, token string) (map[string]string, []byte, error) {
+// FetchRepositorySource reads the complete build project from a pinned commit.
+func (s *Client) FetchRepositorySource(ctx context.Context, provider appconfig.WorkerRepositoryProvider, source domain.WorkerBuildRepository, token string) (map[string]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 	commit := source.Commit
@@ -290,22 +289,18 @@ func (s *Client) FetchRepositorySource(ctx context.Context, provider appconfig.W
 	}
 	repo, dir, err := CloneRepository(ctx, provider, source.Repository, token, commit, source.Ref, CloneBaseDir(s.Config.Workers))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	defer os.RemoveAll(dir)
 	raw, err := ArchiveRepositoryCommit(repo, commit, source.RootDirectory)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if len(raw) > workerartifact.RepositoryArchiveLimit {
-		return nil, nil, fmt.Errorf("Repository archive exceeds 16 MiB")
+		return nil, fmt.Errorf("Repository archive exceeds 16 MiB")
 	}
 
-	files, _, err := workerartifact.ExtractRepositorySource(raw, source.RootDirectory, "")
-	if err != nil {
-		return nil, nil, err
-	}
-	return files, raw, nil
+	return workerartifact.ExtractRepositorySource(raw, source.RootDirectory)
 }
 
 func ArchiveRepositoryCommit(repo *git.Repository, commit, projectRoot string) ([]byte, error) {

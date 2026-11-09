@@ -29,7 +29,7 @@ flowchart LR
 - `config/test.example.yaml`：内网、Office、公网三个独立网关/运行池的完整测试模板。
 - `cmd/krun-deploy`：离线渲染 Secret、ConfigMap、Deployment、Service、RBAC、NetworkPolicy、PDB、HTTPRoute。
 - `scripts/build-deployment.sh`：构建三个镜像，只有显式 `--push` 才上传。
-- `scripts/package-console.sh`：静态检查并打包 `index.html`、`assets/`，不启动 Node 服务或自动上传。
+- `scripts/package-console.sh`：静态检查并打包完整 `dist/console/`（含用户文档和 CLI 下载），不启动 Node 服务或自动上传。
 - `scripts/deploy-production.sh`：默认只渲染；写集群必须同时传 `--context` 和 `--apply`。
 - `gateway.example.yaml`：可选的公司网关管理员参考配置，不被部署脚本自动应用。
 

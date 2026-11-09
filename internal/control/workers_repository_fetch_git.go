@@ -14,6 +14,6 @@ func (s *Server) resolveRepositoryCommit(ctx context.Context, provider appconfig
 	return s.repositoryApplication().ResolveRepositoryCommit(ctx, provider, source, token)
 }
 
-func (s *Server) fetchRepositorySource(ctx context.Context, provider appconfig.WorkerRepositoryProvider, source WorkerBuildRepository, token string) (map[string]string, []byte, error) {
+func (s *Server) fetchRepositorySource(ctx context.Context, provider appconfig.WorkerRepositoryProvider, source WorkerBuildRepository, token string) (map[string]string, error) {
 	return s.repositoryApplication().FetchRepositorySource(ctx, provider, source, token)
 }

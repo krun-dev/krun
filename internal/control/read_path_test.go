@@ -26,7 +26,7 @@ func TestGetRequestsDoNotWrite(t *testing.T) {
 	s.Store = store
 	paths := []string{
 		"/api/auth/me",
-		"/api/v1/me",
+		"/api/auth/me",
 		"/api/v1/orgs",
 		"/api/v1/orgs/org-a",
 		"/api/v1/system/users",

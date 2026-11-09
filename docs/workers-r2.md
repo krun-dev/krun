@@ -222,7 +222,7 @@ runtime 镜像包含 `workers/runtime/storage/`。local-first 的配置渲染器
 固定目标、固定 Host、校验证书的 ExternalServer，并生成相应网络出口规则。
 issuer AK/SK 和 cursor key 不写入 runtime ConfigMap；临时凭据经已认证内部接口按需获取。
 
-新增了三个完整基线表：`krun_worker_buckets`、`krun_worker_environment_r2`、
+桶和绑定使用三个表：`krun_worker_buckets`、`krun_worker_environment_r2`、
 `krun_worker_version_r2`。binding 的父实体删除时在事务内清理；版本保留清理任务也同步
 清理引用。桶和对象是持久资源，没有默认 TTL。没有逐对象数据库行。
 已有数据库 fingerprint 与本版不一致时启动会拒绝；需要显式使用新建的专用开发/测试库，
@@ -240,31 +240,22 @@ workerd 的 facade、原始 gzip 字节、Range、条件读写、空对象、分
 mock 存储还验证上传提前到达、固定 Host 签名、32 MiB 流的背压与断开后的上游取消。
 没有完成 Cloudflare 账号上的逐项对照，也没有宣称所有 S3 实现已通过这些能力。
 
-## 开源项目兼容性实测
+## 开源项目验证
 
-2026-11-04 拉取以下项目，在本仓库固定版本的 workerd、实际 `entry.js` 和 R2 facade
-上执行原始业务代码，后端使用主配置声明的真实 TOS 与 prefix 受限 STS。
-共 21 项选定 HTTP 检查通过，包含 multipart 和 Cache API；这不能视为所有项目功能完全兼容。
+验证使用固定版本的 workerd、实际 runtime 入口和 R2 facade，连接主配置声明的 TOS，
+并通过 prefix 受限的 STS 凭据读写。测试场景使用以下固定项目版本：
 
-| 项目 / 固定 commit | 已验证流程 | 结果与边界 |
-| --- | --- | --- |
-| [r2-file-manager](https://github.com/msaifuddin/r2-file-manager/tree/282ad563ccc48ae4297fa3506ceae77bfa329a81) | 请求流上传、表单 File.stream、索引页、下载、ETag、删除 | 4 项通过；未测试并发更新索引 |
-| [ByteGo](https://github.com/zopiya/bytego/tree/ff21c5b6de9a2b3e5f648139753a73d08ddf6f2a) | 首页 HTML、鉴权上传、中文文件名 metadata、删除 | 3 项通过；保留上游 2023 年 compatibility date；CDN URL 仅验证生成格式，不验证独立公开域名服务 |
-| [r2-share-worker](https://github.com/itoschum/r2-share-worker/tree/70b2b79be23a18fe76964ff483a0cc5a6e6669be) | 错误 token、65 个分页样本、附件下载、媒体 HEAD + Range | 4 项通过；样本预置有效平台 envelope，不代表原生 S3 对象已迁移兼容 |
-| [R2-Explorer](https://github.com/G4brym/R2-Explorer/tree/2c09ecbea00be66992ddb8c63946aed1a9be59e6) | 上传、平铺列表、目录列表、下载、流式重命名、删除、跨请求 multipart 续传合并 | 7 项通过；分片为 5 MiB + 尾片，下载核对完整字节；未验证 dashboard 浏览器交互、分享、邮件和全部列表参数 |
-| [r2-image-worker](https://github.com/yusukebe/r2-image-worker/tree/80cc728a049af10bfd9347a11088ee1d6dc4bbbd) | Basic Auth、表单 File 上传、下载与再次读取缓存命中 | 3 项通过；第二次响应检查 Age；未注入可选 IMAGES binding，未测试图片变换 |
+| 项目 / 固定 commit | 验证范围 |
+| --- | --- |
+| [r2-file-manager](https://github.com/msaifuddin/r2-file-manager/tree/282ad563ccc48ae4297fa3506ceae77bfa329a81) | 请求流和表单上传、索引页、下载、ETag、删除 |
+| [ByteGo](https://github.com/zopiya/bytego/tree/ff21c5b6de9a2b3e5f648139753a73d08ddf6f2a) | 首页、鉴权上传、中文文件名 metadata、删除；仅验证 CDN URL 格式 |
+| [r2-share-worker](https://github.com/itoschum/r2-share-worker/tree/70b2b79be23a18fe76964ff483a0cc5a6e6669be) | 错误 token、分页、附件下载、媒体 HEAD 和 Range；样本使用平台对象 metadata |
+| [R2-Explorer](https://github.com/G4brym/R2-Explorer/tree/2c09ecbea00be66992ddb8c63946aed1a9be59e6) | 上传、目录和对象列表、下载、流式重命名、删除、跨请求分片续传 |
+| [r2-image-worker](https://github.com/yusukebe/r2-image-worker/tree/80cc728a049af10bfd9347a11088ee1d6dc4bbbd) | Basic Auth、表单上传、下载与缓存命中；不使用 IMAGES binding |
 
-实测修复了两个问题：`list({delimiter:""})` 现在等价于省略 delimiter；签名从依赖业务
-RPC flag 的调用改为本地 Fetcher 控制调用，ByteGo 不必修改 compatibility date。
-native runtime 验收还覆盖真实 TOS 的分片取消、重复取消及取消后写入失败；Cache API
-跨请求的 put、match、Range、条件读取和 delete 也在真实 workerd 中执行。
-
-测试通过 esbuild 打包上游代码，业务源码不修改。R2-Explorer 使用其公开的
-`R2Explorer({readonly:false})` 入口；其余直接打包原始 default export。
-配置分发、路由和凭据接口由本地测试 fixture 提供，凭据由真实 Go provider 签发。
-这覆盖真实 runtime 和对象存储数据链路，不包含控制台部署、完整 Wrangler 上传流程、
-Kubernetes rollout 或 Cloudflare 线上账号对照。上游仓库和安装产物只保存在 gitignored
-`.data/r2-project-compat/repos/`，没有复制到发布产物中。
+esbuild 打包上游业务代码，配置分发、路由和凭据接口由本地 fixture 提供。
+该验证覆盖 runtime 与对象存储数据链路；控制台部署、Wrangler 上传、Kubernetes
+rollout 和 Cloudflare 账号对照不在此测试范围内。
 
 在仓库根目录准备固定上游版本和生产依赖（不运行上游安装脚本）：
 
@@ -278,6 +269,6 @@ go test ./internal/adapters/storagecredentials -count=1 \
 
 脚本检查上游 commit 和 tracked 文件未修改；npm 依赖按上游声明解析，安装结果保留在
 本地，上游未锁定的依赖不承诺跨时间完全一致。Explorer 的 Hono peer dependency 使用
-同批图片项目安装的 Hono（本次为 4.13.16）。测试不依赖主数据库，不重建现有开发库；
+同批图片项目安装的 Hono。测试不依赖主数据库，不重建现有开发库；
 每次创建随机测试 prefix，凭据文件权限为 0600，结束后逐对象清理并确认该 prefix 为空。
 正常 `npm test` / `go test` 不下载上游，也不隐式访问真实 TOS。

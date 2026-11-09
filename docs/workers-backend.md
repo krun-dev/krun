@@ -246,7 +246,7 @@ header 与该 pool 独立 token，不能只信任 header：
 }
 ```
 
-旧的内联 `files` 仍可用（仅代码，≤512 文件 / 2 MiB）；带 `assets` 时必须先 `POST /source-uploads` 并上传 `source.tar.gz`。源码包顶层固定为 `src/`（Worker 代码）与 `assets/`（相对 `assets.directory` 的文件）。归档使用 portable ustar；短路径放在 100-byte name field，嵌套路径可使用 155-byte prefix + 100-byte name 的标准拆分。
+内联 `files` 用于仅含代码的构建（≤512 文件 / 2 MiB）；带 `assets` 时必须先 `POST /source-uploads` 并上传 `source.tar.gz`。源码包顶层固定为 `src/`（Worker 代码）与 `assets/`（相对 `assets.directory` 的文件）。归档使用 portable ustar；短路径放在 100-byte name field，嵌套路径可使用 155-byte prefix + 100-byte name 的标准拆分。
 
 环境配置和发布请求分别使用不同 revision：
 

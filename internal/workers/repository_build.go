@@ -54,7 +54,7 @@ func (w *Controller) PrepareRepositoryBuild(ctx context.Context, build domain.Wo
 			return build, private, storage.ErrBuildClaimLost
 		}
 	}
-	files, _, err := w.Service.Repository.FetchRepositorySource(ctx, provider, source, fetchToken)
+	files, err := w.Service.Repository.FetchRepositorySource(ctx, provider, source, fetchToken)
 	if err != nil {
 		return build, private, err
 	}

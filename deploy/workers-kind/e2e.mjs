@@ -148,15 +148,35 @@ async function buildAt(workerBase,input,expected='succeeded',options={}){const b
 async function publishAt(workerBase,buildId,environment,revision){const op=await api(workerBase+'/environments/'+environment+'/deployments','POST',{build_id:buildId,expected_revision:revision,idempotency_key:randomUUID()},202);return poll(workerBase+'/operations/'+op.id,['available'],150000);}
 async function build(input,expected='succeeded',options={}){return buildAt(base,input,expected,options);}
 async function publish(buildId,environment,revision){return publishAt(base,buildId,environment,revision);}
+async function readBuildLog(buildID) {
+  const result = await api(base + '/builds/' + buildID + '/logs?inline=true');
+  assert.equal(typeof result.log, 'string');
+  return result.log;
+}
 let b1,b2,prodFirst,hostTest,hostProd,repositoryBuild,repositoryVersion,repositoryHost;
-await check('authenticated real Kubernetes build finalizes S3 archive',async()=>{b1=await build(source('v1-'+run));const a=await api(base+'/artifacts/'+b1.artifact_id);assert.equal(a.state,'finalized');assert.equal(a.storage_location_id,'primary');assert.equal(a.bucket,bucket);assert(a.object_key.endsWith('/bundle.tar.gz'));assert(a.archive_size_bytes>0);const logs=await api(base+'/builds/'+b1.id+'/logs');assert(logs.log.includes('Archive SHA-256'));assert(!logs.log.includes('X-Amz-'));return {build_id:b1.id,artifact:a,job:b1.job};});
+await check('authenticated real Kubernetes build finalizes S3 archive', async () => {
+  b1 = await build(source('v1-' + run));
+  const artifact = await api(base + '/artifacts/' + b1.artifact_id);
+  assert.equal(artifact.state, 'finalized');
+  assert.equal(artifact.storage_location_id, 'primary');
+  assert.equal(artifact.bucket, bucket);
+  assert(artifact.object_key.endsWith('/bundle.tar.gz'));
+  assert(artifact.archive_size_bytes > 0);
+
+  const log = await readBuildLog(b1.id);
+  assert(log.includes('Archive SHA-256'));
+  assert(!log.includes('X-Amz-'));
+  return { build_id: b1.id, artifact, job: b1.job };
+});
 await check('preview version waits for actual runtime and Gateway adoption',async()=>{await api(base+'/environments','POST',{name:'fix-auth'},201);const op=await publish(b1.id,'fix-auth',0);assert(op.steps.every(s=>s.state==='done'));const envs=(await api(base+'/environments')).items;hostTest=environmentHost(envs.find(e=>e.name==='fix-auth'));hostProd=environmentHost(envs.find(e=>e.name==='production'));assert(hostTest&&hostProd);const r=await invoke(hostTest,'/orders?id=1');assert.equal(r.status,200);assert.equal(r.body.version,'v1-'+run);assert.equal(r.body.environment,'fix-auth');assert(r.body.url.includes('/orders?id=1'));assert.equal(envs.find(e=>e.name==='production').deployment_revision,0);return {operation:op.id,response:r.body};});
 await check('repository build uses TLS Git and the Wrangler build-pack Job',async()=>{
  const providers=await api('/api/v1/orgs/'+org.id+'/workers/repository-providers');assert(providers.items.some(provider=>provider.id==='kind-git'));
  const binding=await api(base+'/repository','PUT',{source:{provider_id:'kind-git',repository:'fixture/worker',ref:'main',root_directory:'.'},expected_revision:0});assert.equal(binding.revision,1);
  repositoryBuild=await build({source_type:'repository',repository_revision:binding.revision,ref:'main'});assert(repositoryBuild.artifact_id);assert.match(repositoryBuild.repository_source.commit,/^[0-9a-f]{40}$/);
  const job=JSON.parse(kubectl('get','job',repositoryBuild.job,'-n','workers-mvp','-o','json'));assert.deepEqual(job.spec.template.spec.initContainers.map(container=>container.name),['builder-build']);assert.deepEqual(job.spec.template.spec.containers.map(container=>container.name),['builder-pack']);
- const logs=await api(base+'/builds/'+repositoryBuild.id+'/logs');assert(logs.log.includes('Wrangler build complete'));assert(logs.log.includes('Uploaded; awaiting platform finalize'));
+ const log = await readBuildLog(repositoryBuild.id);
+ assert(log.includes('Wrangler build complete'));
+ assert(log.includes('Uploaded; awaiting platform finalize'));
  await api(base+'/environments','POST',{name:'repository-e2e'},201);repositoryVersion=await publish(repositoryBuild.id,'repository-e2e',0);
  const environment=(await api(base+'/environments')).items.find(item=>item.name==='repository-e2e');repositoryHost=environmentHost(environment);assert(repositoryHost);
  const response=await invoke(repositoryHost,'/from-repository?run='+run);assert.equal(response.status,200);assert.equal(response.body.source,'repository-wrangler');assert.equal(response.body.environment,'repository-e2e');assert(response.body.url.includes('/from-repository?run='+run));
@@ -166,8 +186,36 @@ await check('same Artifact publishes with production configuration',async()=>{aw
 await check('v2 build and publish changes production without changing test',async()=>{b2=await build(source('v2-'+run));await publish(b2.id,'production',1);assert.equal((await invoke(hostProd)).body.version,'v2-'+run);assert.equal((await invoke(hostTest)).body.version,'v1-'+run);return {build_id:b2.id};});
 await check('stale Version revision rejected',async()=>{const r=await request(base+'/environments/production/deployments','POST',{build_id:b1.id,expected_revision:1,idempotency_key:randomUUID()});assert.equal(r.status,409);return r.body.error.code;});
 await check('historical version rollback restores code and immutable configuration',async()=>{await api(base+'/environments/production','PATCH',{expected_revision:2,variables:{GREETING:'future-config'}});const op=await api(base+'/environments/production/rollbacks','POST',{version_id:prodFirst.version_id,expected_revision:2,idempotency_key:randomUUID()},202);await poll(base+'/operations/'+op.id,['available']);const r=await invoke(hostProd);assert.equal(r.body.version,'v1-'+run);assert.equal(r.body.greeting,'production-value');assert.equal((await api(base+'/environments/production/history')).items.length,3);return r.body;});
-await check('syntax error fails build and retains production',async()=>{const b=await build({entrypoint:'index.ts',files:{'index.ts':'export default {fetch('}},'failed');assert(!b.artifact_id);assert((await api(base+'/builds/'+b.id+'/logs')).log.includes('Build failed'));assert.equal((await invoke(hostProd)).body.version,'v1-'+run);return {build_id:b.id,error:b.error};});
-await check('compiler cannot read files outside project',async()=>{const b=await build({entrypoint:'index.ts',files:{'index.ts':`import input from '/input/input.json';export default {fetch(){return Response.json(input)}}`}},'failed');const log=(await api(base+'/builds/'+b.id+'/logs')).log;assert.match(log,/source-boundary.*outside project is forbidden/is);return {build_id:b.id};});
+await check('syntax error fails build and retains production', async () => {
+  const b = await build({
+    entrypoint: 'index.ts',
+    files: { 'index.ts': 'export default {fetch(' },
+  }, 'failed');
+  assert(!b.artifact_id);
+  const log = await readBuildLog(b.id);
+  assert(log.includes('Build failed'));
+  assert.equal((await invoke(hostProd)).body.version, 'v1-' + run);
+  return { build_id: b.id, error: b.error };
+});
+await check('compiler cannot read files outside project', async () => {
+  const b = await build({
+    entrypoint: 'index.ts',
+    files: {
+      'index.ts': `
+        import input from '/input/input.json';
+
+        export default {
+          fetch() {
+            return Response.json(input);
+          },
+        };
+      `,
+    },
+  }, 'failed');
+  const log = await readBuildLog(b.id);
+  assert.match(log, /source-boundary.*outside project is forbidden/is);
+  return { build_id: b.id };
+});
 await check('candidate module initialization failure leaves current Version',async()=>{const bad=await build({entrypoint:'index.ts',files:{'index.ts':`throw new Error('candidate-init-failed'); export default {fetch(){return new Response('bad')}}`}});const op=await api(base+'/environments/production/deployments','POST',{build_id:bad.id,expected_revision:3,idempotency_key:randomUUID()},202);const result=await poll(base+'/operations/'+op.id,['failed']);assert(result.error.includes('Candidate'));assert.equal((await invoke(hostProd)).body.version,'v1-'+run);assert.equal((await api(base+'/environments')).items.find(e=>e.name==='production').deployment_revision,3);return {operation:op.id,error:result.error};});
 await check('API Key is scoped to environment and cannot publish production',async()=>{const limited=await api('/api/v1/orgs/'+org.id+'/api-keys','POST',{name:'test only',expires_in:3600,policy:{schema_version:1,statements:[{effect:'allow',actions:['worker.publish','worker.read','worker.version.read'],resource:{kind:'worker',organization_id:org.id,ids:[service.id]},conditions:{environments:['fix-auth']}}]}},201,{session:true});const r=await request(base+'/environments/production/deployments','POST',{build_id:b1.id,expected_revision:3,idempotency_key:randomUUID()},{token:limited.key});assert.equal(r.status,403);const visible=await api(base+'/environments','GET',undefined,200,{token:limited.key});assert.deepEqual(visible.items.map(e=>e.name),['fix-auth']);assert.equal((await api(base+'/builds','GET',undefined,200,{token:limited.key})).items.length,0);return {denied:r.status,visible:['fix-auth']};});
 await check('preview lifecycle: create, publish with own variables, then delete',async()=>{await api(base+'/environments','POST',{name:'demo-preview'},201);await api(base+'/environments/demo-preview','PATCH',{expected_revision:1,variables:{GREETING:'preview-value'}});await publish(b1.id,'demo-preview',0);const envs=(await api(base+'/environments')).items;const stage=envs.find(e=>e.name==='demo-preview');assert.equal((await invoke(environmentHost(stage))).body.greeting,'preview-value');await api(base+'/environments/demo-preview','DELETE',undefined,204);assert.equal((await api(base+'/environments')).items.some(e=>e.name==='demo-preview'),false);const recreated=await api(base+'/environments','POST',{name:'demo-preview'},201);await api(base+'/environments/demo-preview','DELETE',undefined,204);return {deleted:'demo-preview',recreated:recreated.name,baseline:envs.find(e=>e.name==='production').name};});
