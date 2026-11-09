@@ -151,9 +151,7 @@ export function WorkerDomains({
               })}
             </div>
             {placementLocked ? (
-              <p className="text-xs text-muted-foreground">
-                {t("首次发布后Worker网络由平台固定；如需调整请联系平台管理员。")}
-              </p>
+              <p className="text-xs text-muted-foreground">{t("Worker 网络不支持修改。")}</p>
             ) : null}
           </CardContent>
         </Card>
