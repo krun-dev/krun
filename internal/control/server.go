@@ -445,6 +445,13 @@ func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, b
 			}
 			out = result.body
 		}
+		if data, ok := out.(auditCSVResponse); ok {
+			w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+			w.Header().Set("Content-Disposition", `attachment; filename="krun-audit.csv"`)
+			w.WriteHeader(status)
+			_, _ = w.Write(data)
+			return
+		}
 		s.json(w, status, out)
 	}
 }

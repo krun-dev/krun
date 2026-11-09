@@ -19,6 +19,26 @@ export async function api<T>(
   signal?: AbortSignal,
   onHeaders?: (headers: Headers) => void,
 ): Promise<T> {
+  const response = await fetchAPI(path, method, input, signal);
+  if (response.ok) onHeaders?.(response.headers);
+  return readAPIJSON<T>(response);
+}
+
+export async function downloadAuditCSV(path: string): Promise<Blob> {
+  const response = await fetchAPI(path, "GET");
+  if (!response.ok) await readAPIJSON(response);
+  if (!response.headers.get("Content-Type")?.startsWith("text/csv")) {
+    throw new APIError(response.status, "INVALID_RESPONSE", t("控制服务响应异常，请稍后刷新。"));
+  }
+  return response.blob();
+}
+
+async function fetchAPI(
+  path: string,
+  method: string,
+  input?: unknown,
+  signal?: AbortSignal,
+): Promise<Response> {
   if (!path.startsWith("/api/")) {
     throw new APIError(0, "INVALID_API_PATH", "Refusing a non-API request path");
   }
@@ -49,7 +69,10 @@ export async function api<T>(
     body: input === undefined ? undefined : JSON.stringify(input),
   });
   notifyAuthRequired(response.status);
-  if (response.ok) onHeaders?.(response.headers);
+  return response;
+}
+
+async function readAPIJSON<T>(response: Response): Promise<T> {
   if (response.status === 204) return undefined as T;
   const raw = await response.text();
   let data;

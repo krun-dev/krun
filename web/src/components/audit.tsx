@@ -1,10 +1,18 @@
 import { errorMessage, t, locale, credentialLabel } from "@/lib/i18n";
 import { useTranslation } from "react-i18next";
 import { useEffect, useState } from "react";
-import { CalendarDays, ChevronLeft, ChevronRight, ChevronsLeft, RefreshCw } from "lucide-react";
-import { api, type AuditPageResponse } from "@/lib/api";
+import {
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  Download,
+  RefreshCw,
+} from "lucide-react";
+import { api, downloadAuditCSV, type AuditPageResponse } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Empty, Loading, PageHeader, SelectField } from "./common";
 import { DataTable, ErrorState, ID } from "./management";
 
@@ -13,6 +21,9 @@ export function AuditPage({ base, refresh }: { base: string; refresh: number }) 
   const [limit, setLimit] = useState("50");
   const [cursors, setCursors] = useState([""]);
   const [page, setPage] = useState(0);
+  const [redact, setRedact] = useState(true);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
   const [reload, setReload] = useState(0);
   const [result, setResult] = useState<{
     key: string;
@@ -45,6 +56,7 @@ export function AuditPage({ base, refresh }: { base: string; refresh: number }) 
     };
   }, [path, requestKey]);
   function reset() {
+    setExportError("");
     setCursors([""]);
     setPage(0);
     setReload((value) => value + 1);
@@ -58,6 +70,30 @@ export function AuditPage({ base, refresh }: { base: string; refresh: number }) 
     setCursors([...history, data.next_cursor]);
     setPage((value) => value + 1);
   }
+  async function exportCSV() {
+    if (!data?.items.length || loading || exporting) return;
+
+    setExportError("");
+    setExporting(true);
+    try {
+      const params = new URLSearchParams({
+        cursor: cursors[0] || data.cursor,
+        redact: String(redact),
+      });
+      const file = await downloadAuditCSV(`${base}/audit/export?${params}`);
+      const url = URL.createObjectURL(file);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "krun-audit.csv";
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      setExportError(errorMessage(error));
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const start = data?.items.length ? page * Number(limit) + 1 : 0;
   const end = data?.items.length ? page * Number(limit) + data.items.length : 0;
   return (
@@ -67,19 +103,53 @@ export function AuditPage({ base, refresh }: { base: string; refresh: number }) 
         title={t("审计记录")}
         description={t("查看最近 7 天的授权与管理记录，超过保留期的记录会自动清理。")}
         action={
-          <Button
-            variant="outline"
-            onClick={reset}
-            disabled={loading}
-          >
-            <RefreshCw
-              size={15}
-              className={loading ? "animate-spin" : ""}
-            />
-            {t("刷新")}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={reset}
+              disabled={loading}
+            >
+              <RefreshCw
+                size={15}
+                className={loading ? "animate-spin" : ""}
+              />
+              {t("刷新")}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={exportCSV}
+              disabled={loading || exporting || !data?.items.length}
+            >
+              <Download size={15} />
+              {exporting ? t("正在导出…") : t("导出 CSV")}
+            </Button>
+          </div>
         }
       />
+      <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <Checkbox
+            checked={redact}
+            disabled={exporting}
+            aria-describedby="audit-export-description"
+            onCheckedChange={(checked) => setRedact(checked === true)}
+          />
+          {t("脱敏导出")}
+        </label>
+        <p
+          id="audit-export-description"
+          className="text-xs text-muted-foreground"
+        >
+          {t(
+            "导出当前快照，最多 5,000 条。脱敏会遮盖记录、主体、API Key、资源、组织和请求的标识。",
+          )}
+        </p>
+      </div>
+      {exportError && (
+        <div className="mb-4">
+          <ErrorState error={exportError} />
+        </div>
+      )}
       <div className="mb-5 flex flex-wrap items-center gap-3 border-b pb-4">
         <Badge
           variant="outline"

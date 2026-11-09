@@ -246,6 +246,78 @@ test("system administration works before any organization exists", async ({ page
   await expect(page.getByRole("heading", { name: "审计记录", exact: true })).toBeVisible();
 });
 
+test("audit downloads the same snapshot with the selected redaction mode", async ({ page }) => {
+  await fixture(page, { actions: { "org-a": admin } });
+  const path = "/api/v1/orgs/org-a/audit";
+  const asOf = "2026-01-01T00:00:00Z";
+  const exported = [];
+  await page.route(
+    (url) => url.pathname === path,
+    async (route) => {
+      const cursor = new URL(route.request().url()).searchParams.get("cursor");
+      await route.fulfill({
+        json: {
+          items: [
+            {
+              id: cursor ? "audit-two" : "audit-one",
+              time: asOf,
+              actor: "user-test",
+              credential: "session",
+              action: "worker.update",
+              resource: "worker-test",
+              allowed: true,
+              request_id: "request-test",
+            },
+          ],
+          total: 51,
+          cursor: cursor || "first-page",
+          has_more: !cursor,
+          next_cursor: cursor ? "" : "second-page",
+          as_of: asOf,
+        },
+      });
+    },
+  );
+  await page.route(
+    (url) => url.pathname === path + "/export",
+    async (route) => {
+      const url = new URL(route.request().url());
+      const redact = url.searchParams.get("redact");
+      exported.push({ cursor: url.searchParams.get("cursor"), redact });
+      await route.fulfill({
+        contentType: "text/csv; charset=utf-8",
+        body: redact === "true" ? "actor\n[REDACTED]\n" : "actor\nuser-test\n",
+      });
+    },
+  );
+
+  await page.goto(origin + "/?page=audit&workspace=org-a");
+  await page.getByRole("button", { name: "下一页" }).click();
+  await expect(page.getByText("第 2 页", { exact: false })).toBeVisible();
+  const redact = page.getByRole("checkbox", { name: "脱敏导出" });
+  const download = page.getByRole("button", { name: "导出 CSV" });
+  await expect(redact).toBeChecked();
+
+  async function downloadContents() {
+    const event = page.waitForEvent("download");
+    await download.click();
+    const file = await event;
+    expect(file.suggestedFilename()).toBe("krun-audit.csv");
+    return readFile(await file.path(), "utf8");
+  }
+
+  expect(await downloadContents()).toBe("actor\n[REDACTED]\n");
+  await page.getByRole("button", { name: "切换深色主题" }).click();
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  await redact.click();
+  await expect(redact).not.toBeChecked();
+  expect(await downloadContents()).toBe("actor\nuser-test\n");
+  expect(exported).toEqual([
+    { cursor: "first-page", redact: "true" },
+    { cursor: "first-page", redact: "false" },
+  ]);
+});
+
 test("switching organizations closes old management pages until new permissions arrive", async ({
   page,
 }) => {

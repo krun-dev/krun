@@ -2,9 +2,12 @@ package control
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -134,5 +137,98 @@ func TestAuditPaginationValidation(t *testing.T) {
 	empty := getAuditPage(t, s, "/api/v1/system/audit", "krun_cli_admin")
 	if empty.Limit != 50 {
 		t.Fatal("wrong default page size")
+	}
+}
+
+func TestAuditCSVExportSnapshotAndRedaction(t *testing.T) {
+	s, store := testServer(t)
+	seedAuditPages(t, store)
+	entry := Audit{
+		ID: "csv-row", Time: now().Add(-time.Minute), Organization: "org-a",
+		Actor: "  =1+1", KeyID: "key-private", Credential: "api_key",
+		Action: "worker.update", Resource: "资源,\"引号\"\n下一行",
+		Allowed: true, RequestID: "request-private", Revision: 7,
+	}
+	if err := store.AppendAudits(context.Background(), []Audit{entry}); err != nil {
+		t.Fatal(err)
+	}
+	first := getAuditPage(t, s, "/api/v1/orgs/org-a/audit?limit=1", "krun_cli_admin")
+	if err := store.AppendAudits(context.Background(), []Audit{{
+		ID: "newer-than-snapshot", Time: now(), Organization: "org-a",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/v1/orgs/org-a/audit/export?cursor=" + url.QueryEscape(first.NextCursor)
+
+	masked := getAuditCSV(t, s, path)
+	raw := getAuditCSV(t, s, path+"&redact=false")
+	if len(masked) != 239 || len(raw) != len(masked) {
+		t.Fatalf("export should include header and all %d snapshot records, got %d and %d", first.Total, len(masked), len(raw))
+	}
+	header := []string{"id", "time", "actor", "credential", "key_id", "action", "resource", "organization_id", "allowed", "request_id", "revision"}
+	if !reflect.DeepEqual(raw[0], header) {
+		t.Fatalf("unexpected CSV header: %q", raw[0])
+	}
+	at := entry.Time.UTC().Format(time.RFC3339Nano)
+	wantRaw := []string{entry.ID, at, "'" + entry.Actor, entry.Credential, entry.KeyID, entry.Action, entry.Resource, entry.Organization, "true", entry.RequestID, "7"}
+	wantMasked := []string{"[REDACTED]", at, "[REDACTED]", entry.Credential, "[REDACTED]", entry.Action, "[REDACTED]", "[REDACTED]", "true", "[REDACTED]", "7"}
+	if !reflect.DeepEqual(raw[1], wantRaw) || !reflect.DeepEqual(masked[1], wantMasked) {
+		t.Fatalf("unexpected CSV values: raw %q, masked %q", raw[1], masked[1])
+	}
+	for _, row := range raw[1:] {
+		if row[7] != "org-a" || row[0] == "old" || row[0] == "newer-than-snapshot" {
+			t.Fatalf("unexpected row in organization snapshot: %q", row)
+		}
+	}
+
+	global := getAuditCSV(t, s, "/api/v1/system/audit/export?redact=false")
+	if len(global) != len(raw)+2 || global[1][0] != "newer-than-snapshot" {
+		t.Fatalf("system export should include the new record and the other organization, got %d rows", len(global))
+	}
+}
+
+func getAuditCSV(t *testing.T, s *Server, path string) [][]string {
+	t.Helper()
+	w := request(s, "GET", path, "krun_cli_admin", "")
+	if w.Code != 200 || w.Header().Get("Content-Type") != "text/csv; charset=utf-8" ||
+		w.Header().Get("Content-Disposition") != `attachment; filename="krun-audit.csv"` ||
+		w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected export response: %d %v", w.Code, w.Header())
+	}
+	body, hasBOM := strings.CutPrefix(w.Body.String(), "\uFEFF")
+	if !hasBOM {
+		t.Fatal("CSV is missing UTF-8 BOM")
+	}
+	rows, err := csv.NewReader(strings.NewReader(body)).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
+
+func TestAuditCSVExportAuthorizationAndQuery(t *testing.T) {
+	s, _ := testServer(t)
+	const path = "/api/v1/orgs/org-a/audit/export"
+	other := s.encodeAuditCursor(auditCursor{Scope: "organization:org-b", AsOf: now()})
+	tests := []struct {
+		query  string
+		token  string
+		status int
+	}{
+		{"", "", 401},
+		{"?redact=false", "krun_cli_viewer", 403},
+		{"?redact=no", "krun_cli_admin", 400},
+		{"?redact=true&redact=false", "krun_cli_admin", 400},
+		{"?redact=false&cursor=%ZZ", "krun_cli_admin", 400},
+		{"?cursor=" + url.QueryEscape(other), "krun_cli_admin", 400},
+	}
+	for _, tt := range tests {
+		w := request(s, "GET", path+tt.query, tt.token, "")
+		if w.Code != tt.status || w.Header().Get("Content-Disposition") != "" {
+			t.Errorf("%s returned %d, want %d with no attachment", tt.query, w.Code, tt.status)
+		}
+	}
+	if rows := getAuditCSV(t, s, path); len(rows) != 1 {
+		t.Fatalf("empty export should contain just the header, got %d rows", len(rows))
 	}
 }
