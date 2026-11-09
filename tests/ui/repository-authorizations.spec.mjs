@@ -34,7 +34,9 @@ test.afterAll(async () => {
   await new Promise((done) => server.close(done));
 });
 
-async function fixture(page, initialStatus) {
+async function fixture(page, initialStatus, provider = "gitlab") {
+  const github = provider === "github";
+  const endpoint = github ? base + "/worker-repositories/github" : grant;
   const state = { status: initialStatus, revoked: false, lists: 0, binding: null };
   const environment = {
     name: "production",
@@ -84,14 +86,16 @@ async function fixture(page, initialStatus) {
     } else if (path === base + "/workers/repository-providers") {
       json = {
         items: [{
-          id: "gitlab", name: "公司 GitLab", type: "gitlab", oauth: true,
-          base_url: "https://gitlab.example.com", connected: state.status === "connected",
+          id: provider, name: github ? "GitHub" : "公司 GitLab", type: provider, oauth: true,
+          base_url: github ? "https://github.com" : "https://gitlab.example.com",
+          install_url: github ? "https://github.com/apps/example/installations/new" : undefined,
+          connected: state.status === "connected",
           authorization_status: state.status,
         }],
       };
-    } else if (path === grant + "/connect") {
+    } else if (path === endpoint + "/connect") {
       json = { authorization_url: "https://gitlab.example.com/oauth/authorize", resume_key: "fixture-resume" };
-    } else if (path === grant + "/repositories") {
+    } else if (path === endpoint + "/repositories") {
       state.lists++;
       if (state.revoked) {
         state.status = "reconnect_required";
@@ -140,5 +144,27 @@ test("repository OAuth returns to the original Worker and binds a selected repos
     expected_revision: 1,
     use_authorization: true,
   });
+  expect(errors).toEqual([]);
+});
+
+test("GitHub installation is only offered in repository picker help", async ({ page }) => {
+  const { state, errors } = await fixture(page, "connected", "github");
+  const install = page.getByRole("link", { name: "安装 GitHub App 或调整仓库范围" });
+
+  await page.goto(origin + "/?workspace=org-repos&page=git-authorizations");
+  await expect(page.getByRole("heading", { name: "GitHub" })).toBeVisible();
+  await expect(page.getByRole("link", { name: /GitHub App/ })).toHaveCount(0);
+
+  await page.goto(origin + "/?workspace=org-repos&page=workers&worker=worker-repos&worker_tab=source");
+  await page.getByRole("combobox", { name: "仓库平台" }).selectOption("github");
+  await expect(page.getByRole("link", { name: /GitHub App/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "选择已授权仓库" }).click();
+  await expect(page.getByRole("button", { name: /platform\/edge-api/ })).toBeVisible();
+  await expect(install).toBeHidden();
+  await page.getByText("找不到仓库？", { exact: true }).click();
+  await expect(install).toHaveAttribute("href", "https://github.com/apps/example/installations/new");
+  await page.getByRole("button", { name: "刷新仓库列表" }).click();
+  await expect(page.getByRole("button", { name: /platform\/edge-api/ })).toBeVisible();
+  expect(state.lists).toBe(2);
   expect(errors).toEqual([]);
 });

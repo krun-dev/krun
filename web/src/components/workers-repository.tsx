@@ -231,22 +231,6 @@ export function RepositorySettings({
                   : t("公开仓库匿名拉取；私有仓库需管理员配置共享凭据。")}
               </p>
               <div className="flex flex-wrap gap-2">
-                {provider.install_url && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    asChild
-                  >
-                    <a
-                      href={provider.install_url}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {t("安装或管理 GitHub App")}
-                    </a>
-                  </Button>
-                )}
                 {provider.oauth &&
                   (provider.connected ? (
                     <Button
@@ -261,7 +245,6 @@ export function RepositorySettings({
                   ) : (
                     <Button
                       type="button"
-                      variant="outline"
                       size="sm"
                       disabled={busy}
                       onClick={() => void authorize()}
@@ -269,7 +252,9 @@ export function RepositorySettings({
                       {t(
                         provider.authorization_status === "reconnect_required"
                           ? "重新授权"
-                          : "连接账号",
+                          : provider.type === "github"
+                            ? "连接 GitHub"
+                            : "连接账号",
                       )}
                     </Button>
                   ))}
@@ -458,22 +443,46 @@ function RepositoryPicker({
             {t("加载中…")}
           </p>
         )}
-        <div className="flex flex-wrap justify-end gap-2">
-          {provider.install_url && !loading && (
-            <Button
-              type="button"
-              variant="outline"
-              asChild
-            >
-              <a
-                href={provider.install_url}
-                target="_blank"
-                rel="noreferrer"
+        {provider.install_url && !loading && provider.connected && (
+          <details className="text-sm text-muted-foreground">
+            <summary className="cursor-pointer">{t("找不到仓库？")}</summary>
+            <p className="mt-2">
+              {t(
+                "请确认你的 GitHub 账号能访问该仓库，并且仓库已开放给 GitHub App。组织仓库可能需要管理员授权。",
+              )}
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                asChild
               >
-                {t("安装或管理 GitHub App")}
-              </a>
-            </Button>
-          )}
+                <a
+                  href={provider.install_url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {t("安装 GitHub App 或调整仓库范围")}
+                </a>
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setItems([]);
+                  setHasMore(false);
+                  setPage(1);
+                  setAttempt((current) => current + 1);
+                }}
+              >
+                {t("刷新仓库列表")}
+              </Button>
+            </div>
+          </details>
+        )}
+        <div className="flex flex-wrap justify-end gap-2">
           {reconnect ? (
             <Button
               type="button"
