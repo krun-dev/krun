@@ -6,9 +6,9 @@ import { restoreRepositoryReturn } from "./lib/repository-authorization";
 
 restoreRepositoryReturn();
 try {
-  document.documentElement.classList.toggle("dark", localStorage.getItem("krun.theme") !== "light");
+  document.documentElement.classList.toggle("dark", localStorage.getItem("krun.theme") === "dark");
 } catch {
-  document.documentElement.classList.add("dark");
+  document.documentElement.classList.remove("dark");
 }
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

@@ -16,8 +16,6 @@ import {
   LayoutDashboard,
   Layers3,
   LogOut,
-  Sun,
-  Moon,
   PanelLeft,
   Plus,
   Search,
@@ -50,6 +48,7 @@ import {
   Notice,
   PageHeader,
   QuickLink,
+  ThemeToggle,
 } from "@/components/common";
 const OAuthConsent = lazy(() =>
   import("@/components/oauth-consent").then((m) => ({
@@ -145,17 +144,6 @@ function repositoryCallbackNotice(): string {
 
 export default function App() {
   useTranslation();
-  const [theme, setTheme] = useState(() =>
-    document.documentElement.classList.contains("dark") ? "dark" : "light",
-  );
-  useEffect(() => {
-    document.documentElement.classList.toggle("dark", theme === "dark");
-    try {
-      localStorage.setItem("krun.theme", theme);
-    } catch {
-      /* Theme still works without storage. */
-    }
-  }, [theme]);
   const [me, setMe] = useState<Me | null>(null),
     [providers, setProviders] = useState<Provider[]>([]),
     [development, setDevelopment] = useState(false),
@@ -437,6 +425,7 @@ export default function App() {
       <div className="m-auto max-w-lg p-10">
         <div className="flex items-center justify-between gap-4">
           <Logo />
+          <ThemeToggle />
           <LanguageSwitch />
         </div>
         <p
@@ -709,14 +698,7 @@ export default function App() {
             </Button>
           ) : null}
           <LanguageSwitch />
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={theme === "dark" ? t("切换浅色主题") : t("切换深色主题")}
-            onClick={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
-          >
-            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-          </Button>
+          <ThemeToggle />
           {development && (
             <Badge
               variant="outline"

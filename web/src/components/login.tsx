@@ -15,7 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Logo } from "./common";
+import { Logo, ThemeToggle } from "./common";
 import type { Provider } from "@/lib/api";
 
 export function Login({
@@ -65,18 +65,18 @@ export function Login({
   }
   return (
     <div className="grid min-h-screen lg:grid-cols-[1.05fr_1fr]">
-      <div className="relative hidden flex-col overflow-hidden bg-[#151515] p-14 text-white lg:flex">
+      <div className="relative hidden flex-col overflow-hidden bg-[#f4f7f5] p-14 text-foreground dark:bg-[#151515] dark:text-white lg:flex">
         <a
           href="/"
           aria-label={t("RUN 首页")}
         >
-          <Logo dark />
+          <Logo />
         </a>
-        <div className="absolute right-[-110px] top-[18%] size-[500px] rounded-full border border-white/5" />
-        <div className="absolute right-[-45px] top-[24%] size-[370px] rounded-full border border-white/5" />
+        <div className="absolute right-[-110px] top-[18%] size-[500px] rounded-full border border-black/5 dark:border-white/5" />
+        <div className="absolute right-[-45px] top-[24%] size-[370px] rounded-full border border-black/5 dark:border-white/5" />
         <div className="relative my-auto max-w-lg">
           <Badge
-            className="mb-7 border-white/15 bg-card/5 text-white/65"
+            className="mb-7 border-primary/20 bg-primary/5 text-primary dark:border-white/15 dark:bg-card/5 dark:text-white/65"
             variant="outline"
           >
             {t("RUN ANYTHING")}
@@ -86,12 +86,12 @@ export function Login({
             <br />
             {t("跑起来。")}
           </h1>
-          <p className="mt-6 max-w-sm text-base leading-relaxed text-slate-400">
+          <p className="mt-6 max-w-sm text-base leading-relaxed text-muted-foreground dark:text-slate-400">
             {t("从一个 API 到完整应用，")}
             <br />
             {t("在 RUN 构建、部署、运行。")}
           </p>
-          <div className="mt-12 grid grid-cols-3 gap-6 border-t border-white/10 pt-7">
+          <div className="mt-12 grid grid-cols-3 gap-6 border-t border-border pt-7 dark:border-white/10">
             {[
               [CloudUpload, t("构建部署")],
               [Boxes, t("应用运行")],
@@ -102,9 +102,11 @@ export function Login({
                 <div key={String(text)}>
                   <I
                     size={20}
-                    className="mb-3 text-emerald-300"
+                    className="mb-3 text-primary dark:text-emerald-300"
                   />
-                  <p className="text-sm text-slate-300">{String(text)}</p>
+                  <p className="text-sm text-muted-foreground dark:text-slate-300">
+                    {String(text)}
+                  </p>
                 </div>
               );
             })}
@@ -120,6 +122,7 @@ export function Login({
             >
               {t("使用文档")}
             </a>
+            <ThemeToggle className="mr-2" />
             <LanguageSwitch />
           </div>
           <div className="mb-12 lg:hidden">

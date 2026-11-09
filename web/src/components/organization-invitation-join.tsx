@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { LanguageSwitch } from "./language";
-import { Loading, Logo } from "./common";
+import { Loading, Logo, ThemeToggle } from "./common";
 import { Login } from "./login";
 
 export function OrganizationInvitationJoin({
@@ -135,7 +135,10 @@ export function OrganizationInvitationJoin({
     <div className="min-h-screen bg-background">
       <header className="mx-auto flex max-w-5xl items-center justify-between gap-4 p-6">
         <Logo />
-        <LanguageSwitch />
+        <div className="flex items-center gap-2">
+          <ThemeToggle />
+          <LanguageSwitch />
+        </div>
       </header>
       <main className="mx-auto max-w-md px-4 pb-10 pt-10">
         <Card className="gap-0 shadow-none">
