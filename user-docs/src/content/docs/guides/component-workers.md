@@ -39,7 +39,7 @@ export default {
 
 ## 构建和发布
 
-支持 Wrangler 配置、JavaScript/TypeScript 模块、静态资产和已配置的自定义构建；仓库构建支持 npm、pnpm、Yarn 或 Bun 锁文件。具体步骤见 [使用 Wrangler 部署 Workers](/docs/guides/cloudflare-workers.html)。
+支持 Wrangler 配置、JavaScript/TypeScript 模块、静态资产和已配置的自定义构建；仓库构建支持 npm、pnpm、Yarn 或 Bun 锁文件。通过控制台从仓库构建，见 [Git 仓库集成](/docs/guides/git-repositories.html)。通过 CLI 部署，见 [使用 Wrangler 部署 Workers](/docs/guides/cloudflare-workers.html)。
 
 如需限定编码 Agent 的使用范围，参照 [Workers 代码兼容范围](/docs/guides/workers-runtime-compatibility.html)。
 

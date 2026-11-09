@@ -2,15 +2,22 @@
 import DefaultPageTitle from "@astrojs/starlight/components/PageTitle.astro";
 const id = Astro.locals.starlightRoute.entry.id.replace(/\.(md|mdx)$/, "") || "index";
 const source = `/docs/${id}.md${import.meta.env.DEV ? "" : ".txt"}`;
+const workerPages = [
+  "guides/component-workers",
+  "guides/git-repositories",
+  "guides/gitlab-integration",
+  "guides/github-integration",
+  "guides/workers-runtime-compatibility",
+];
 const section = ["guides/krun-cli", "guides/cloudflare-workers"].includes(id)
-  ? "命令行工具"
-  : ["guides/component-workers", "guides/component-object-storage"].includes(id)
-    ? "组件"
-    : id === "guides/workers-runtime-compatibility"
-      ? "组件"
-      : "开始使用";
+  ? ["命令行工具"]
+  : workerPages.includes(id)
+    ? ["组件", "计算 · Workers", ...(id.endsWith("-integration") ? ["Git 仓库集成"] : [])]
+    : id === "guides/component-object-storage"
+      ? ["组件"]
+      : ["开始使用"];
 ---
-<div class="krun-breadcrumb">文档 <span>/</span> {section} <span>/</span> {Astro.locals.starlightRoute.entry.data.title}</div>
+<div class="krun-breadcrumb">文档 <span>/</span> {section.map((label) => <>{label} <span>/</span>{" "}</>)} {Astro.locals.starlightRoute.entry.data.title}</div>
 <div class="krun-title-row">
   <div>
     <div class="krun-eyebrow">● GETTING STARTED</div>

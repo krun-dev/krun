@@ -168,3 +168,13 @@ test("GitHub installation is only offered in repository picker help", async ({ p
   expect(state.lists).toBe(2);
   expect(errors).toEqual([]);
 });
+
+test("expired repository authorization explains how to reconnect", async ({ page }) => {
+  await fixture(page, "not_connected");
+  await page.goto(
+    origin + "/?workspace=org-repos&page=git-authorizations&repository_status=error&error=WORKER_REPOSITORY_STATE_INVALID",
+  );
+  await expect(
+    page.getByText("仓库授权请求已失效，请返回 Git 仓库授权页面重新连接，并在同一浏览器中完成授权。"),
+  ).toBeVisible();
+});

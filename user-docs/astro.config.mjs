@@ -44,9 +44,22 @@ export default defineConfig({
         {
           label: "组件",
           items: [
-            "guides/component-workers",
+            {
+              label: "计算 · Workers",
+              items: [
+                { label: "概览", slug: "guides/component-workers" },
+                {
+                  label: "Git 仓库集成",
+                  items: [
+                    { label: "连接与构建", slug: "guides/git-repositories" },
+                    "guides/gitlab-integration",
+                    "guides/github-integration",
+                  ],
+                },
+                "guides/workers-runtime-compatibility",
+              ],
+            },
             "guides/component-object-storage",
-            "guides/workers-runtime-compatibility",
           ],
         },
         {

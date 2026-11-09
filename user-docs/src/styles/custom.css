@@ -206,3 +206,59 @@
     display: none;
   }
 }
+
+.krun-consent-screenshot,
+.krun-install-screenshot,
+.krun-gitlab-consent-screenshot {
+  position: relative;
+}
+
+.krun-consent-screenshot a,
+.krun-install-screenshot a,
+.krun-gitlab-consent-screenshot a {
+  display: block;
+}
+
+.krun-consent-screenshot img,
+.krun-install-screenshot img,
+.krun-gitlab-consent-screenshot img {
+  display: block;
+}
+
+.krun-consent-screenshot span,
+.krun-install-screenshot span,
+.krun-gitlab-consent-screenshot span {
+  position: absolute;
+  top: 80%;
+  left: 84%;
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  place-items: center;
+  border-radius: 50%;
+  background: #3ed39b;
+  color: #102b21;
+  font-size: 0.9rem;
+  font-weight: 700;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.krun-install-screenshot .krun-install-scope {
+  top: 62%;
+  left: 14%;
+}
+
+.krun-install-screenshot .krun-install-button {
+  top: 87%;
+  left: 14%;
+}
+
+.krun-gitlab-consent-screenshot span {
+  top: 86%;
+  left: 85%;
+}
+
+.sidebar-content li li li summary .group-label .large {
+  font-weight: 400;
+}

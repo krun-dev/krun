@@ -632,6 +632,7 @@
   "留空则读取仓库里的 wrangler 配置（main 字段）。": "Leave empty to use `main` from the repository's wrangler config.",
   "仓库账号连接成功。": "Repository account connected.",
   "仓库账号连接失败（{{code}}）。": "Repository account connection failed ({{code}}).",
+  "仓库授权请求已失效，请返回 Git 仓库授权页面重新连接，并在同一浏览器中完成授权。": "The repository authorization request has expired. Return to Git repository authorization, reconnect, and complete authorization in the same browser.",
   "Secrets": "Secrets",
   "Secret 已保存，正在自动发布新版本。": "Secret saved; a new version is being deployed automatically.",
   "Secret 已删除，正在自动发布新版本。": "Secret deleted; a new version is being deployed automatically.",
