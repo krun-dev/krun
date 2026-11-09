@@ -58,6 +58,55 @@ func (s Service) UpdateOrganization(st *domain.State, t authorization.Target, in
 	return org, nil
 }
 
+func (s Service) hasOrganizationAdmin(st *domain.State, org string) bool {
+	for _, assignment := range st.Assignments {
+		if s.isActiveOrganizationAdminGrant(st, org, assignment) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s Service) isActiveOrganizationAdminGrant(st *domain.State, org string, assignment domain.Assignment) bool {
+	if assignment.Role != "org_admin" || assignment.ScopeKind != "organization" || assignment.ScopeID != org {
+		return false
+	}
+
+	isEligible := func(id string) bool {
+		user := st.Users[id]
+		_, member := st.Members[domain.MemberKey(org, id)]
+		return member && user.Status == "active" &&
+			s.sourceEnabled(user.Source) && authorization.SourceAllowed(st, user, org)
+	}
+
+	if assignment.SubjectKind == "user" {
+		return isEligible(assignment.SubjectID)
+	}
+	group, ok := st.Groups[assignment.SubjectID]
+	if !ok || group.ScopeKind != "organization" || group.ScopeID != org {
+		return false
+	}
+	for _, member := range group.Members {
+		if isEligible(member) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s Service) finishOrganizationAdminChange(st *domain.State, org string, hadAdmin bool) error {
+	if hadAdmin && !s.hasOrganizationAdmin(st, org) {
+		return domain.Problem(409, "LAST_ORG_ADMIN", "Grant another active member the organization administrator role first.")
+	}
+
+	// The organization revision is the shared CAS for changes to its admin
+	// grants and memberships, even when the writes affect different rows.
+	organization := st.Organizations[org]
+	organization.Revision++
+	st.Organizations[org] = organization
+	return nil
+}
+
 // MembershipRoles reports the current user's own effective assignment names;
 // it does not translate them into Cloudflare roles or grant new permissions.
 func (s Service) MembershipRoles(st *domain.State, p authorization.Principal, org string) []string {

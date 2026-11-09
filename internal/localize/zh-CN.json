@@ -24,6 +24,7 @@
   "Existing active local user_id required": "必须提供已有的有效本地 user_id",
   "Existing local user_id": "已有的本地 user_id",
   "Expected revision": "预期修订号",
+  "Grant another active member the organization administrator role first.": "请先将组织管理员角色授予另一名有效成员。",
   "Group ID": "用户组 ID",
   "Group changed": "用户组已变更，请刷新后重试",
   "Group must belong to this scope": "用户组必须属于当前范围",

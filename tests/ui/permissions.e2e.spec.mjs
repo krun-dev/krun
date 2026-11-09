@@ -110,8 +110,9 @@ test("viewer permissions drive navigation and cannot be bypassed through URLs or
     "概览",
     "Workers",
     "对象存储",
-    "API 密钥",
     "权限检查",
+    "API 密钥",
+    "Git 仓库授权",
   ]);
   await expect(page.getByRole("button", { name: "创建 Worker", exact: true })).toHaveCount(0);
   const permissions = await api(viewer.context, orgPath() + "/permissions");
@@ -219,6 +220,22 @@ test("the role picker offers three roles and a member can work without organizat
 });
 
 test("group grants and revocations refresh the live page against PostgreSQL", async () => {
+  const ownerPage = member.page;
+  const ownerID = (await api(member.context, "/api/auth/me")).user.user_id;
+  await ownerPage.goto(`/?page=roles&workspace=${organization.id}`);
+  const ownerGrant = ownerPage.getByRole("row").filter({ hasText: ownerID });
+  const revoke = ownerGrant.getByRole("button", { name: "撤销", exact: true });
+  const hint = ownerGrant.getByText("请先将组织管理员角色授予另一名有效成员。");
+  await expect(revoke).toBeDisabled();
+  await expect(hint).toBeVisible();
+  await ownerPage.getByRole("button", { name: "切换深色主题" }).click();
+  await expect(ownerPage.locator("html")).toHaveClass(/dark/);
+  await expect(revoke).toBeDisabled();
+  await expect(hint).toBeVisible();
+  await ownerPage.getByRole("button", { name: "切换浅色主题" }).click();
+  const viewerGrant = ownerPage.getByRole("row").filter({ hasText: viewerID });
+  await expect(viewerGrant.getByRole("button", { name: "撤销", exact: true })).toBeEnabled();
+
   const group = await api(
     admin.context,
     orgPath() + "/groups",
@@ -241,6 +258,10 @@ test("group grants and revocations refresh the live page against PostgreSQL", as
     },
     201,
   );
+  await ownerPage.reload();
+  await expect(revoke).toBeEnabled();
+  await expect(hint).toHaveCount(0);
+
   const page = viewer.page;
   await page.reload();
   await page.locator("aside nav").getByRole("button", { name: "组织成员", exact: true }).click();
@@ -254,6 +275,10 @@ test("group grants and revocations refresh the live page against PostgreSQL", as
     undefined,
     204,
   );
+  await ownerPage.reload();
+  await expect(revoke).toBeDisabled();
+  await expect(hint).toBeVisible();
+
   await api(viewer.context, orgPath() + "/members", "GET", undefined, 403);
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(page.getByRole("heading", { name: "组织概览", exact: true })).toBeVisible();

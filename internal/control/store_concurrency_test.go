@@ -9,6 +9,7 @@ import (
 	"time"
 
 	appconfig "github.com/krun-dev/krun/internal/config"
+	"github.com/krun-dev/krun/internal/iam"
 )
 
 func secondPostgresStore(t *testing.T) *Store {
@@ -86,6 +87,52 @@ func TestPostgresIAMRevisionCASRejectsLostUpdate(t *testing.T) {
 	}
 	if audits != 1 {
 		t.Fatalf("allowed audit was not atomic with its IAM write: got %d", audits)
+	}
+}
+
+func TestPostgresOrganizationAdminRevocationsCannotBothCommit(t *testing.T) {
+	store := postgresTestStore(t)
+	other := secondPostgresStore(t)
+	ctx := context.Background()
+	state, admin, viewer := fixture()
+	target := Target{Kind: "organization", ID: "org-a"}
+	for _, user := range []User{admin, viewer} {
+		id := "org-admin-" + user.ID
+		state.Assignments[id] = Assignment{
+			ID: id, SubjectKind: "user", SubjectID: user.ID,
+			Role: "org_admin", ScopeKind: "organization", ScopeID: target.ID, Revision: 1,
+		}
+	}
+	if err := store.Update(ctx, PartitionIAM, func(st *State) error {
+		*st = *state
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	service := iam.NewService(func(source string) bool { return source == "local" })
+	err := store.Update(ctx, PartitionIAM, func(st *State) error {
+		if err := service.DeleteAssignment(st, target, "org-admin-viewer"); err != nil {
+			t.Fatalf("first revocation on shared snapshot: %v", err)
+		}
+		// The other writer still sees both grants and commits before the first writer.
+		err := other.Update(ctx, PartitionIAM, func(st *State) error {
+			return service.DeleteMember(st, target, admin.ID)
+		})
+		if err != nil {
+			t.Fatalf("remove the other administrator: %v", err)
+		}
+		return nil
+	})
+	var problem *APIError
+	if !errors.As(err, &problem) || problem.Code != "REVISION_CONFLICT" {
+		t.Fatalf("stale revocation returned %v, want REVISION_CONFLICT", err)
+	}
+	err = store.Update(ctx, PartitionIAM, func(st *State) error {
+		return service.DeleteAssignment(st, target, "org-admin-viewer")
+	})
+	if !errors.As(err, &problem) || problem.Code != "LAST_ORG_ADMIN" {
+		t.Fatalf("revocation on fresh snapshot returned %v, want LAST_ORG_ADMIN", err)
 	}
 }
 

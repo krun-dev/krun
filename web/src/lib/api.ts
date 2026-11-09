@@ -129,6 +129,7 @@ export type Assignment = {
   scope_id: string;
   conditions: { environments?: string[] };
   revision: number;
+  revoke_blocked?: boolean;
 };
 export type Resource = {
   created_at: string;
