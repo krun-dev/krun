@@ -2,7 +2,11 @@
 
 Workers 导航先展示当前组织中有权查看的Workers 列表。服务名称、关联仓库和可见环境状态来自后端；点击服务才进入构建 / 发布详情。返回Workers 列表和浏览器返回均可用，详情 URL 可以直接打开。创建服务后进入新服务详情，不再自动打开第一个已有服务。
 
-“构建新版本”现在从 GitHub、GitLab.com 或管理员配置的自建 GitLab 拉取代码。用户填写仓库地址、分支 / Tag / Commit 和项目目录，保存为该服务的仓库配置；入口、静态资源与构建命令统一以项目内 Wrangler 配置为准，避免平台表单与项目配置出现两套真相。后续打开会恢复已保存配置。历史构建展示仓库、请求的 ref 与实际 commit，发布与回滚继续选用已成功构建的不可变制品。
+在 Worker 的「代码源」页签选择仓库平台和项目目录。授权后可打开「选择已授权仓库」，或填写仓库地址。发起仓库构建时选择分支、Tag 或 Commit。入口、静态资源与构建命令读取项目内的 Wrangler 配置。历史构建记录请求的 ref 与实际 commit。
+
+「个人设置 → Git 仓库授权」展示当前用户在所选组织可用的仓库平台及自己的授权状态。页面加载和「刷新」只读取本地状态。「验证授权」、选择仓库和构建按需访问 Git 平台。过期但仍可续期的授权在使用时续期，并发请求共享现有刷新租约。无法续期或上游拒绝令牌时，页面提示重新授权。Git 平台暂时不可用时可以重试。
+
+从授权列表选择仓库并保存后，绑定使用配置者的授权。有该 Worker 构建权限的成员可构建绑定的仓库，仓库选择器仍按当前用户的授权过滤。授权人断开或失去访问权后，依赖该授权的新构建需要重新授权或重新绑定。已生成的构建制品继续用于发布与回滚。
 
 ## 管理员配置
 
@@ -43,27 +47,22 @@ workers:
 - `organization_ids` 可限定来源可用于哪些平台组织，省略时对有服务权限的组织用户开放。共享 Token 的访问范围由这些配置与服务权限共同限制。
 - 修改后重启控制面生效。Token 不出现在来源列表、构建 API、日志、Kubernetes 构建 Job 输入或 workerd 中。页面会说明所选来源是否配置了凭证。
 
-配置 `client_id` / `client_secret` 后，用户可连接自己的 GitHub/GitLab OAuth
-授权。access token、refresh token、到期时间和轮换 revision 只保存在控制面的私有凭据
-表；普通 Workers 快照和 API 不加载这些字段。控制面在构建前刷新即将到期的授权，
-通过 CAS 租约保证多副本不会同时消费轮换型 refresh token。授权失效时必须由用户重连，
-不会静默退回管理员共享 Token。Token endpoint 请求固定在配置的 provider host，拒绝
-重定向并受连接、响应头、响应体和总时限约束；生产默认拒绝解析到 loopback、私网或
-link-local 地址。可信内网 GitLab 可以逐 provider 显式放行 private/loopback，但
-link-local/unspecified 永远拒绝，不能把普通 OAuth 配置变成任意内网请求入口。
+配置 `client_id` 和 `client_secret` 后，用户可连接自己的 GitHub 或 GitLab 账号。配置 GitHub App 时，再设置 `github_app_slug`，使用该 App 的 Client ID、Client Secret 和仓库权限。App 需要仓库的 Contents 只读权限，并安装到需要访问的仓库。用户授权的访问范围取用户权限与 App 安装范围的交集。改用 GitHub App 或更换 App 的 Client ID 后，需要重新授权。GitLab 的 OAuth 授权请求 `read_repository` 和 `read_api`，分别用于拉取代码和读取仓库列表。回调地址是 `<public_url>/api/v1/workers/repository/<provider_id>/callback`。
+
+Access Token、Refresh Token 和到期时间保存在控制面的私有凭据表。列表请求只发送到配置的 Git 平台，分页按用户操作触发。API 响应和构建 Job 输入只包含所需的仓库元数据。OAuth 和仓库 API 请求固定到受信任的来源并拒绝重定向，受连接、响应体和总时限约束。可信内网 GitLab 通过 `allow_private_network` 显式放行。
 
 仓库 ref 解析和浅克隆统一使用 [Git smart HTTP](https://git-scm.com/docs/http-protocol)，直接访问 provider 的固定 HTTPS origin（例如 `https://github.com/<owner>/<repo>.git`）。公开仓库匿名读取；私有仓库只在 Git 请求的 Basic Auth 中使用短期或管理员只读 Token，错误和构建日志会清理 URL 与凭据。控制面把 commit 固定后只拉取该 commit；服务端不支持 exact-SHA want 时最多回退到深度 32 的指定 ref，并在 checkout 前再次核对 commit。
 
 ## 后端流程
 
-1. `PUT .../workers/{worker}/repository` 使用 `worker.update` 权限及 `expected_revision` 保存共享仓库配置。`GET .../workers/{worker}/repository` 返回配置与修订号。
+1. `PUT .../workers/{worker}/repository` 使用 `worker.update` 权限及 `expected_revision` 保存仓库配置。`use_authorization: true` 将当前会话用户的授权绑定到所选仓库。`GET .../workers/{worker}/repository` 返回配置与修订号。
 2. `POST .../workers/{worker}/builds` 传 `source_type: repository`、`repository_revision`、构建环境及幂等键，要求目标环境 `build.start`。先检查仓库配置修订号，防止构建请求与另一个用户的配置修改串用。入队时复制 Worker 的仓库配置，后续配置修改不影响该构建。
 3. 控制器在数据库事务外通过 Git smart HTTP 将 ref 解析为完整 commit，并先持久化 commit。下载中断后的重试仍使用该 commit。
 4. 对固定 commit 做有界浅克隆，在控制面内生成项目归档并检查目录边界、链接、特殊文件、路径和大小；拒绝 `.env`、`.dev.vars`、`.npmrc` 等本地凭据，并保留 Wrangler 配置、锁文件、框架配置及 Text/Data/Wasm 等二进制构建输入。仓库中任何脚本、hook 都不会在控制面执行。
 5. Kubernetes Job 根据唯一锁文件执行 frozen install，并由固定 Wrangler dry-run 构建已经配置好的 Workers 项目。安装和 custom build 在无上传凭据的 init container 中执行；可信 packer 在单独主容器校验输出、生成 `workerd-bundle-v2` 并上传。Job 不接收 Git 平台凭据或 S3 长期凭据。
 6. 选历史制品发布到 test / staging / production，沿用候选验证 → Version 提交 → 副本确认流程。
 
-`GET /api/v1/orgs/{org}/workers` 返回按用户环境权限过滤的列表；`GET /api/v1/orgs/{org}/workers/repository-providers` 返回当前组织启用的来源展示信息。源码上传与仓库构建是两种独立输入模式，产品页面使用仓库构建。
+`GET /api/v1/orgs/{org}/workers` 返回按用户环境权限过滤的列表；`GET /api/v1/orgs/{org}/workers/repository-providers` 返回当前组织启用的来源和当前用户的授权状态。用户在 `POST /api/v1/orgs/{org}/worker-repositories/{provider}/repositories` 中传入 `page`，按需验证授权并读取自己可用的仓库。源码上传与仓库构建是两种独立输入模式，产品页面使用仓库构建。
 
 ## 当前范围与网络
 

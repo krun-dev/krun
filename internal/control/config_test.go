@@ -121,6 +121,9 @@ func TestYAMLServerExamples(t *testing.T) {
 		t.Setenv(name, "test-only")
 	}
 	t.Setenv("KRUN_SMTP_PASSWORD", "test-only")
+	t.Setenv("KRUN_REPO_GITHUB_APP_SLUG", "test-app")
+	t.Setenv("KRUN_REPO_GITHUB_CLIENT_ID", "test-app-client")
+	t.Setenv("KRUN_REPO_GITHUB_CLIENT_SECRET", "test-app-secret")
 	for _, name := range []string{"development.example.yaml", "example.yaml"} {
 		t.Run(name, func(t *testing.T) {
 			loaded, err := appconfig.LoadConfig(filepath.Join("..", "..", "config", name))
@@ -132,6 +135,22 @@ func TestYAMLServerExamples(t *testing.T) {
 			}
 		})
 	}
+	t.Run("GitHub App configuration", func(t *testing.T) {
+		loaded, err := appconfig.LoadConfig(filepath.Join("..", "..", "config", "example.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, provider := range loaded.Workers.RepositoryProviders {
+			if provider.Type == "github" {
+				oauth := (&Server{Config: loaded}).repositoryOAuthConfig(provider)
+				if provider.GitHubAppSlug != "test-app" || oauth == nil || len(oauth.Scopes) != 0 {
+					t.Fatal("GitHub App must use its configured permissions")
+				}
+				return
+			}
+		}
+		t.Fatal("missing GitHub provider")
+	})
 	// Validate every template while enabled, so disabled examples cannot hide
 	// invalid endpoints, missing credentials or SMTP fields.
 	c, err := appconfig.LoadConfig(filepath.Join("..", "..", "config", "example.yaml"))

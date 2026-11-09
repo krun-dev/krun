@@ -293,6 +293,8 @@ workers:
       base_url: https://github.com
       client_id: ${KRUN_REPO_GITHUB_CLIENT_ID:-}
       client_secret: ${KRUN_REPO_GITHUB_CLIENT_SECRET:-}
+      # Set the GitHub App slug to use its user authorization and selected repositories.
+      github_app_slug: ${KRUN_REPO_GITHUB_APP_SLUG:-}
     - id: gitlab
       type: gitlab
       name: GitLab.com

@@ -8,6 +8,7 @@ import (
 	authorization "github.com/krun-dev/krun/internal/authorization"
 	appconfig "github.com/krun-dev/krun/internal/config"
 	domain "github.com/krun-dev/krun/internal/domain"
+	"github.com/krun-dev/krun/internal/repository"
 )
 
 type WorkerRoutingDomainsUpdateInput struct {
@@ -21,8 +22,9 @@ type WorkerNetworkProfileUpdateInput struct {
 }
 
 type WorkerRepositoryUpdateInput struct {
-	Source   *domain.WorkerRepositorySource `json:"source"`
-	Revision int                            `json:"expected_revision"`
+	Source           *domain.WorkerRepositorySource `json:"source"`
+	Revision         int                            `json:"expected_revision"`
+	UseAuthorization bool                           `json:"use_authorization,omitempty"`
 }
 
 func (s *Service) Worker(st *domain.State, t authorization.Target) domain.Worker {
@@ -564,7 +566,7 @@ func (s *Service) WorkerRepositoryProviders(ctx context.Context, st *domain.Stat
 	if err := s.require(st, p, "worker.list", target); err != nil {
 		return nil, Read, err
 	}
-	connected, err := s.Store.ConnectedRepositoryProviders(ctx, p.User.ID)
+	connected, err := s.Store.RepositoryConnectionStatuses(ctx, p.User.ID)
 	if err != nil {
 		return nil, Read, err
 	}
@@ -578,7 +580,7 @@ func (s *Service) WorkerRepositoryGet(ctx context.Context, st *domain.State, p a
 		return nil, Read, err
 	}
 	worker := s.WorkerView(st, target)
-	return map[string]any{"source": worker.Repository, "revision": worker.RepositoryRevision}, Read, nil
+	return s.repositoryBinding(ctx, worker, target.Organization)
 
 }
 
@@ -590,13 +592,47 @@ func (s *Service) WorkerRepositoryUpdate(ctx context.Context, st *domain.State, 
 	if in.Source == nil {
 		worker.Repository = nil
 	} else {
-		if _, err := s.Repository.ValidateRepositorySource(in.Source, target.Organization); err != nil {
+		provider, err := s.Repository.ValidateRepositorySource(in.Source, target.Organization)
+		if err != nil {
 			return nil, Read, err
+		}
+		// This field is server-assigned; clients cannot bind another user.
+		in.Source.AuthorizationUser = ""
+		if in.UseAuthorization {
+			if p.Kind == "api_key" {
+				return nil, Read, domain.Problem(403, "SESSION_REQUIRED", "A user session is required to bind repository authorization")
+			}
+			if err := s.Repository.CheckBindingAuthorization(ctx, provider, p.User.ID); err != nil {
+				return nil, Read, err
+			}
+			in.Source.AuthorizationUser = p.User.ID
+		} else if worker.Repository != nil && worker.Repository.ProviderID == in.Source.ProviderID && worker.Repository.Repository == in.Source.Repository {
+			in.Source.AuthorizationUser = worker.Repository.AuthorizationUser
 		}
 		worker.Repository = in.Source
 	}
 	worker.RepositoryRevision++
 	st.Workers.Workers[target.ID] = worker
-	return map[string]any{"source": worker.Repository, "revision": worker.RepositoryRevision}, Read, nil
+	return s.repositoryBinding(ctx, worker, target.Organization)
 
+}
+
+func (s *Service) repositoryBinding(ctx context.Context, worker domain.Worker, org string) (any, Outcome, error) {
+	out := map[string]any{"source": worker.Repository, "revision": worker.RepositoryRevision}
+	if worker.Repository == nil || worker.Repository.AuthorizationUser == "" {
+		return out, Read, nil
+	}
+	status := "reconnect_required"
+	provider, err := s.Repository.RepositoryProvider(worker.Repository.ProviderID, org)
+	if err == nil && provider.ClientID != "" {
+		statuses, err := s.Store.RepositoryConnectionStatuses(ctx, worker.Repository.AuthorizationUser)
+		if err != nil {
+			return nil, Read, err
+		}
+		if current := repository.AuthorizationStatus(provider, statuses); current != "" {
+			status = current
+		}
+	}
+	out["authorization_status"] = status
+	return out, Read, nil
 }

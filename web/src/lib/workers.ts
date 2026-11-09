@@ -7,6 +7,7 @@ import type { R2Binding } from "./object-storage";
 export type RepositoryBinding = {
   source: RepositorySource | null;
   revision: number;
+  authorization_status?: RepositoryProvider["authorization_status"];
 };
 export type RepositorySource = {
   provider_id: string;
@@ -22,6 +23,8 @@ export type RepositoryProvider = {
   base_url: string;
   connected: boolean;
   oauth: boolean;
+  authorization_status: "not_connected" | "connected" | "refresh_due" | "reconnect_required";
+  install_url?: string;
 };
 export type WorkerSummary = Resource & {
   repository_source?: RepositorySource;

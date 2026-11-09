@@ -2,6 +2,9 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
+import { restoreRepositoryReturn } from "./lib/repository-authorization";
+
+restoreRepositoryReturn();
 try {
   document.documentElement.classList.toggle("dark", localStorage.getItem("krun.theme") !== "light");
 } catch {

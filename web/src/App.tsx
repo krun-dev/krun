@@ -12,6 +12,7 @@ import {
   Clipboard,
   Database,
   KeyRound,
+  GitBranch,
   LayoutDashboard,
   Layers3,
   LogOut,
@@ -97,6 +98,7 @@ const BucketsPage = lazy(() =>
     default: module.BucketsPage,
   })),
 );
+const RepositoryAuthorizations = lazy(() => import("@/components/repository-authorizations"));
 const KeysPage = lazy(() =>
   import("@/components/keys").then((module) => ({ default: module.KeysPage })),
 );
@@ -117,6 +119,7 @@ const navigation: {
   { id: "check", name: "权限检查", icon: Search, group: "组织管理" },
   { id: "audit", name: "审计记录", icon: Activity, group: "组织管理" },
   { id: "keys", name: "API Keys", icon: KeyRound, group: "个人设置" },
+  { id: "git-authorizations", name: "Git 仓库授权", icon: GitBranch, group: "个人设置" },
 ];
 const adminNavigation: { id: Section; name: string }[] = [
   { id: "orgs", name: "组织目录" },
@@ -170,6 +173,7 @@ export default function App() {
         "groups",
         "roles",
         "keys",
+        "git-authorizations",
         "check",
         "audit",
         "users",
@@ -249,6 +253,7 @@ export default function App() {
     if (section === "overview") url.searchParams.delete("page");
     else url.searchParams.set("page", section);
     if (section !== "workers") {
+      url.searchParams.delete("repository_pick");
       url.searchParams.delete("worker");
       url.searchParams.delete("environment");
       url.searchParams.delete("worker_tab");
@@ -352,6 +357,7 @@ export default function App() {
     return () => controller.abort();
   }, [me?.user.user_id, me?.revision, org?.id, system, refresh, oauthLogin]);
   const canOpen = (page: Section) =>
+    (page !== "git-authorizations" || me?.workers_configured !== false) &&
     canOpenSection(
       page,
       system,
@@ -929,6 +935,12 @@ export default function App() {
               notify={notify}
               refresh={refresh}
               reload={reload}
+            />
+          ) : section === "git-authorizations" ? (
+            <RepositoryAuthorizations
+              key={scope}
+              organizationBase={base}
+              notify={notify}
             />
           ) : section === "keys" ? (
             <KeysPage

@@ -23,8 +23,9 @@ type WorkerRepositoryProvider struct {
 	OrganizationIDs     []string `json:"organization_ids"`
 	// OAuth app credentials; when set users connect their own accounts and
 	// builds fetch with the connecting user's token instead of a shared PAT.
-	ClientID     string `json:"client_id"`
-	ClientSecret string `json:"client_secret"`
+	ClientID      string `json:"client_id"`
+	ClientSecret  string `json:"client_secret"`
+	GitHubAppSlug string `json:"github_app_slug"`
 }
 
 var RepositorySegment = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$`)
@@ -59,6 +60,9 @@ func (c *WorkersConfig) ValidateRepositoryProviders() error {
 		}
 		if p.Type == "github" && p.AllowPrivateNetwork {
 			return fmt.Errorf("Workers github provider cannot allow private network OAuth endpoints")
+		}
+		if p.GitHubAppSlug != "" && (p.Type != "github" || !Slug.MatchString(p.GitHubAppSlug) || p.ClientID == "" || p.ClientSecret == "") {
+			return fmt.Errorf("Workers GitHub App requires a valid slug and OAuth client credentials")
 		}
 		if strings.ContainsAny(p.Token, "\r\n") {
 			return fmt.Errorf("invalid Workers repository token")

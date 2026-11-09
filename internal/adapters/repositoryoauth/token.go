@@ -48,6 +48,12 @@ func GrantRejected(err error) bool {
 	if !errors.As(err, &response) || response.Response == nil {
 		return false
 	}
+	switch response.ErrorCode {
+	case "invalid_grant", "bad_refresh_token":
+		return true
+	case "invalid_client", "incorrect_client_credentials":
+		return false
+	}
 	return response.Response.StatusCode == http.StatusBadRequest || response.Response.StatusCode == http.StatusUnauthorized
 }
 func IsUnavailable(err error) bool { var target *Unavailable; return errors.As(err, &target) }

@@ -1024,6 +1024,7 @@ function WorkerDetail({
               base={base}
               organizationBase={organizationBase}
               bound={binding?.source ?? null}
+              authorizationStatus={binding?.authorization_status}
               revision={binding?.revision ?? 0}
               onSaved={setBinding}
               notify={notify}
