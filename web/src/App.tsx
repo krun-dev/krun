@@ -134,9 +134,11 @@ function repositoryCallbackNotice(): string {
     return t("仓库账号连接成功。");
   }
   if (params.get("repository_status") === "error") {
-    return t("仓库账号连接失败（{{code}}）。", {
-      code: params.get("error") || "UNKNOWN",
-    });
+    const code = params.get("error") || "UNKNOWN";
+    if (code === "WORKER_REPOSITORY_STATE_INVALID") {
+      return t("仓库授权请求已失效，请返回 Git 仓库授权页面重新连接，并在同一浏览器中完成授权。");
+    }
+    return t("仓库账号连接失败（{{code}}）。", { code });
   }
   return "";
 }
