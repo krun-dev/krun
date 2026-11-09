@@ -111,7 +111,6 @@ test("viewer permissions drive navigation and cannot be bypassed through URLs or
     "Workers",
     "对象存储",
     "API 密钥",
-    "资源目录",
     "权限检查",
   ]);
   await expect(page.getByRole("button", { name: "创建 Worker", exact: true })).toHaveCount(0);

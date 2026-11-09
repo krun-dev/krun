@@ -9,7 +9,6 @@ export type Section =
   | "check"
   | "audit"
   | "users"
-  | "resources"
   | "workers"
   | "buckets";
 
@@ -49,8 +48,6 @@ export function canOpenSection(
       return allowed("iam.read");
     case "keys":
       return allowed("apiKey.create");
-    case "resources":
-      return allowed("worker.list") && allowed("model.list");
     case "check":
       return allowed("organization.read");
     case "audit":

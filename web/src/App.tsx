@@ -79,11 +79,6 @@ const UsersPage = lazy(() =>
     default: module.UsersPage,
   })),
 );
-const ResourcesPage = lazy(() =>
-  import("@/components/management").then((module) => ({
-    default: module.ResourcesPage,
-  })),
-);
 const AuditPage = lazy(() =>
   import("@/components/audit").then((module) => ({
     default: module.AuditPage,
@@ -114,7 +109,6 @@ const navigation: {
   { id: "members", name: "组织成员", icon: Users, group: "组织管理" },
   { id: "groups", name: "用户组", icon: UsersRound, group: "组织管理" },
   { id: "roles", name: "角色授权", icon: ShieldCheck, group: "组织管理" },
-  { id: "resources", name: "资源目录", icon: Building2, group: "组织管理" },
   { id: "check", name: "权限检查", icon: Search, group: "组织管理" },
   { id: "audit", name: "审计记录", icon: Activity, group: "组织管理" },
   { id: "keys", name: "API Keys", icon: KeyRound, group: "个人设置" },
@@ -167,7 +161,6 @@ export default function App() {
         "check",
         "audit",
         "users",
-        "resources",
         "workers",
         "buckets",
       ];
@@ -961,15 +954,6 @@ export default function App() {
               canWrite={permissions?.actions["storage.object.write"] === true}
               canDelete={permissions?.actions["storage.object.delete"] === true}
               notify={notify}
-            />
-          ) : section === "resources" ? (
-            <ResourcesPage
-              key={scope}
-              base={base}
-              system={system}
-              notify={notify}
-              refresh={refresh}
-              reload={reload}
             />
           ) : section === "check" ? (
             <CheckPage

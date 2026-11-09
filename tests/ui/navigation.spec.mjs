@@ -131,7 +131,6 @@ test("viewer deep links retain allowed pages and hide administration and Worker 
     "概览",
     "Workers",
     "对象存储",
-    "资源目录",
     "权限检查",
     "API 密钥",
     "Git 仓库授权",
@@ -139,6 +138,15 @@ test("viewer deep links retain allowed pages and hide administration and Worker 
   await expect(page.getByRole("button", { name: "创建 Worker", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "平台管理", exact: true })).toHaveCount(0);
   await expect(page).toHaveURL(/page=workers/);
+});
+
+test("removed resource catalog links open the current organization overview", async ({ page }) => {
+  const { requests } = await fixture(page);
+  await page.goto(origin + "/?page=resources&workspace=org-a");
+  await expect(page.getByRole("heading", { name: "组织概览" })).toBeVisible();
+  await expect(page).toHaveURL(origin + "/?workspace=org-a");
+  expect(requests).not.toContain("/api/v1/orgs/org-a/workers");
+  expect(requests).not.toContain("/api/v1/orgs/org-a/models");
 });
 
 test("unauthorized direct URLs fall back without requesting protected page data", async ({

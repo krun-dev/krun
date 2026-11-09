@@ -159,7 +159,7 @@ test("static export, login, language persistence and logout", async ({
   await expect(page.getByRole("heading", { name: "登录组织" })).toBeVisible();
   await context.close();
 });
-test("Workers and resource catalog paginate through all 106 sites", async ({
+test("Workers paginate through all 106 sites", async ({
   page,
 }) => {
   await page.goto(locationFor());
@@ -168,10 +168,6 @@ test("Workers and resource catalog paginate through all 106 sites", async ({
   await expect(page.locator("tbody tr")).toHaveCount(6);
   await page.getByRole("button", { name: "上一页", exact: true }).click();
   await expect(page.locator("tbody tr")).toHaveCount(100);
-  await page.goto(`/?page=resources&workspace=${org.id}`);
-  await expect(page.locator("tbody tr")).toHaveCount(100);
-  await page.getByRole("button", { name: "下一页", exact: true }).click();
-  await expect(page.locator("tbody tr")).toHaveCount(6);
 });
 test("deep link opens a service outside the first page", async ({ page }) => {
   const last = [...resources, workflow]
