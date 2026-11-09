@@ -87,7 +87,7 @@ krun keys list --org ORGANIZATION_ID
 krun workers list --org ORGANIZATION_ID
 ```
 
-将 `ORGANIZATION_ID` 替换为 `krun org list` 输出中的组织 ID。还可以使用 `krun org create --name NAME`、`krun groups create --org ORGANIZATION_ID --name NAME` 等命令；操作受当前身份和组织权限限制。
+将 `ORGANIZATION_ID` 替换为 `krun org list` 输出中的组织短名或 ID。创建组织可用 `krun org create --name NAME --short-name platform` 指定短名。使用 `krun workers get --id platform/workers/image-resize` 可以按完整路径读取 Worker。
 
 Worker 使用 `workers` 命令管理，`WORKER_ID` 来自创建或列表输出中的 `id`：
 

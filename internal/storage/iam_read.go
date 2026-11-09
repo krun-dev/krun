@@ -14,13 +14,13 @@ import (
 func (s *Store) loadIAM(ctx context.Context, st *domain.State) error {
 	batch := &pgx.Batch{}
 	queueStateRead(ctx, batch, `SELECT user_id, source, subject, name, email, email_verified, status, auth_version FROM krun_users`)
-	queueStateRead(ctx, batch, `SELECT org_id, name, revision FROM krun_organizations`)
+	queueStateRead(ctx, batch, `SELECT org_id, short_name, name, revision FROM krun_organizations`)
 	queueStateRead(ctx, batch, `SELECT org_id, source FROM krun_org_sources ORDER BY source`)
 	queueStateRead(ctx, batch, `SELECT org_id, user_id FROM krun_members`)
 	queueStateRead(ctx, batch, `SELECT group_id, scope_kind, scope_id, name, revision FROM krun_groups`)
 	queueStateRead(ctx, batch, `SELECT group_id, user_id FROM krun_group_members`)
 	queueStateRead(ctx, batch, `SELECT assignment_id, subject_kind, subject_id, role, scope_kind, scope_id, conditions, revision FROM krun_assignments`)
-	queueStateRead(ctx, batch, `SELECT resource_id, kind, org_id, name, revision, created_at FROM krun_resources`)
+	queueStateRead(ctx, batch, `SELECT resource_id, kind, org_id, locator, name, revision, created_at FROM krun_resources`)
 	queueStateRead(ctx, batch, `SELECT key_id, owner_user_id, org_id, scope_kind, name, prefix, policy, expires_at, revoked, revision FROM krun_api_keys`)
 	queueStateRead(ctx, batch, `SELECT source, subject, expires_at FROM krun_invitations`)
 	queueStateRead(ctx, batch, `SELECT source, fingerprint FROM krun_identity_sources`)
@@ -93,7 +93,7 @@ func readOrganizations(results pgx.BatchResults, st *domain.State) error {
 	defer rows.Close()
 	for rows.Next() {
 		var o domain.Organization
-		if err = rows.Scan(&o.ID, &o.Name, &o.Revision); err != nil {
+		if err = rows.Scan(&o.ID, &o.ShortName, &o.Name, &o.Revision); err != nil {
 			return err
 		}
 		o.Sources = []string{}
@@ -201,7 +201,7 @@ func readResources(results pgx.BatchResults, st *domain.State) error {
 	defer rows.Close()
 	for rows.Next() {
 		var r domain.Resource
-		if err = rows.Scan(&r.ID, &r.Kind, &r.Organization, &r.Name, &r.Revision, &r.Created); err != nil {
+		if err = rows.Scan(&r.ID, &r.Kind, &r.Organization, &r.Locator, &r.Name, &r.Revision, &r.Created); err != nil {
 			return err
 		}
 		r.Created = r.Created.UTC()

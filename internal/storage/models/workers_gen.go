@@ -289,16 +289,6 @@ type Idempotency struct {
 	CreatedAt     time.Time `bun:"created_at"`
 }
 
-type Script struct {
-	bun.BaseModel   `bun:"table:krun_worker_scripts,alias:krun_worker_scripts"`
-	OrgID           string    `bun:"org_id,pk"`
-	ScriptName      string    `bun:"script_name,pk"`
-	WorkerID        string    `bun:"worker_id"`
-	WorkersDev      bool      `bun:"workers_dev"`
-	PreviewsEnabled bool      `bun:"previews_enabled"`
-	CreatedAt       time.Time `bun:"created_at"`
-}
-
 type Bucket struct {
 	bun.BaseModel `bun:"table:krun_worker_buckets,alias:krun_worker_buckets"`
 	BucketID      string    `bun:"bucket_id,pk"`

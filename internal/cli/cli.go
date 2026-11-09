@@ -400,10 +400,12 @@ func (c *Client) manage(ctx context.Context, command string, args []string) erro
 	}
 	operation := args[0]
 	f := flags(command, c.Err)
-	org := f.String("org", "", "Organization ID")
+	org := f.String("org", "", "Organization short name or ID")
 	system := f.Bool("system", false, "System scope")
 	id := f.String("id", "", "Resource / key / assignment ID")
 	name := f.String("name", "", "Name")
+	shortName := f.String("short-name", "", "Organization short name")
+	locator := f.String("locator", "", "Resource locator")
 	user := f.String("user", "", "Local user ID")
 	group := f.String("group", "", "Group ID")
 	role := f.String("role", "", "Role ID")
@@ -422,6 +424,15 @@ func (c *Client) manage(ctx context.Context, command string, args []string) erro
 	if f.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
+	if command == "workers" || command == "models" {
+		if strings.Contains(*id, "/") {
+			parts := strings.Split(*id, "/")
+			if len(parts) != 3 || parts[0] == "" || parts[1] != command || parts[2] == "" || *system || (*org != "" && *org != parts[0]) {
+				return errors.New("invalid resource path")
+			}
+			*org, *id = parts[0], parts[2]
+		}
+	}
 	base := "/api/v1/orgs/" + url.PathEscape(*org)
 	if *system {
 		base = "/api/v1/system"
@@ -439,7 +450,11 @@ func (c *Client) manage(ctx context.Context, command string, args []string) erro
 		case "list":
 		case "create":
 			method = "POST"
-			input = map[string]string{"name": *name}
+			values := map[string]string{"name": *name}
+			if *shortName != "" {
+				values["short_name"] = *shortName
+			}
+			input = values
 		default:
 			return errors.New("use org list or create")
 		}
@@ -546,7 +561,11 @@ func (c *Client) manage(ctx context.Context, command string, args []string) erro
 		case "list":
 		case "create":
 			method = "POST"
-			input = map[string]string{"name": *name}
+			values := map[string]string{"name": *name}
+			if *locator != "" {
+				values["locator"] = *locator
+			}
+			input = values
 		case "get", "update", "delete":
 			path += "/" + url.PathEscape(*id)
 			if operation == "update" {

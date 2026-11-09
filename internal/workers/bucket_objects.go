@@ -23,14 +23,9 @@ func (s *Service) AuthorizeBucket(st *domain.State, p authorization.Principal, o
 	if s.Config.Workers == nil || s.Config.Workers.ObjectStorage == nil {
 		return domain.WorkerBucket{}, domain.Problem(503, "OBJECT_STORAGE_NOT_CONFIGURED", "Object storage is not configured")
 	}
-	for _, bucket := range st.Workers.Buckets {
-		matches := bucket.ID == id
-		if byName {
-			matches = bucket.Name == id
-		}
-		if matches && bucket.Organization == organization && bucket.Enabled {
-			return bucket, nil
-		}
+	bucket, exists := findBucket(st, organization, id, byName)
+	if !exists || !bucket.Enabled {
+		return domain.WorkerBucket{}, domain.NotFound()
 	}
-	return domain.WorkerBucket{}, domain.NotFound()
+	return bucket, nil
 }

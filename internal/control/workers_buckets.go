@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/krun-dev/krun/internal/domain"
+	"github.com/krun-dev/krun/internal/resourcename"
 )
 
 func (s *Server) workerBucketList(st *State, p Principal, r *http.Request) (any, int, error) {
@@ -15,6 +16,9 @@ func (s *Server) workerBucketList(st *State, p Principal, r *http.Request) (any,
 	buckets, err := s.workerApplication(r).BucketList(st, p, r.PathValue("org"))
 	if err != nil {
 		return nil, 0, err
+	}
+	for i := range buckets {
+		buckets[i].ResourcePath = resourcePath(st, buckets[i].Organization, "buckets", buckets[i].Name)
 	}
 	// Binding selectors use the unpaginated, name-ordered collection. Only
 	// console list requests opt into pagination; CF uses its own handler.
@@ -39,6 +43,7 @@ func (s *Server) workerBucketList(st *State, p Principal, r *http.Request) (any,
 
 func (s *Server) workerBucketGet(st *State, p Principal, r *http.Request) (any, int, error) {
 	out, err := s.workerApplication(r).BucketGet(st, p, r.PathValue("org"), r.PathValue("bucket"))
+	out.ResourcePath = resourcePath(st, out.Organization, "buckets", out.Name)
 	return out, 200, err
 }
 
@@ -49,7 +54,12 @@ func (s *Server) workerBucketCreate(st *State, p Principal, r *http.Request) (an
 	if err := body(r, &input); err != nil {
 		return nil, 0, err
 	}
-	out, err := s.workerApplication(r).BucketCreate(st, p, r.PathValue("org"), input.Name)
+	name, err := resourcename.Make(input.Name, 3, resourcename.ResourceMax)
+	if err != nil {
+		return nil, 0, err
+	}
+	out, err := s.workerApplication(r).BucketCreate(st, p, r.PathValue("org"), name)
+	out.ResourcePath = resourcePath(st, out.Organization, "buckets", out.Name)
 	return out, 201, err
 }
 
@@ -65,6 +75,7 @@ func (s *Server) workerBucketUpdate(st *State, p Principal, r *http.Request) (an
 		return nil, 0, problem(422, "INVALID_REQUEST", "enabled is required")
 	}
 	out, err := s.workerApplication(r).BucketSetEnabled(st, p, r.PathValue("org"), r.PathValue("bucket"), *input.Enabled, input.Revision)
+	out.ResourcePath = resourcePath(st, out.Organization, "buckets", out.Name)
 	return out, 200, err
 }
 

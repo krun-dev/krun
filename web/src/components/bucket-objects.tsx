@@ -44,7 +44,7 @@ export function BucketObjects({
   back: () => void;
   notify: (message: string) => void;
 }) {
-  const endpoint = base + "/buckets/" + encodeURIComponent(bucket.id) + "/objects";
+  const endpoint = base + "/buckets/" + encodeURIComponent(bucket.name) + "/objects";
   const [prefix, setPrefix] = useState(
     () => new URLSearchParams(location.search).get("prefix") || "",
   );

@@ -95,9 +95,6 @@ func (s *Server) cfDeleteScript(w http.ResponseWriter, r *http.Request) {
 		}
 		return s.iam().DeleteResource(st, t)
 	})
-	if err == nil {
-		err = s.Store.DeleteWorkerScript(r.Context(), r.PathValue("org"), r.PathValue("script"))
-	}
 	if err != nil {
 		s.writeError(w, r, err)
 		return

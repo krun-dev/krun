@@ -120,7 +120,7 @@ export function BucketsPage({
     }
     setBusy(true);
     try {
-      await api(base + "/buckets/" + encodeURIComponent(target.id), "PATCH", {
+      await api(base + "/buckets/" + encodeURIComponent(target.name), "PATCH", {
         enabled: !target.enabled,
         revision: target.revision,
       });
@@ -255,12 +255,14 @@ export function BucketsPage({
                         <Button
                           variant="link"
                           className="h-auto p-0 font-medium"
-                          onClick={() => selectBucket(bucket.id)}
+                          onClick={() => selectBucket(bucket.name)}
                         >
                           {bucket.name}
                         </Button>
                       </div>
-                      <code className="text-xs text-muted-foreground">{bucket.id}</code>
+                      <code className="block break-all whitespace-normal text-xs text-muted-foreground">
+                        {bucket.resource_path || bucket.name}
+                      </code>
                       <p className="mt-1 text-xs text-muted-foreground md:hidden">
                         {t("创建时间")} ·{" "}
                         <time dateTime={bucket.created_at}>
@@ -315,7 +317,7 @@ export function BucketsPage({
           <DialogHeader>
             <DialogTitle>{t("创建桶")}</DialogTitle>
             <DialogDescription>
-              {t("桶在本组织内共享。名称为 3–63 位小写字母、数字或连字符，首尾须为字母或数字。")}
+              {t("桶在本组织内共享。名称会转换为 3–63 位小写字母、数字或连字符。")}
             </DialogDescription>
           </DialogHeader>
           <form
@@ -345,7 +347,7 @@ export function BucketsPage({
             ) : null}
             <Button
               type="submit"
-              disabled={busy || !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(name)}
+              disabled={busy || !name.trim()}
             >
               {busy ? t("保存中…") : t("创建桶")}
             </Button>

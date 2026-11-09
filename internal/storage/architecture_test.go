@@ -16,7 +16,7 @@ import (
 // cannot bypass the same rules enforced on the top-level packages.
 func TestStorageLayerBoundaries(t *testing.T) {
 	sql := regexp.MustCompile(`(?i)^\s*(SELECT\s+(?:[0-9]+\b|[^;]+\bFROM\b)|INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|WITH\s+\w+\s+AS|CREATE\s+TABLE|ALTER\s+TABLE|DROP\s+TABLE)\b`)
-	for _, layer := range []string{"control", "storage", "domain", "iam", "authorization", "securetoken", "auth", "audit", "workers", "repository", "runtimeconfig", "config", "artifact", "adapters"} {
+	for _, layer := range []string{"control", "storage", "domain", "iam", "authorization", "securetoken", "auth", "audit", "workers", "repository", "runtimeconfig", "resourcename", "config", "artifact", "adapters"} {
 		var paths []string
 		err := filepath.WalkDir(filepath.Join("..", layer), func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
@@ -55,7 +55,7 @@ func TestStorageLayerBoundaries(t *testing.T) {
 				if layer == "iam" || layer == "authorization" {
 					if strings.Contains(strings.Split(name, "/")[0], ".") &&
 						name != "github.com/krun-dev/krun/internal/domain" &&
-						!(layer == "iam" && (name == "github.com/krun-dev/krun/internal/authorization" || name == "github.com/krun-dev/krun/internal/securetoken")) &&
+						!(layer == "iam" && (name == "github.com/krun-dev/krun/internal/authorization" || name == "github.com/krun-dev/krun/internal/securetoken" || name == "github.com/krun-dev/krun/internal/resourcename")) &&
 						!(layer == "authorization" && name == "github.com/cedar-policy/cedar-go") {
 						t.Errorf("%s imports dependency outside its layer: %s", path, name)
 					}

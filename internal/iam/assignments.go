@@ -88,6 +88,9 @@ func (s Service) Assignments(st *domain.State, t authorization.Target) ([]Listed
 }
 
 func (s Service) WriteAssignment(st *domain.State, t authorization.Target, assignmentID string, in AssignmentInput, update bool) (domain.Assignment, error) {
+	if target, err := authorization.ResolveReference(st, in.ScopeKind, in.ScopeID, "global"); err == nil {
+		in.ScopeID = target.ID
+	}
 	if e := validateAssignment(st, t, in); e != nil {
 		return domain.Assignment{}, e
 	}

@@ -31,11 +31,20 @@ func workerListOptions(r *http.Request) (workerListQuery, error) {
 	return query, nil
 }
 
-func (query workerListQuery) matches(id, name string) bool {
+func (query workerListQuery) matches(id string, names ...string) bool {
+	if id <= query.after {
+		return false
+	}
 	search := strings.ToLower(query.search)
-	return id > query.after && (search == "" ||
-		strings.Contains(strings.ToLower(id), search) ||
-		strings.Contains(strings.ToLower(name), search))
+	if strings.Contains(strings.ToLower(id), search) {
+		return true
+	}
+	for _, name := range names {
+		if strings.Contains(strings.ToLower(name), search) {
+			return true
+		}
+	}
+	return false
 }
 
 // The cursor follows the storage candidate order, including candidates hidden
@@ -45,7 +54,7 @@ func workerPage(st *State, r *http.Request, summaries []workerapp.WorkerSummary)
 	if err != nil {
 		return nil, 0, err
 	}
-	workerID := r.URL.Query().Get("worker_id")
+	workerID := workerFilter(r)
 	ids := []string{}
 	for _, resource := range st.Resources {
 		if resource.Kind != "worker" || resource.Organization != r.PathValue("org") {
@@ -55,7 +64,7 @@ func workerPage(st *State, r *http.Request, summaries []workerapp.WorkerSummary)
 			if resource.ID == workerID {
 				ids = append(ids, resource.ID)
 			}
-		} else if query.matches(resource.ID, resource.Name) {
+		} else if query.matches(resource.ID, resource.Name, resource.Locator) {
 			ids = append(ids, resource.ID)
 		}
 	}
@@ -72,6 +81,7 @@ func workerPage(st *State, r *http.Request, summaries []workerapp.WorkerSummary)
 	items := []workerapp.WorkerSummary{}
 	for _, summary := range summaries {
 		if included[summary.ID] {
+			summary.Resource = presentResource(st, summary.Resource)
 			items = append(items, summary)
 		}
 	}

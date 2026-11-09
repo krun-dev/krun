@@ -68,7 +68,11 @@ func (s *Server) cfAssetUpload(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, problem(401, "UNAUTHENTICATED", "Asset upload token required"))
 		return
 	}
-	a, err := s.Store.WorkerAssetSession(r.Context(), r.PathValue("account"), securetoken.Digest(token), false)
+	if err := s.resolveCloudflareAccount(r); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	a, err := s.Store.WorkerAssetSession(r.Context(), r.PathValue("org"), securetoken.Digest(token), false)
 	if err != nil {
 		s.writeError(w, r, err)
 		return

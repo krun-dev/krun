@@ -210,7 +210,7 @@ func (s *Server) cfUpload(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	script, err := s.cfEnsureScript(r, r.PathValue("script"))
+	workerID, err := s.cfEnsureScript(r, r.PathValue("script"))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -274,7 +274,7 @@ func (s *Server) cfUpload(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			return e
 		}
-		env := st.Workers.Workers[script.Worker].Environments[ref.Environment]
+		env := st.Workers.Workers[workerID].Environments[ref.Environment]
 		out, _, e = app.WorkerDeploymentCreate(r.Context(), st, p, ref, target, ref.Environment, "publish", workerapp.WorkerDeploymentCreateInput{Version: version.ID, Revision: env.Revision, Key: securetoken.UUID()})
 		if e == nil {
 			op = out.(WorkerOperation)
@@ -307,10 +307,10 @@ func (s *Server) cfUpload(w http.ResponseWriter, r *http.Request) {
 				} else {
 					// The legacy Script upload field is named deployment_id, but Cloudflare
 					// and Wrangler use it as the uploaded Version UUID.
-					result["id"] = script.Name
+					result["id"] = r.PathValue("script")
 					result["deployment_id"] = version.ID
 				}
-				env := st.Workers.Workers[script.Worker].Environments[r.PathValue("environment")]
+				env := st.Workers.Workers[workerID].Environments[r.PathValue("environment")]
 				result["env"] = cfEnvBindings(env)
 				return nil
 			}

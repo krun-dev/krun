@@ -131,7 +131,7 @@ test("anonymous landing survives login without leaking the token, then joins on 
   ).toEqual(["member"]);
   await page.getByRole("button", { name: "进入组织", exact: true }).click();
   await expect(page.getByRole("heading", { name: "组织概览", exact: true })).toBeVisible();
-  await expect(page).toHaveURL(new RegExp(`workspace=${organization.id}`));
+  await expect(page).toHaveURL(new RegExp(`workspace=${organization.short_name}`));
 });
 
 test("existing membership keeps its role and quota; revocation disables the landing page", async () => {

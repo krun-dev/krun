@@ -108,6 +108,7 @@ export type Me = {
 };
 export type Organization = {
   id: string;
+  short_name?: string;
   name: string;
   allowed_sources: string[];
   revision: number;
@@ -134,6 +135,8 @@ export type Assignment = {
 export type Resource = {
   created_at: string;
   id: string;
+  locator?: string;
+  resource_path?: string;
   kind: string;
   name: string;
   organization_id: string;

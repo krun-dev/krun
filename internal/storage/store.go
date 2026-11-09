@@ -24,7 +24,6 @@ type Store struct {
 	oauthAuthorizations map[string]domain.OAuthAuthorization
 	oauthGrants         map[string]domain.OAuthGrant
 	oauthRefresh        map[string]domain.OAuthRefresh
-	scripts             map[string]domain.WorkerScript
 	pool                *pgxpool.Pool
 	orm                 *bun.DB
 	mu                  sync.Mutex

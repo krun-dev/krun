@@ -2,10 +2,15 @@
 
 创建项目、构建和发布的简明步骤见 [使用 Wrangler 部署 Workers](../user-docs/src/content/docs/guides/cloudflare-workers.md)。本文记录适配接口与实现细节。
 
-入口为同源 `/api/v1/cloudflare/client/v4`。使用 krun API Key 或 OAuth Token；`account_id` 是 krun
-组织 ID。Script 名称在组织内稳定映射到服务 ID，不拆解环境后缀。Wrangler 的普通
-`deploy` 和 `--env` 生成的不同 Script 名称对应不同服务；`wrangler preview --name`
-对应该服务下的 Preview。地址使用 krun 已配置域名，不占用 `workers.dev`。
+入口为同源 `/api/v1/cloudflare/client/v4`。使用 krun API Key 或 OAuth Token。
+`account_id` 接受 krun 组织 ID 或组织短名。Script 名就是该 Worker 的定位符。
+例如原生路径为 `platform/workers/tu-pian-chu-li` 时，Wrangler 可用
+`CLOUDFLARE_ACCOUNT_ID=platform` 和 `name = "tu-pian-chu-li"`。控制台与 Wrangler
+共同使用同一个 Worker 身份和版本历史。
+
+Wrangler 的普通 `deploy` 和 `--env` 生成的不同 Script 名称对应不同服务。
+`wrangler preview --name` 对应该服务下的 Preview。地址使用 krun 已配置域名。
+Worker 定位符 `domains`、`network-profiles` 和 `repository-providers` 供原生集合接口使用。
 
 ```sh
 export CLOUDFLARE_API_BASE_URL=https://console.example.com/api/v1/cloudflare/client/v4
@@ -39,9 +44,8 @@ krun CLI 自身的 `login --device` 使用同一 issuer 的规范 `/api/auth/` �
 
 适配层复用原有权限、Cookie/CSRF、审计、不可变 Version、部署 CAS、独立 validator、
 Runtime 配置分发和保留期。浏览器会话需要原有 CSRF 校验；CLI 使用 Bearer API Key 或 OAuth Token。
-同步上传的制品读写和等待部署都在数据库事务之外。首次创建中断或通过原生接口删除
-服务后，悬空的 Script 身份由后台清理（保留创建后 10 分钟的重试窗口）；清理前重新
-创建返回冲突，不会复活旧服务身份、版本和密钥。
+同步上传的制品读写和等待部署都在数据库事务之外。Script 名在组织内由资源行保证唯一。
+删除后同名创建会获得新的 Worker ID，版本与密钥属于各自的 Worker 身份。
 
 | 接口（相对于入口） | 行为 |
 | --- | --- |
@@ -52,7 +56,7 @@ Runtime 配置分发和保留期。浏览器会话需要原有 CSRF 校验；CLI
 | `POST .../scripts/{script}/assets-upload-session` | 提交资产清单，取得限定 Worker 的一小时上传凭据和待传文件分组 |
 | `POST /accounts/{account}/workers/assets/upload?base64=true` | 上传 multipart 资产分组；完整上传后取得部署所需 completion token |
 | `POST /accounts/{account}/workers/assets/upload/{hash}` | 上传单个原始资产文件 |
-| `DELETE /accounts/{account}/workers/scripts/{script}` | 删除服务及 Script 名称映射，后台清理关联实体 |
+| `DELETE /accounts/{account}/workers/scripts/{script}` | 删除 Worker 资源，后台清理关联实体 |
 | `GET .../scripts/{script}/settings`、`.../script-settings` | 配置和脱敏绑定 |
 | `POST/GET .../scripts/{script}/versions`、`GET .../versions/{id}` | 只上传版本、列出版本、读取版本 |
 | `POST/GET .../scripts/{script}/deployments`、`GET .../deployments/{id}` | 单版本 100% 部署及部署记录 |

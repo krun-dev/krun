@@ -16,7 +16,7 @@ func (s *Server) check(st *State, p Principal, r *http.Request) (any, int, error
 	if e := body(r, &in); e != nil {
 		return nil, 0, e
 	}
-	t, e := resolve(st, in.Kind, in.ID, in.Environment)
+	t, e := authorization.ResolveReference(st, in.Kind, in.ID, in.Environment)
 	if e != nil {
 		return nil, 0, e
 	}

@@ -85,14 +85,26 @@ const credential = await api(
   201,
 );
 token = credential.key;
+const locatorSuffix = randomUUID().slice(0, 8);
 const org = await api(
   "/api/v1/orgs",
   "POST",
-  { name: "CF protocol " + randomUUID().slice(0, 8) },
+  { name: "协议验收 " + locatorSuffix, short_name: "CF Locator " + locatorSuffix },
   true,
   201,
 );
-const script = "cf-wire-" + randomUUID().slice(0, 8);
+assert.equal(org.short_name, "cf-locator-" + locatorSuffix);
+const script = "tu-pian-chu-li-" + locatorSuffix;
+const orgNative = "/api/v1/orgs/" + org.short_name;
+const native = orgNative + "/workers/" + script;
+const nativeWorker = await api(
+  orgNative + "/workers",
+  "POST",
+  { name: "图片处理 " + locatorSuffix },
+  false,
+  201,
+);
+assert.equal(nativeWorker.locator, script);
 const cf = "/api/v1/cloudflare/client/v4/accounts/" + org.id;
 const scriptPath = cf + "/workers/scripts/" + script;
 const workerPath = cf + "/workers/workers/" + script;
@@ -126,13 +138,13 @@ function code(marker) {
   );
 }
 let commandCount = 0;
-async function wrangler(args, input = "") {
+async function wrangler(args, input = "", account = org.short_name) {
   const env = {
     ...process.env,
     CI: "true",
     CLOUDFLARE_API_BASE_URL: origin + "/api/v1/cloudflare/client/v4",
     CLOUDFLARE_API_TOKEN: token,
-    CLOUDFLARE_ACCOUNT_ID: org.id,
+    CLOUDFLARE_ACCOUNT_ID: account,
     WRANGLER_SEND_METRICS: "false",
     WRANGLER_LOG_PATH: path.join(directory, "wrangler-private.log"),
   };
@@ -158,7 +170,6 @@ async function wrangler(args, input = "") {
   assert.equal(status, 0, args.join(" ") + " failed: " + log.slice(-6000));
   return log;
 }
-let native = "";
 async function invoke(environment, expected) {
   let last;
   for (let i = 0; i < 60; i++) {
@@ -183,21 +194,39 @@ let firstVersion;
 let secondVersion;
 await check("official Wrangler deploy uploads modules and publishes production", async () => {
   code("first");
-  const output = await wrangler(["deploy"]);
+  const output = await wrangler(["deploy"], "", org.id);
   const details = (await api(workerPath)).result;
-  native = "/api/v1/orgs/" + org.id + "/workers/" + details.tag;
+  assert.equal(details.tag, nativeWorker.id);
   await invoke("production", { marker: "first", label: "production" });
   firstVersion = (await api(scriptPath + "/versions")).result.items[0].id;
   assert.match(firstVersion, /^[0-9a-f-]{36}$/);
   assert(output.includes("Current Version ID: " + firstVersion));
 });
+await check(
+  "official Wrangler deploy by organization short name updates the same native Worker",
+  async () => {
+    const first = firstVersion;
+    code("short-name");
+    const output = await wrangler(["deploy"], "", org.short_name);
+    const alias = "/api/v1/cloudflare/client/v4/accounts/" + org.short_name;
+    const details = (await api(alias + "/workers/workers/" + script)).result;
+    assert.equal(details.tag, nativeWorker.id);
+    assert.equal((await api(native)).id, nativeWorker.id);
+    const versions = (await api(scriptPath + "/versions")).result.items;
+    assert.equal(versions[1].id, first);
+    firstVersion = versions[0].id;
+    assert.notEqual(firstVersion, first);
+    assert(output.includes("Current Version ID: " + firstVersion));
+    await invoke("production", { marker: "short-name", label: "production" });
+  },
+);
 await check("official versions upload leaves production on its previous version", async () => {
   code("second");
   await wrangler(["versions", "upload"]);
   const versions = (await api(scriptPath + "/versions")).result.items;
   secondVersion = versions[0].id;
   assert.notEqual(firstVersion, secondVersion);
-  await invoke("production", { marker: "first" });
+  await invoke("production", { marker: "short-name" });
 });
 await check("ordinary Secret mutation rejects an unpublished latest version", async () => {
   const response = await api(
@@ -803,8 +832,9 @@ await check("deleted Script names receive a fresh internal service identity", as
 await check("native service deletion cannot resurrect a previous Script identity", async () => {
   const id = (await api(workerPath)).result.tag;
   await api("/api/v1/orgs/" + org.id + "/workers/" + id, "DELETE", undefined, false, 204);
-  const response = await api(cf + "/workers/workers", "POST", { name: script }, false, 409);
-  assert.equal(response.success, false);
+  await api(workerPath, "GET", undefined, false, 404);
+  const response = await api(cf + "/workers/workers", "POST", { name: script });
+  assert.notEqual(response.result.tag, id);
   await api("/api/v1/orgs/" + org.id + "/workers/" + id, "GET", undefined, false, 404);
 });
 console.log("CF WRANGLER E2E PASSED " + results.length + " cases");

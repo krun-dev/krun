@@ -5,6 +5,7 @@ import "time"
 // WorkerBucket is a logical organization resource. Its ID and data namespace
 // survive Worker deployments, rollbacks and environment deletion.
 type WorkerBucket struct {
+	ResourcePath string    `json:"resource_path,omitempty"`
 	ID           string    `json:"id"`
 	Organization string    `json:"organization_id"`
 	Name         string    `json:"name"`

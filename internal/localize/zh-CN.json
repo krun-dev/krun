@@ -1,4 +1,13 @@
 {
+  "Resource locator": "资源定位符",
+  "Organization short name": "组织短名",
+  "Organization short name or ID": "组织短名或 ID",
+  "invalid resource path": "资源路径无效",
+  "Unknown organization": "找不到该组织",
+  "Resource locator already exists": "当前组织内已有同类型资源使用该定位符",
+  "Organization short name already exists": "组织短名已被使用",
+  "Choose a different Worker locator": "请指定其他 Worker 定位符",
+  "Choose a short name containing letters or numbers": "请指定包含字母或数字的短名",
   "--action, --kind and --id required": "必须提供 --action、--kind 和 --id",
   "--expires must be never, 0 or a duration between 60s and 2160h": "--expires 必须为 never、0 或 60s 到 2160h 之间的时长",
   "--org or --system required": "必须提供 --org 或 --system",
