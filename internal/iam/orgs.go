@@ -1,6 +1,7 @@
 package iam
 
 import (
+	"slices"
 	"sort"
 
 	"github.com/krun-dev/krun/internal/authorization"
@@ -63,12 +64,16 @@ func (s Service) UpdateOrganization(st *domain.State, t authorization.Target, in
 	if in.Revision != org.Revision {
 		return domain.Organization{}, domain.Problem(409, "REVISION_CONFLICT", "Organization changed")
 	}
+	hadAdmin := !slices.Equal(org.Sources, in.Sources) && s.hasOrganizationAdmin(st, t.ID)
 	org.Name = in.Name
 	org.Sources = in.Sources
-	org.Revision++
 	st.Organizations[t.ID] = org
+
+	if err := s.finishOrganizationAdminChange(st, t.ID, hadAdmin); err != nil {
+		return domain.Organization{}, err
+	}
 	st.Revision++
-	return org, nil
+	return st.Organizations[t.ID], nil
 }
 
 func (s Service) hasOrganizationAdmin(st *domain.State, org string) bool {

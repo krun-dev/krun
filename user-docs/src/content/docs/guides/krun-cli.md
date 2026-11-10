@@ -98,6 +98,31 @@ krun login --endpoint {{KRUN_ORIGIN}} --device --browser=false
 
 CLI 接受 HTTPS 控制台地址，本地开发允许 loopback HTTP。登录多个账号时，可用 `--profile NAME` 分开保存。
 
+## 管理组织和邀请
+
+```sh
+krun org get --org platform
+krun org permissions --org platform
+krun org update --org platform --name "平台工程"
+krun org update --org platform --allowed-source SOURCE_ID
+krun groups update --org platform --id GROUP_ID --name "值班团队" --revision 1
+```
+
+`--org` 接受组织短名或 ID，可以省略以使用当前配置的默认组织。`org permissions` 返回当前登录身份在组织全局范围内的有效权限。检查指定 Worker 和环境下的动作时，可用 `krun check --kind worker --id platform/workers/edge-api --action worker.publish --env production`。
+
+`org update` 保留本次未指定的字段。重复传入 `--allowed-source` 可以指定多个允许的登录来源，这些值会替换整个列表。登录来源使用来源 ID，可以从 `krun whoami` 的 `user.source_id` 查看当前账号的来源。使用 `--clear-allowed-sources` 恢复允许所有已启用的来源。变更导致最后一位有效组织管理员失去访问时，更新会被拒绝。更新默认使用读到的组织修订号，也可以用 `--revision` 指定预期修订号。用户组改名需要传入 `krun groups list` 返回的 `id` 和当前 `revision`。遇到修订冲突时，先重新读取并核对当前配置。
+
+组织管理员用 `krun login` 登录后，可以管理邀请链接：
+
+```sh
+krun org invitations create --org platform --role viewer --target-email teammate@example.com
+krun org invitations list --org platform --limit 20
+krun org invitations list --org platform --limit 20 --cursor NEXT_CURSOR
+krun org invitations revoke --org platform --id INVITATION_ID
+```
+
+邀请默认授予 `member` 角色，有效期为 7 天，允许 1 位新成员加入。可以用 `--max-uses` 指定 1 到 100 位新成员，也可用 `--target-user` 指定本地用户 ID。指定用户与已验证邮箱只能二选一。完整的 `invite_url` 仅在创建时返回，请只发给受邀者。受邀者在浏览器中打开链接，登录后确认加入。列表返回元数据和 `next_cursor`，可用其中的邀请 ID 撤销链接。
+
 ## 查看组织和资源
 
 ```sh
