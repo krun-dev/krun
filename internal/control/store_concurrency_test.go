@@ -530,10 +530,12 @@ func TestPostgresRepositoryConnectStateConsumedOnce(t *testing.T) {
 	if err := store.UpsertRepositoryConnectState(ctx, "oauth-state", pending); err != nil {
 		t.Fatal(err)
 	}
-	// A callback from another browser must neither win nor destroy the valid
-	// browser's one-shot state.
-	if _, consumed, err := store.ConsumeRepositoryConnectState(ctx, "oauth-state", "wrong-browser"); err != nil || consumed {
+	// Neither a different browser nor a different account may consume state.
+	if _, consumed, err := store.ConsumeRepositoryConnectState(ctx, "oauth-state", "wrong-browser", pending.User); err != nil || consumed {
 		t.Fatalf("wrong browser consumed state: consumed=%v err=%v", consumed, err)
+	}
+	if _, consumed, err := store.ConsumeRepositoryConnectState(ctx, "oauth-state", pending.Browser, "wrong-user"); err != nil || consumed {
+		t.Fatalf("wrong user consumed state: consumed=%v err=%v", consumed, err)
 	}
 
 	var winners sync.Map
@@ -542,7 +544,7 @@ func TestPostgresRepositoryConnectStateConsumedOnce(t *testing.T) {
 		wg.Add(1)
 		go func(replica string) {
 			defer wg.Done()
-			got, consumed, err := store.ConsumeRepositoryConnectState(ctx, "oauth-state", "browser-one")
+			got, consumed, err := store.ConsumeRepositoryConnectState(ctx, "oauth-state", pending.Browser, pending.User)
 			if err != nil {
 				t.Error(err)
 				return

@@ -305,7 +305,10 @@ func TestRepositoryConnectionLifecycle(t *testing.T) {
 		{ID: "github", Type: "github", Name: "GitHub", Enabled: true, Priority: 10, ClientID: "cid", ClientSecret: "csecret"},
 	}
 	s.routes()
-	if r := request(s, "POST", "/api/v1/orgs/org-b/worker-repositories/github/connect", "krun_cli_viewer", ""); r.Code != 403 {
+	viewer := repositoryTestSession(t, s, store, "viewer")
+	browser := &http.Cookie{Name: s.cookieName("browser"), Value: "repository-browser"}
+	if r := browserRequest(s, http.MethodPost, "/api/v1/orgs/org-b/worker-repositories/github/connect",
+		url.Values{"csrf_token": {"repository-csrf"}}, []*http.Cookie{viewer, browser}); r.Code != http.StatusForbidden {
 		t.Fatal("cross-organization repository connection allowed", r.Code, r.Body.String())
 	}
 	if r := request(s, "DELETE", "/api/v1/orgs/org-a/worker-repositories/github/disconnect", "krun_cli_admin", ""); r.Code != 204 {
@@ -342,6 +345,20 @@ func TestRepositoryConnectionLifecycle(t *testing.T) {
 
 }
 
+func repositoryTestSession(t *testing.T, s *Server, store *Store, user string) *http.Cookie {
+	t.Helper()
+	token := "repository-session-" + user
+	if err := store.Update(t.Context(), PartitionIAM, func(*State) error {
+		return store.InsertSession(t.Context(), token, Session{
+			User: user, AuthVersion: 1, Created: now(), Seen: now(),
+			Absolute: now().Add(time.Hour), CSRF: "repository-csrf",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return &http.Cookie{Name: s.cookieName("session"), Value: token}
+}
+
 func TestRepositoryOAuthGETCallbackStoresConnectionAndReturnsToWorkspace(t *testing.T) {
 	oauth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/oauth/token" || r.Method != http.MethodPost {
@@ -359,18 +376,55 @@ func TestRepositoryOAuthGETCallbackStoresConnectionAndReturnsToWorkspace(t *test
 		OrganizationIDs: []string{"org-a"},
 	}}
 	s.routes()
-	browserToken := "repository-browser"
-	state := "repository-state"
-	if err := store.UpsertRepositoryConnectState(context.Background(), state, WorkerRepositoryConnectState{
-		User: "admin", Provider: "gitlab", Organization: "org-a",
-		Browser: digest(browserToken), Expires: now().Add(time.Minute),
-	}); err != nil {
-		t.Fatal(err)
+	connect := "/api/v1/orgs/org-a/worker-repositories/gitlab/connect"
+	if got := request(s, http.MethodPost, connect, "krun_cli_viewer", ""); got.Code != http.StatusForbidden {
+		t.Fatalf("CLI direct connect returned %d", got.Code)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers/repository/gitlab/callback?"+url.Values{
+
+	session := repositoryTestSession(t, s, store, "admin")
+	form := url.Values{"csrf_token": {"repository-csrf"}}
+	if got := browserRequest(s, http.MethodPost, connect, form, []*http.Cookie{session}); got.Code != http.StatusForbidden {
+		t.Fatalf("connect without a browser cookie returned %d", got.Code)
+	}
+	csrf := browserRequest(s, http.MethodPost, "/api/auth/csrf", nil, []*http.Cookie{session})
+	cookies := csrf.Result().Cookies()
+	if csrf.Code != http.StatusOK || len(cookies) != 1 || cookies[0].Name != s.cookieName("browser") || cookies[0].Value == "" {
+		t.Fatalf("CSRF request did not restore the browser cookie: %d", csrf.Code)
+	}
+	start := browserRequest(s, http.MethodPost, connect, form, append(cookies, session))
+	var response struct {
+		AuthorizationURL string `json:"authorization_url"`
+	}
+	if err := json.Unmarshal(start.Body.Bytes(), &response); err != nil || start.Code != http.StatusOK {
+		t.Fatalf("browser connect returned %d: %s", start.Code, start.Body)
+	}
+	authorizationURL, err := url.Parse(response.AuthorizationURL)
+	if err != nil || authorizationURL.Query().Get("state") == "" {
+		t.Fatal("browser connect did not return OAuth state")
+	}
+	state := authorizationURL.Query().Get("state")
+	callback := "/api/v1/workers/repository/gitlab/callback?" + url.Values{
 		"state": {state}, "code": {"approved"},
-	}.Encode(), nil)
-	req.AddCookie(&http.Cookie{Name: s.cookieName("browser"), Value: browserToken})
+	}.Encode()
+	for _, tc := range []struct {
+		name    string
+		cookies []*http.Cookie
+	}{
+		{"no browser cookie", []*http.Cookie{session}},
+		{"no session cookie", cookies},
+		{"different user", append(cookies, repositoryTestSession(t, s, store, "viewer"))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := browserRequest(s, http.MethodGet, callback, nil, tc.cookies)
+			location, err := url.Parse(got.Header().Get("Location"))
+			if err != nil || got.Code != http.StatusSeeOther || location.Query().Get("error") != "WORKER_REPOSITORY_STATE_INVALID" {
+				t.Fatalf("invalid callback returned %d: %s", got.Code, got.Header().Get("Location"))
+			}
+		})
+	}
+	req := httptest.NewRequest(http.MethodGet, callback, nil)
+	req.AddCookie(cookies[0])
+	req.AddCookie(session)
 	res := httptest.NewRecorder()
 	s.ServeHTTP(res, req)
 	if res.Code != http.StatusSeeOther {
@@ -427,6 +481,7 @@ func TestRepositoryOAuthCallbackRejectsTokenEndpointRedirect(t *testing.T) {
 		"state": {state}, "code": {"approved"},
 	}.Encode(), nil)
 	req.AddCookie(&http.Cookie{Name: s.cookieName("browser"), Value: browserToken})
+	req.AddCookie(repositoryTestSession(t, s, store, "admin"))
 	res := httptest.NewRecorder()
 	s.ServeHTTP(res, req)
 	if res.Code != http.StatusSeeOther || leaked != 0 {

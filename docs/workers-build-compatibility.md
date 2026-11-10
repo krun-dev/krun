@@ -72,8 +72,8 @@ receives narrowly scoped source-download and artifact-upload URLs. Network
 policy permits the configured package registry and the build transfer endpoint
 and denies cluster services and arbitrary public destinations.
 
-`builder_mode: local` is a trusted-development convenience. It must not run
-custom builds from untrusted repositories. Deployments that offer builds to
+`builder_mode: local` requires `development: true`; other configurations fail
+to load. Use it only with trusted repositories. Deployments that offer builds to
 untrusted tenants should set a sandboxed Kubernetes `runtimeClassName` backed
 by gVisor, Kata Containers or an equivalent isolation layer.
 

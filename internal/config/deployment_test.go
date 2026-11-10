@@ -28,6 +28,45 @@ func TestProductionExampleLoadsThroughMainConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadConfigRestrictsLocalBuilderToDevelopment(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "production.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := strings.Replace(string(raw), "builder_mode: kubernetes", "builder_mode: local", 1)
+	for _, tc := range []struct {
+		name        string
+		development string
+		allowed     bool
+	}{
+		{"production", "development: false", false},
+		{"default", "", false},
+		{"development", "development: true", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "server.yaml")
+			yaml := strings.Replace(local, "development: false", tc.development, 1)
+			if err := os.WriteFile(path, []byte(yaml), 0600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := LoadConfig(path)
+			if !tc.allowed {
+				if err == nil || !strings.Contains(err.Error(), "workers.builder_mode: local requires development: true") {
+					t.Fatalf("expected a development-only builder error, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Workers.BuilderMode != "local" || c.Workers.BuilderScript == "" {
+				t.Fatal("local builder or its default script was not loaded")
+			}
+		})
+	}
+}
+
 func TestDeploymentValidationRejectsUnboundedOrInjectedInput(t *testing.T) {
 	for _, test := range []struct {
 		name   string

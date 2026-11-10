@@ -105,6 +105,9 @@ func LoadConfig(path string) (Config, error) {
 var Slug = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
 func (c *Config) Validate() error {
+	if c.Workers != nil && c.Workers.BuilderMode == "local" && !c.Development {
+		return errors.New("workers.builder_mode: local requires development: true")
+	}
 	if err := c.Deployment.validate(); err != nil {
 		return err
 	}
