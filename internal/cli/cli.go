@@ -279,7 +279,9 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		return c.versions(ctx, rest)
 	case "secret":
 		return c.secret(ctx, rest)
-	case "org", "members", "groups", "roles", "keys", "models":
+	case "org":
+		return c.organization(ctx, rest)
+	case "members", "groups", "roles", "keys", "models":
 		return c.manage(ctx, command, rest)
 	case "build":
 		return c.build(ctx, rest)
@@ -542,6 +544,19 @@ func (c *Client) manage(ctx context.Context, command string, args []string) erro
 		case "create":
 			method = "POST"
 			input = map[string]string{"name": *name}
+		case "update":
+			if err := requireID(*id, "id"); err != nil {
+				return err
+			}
+			if *file == "" && (strings.TrimSpace(*name) == "" || !flagSet(f, "revision") || *revision < 0) {
+				return errors.New("--name and a non-negative --revision are required")
+			}
+			if *file != "" && (flagSet(f, "name") || flagSet(f, "revision")) {
+				return errors.New("choose either --file or --name and --revision")
+			}
+			method = "PATCH"
+			path += "/" + url.PathEscape(*id)
+			input = map[string]any{"name": *name, "expected_revision": *revision}
 		case "delete":
 			method = "DELETE"
 			path += "/" + url.PathEscape(*id)
@@ -674,9 +689,11 @@ Account and configuration
   krun whoami | logout
 
 Organizations and access
-  krun org list | create --name NAME
+  krun org --help
+  krun org invitations --help
   krun members list | add | remove --org ID [--user ID]
   krun groups list | create | delete --org ID [--name NAME | --id ID]
+  krun groups update --org ID --id ID --name NAME --revision N
   krun groups add-member | remove-member --org ID --group ID --user ID
   krun roles list | grant | update | revoke --org ID [options]
     grant: --subject ID --subject-kind user|group --role ROLE

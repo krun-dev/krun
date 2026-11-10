@@ -16,8 +16,9 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 	if !s.Store.Persistent() {
 		return r, nil
 	}
-	// IAM administration may edit other users and grants; it has a separate
-	// loading contract. Resource and Workers endpoints only need their target.
+	// IAM writes need the other users and grants they may affect. In particular,
+	// changing organization sources checks every organization administrator.
+	// Resource and Workers endpoints only need their target.
 	isResource := strings.Contains(r.Pattern, "/workers") || strings.Contains(r.Pattern, "/models")
 	simpleIAM := strings.HasPrefix(r.URL.Path, oauthPrefix+"/") ||
 		r.URL.Path == "/api/auth/me" ||
@@ -25,7 +26,6 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 		r.URL.Path == "/api/v1/roles" ||
 		r.URL.Path == "/api/v1/orgs" ||
 		r.Pattern == "GET /api/v1/orgs/{org}" ||
-		r.Pattern == "PATCH /api/v1/orgs/{org}" ||
 		r.Pattern == "GET /api/v1/orgs/{org}/permissions" ||
 		strings.HasSuffix(r.Pattern, "/audit")
 	if !isResource && !strings.Contains(r.Pattern, "/workers/") && !simpleIAM && !cloudflare {
