@@ -9,6 +9,7 @@ import (
 )
 
 func TestKubeconfigSettingsLoadThroughMainConfig(t *testing.T) {
+	setExampleCredentials(t)
 	t.Setenv("KRUN_DATABASE_URL", "postgres://fixture/krun_test")
 	c, err := LoadConfig(filepath.Join("..", "..", "config", "example.yaml"))
 	if err != nil {

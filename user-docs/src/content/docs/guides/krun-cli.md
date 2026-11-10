@@ -7,13 +7,20 @@ krun CLI 用于登录控制面、构建和发布 Worker，以及管理组织权�
 
 ## 安装
 
-在 macOS 或 Linux 终端运行：
+在装有 curl 和 Python 3 的 macOS 或 Linux 终端运行：
 
 ```sh
-curl -fsSL {{KRUN_ORIGIN}}/install.sh | sh -s -- {{KRUN_ORIGIN}}
+(
+  set -eu
+  installer=$(mktemp)
+  trap 'rm -f "$installer"' EXIT
+  status=$(curl -q -fsS -o "$installer" -w '%{http_code}' "{{KRUN_ORIGIN}}/install.sh")
+  [ "$status" = 200 ]
+  sh "$installer" "{{KRUN_ORIGIN}}"
+)
 ```
 
-脚本自动识别 Intel/AMD 64 位和 ARM64，无需 root，安装到 `~/.local/bin/krun`；再次运行会更新该文件。脚本不会修改 shell 配置。如果安装目录不在 PATH 中，按提示运行下面的命令，即可在当前终端使用：
+脚本自动识别 Intel/AMD 64 位和 ARM64，无需 root，安装到 `~/.local/bin/krun`；安装前会对照同源发布清单验证 SHA-256，再次运行会更新该文件。脚本不会修改 shell 配置。如果安装目录不在 PATH 中，按提示运行下面的命令，即可在当前终端使用：
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"

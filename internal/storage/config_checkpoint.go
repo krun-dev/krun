@@ -80,3 +80,22 @@ func (s *Store) RuntimeConfigRoute(ctx context.Context, host, pool string) (doma
 	}
 	return out, revision, nil
 }
+
+// PublishedAssetHosts identifies active routes for an immutable artifact in a
+// single runtime pool. The caller resolves each route's configured visibility.
+func (s *Store) PublishedAssetHosts(ctx context.Context, organization, worker, digest, pool string) ([]string, error) {
+	if s.pool == nil {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT r.host
+		FROM worker_config_routes r
+		JOIN krun_worker_versions v ON v.version_id = r.version_id AND v.worker_id = r.worker_id
+		WHERE r.worker_id = $1 AND v.org_id = $2 AND v.archive_digest = $3 AND r.pool = $4
+		  AND r.enabled AND (r.expires_at IS NULL OR r.expires_at > now())`,
+		worker, organization, digest, pool)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
+}

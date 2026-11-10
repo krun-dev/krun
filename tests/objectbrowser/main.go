@@ -124,7 +124,7 @@ func run() error {
 		},
 	}
 	cfg.StaticDir, _ = filepath.Abs("dist/console")
-	store, err := control.OpenStore(ctx, cfg.DB)
+	store, err := control.OpenStore(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("initialize isolated storage failed: %w", err)
 	}

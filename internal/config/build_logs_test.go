@@ -8,6 +8,7 @@ import (
 )
 
 func TestLogReadEndpointLoadsThroughMainConfig(t *testing.T) {
+	setExampleCredentials(t)
 	t.Setenv("KRUN_DATABASE_URL", "postgres://fixture/krun_test")
 	for _, endpoint := range []string{"", "https://logs.public.example.com", "https://logs.internal.example.com"} {
 		t.Run(endpoint, func(t *testing.T) {
@@ -38,6 +39,7 @@ func TestLogReadEndpointLoadsThroughMainConfig(t *testing.T) {
 }
 
 func TestLogReadEndpointRejectsInvalidOrigins(t *testing.T) {
+	setExampleCredentials(t)
 	t.Setenv("KRUN_DATABASE_URL", "postgres://fixture/krun_test")
 	for _, endpoint := range []string{"https://user:secret@example.com", "https://example.com/logs", "https://example.com?token=value", "https://example.com?", "https://example.com#fragment", "file:///logs"} {
 		t.Run(endpoint, func(t *testing.T) {

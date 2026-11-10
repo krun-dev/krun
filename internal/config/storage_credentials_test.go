@@ -72,6 +72,7 @@ func TestObjectStorageValidation(t *testing.T) {
 }
 
 func TestObjectStorageExamplesLoadThroughMainConfig(t *testing.T) {
+	setExampleCredentials(t)
 	t.Setenv("KRUN_DATABASE_URL", "postgres://test-only/krun_test")
 	for _, name := range []string{"example.yaml", "development.example.yaml"} {
 		t.Run(name, func(t *testing.T) {
@@ -133,6 +134,7 @@ func TestObjectStorageExamplesLoadThroughMainConfig(t *testing.T) {
 }
 
 func TestArtifactRuntimeCredentialsLoadThroughMainConfig(t *testing.T) {
+	setExampleCredentials(t)
 	t.Setenv("KRUN_DATABASE_URL", "postgres://test-only/krun_test")
 	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "example.yaml"))
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 )
 
 func TestRuntimeAPIURLLoadsThroughMainConfig(t *testing.T) {
+	setExampleCredentials(t)
 	t.Setenv("KRUN_DATABASE_URL", "postgres://fixture/krun_test")
 	for _, origin := range []string{"", "https://runtime.example.com/", "https://runtime.example.com:8443"} {
 		t.Run(origin, func(t *testing.T) {

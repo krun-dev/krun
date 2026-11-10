@@ -334,16 +334,30 @@ await check('Secret put and delete create configuration-only Versions and deploy
  const deleteVersion=await api(base+'/versions/'+removed.version_id);assert.equal(deleteVersion.artifact_id,assetBuild.artifact_id);
  return {put_version:deployed.version_id,delete_version:removed.version_id,artifact:assetBuild.artifact_id,value_exposed:false};
 });
-await check('static domain serves pub/ directly and v1/ stays private',async()=>{
- const path='/'+org.id+'/'+service.id+'/'+assetArtifact.archive_sha256+'/index.html';
- let static200;for(let i=0;i<20;i++){static200=await invoke('static.workers.test',path);if(static200.status===200)break;await sleep(500);}
- assert.equal(static200.status,200);assert(String(static200.body).includes('<!doctype html>'));
- assert.equal(static200.headers['access-control-allow-origin'],'*');
- const pub=testerGet(storage+'/pub/'+org.id+'/'+service.id+'/'+assetArtifact.archive_sha256+'/index.html');
- assert.equal(pub.status,200);
- const privateObject=testerGet(storage+'/v1/'+org.id+'/sha256/'+assetArtifact.archive_sha256+'/bundle.tar.gz');
- assert.equal(privateObject.status,403);
- return {static:static200.status,pub:pub.status,v1:privateObject.status};
+await check('static domains authorize reads while the artifact bucket stays private', async () => {
+  const path = '/' + org.id + '/' + service.id + '/' + assetArtifact.archive_sha256 + '/index.html';
+  let staticResponse;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    staticResponse = await invoke('static.workers.test', path);
+    if (staticResponse.status === 200) {
+      break;
+    }
+    await sleep(500);
+  }
+  assert.equal(staticResponse.status, 200);
+  assert(String(staticResponse.body).includes('<!doctype html>'));
+  assert.equal(staticResponse.headers['access-control-allow-origin'], '*');
+
+  const privateObjects = [
+    '/pub' + path,
+    '/int' + path,
+    '/config/pools/default/latest.json',
+    '/v1/' + org.id + '/sha256/' + assetArtifact.archive_sha256 + '/bundle.tar.gz',
+  ];
+  for (const object of privateObjects) {
+    assert.equal(testerGet(storage + object).status, 403, object);
+  }
+  return { static: staticResponse.status, anonymousReadsDenied: privateObjects.length };
 });
 // The security invariant: each Gateway instance only knows the hostnames of
 // the domains bound to it. A forged Host aimed at the other instance must not

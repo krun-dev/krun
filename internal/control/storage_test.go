@@ -2,18 +2,29 @@ package control
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	appconfig "github.com/krun-dev/krun/internal/config"
 )
 
 var testPools sync.Map
 
 func openStoreForTest(t *testing.T, ctx context.Context, dsn string) (*Store, error) {
 	t.Helper()
-	store, err := OpenStore(ctx, dsn)
+	key := sha256.Sum256([]byte("repository connection integration test"))
+	cfg := appconfig.Config{
+		DB: dsn,
+		Workers: &appconfig.WorkersConfig{
+			SecretsActiveKey: "test",
+			SecretsKeys:      map[string]string{"test": base64.StdEncoding.EncodeToString(key[:])},
+		},
+	}
+	store, err := OpenStore(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}

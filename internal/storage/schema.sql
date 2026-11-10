@@ -248,14 +248,17 @@ CREATE TABLE IF NOT EXISTS krun_rate_limits (
 CREATE INDEX IF NOT EXISTS krun_rate_limits_window ON krun_rate_limits (window_start);
 
 
+CREATE SEQUENCE IF NOT EXISTS krun_repository_token_revision_seq;
+
 CREATE TABLE IF NOT EXISTS krun_repository_connections (
 	user_id            text NOT NULL,
 	provider_id        text NOT NULL,
-	access_token       text NOT NULL,
+	access_token_ciphertext bytea,
 	token_type         text NOT NULL DEFAULT '',
-	refresh_token      text NOT NULL DEFAULT '',
+	refresh_token_ciphertext bytea,
+	token_key_version  text NOT NULL,
 	expires_at         timestamptz,
-	token_revision     bigint NOT NULL DEFAULT 1,
+	token_revision     bigint NOT NULL DEFAULT nextval('krun_repository_token_revision_seq'),
 	refresh_state      text NOT NULL DEFAULT 'ready' CONSTRAINT krun_repository_connections_refresh_state CHECK (refresh_state IN ('ready','refreshing')),
 	refresh_claimed_at timestamptz,
 	reconnect_required boolean NOT NULL DEFAULT false,

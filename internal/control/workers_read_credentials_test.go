@@ -11,6 +11,7 @@ import (
 	"time"
 
 	workerartifact "github.com/krun-dev/krun/internal/artifact"
+	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/domain"
 	workerapp "github.com/krun-dev/krun/internal/workers"
 )
@@ -141,5 +142,55 @@ func TestRuntimeReadCredentialsScopeAndTransport(t *testing.T) {
 	raw, err := json.Marshal(domain.StorageReadGrant{Credentials: domain.StorageCredentials{SecretAccessKey: "session-secret"}})
 	if err != nil || string(raw) != "{}" {
 		t.Fatal("read grant leaked through default JSON serialization")
+	}
+}
+
+func TestPostgresPublicStaticGrantRequiresPublicRoute(t *testing.T) {
+	store := postgresTestStore(t)
+	server, _, _ := workerTestServer(t)
+	server.Store = store
+	cfg := server.Config.Workers
+	pool := &cfg.RuntimePools[0]
+	pool.Access = []string{"public", "private"}
+	cfg.Domains = append(cfg.Domains,
+		appconfig.WorkerDomain{Domain: "public.example.test", Access: "public"},
+		appconfig.WorkerDomain{Domain: "private.example.test", Access: "private"},
+	)
+	recorder := &readCredentialRecorder{}
+	server.workers = &workerapp.Controller{Config: cfg, ReadCredentials: recorder}
+	ctx := t.Context()
+	digest := strings.Repeat("a", 64)
+	db := postgresTestPool(store)
+	_, err := db.Exec(ctx, `
+		INSERT INTO krun_worker_versions (version_id, org_id, worker_id, env_name, artifact_id, archive_digest)
+		VALUES ('release', 'org-a', 'svc-a', 'production', 'artifact', $1)`, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(ctx, `
+		INSERT INTO worker_config_routes (worker_id, shard, host, pool, enabled, version_id)
+		VALUES ('svc-a', 'ab', 'svc.private.example.test', $1, true, 'release'),
+		       ('svc-a', 'ab', 'svc.public.example.test', $1, false, 'release')`, pool.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/internal/workers/static-assets/pub/org-a/svc-a/" + digest + "/credentials"
+	requestGrant := func() int {
+		req := httptest.NewRequest(http.MethodPost, path, nil)
+		req.Header.Set("Authorization", "Bearer "+pool.RuntimeToken)
+		req.Header.Set("X-Runtime-Pool", pool.ID)
+		response := httptest.NewRecorder()
+		server.serveInternal(response, req)
+		return response.Code
+	}
+
+	if status := requestGrant(); status != http.StatusNotFound || len(recorder.scopes) != 0 {
+		t.Fatalf("private-only artifact reached the public static origin: %d", status)
+	}
+	if _, err := db.Exec(ctx, "UPDATE worker_config_routes SET enabled=true WHERE host='svc.public.example.test'"); err != nil {
+		t.Fatal(err)
+	}
+	if status := requestGrant(); status != http.StatusOK || len(recorder.scopes) != 1 {
+		t.Fatalf("public artifact did not receive a scoped read grant: %d", status)
 	}
 }

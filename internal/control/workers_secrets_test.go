@@ -1,7 +1,6 @@
 package control
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -19,7 +18,8 @@ import (
 )
 
 func testWorkerSecretsKey() string {
-	return base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
+	key := sha256.Sum256([]byte("Worker secret integration test"))
+	return base64.StdEncoding.EncodeToString(key[:])
 }
 
 func TestSameWorkerSecretVersionUsesInstantEquality(t *testing.T) {

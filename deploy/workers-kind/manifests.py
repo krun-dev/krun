@@ -33,7 +33,7 @@ def env(name):return {'name':name,'valueFrom':{'secretKeyRef':{'name':'workers-c
 def limits(memory='256Mi',request='64Mi'):return {'requests':{'cpu':'50m','memory':request},'limits':{'cpu':'1','memory':memory}}
 def secure():return {'allowPrivilegeEscalation':False,'readOnlyRootFilesystem':True,'runAsNonRoot':True,'runAsUser':1000,'capabilities':{'drop':['ALL']},'seccompProfile':{'type':'RuntimeDefault'}}
 deployment('postgres',[{'name':'postgres','image':'postgres:18-alpine','imagePullPolicy':'Never','env':[env('POSTGRES_PASSWORD')],'volumeMounts':[{'name':'data','mountPath':'/var/lib/postgresql'}],'readinessProbe':{'exec':{'command':['pg_isready','-U','postgres']},'periodSeconds':2},'resources':limits('1Gi','256Mi')}],volumes=[{'name':'data','persistentVolumeClaim':{'claimName':'postgres-data'}}]);service('postgres',[5432])
-deployment('minio',[{'name':'minio','image':'krun-e2e-minio:20250907','imagePullPolicy':'Never','args':['server','/data','--console-address',':9001'],'env':[env('MINIO_ROOT_USER'),env('MINIO_ROOT_PASSWORD')],'volumeMounts':[{'name':'data','mountPath':'/data'}],'readinessProbe':{'httpGet':{'path':'/minio/health/ready','port':9000},'periodSeconds':2},'resources':limits('512Mi')}],volumes=[{'name':'data','persistentVolumeClaim':{'claimName':'minio-data'}}]);service('minio',[9000]);service('static-assets',[9000],selector={'app':'minio'})
+deployment('minio',[{'name':'minio','image':'krun-e2e-minio:20250907','imagePullPolicy':'Never','args':['server','/data','--console-address',':9001'],'env':[env('MINIO_ROOT_USER'),env('MINIO_ROOT_PASSWORD')],'volumeMounts':[{'name':'data','mountPath':'/data'}],'readinessProbe':{'httpGet':{'path':'/minio/health/ready','port':9000},'periodSeconds':2},'resources':limits('512Mi')}],volumes=[{'name':'data','persistentVolumeClaim':{'claimName':'minio-data'}}]);service('minio',[9000])
 deployment('git-mock',[{'name':'git-mock','image':f'krun-e2e-git-mock:{tag}','imagePullPolicy':'Never','securityContext':secure(),'volumeMounts':[{'name':'tls','mountPath':'/tls','readOnly':True}],'readinessProbe':{'httpGet':{'scheme':'HTTPS','path':'/healthz','port':8443},'periodSeconds':2},'resources':limits('256Mi')}],volumes=[{'name':'tls','secret':{'secretName':'git-mock-tls'}}]);items.append(resource('Service','git-mock',spec={'selector':{'app':'git-mock'},'ports':[{'name':'https','port':443,'targetPort':8443}]}))
 config='''listen: 0.0.0.0:9000
 internal_listen: 0.0.0.0:9001
@@ -118,8 +118,6 @@ workers:
         public_egress: direct
       approval: none
       visibility: public
-  static_service: static-assets
-  static_service_port: 9000
   secrets_active_key: v1
   secrets_keys:
     v1: ${KRUN_WORKERS_SECRETS_KEY}
@@ -165,9 +163,8 @@ items.append(resource('RoleBinding','workers-control',apiVersion='rbac.authoriza
 items.append({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'Role','metadata':{'name':'workers-mvp-reader','namespace':'kgateway-system'},'rules':[{'apiGroups':['gateway.networking.k8s.io'],'resources':['gateways'],'resourceNames':['workers-mvp','workers-public'],'verbs':['get']}]})
 items.append({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'RoleBinding','metadata':{'name':'workers-mvp-reader','namespace':'kgateway-system'},'roleRef':{'apiGroup':'rbac.authorization.k8s.io','kind':'Role','name':'workers-mvp-reader'},'subjects':[{'kind':'ServiceAccount','name':'workers-control','namespace':ns}]})
 deployment('backend',[{'name':'backend','image':f'krun-workers-backend:{tag}','imagePullPolicy':'Never','env':[env(n) for n in ['KRUN_DATABASE_URL','KRUN_S3_ACCESS','KRUN_S3_SECRET','KRUN_RUNTIME_TOKEN','KRUN_MANAGEMENT_TOKEN','KRUN_WORKERS_SECRETS_KEY']],'securityContext':secure(),'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},{'name':'workdir','mountPath':'/workdir'}],'resources':limits('1Gi','128Mi'),'readinessProbe':{'httpGet':{'path':'/api/healthz','port':9000},'periodSeconds':5}}],serviceAccountName='workers-control',automountServiceAccountToken=True,volumes=[{'name':'config','configMap':{'name':'control-config'}},{'name':'workdir','emptyDir':{'sizeLimit':'1Gi'}}],terminationGracePeriodSeconds=10);service('backend',[9000,9001])
-# Runtime has no Kubernetes token, DB identity, S3 credentials or public
-# network; it reaches only the control plane and object storage (via
-# short-lived presigned URLs issued by the control plane). workerd's network
+# The trusted runtime signs configuration reads against the fixture MinIO.
+# User Workers have no access to its storage bindings. workerd's network
 # allow-list takes CIDR blocks only (host:port is rejected at startup), so it
 # must cover the object-storage Service ClusterIP; NetworkPolicy still pins the
 # real destination to the minio Pods on :9000.
@@ -197,6 +194,10 @@ const config :W.Config = (
    (name="MANAGEMENT_TOKEN",text=embed "/secrets/KRUN_MANAGEMENT_TOKEN"),
    (name="RUNTIME_POOL",text="default"),
    (name="CONFIG_BASE",text="http://minio:9000/krun-artifacts/config/pools/default"),
+   (name="STORAGE_ACCESS_KEY",text=embed "/secrets/KRUN_S3_ACCESS"),
+   (name="STORAGE_SECRET_KEY",text=embed "/secrets/KRUN_S3_SECRET"),
+   (name="STORAGE_REGION",text="us-east-1"),
+   (name="STATIC_DOMAINS",text={json.dumps(json.dumps({"static.workers.test": "int", "static.public-workers.test": "pub"}))}),
    (name="ASSETS_CACHE_MAX",text="67108864")
   ],globalOutbound="storage")),
   (name="platform",external=(address="backend:9001",http=())),
@@ -244,7 +245,7 @@ const config :W.Config = (
 capnp=capnp.replace('krun-artifacts',bucket)
 items.append(resource('ConfigMap','runtime-config',data={'runtime.capnp':capnp}))
 items.append(resource('ConfigMap','validator-config',data={'runtime.capnp':validator_capnp}))
-deployment('runtime-default',[{'name':'workerd','image':f'krun-worker-runtime:{tag}','imagePullPolicy':'Never','securityContext':secure(),'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},{'name':'pod','mountPath':'/pod','readOnly':True},{'name':'secrets','mountPath':'/secrets','readOnly':True}],'readinessProbe':{'httpGet':{'path':'/ready','port':8083},'periodSeconds':1,'timeoutSeconds':5,'failureThreshold':2},'resources':limits('1Gi')}],replicas=2,labels={'role':'krun-runtime','pool':'default'},volumes=[{'name':'config','configMap':{'name':'runtime-config'}},{'name':'pod','downwardAPI':{'items':[{'path':'name','fieldRef':{'fieldPath':'metadata.name'}},{'path':'uid','fieldRef':{'fieldPath':'metadata.uid'}}]}},{'name':'secrets','secret':{'secretName':'workers-credentials','items':[{'key':n,'path':n} for n in ['KRUN_RUNTIME_TOKEN','KRUN_MANAGEMENT_TOKEN']]}}],terminationGracePeriodSeconds=10);service('runtime-default',[8081,8083])
+deployment('runtime-default',[{'name':'workerd','image':f'krun-worker-runtime:{tag}','imagePullPolicy':'Never','securityContext':secure(),'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},{'name':'pod','mountPath':'/pod','readOnly':True},{'name':'secrets','mountPath':'/secrets','readOnly':True}],'readinessProbe':{'httpGet':{'path':'/ready','port':8083},'periodSeconds':1,'timeoutSeconds':5,'failureThreshold':2},'resources':limits('1Gi')}],replicas=2,labels={'role':'krun-runtime','pool':'default'},volumes=[{'name':'config','configMap':{'name':'runtime-config'}},{'name':'pod','downwardAPI':{'items':[{'path':'name','fieldRef':{'fieldPath':'metadata.name'}},{'path':'uid','fieldRef':{'fieldPath':'metadata.uid'}}]}},{'name':'secrets','secret':{'secretName':'workers-credentials','items':[{'key':n,'path':n} for n in ['KRUN_RUNTIME_TOKEN','KRUN_MANAGEMENT_TOKEN','KRUN_S3_ACCESS','KRUN_S3_SECRET']]}}],terminationGracePeriodSeconds=10);service('runtime-default',[8081,8083])
 deployment('runtime-validator-default',[{'name':'workerd','image':f'krun-worker-runtime:{tag}','imagePullPolicy':'Never','securityContext':secure(),'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},{'name':'pod','mountPath':'/pod','readOnly':True},{'name':'secrets','mountPath':'/secrets','readOnly':True}],'readinessProbe':{'httpGet':{'path':'/ready','port':8083},'periodSeconds':1,'timeoutSeconds':5,'failureThreshold':2},'livenessProbe':{'httpGet':{'path':'/ready','port':8083},'periodSeconds':2,'timeoutSeconds':1,'failureThreshold':3},'resources':limits('512Mi')}],labels={'role':'krun-validator','pool':'default'},volumes=[{'name':'config','configMap':{'name':'validator-config'}},{'name':'pod','downwardAPI':{'items':[{'path':'name','fieldRef':{'fieldPath':'metadata.name'}},{'path':'uid','fieldRef':{'fieldPath':'metadata.uid'}}]}},{'name':'secrets','secret':{'secretName':'workers-credentials','items':[{'key':'KRUN_VALIDATOR_TOKEN','path':'KRUN_RUNTIME_TOKEN'},{'key':'KRUN_MANAGEMENT_TOKEN','path':'KRUN_MANAGEMENT_TOKEN'}]}}],terminationGracePeriodSeconds=5);service('runtime-validator-default',[8083])
 deployment('tester',[{'name':'tester','image':f'krun-worker-builder:{tag}','imagePullPolicy':'Never','command':['node','-e','setInterval(()=>{},100000)'],'resources':limits('128Mi')}])
 def selector(app):return {'podSelector':{'matchLabels':{'app':app}}}

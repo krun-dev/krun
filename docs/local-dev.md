@@ -37,7 +37,7 @@ SSH 隧道或 `dev-*.sh` 启动生产。两者共用 `internal/adapters/runtimeb
 
 关键字段：
 
-- `builder_mode: local`：要求主配置设置 `development: true`，否则服务拒绝启动。builder 在本机以 `node workers/builder/build-worker.mjs` 运行，不创建 Kubernetes Job。Wrangler/custom build 会执行仓库代码，因此此模式只用于开发者自己的可信仓库；面向不可信租户必须使用 Kubernetes builder，并建议配置 `builder_runtime_class` 为 gVisor/Kata 等强隔离运行时。
+- `builder_mode: local`：要求主配置设置 `development: true`，且 `public_url` 指向回环地址。builder 在本机以 `node workers/builder/build-worker.mjs` 运行，不创建 Kubernetes Job。Wrangler/custom build 会执行仓库代码，因此此模式只用于开发者自己的可信仓库；面向不可信租户必须使用 Kubernetes builder，并建议配置 `builder_runtime_class` 为 gVisor/Kata 等强隔离运行时。
 - `gateways` / `domains`：网关实例与域名清单。每个域名绑定一个网关，并带一个只用于展示的 `label`；服务从中选择要用哪些域名。
 - 网关的 `base`（如 `http://127.0.0.1:38080`）：控制台 invoke 经 SSH 隧道打到对应的集群网关实例。
 - `validator_pool: default`：local-first 隧道脚本显式选择独立校验模式；通用部署默认为业务 Pod 校验。
@@ -53,13 +53,12 @@ SSH 隧道或 `dev-*.sh` 启动生产。两者共用 `internal/adapters/runtimeb
 ## S3 兼容对象存储
 
 对象存储配置统一放在 `.data/dev.yaml` 的 `workers:` 段，字段、寻址与访问模式
-见 [对象存储](object-storage.md)。本地 MinIO 可以使用 `managed + direct`，已有私有桶
-使用 `external + signed`；两项配置与厂商无关。
+见 [对象存储](object-storage.md)。本地 MinIO 用 `managed`，已有私有桶用 `external`。
+两种模式都使用签名读取。
 
 local-first 渲染器对网络地址有以下约束：
 
-- `direct` 的静态源站使用集群可达的 HTTP IPv4 地址。
-- `signed` 支持公网 HTTPS，或显式 IPv4 地址的私有 HTTP/HTTPS 源站；端口来自 endpoint。
+- 存储端点支持公网 HTTPS，或显式 IPv4 地址的私有 HTTP/HTTPS 源站；端口来自 endpoint。
 - 公网域名允许 DNS 和对应 HTTPS 端口；私有存储只放行指定 IP 和端口，不放行私有 DNS 网段。
 
 `dev-runtime-config.sh` 从主配置生成 workerd 配置、Secret 和 NetworkPolicy。更新

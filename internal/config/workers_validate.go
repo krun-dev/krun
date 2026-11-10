@@ -100,13 +100,10 @@ func (c *WorkersConfig) Validate() error {
 		return fmt.Errorf("invalid Workers S3 bucket mode")
 	}
 	if c.S3AccessMode == "" {
-		c.S3AccessMode = "direct"
-		if c.S3BucketMode == "external" {
-			c.S3AccessMode = "signed"
-		}
+		c.S3AccessMode = "signed"
 	}
-	if c.S3AccessMode != "direct" && c.S3AccessMode != "signed" {
-		return fmt.Errorf("invalid Workers S3 access mode")
+	if c.S3AccessMode != "signed" {
+		return fmt.Errorf("Workers s3_access_mode must be signed; direct reads expose private artifacts")
 	}
 	if c.S3Prefix != "" {
 		hasUnsafeCharacters := strings.ContainsAny(c.S3Prefix, "\\?#%*[]") ||

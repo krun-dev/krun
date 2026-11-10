@@ -53,7 +53,7 @@ func (c *WorkersConfig) S3UsesSignedAccess() bool {
 	if c.S3AccessMode != "" {
 		return c.S3AccessMode == "signed"
 	}
-	return c.S3BucketMode == "external"
+	return true
 }
 
 // StaticRoutePrefix keeps direct origins and signed runtime reads on the same

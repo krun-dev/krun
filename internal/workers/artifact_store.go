@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -51,30 +50,17 @@ func (w *Controller) EnsureBucket(ctx context.Context) error {
 	return w.EnsureAssetPolicy(ctx)
 }
 
-// Only pub/ and int/ are anonymous, plus the runtime-readable config prefix.
-// The v1/ artifact segment (which contains code) always requires credentials.
+// A managed bucket is dedicated to krun. Remove any legacy anonymous policy
+// before publishing snapshots. External buckets remain under operator control.
 func (w *Controller) EnsureAssetPolicy(ctx context.Context) error {
-	if w.Config.S3BucketMode == "external" || w.Config.S3UsesSignedAccess() {
+	if w.Config.S3BucketMode == "external" {
 		return nil
 	}
-	policy := fmt.Sprintf(`{
-  "Version": "2012-10-17",
-  "Statement": [{
-   "Effect": "Allow",
-   "Principal": {"AWS": ["*"]},
-   "Action": ["s3:GetObject"],
-   "Resource": [
-    "arn:aws:s3:::%s/*",
-    "arn:aws:s3:::%s/*",
-    "arn:aws:s3:::%s/*"
-   ]
-  }]
- }`,
-		w.Config.S3Bucket+"/"+w.Config.S3Key("pub"),
-		w.Config.S3Bucket+"/"+w.Config.S3Key("int"),
-		w.Config.S3Bucket+"/"+w.Config.S3Key("config"),
-	)
-	return w.S3.SetBucketPolicy(ctx, w.Config.S3Bucket, policy)
+	err := w.S3.SetBucketPolicy(ctx, w.Config.S3Bucket, "")
+	if objectstore.ToErrorResponse(err).Code == "NoSuchBucketPolicy" {
+		return nil
+	}
+	return err
 }
 
 func (w *Controller) GetObject(ctx context.Context, key string) ([]byte, error) {

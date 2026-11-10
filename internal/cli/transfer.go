@@ -16,7 +16,7 @@ import (
 func transfer(ctx context.Context, method, target string, headers map[string]string, body io.Reader, size int64) (*http.Response, error) {
 	u, err := url.Parse(target)
 	if err != nil || u.Hostname() == "" || u.User != nil || u.Fragment != "" ||
-		(u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost" || u.Hostname() == "::1"))) {
+		(u.Scheme != "https" && !(u.Scheme == "http" && loopbackHost(u.Hostname()))) {
 		return nil, errors.New("invalid storage transfer URL")
 	}
 	req, err := http.NewRequestWithContext(ctx, method, target, body)
