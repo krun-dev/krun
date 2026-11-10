@@ -633,7 +633,7 @@ export function KeysPage(p: Props) {
                                                 organization: e.target.value,
                                               })
                                             }
-                                            placeholder="org_…"
+                                            placeholder="org-…"
                                           />
                                         </Field>
                                       )}

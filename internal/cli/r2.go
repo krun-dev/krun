@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/krun-dev/krun/internal/domain"
+	"github.com/krun-dev/krun/internal/securetoken"
 )
 
 const r2Help = `Usage: krun r2 bucket|object COMMAND [--org ID]
@@ -199,9 +200,9 @@ func (c *Client) r2Object(ctx context.Context, action string, args []string) err
 	}
 }
 
-// Bucket IDs have an underscore, which the bucket name grammar excludes.
 func (c *Client) r2BucketID(ctx context.Context, path, bucket string) (string, error) {
-	if strings.HasPrefix(bucket, "bkt_") {
+	// Native bucket routes also resolve names that have the new ID shape.
+	if securetoken.IsID(bucket, "bkt") || strings.HasPrefix(bucket, "bkt_") {
 		return bucket, nil
 	}
 	var result struct {
