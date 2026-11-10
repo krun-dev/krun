@@ -38,6 +38,7 @@ import {
 import { api, APIError, type List, type Me, type Organization, type Provider } from "@/lib/api";
 import { AUTH_REQUIRED_EVENT } from "@/lib/auth-required";
 import { canOpenSection, type OrganizationPermissions, type Section } from "@/lib/navigation";
+import { useSuggestedShortName } from "@/lib/suggested-short-name";
 import { cn } from "@/lib/utils";
 import {
   Empty,
@@ -181,9 +182,9 @@ export default function App() {
   const [orgCatalog, setOrgCatalog] = useState<Organization[]>([]);
   const [orgDialog, setOrgDialog] = useState(false),
     [orgName, setOrgName] = useState(""),
-    [orgShortName, setOrgShortName] = useState(""),
     [saving, setSaving] = useState(false),
     [copied, setCopied] = useState(false);
+  const orgShortName = useSuggestedShortName(orgName, 32);
   const org = orgs.find((organization) => organization.id === scope);
   const orgReference = org?.short_name || scope;
   const oauthLogin =
@@ -990,12 +991,12 @@ export default function App() {
               await mutate(async () => {
                 const organization = await api<Organization>("/api/v1/orgs", "POST", {
                   name: orgName,
-                  short_name: orgShortName,
+                  short_name: orgShortName.value,
                 });
                 setScope(organization.id);
                 setOrgDialog(false);
                 setOrgName("");
-                setOrgShortName("");
+                orgShortName.reset();
               }, t("组织已创建。"));
             }}
           >
@@ -1008,16 +1009,16 @@ export default function App() {
                 placeholder={t("例如：Platform Engineering")}
               />
             </Field>
-            <Field label={t("组织短名（可选）")}>
+            <Field
+              label={t("组织短名（可选）")}
+              hint={t("根据组织名称自动填写，可修改，最多 32 个字符。创建后固定。")}
+            >
               <Input
-                value={orgShortName}
-                onChange={(e) => setOrgShortName(e.target.value)}
+                value={orgShortName.value}
+                onChange={(e) => orgShortName.edit(e.target.value)}
                 placeholder="platform"
-                maxLength={128}
+                maxLength={32}
               />
-              <p className="text-xs text-muted-foreground">
-                {t("留空时从组织名称生成，最多 32 个字符，创建后固定。")}
-              </p>
             </Field>
             <Button
               type="submit"

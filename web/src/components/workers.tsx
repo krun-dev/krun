@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { api, type List, type Resource } from "@/lib/api";
 import { errorMessage, t } from "@/lib/i18n";
+import { useSuggestedShortName } from "@/lib/suggested-short-name";
 import {
   pending,
   shortID,
@@ -83,7 +84,7 @@ export function WorkersPage({
   const [selected, setSelected] = useState<WorkerSummary | null>(null);
   const [create, setCreate] = useState(false);
   const [name, setName] = useState("");
-  const [locator, setLocator] = useState("");
+  const locator = useSuggestedShortName(name, 63);
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
   const collection = useCollectionPage<WorkerSummary>(
@@ -385,12 +386,12 @@ export function WorkersPage({
               try {
                 const r = await api<Resource>(base + "/workers", "POST", {
                   name,
-                  locator,
+                  locator: locator.value,
                 });
                 const reference = r.locator || r.id;
                 setCreate(false);
                 setName("");
-                setLocator("");
+                locator.reset();
                 openWorker(reference);
                 await api(
                   base + "/workers/" + encodeURIComponent(reference) + "/network-profile",
@@ -417,16 +418,16 @@ export function WorkersPage({
                 maxLength={128}
               />
             </Field>
-            <Field label={t("Worker 定位符（可选）")}>
+            <Field
+              label={t("Worker 定位符（可选）")}
+              hint={t("根据 Worker 名称自动填写，可修改，最多 63 个字符。可用于 Wrangler 部署。")}
+            >
               <Input
-                value={locator}
-                onChange={(e) => setLocator(e.target.value)}
+                value={locator.value}
+                onChange={(e) => locator.edit(e.target.value)}
                 placeholder="image-resize"
-                maxLength={128}
+                maxLength={63}
               />
-              <p className="text-xs text-muted-foreground">
-                {t("留空时从 Worker 名称生成，最多 63 个字符，可用于 Wrangler 部署。")}
-              </p>
             </Field>
             {networkProfiles.length > 1 ? (
               <Field label={t("网络环境")}>

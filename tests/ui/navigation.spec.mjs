@@ -133,6 +133,72 @@ test("new users see onboarding and organization creation without management menu
   expect(requests.some((path) => path.endsWith("/permissions"))).toBe(false);
 });
 
+test("organization short names follow the name until manually edited", async ({ page }) => {
+  const { state } = await fixture(page, { orgs: [] });
+  await page.route("**/api/v1/orgs", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+
+    const created = { ...organization("org-new"), ...route.request().postDataJSON() };
+    state.orgs.push(created);
+    await route.fulfill({ status: 201, json: created });
+  });
+  await page.goto(origin + "/?page=overview");
+  await page.getByRole("button", { name: "创建组织", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  const name = dialog.getByRole("textbox", { name: "组织名称", exact: true });
+  const shortName = dialog.getByRole("textbox", { name: /组织短名/ });
+
+  await name.fill("Platform Engineering");
+  await expect(shortName).toHaveValue("platform-engineering");
+  await name.fill("平台工程");
+  await expect(shortName).toHaveValue("ping-tai-gong-cheng");
+  await name.fill(`${"a".repeat(31)} Next`);
+  await expect(shortName).toHaveValue("a".repeat(31));
+
+  await shortName.fill("platform-team");
+  await name.fill("Infrastructure Team");
+  await expect(shortName).toHaveValue("platform-team");
+  const request = page.waitForRequest(
+    (req) => req.method() === "POST" && req.url().endsWith("/api/v1/orgs"),
+  );
+  await dialog.getByRole("button", { name: "创建组织", exact: true }).click();
+  expect((await request).postDataJSON()).toEqual({
+    name: "Infrastructure Team",
+    short_name: "platform-team",
+  });
+  await expect(dialog).toBeHidden();
+});
+
+test("Worker creation sends the suggested locator shown in the form", async ({ page }) => {
+  await fixture(page, { actions: { "org-a": admin } });
+  await page.addInitScript(() => localStorage.setItem("krun.theme", "dark"));
+  await page.route("**/api/v1/orgs/org-a/workers/network-profiles", (route) =>
+    route.fulfill({ json: { items: [{ id: "test", name: "Test", default: true }] } }),
+  );
+  await page.route("**/api/v1/orgs/org-a/workers", (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+
+    return route.fulfill({ status: 201, json: { id: "worker-new", locator: "image-resize-2" } });
+  });
+  await page.goto(origin + "/?page=workers&workspace=org-a");
+  await page.getByRole("button", { name: "创建 Worker", exact: true }).click();
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("textbox", { name: "Worker 名称", exact: true }).fill("Image_Resize 2");
+  await expect(dialog.getByRole("textbox", { name: /Worker 定位符/ })).toHaveValue(
+    "image-resize-2",
+  );
+  const request = page.waitForRequest(
+    (req) => req.method() === "POST" && req.url().endsWith("/api/v1/orgs/org-a/workers"),
+  );
+  await dialog.getByRole("button", { name: "创建 Worker", exact: true }).click();
+  expect((await request).postDataJSON()).toEqual({
+    name: "Image_Resize 2",
+    locator: "image-resize-2",
+  });
+  await expect(dialog).toBeHidden();
+});
+
 test("viewer deep links retain allowed pages and hide administration and Worker creation", async ({
   page,
 }) => {
