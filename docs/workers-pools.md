@@ -57,8 +57,9 @@ Version 固定代码和配置，不携带 pool；路由和内部制品访问根�
 缓存有界，不在启动时加载全池站点。详见 [规模与验证](performance-scaling.md)。
 
 内部 listener 要求 `X-Runtime-Pool` 和对应 Runtime token；路由、Version、Artifact、
-Secret 与资产读取继续校验该池有效 placement。validator 的 management token 用于
-候选验证，不进入业务 binding。业务 Worker 无平台 token、对象存储密钥或控制面 binding。
+Secret 与资产读取继续校验该池有效 placement。Version Secret 接口仅接受对应池的
+serving runtime token。候选验证通过 management token 认证，所需的 Secret 随验证请求传递。
+业务 Worker 无平台 token、对象存储密钥或控制面 binding。
 
 出口约束由 workerd 配置和 Kubernetes NetworkPolicy 共同落实。主 YAML 描述能力并
 校验匹配关系，不会凭空创建代理、网络规则或 Runtime Deployment。Secret 和 ASSETS

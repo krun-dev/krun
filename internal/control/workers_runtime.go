@@ -130,12 +130,11 @@ func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// workerRuntimeVersionSecrets is the only plaintext delivery path. It is
-// available solely on the internal listener, requires the runtime credential,
-// and returns values for one immutable Version. Values are never cached by the
-// control plane or included in edge snapshots.
+// workerRuntimeVersionSecrets delivers one immutable Version's secrets to
+// the serving runtime. Candidate validation receives its secrets with the
+// validation request.
 func (s *Server) workerRuntimeVersionSecrets(w http.ResponseWriter, r *http.Request) {
-	pool, allowed := s.workerRuntimePool(r)
+	pool, allowed := s.workerRuntimeServingPool(r)
 	if !allowed {
 		s.writeError(w, r, forbidden())
 		return
