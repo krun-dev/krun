@@ -68,8 +68,16 @@ test("public home works when the control plane is unavailable", async ({ page })
     route.fulfill({ status: 503, json: { error: { message: "Unavailable" } } }),
   );
   await page.goto(origin);
-  await expect(page.getByRole("heading", { name: "Run anything." })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "以更低成本运行网站、API 和全栈应用" }),
+  ).toBeVisible();
   await expect(page).toHaveTitle("RUN · Run anything.");
+  await expect(page.getByText("为 Agent 打造的 Serverless 计算平台。")).toBeVisible();
+  await expect(page.getByText("Agent First", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "查看 Agent 开发指南" })).toHaveAttribute(
+    "href",
+    "/docs/guides/workers-runtime-compatibility.html",
+  );
   await expect(page.getByRole("heading", { name: "Workers", exact: true })).toBeVisible();
   const database = page
     .getByRole("article")
@@ -95,7 +103,9 @@ for (const [name, section] of [
     await expect(page.getByRole("heading", { name: "登录组织" })).toBeVisible();
     await expect(page.locator('input[name="return_to"]')).toHaveValue(`/?page=${section}`);
     await page.getByRole("link", { name: "RUN 首页" }).first().click();
-    await expect(page.getByRole("heading", { name: "Run anything." })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 1, name: "以更低成本运行网站、API 和全栈应用" }),
+    ).toBeVisible();
   });
 }
 
@@ -107,7 +117,10 @@ test("home language persists and the mobile layout fits the viewport", async ({ 
   await page.reload();
   await expect(page.getByRole("combobox", { name: "Language" })).toHaveValue("en");
   await expect(
-    page.getByText("Static sites. APIs. Full-stack apps.", { exact: true }),
+    page.getByRole("heading", {
+      level: 1,
+      name: "Run websites, APIs, and full-stack apps at lower cost",
+    }),
   ).toBeVisible();
   await expect(page).toHaveTitle("RUN · Run anything.");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(

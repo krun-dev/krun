@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -198,17 +198,16 @@ export function Home() {
         >
           <p className="run-eyebrow">
             <span />
-            {t("从代码，到上线。")}
+            Run anything.
           </p>
           <h1 id="run-title">
-            Run <span>anything.</span>
+            <Trans
+              i18nKey="以更低成本运行网站、API 和全栈应用"
+              components={{ phrase: <span className="whitespace-nowrap" /> }}
+            />
           </h1>
-          <p className="run-hero-lead">{t("低成本 Serverless 计算，运行网站、API 与全栈应用。")}</p>
-          <p className="run-hero-description">
-            {t("按需运行应用代码，无需管理常驻服务器。")}
-            <br className="run-desktop-break" />
-            {t("让你的下一个想法，在 RUN 跑起来。")}
-          </p>
+          <p className="run-hero-lead">{t("为 Agent 打造的 Serverless 计算平台。")}</p>
+          <p className="run-hero-description">{t("按需运行应用代码，无需管理常驻服务器。")}</p>
           <div className="run-hero-actions">
             <a
               className="run-button run-button-primary"
@@ -252,9 +251,9 @@ export function Home() {
           <div className="run-section-heading">
             <div>
               <p className="run-section-label">THE PLATFORM</p>
-              <h2 id="run-products-title">{t("为 Agent 而建的应用运行基础设施。")}</h2>
+              <h2 id="run-products-title">{t("应用运行所需的计算与存储")}</h2>
             </div>
-            <p>{t("让 Agent 构建和部署应用，由 RUN 提供低成本 Serverless 计算与存储能力。")}</p>
+            <p>{t("用 Workers 运行代码，用 Storage 存储文件。")}</p>
           </div>
           <div className="run-product-grid">
             <article className="run-product-card run-workers-card">
@@ -334,22 +333,18 @@ export function Home() {
           aria-labelledby="run-workflow-title"
         >
           <div className="run-workflow-copy">
-            <p className="run-section-label">BUILT FOR YOUR WORKFLOW</p>
-            <h2 id="run-workflow-title">
-              {t("让 Agent 编写和部署。")}
-              <br />
-              {t("让 RUN 承载应用运行。")}
-            </h2>
+            <p className="run-section-label run-agent-label">Agent First</p>
+            <h2 id="run-workflow-title">{t("让 Agent 编写代码并部署应用")}</h2>
             <p>
               {t(
-                "RUN 为 Agent 提供构建、部署和运行应用所需的基础设施，让应用代码、页面与文件在同一平台上协同交付。",
+                "把 Workers 兼容性指南交给 Agent，让它按平台支持的 API 编写代码。配置好项目后，Agent 可以用 Wrangler 部署到 RUN。",
               )}
             </p>
             <a
               className="run-text-link"
-              href="/docs/guides/cloudflare-workers.html"
+              href="/docs/guides/workers-runtime-compatibility.html"
             >
-              {t("查看部署指南")}
+              {t("查看 Agent 开发指南")}
               <ArrowUpRight size={16} />
             </a>
             <div className="run-workflow-tools">
