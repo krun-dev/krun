@@ -6,6 +6,7 @@ export function useCollectionPage<T>(
   endpoint: string,
   enabled: boolean,
   revision: number | string,
+  filters = "",
 ) {
   const [items, setItems] = useState<T[] | null>(null);
   const [error, setError] = useState("");
@@ -31,11 +32,10 @@ export function useCollectionPage<T>(
     setLoading(true);
     setItems(null);
     setError("");
-    const query = new URLSearchParams({
-      q: search,
-      limit: String(pageSize),
-      after,
-    });
+    const query = new URLSearchParams(filters);
+    query.set("q", search);
+    query.set("limit", String(pageSize));
+    query.set("after", after);
     void api<List<T>>(
       endpoint + (endpoint.includes("?") ? "&" : "?") + query,
       "GET",
@@ -59,7 +59,7 @@ export function useCollectionPage<T>(
         }
       });
     return () => controller.abort();
-  }, [endpoint, enabled, revision, search, pageSize, after]);
+  }, [endpoint, enabled, revision, search, pageSize, after, filters]);
 
   return {
     items,

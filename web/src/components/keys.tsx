@@ -1,3 +1,5 @@
+import { CollectionPagination, CollectionToolbar } from "./collection-controls";
+import { useCollectionPage } from "@/lib/collection-page";
 import { errorMessage, t, locale } from "@/lib/i18n";
 import { useTranslation } from "react-i18next";
 import { useState } from "react";
@@ -25,7 +27,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, type APIKey, type List, type Policy } from "@/lib/api";
+import { api, type APIKey, type List, type Organization, type Policy } from "@/lib/api";
 import {
   actionLabel,
   buildPolicy,
@@ -90,9 +92,9 @@ function PolicySummary({ policy }: { policy: Policy }) {
   );
 }
 
-export function KeysPage(p: Props) {
+export function KeysPage(p: Props & { organizations: Organization[] }) {
   useTranslation();
-  const { data, error, loading } = useData<List<APIKey>>(p.base + "/api-keys", p.refresh);
+  const organizationKeys = useData<List<APIKey>>(p.system ? "" : p.base + "/api-keys", p.refresh);
   const registry = usePermissionCatalog();
   const [open, setOpen] = useState(false),
     [secret, setSecret] = useState(""),
@@ -109,6 +111,13 @@ export function KeysPage(p: Props) {
     [status, setStatus] = useState("all"),
     [permissionSearch, setPermissionSearch] = useState(""),
     [detail, setDetail] = useState<APIKey | null>(null);
+  const inventory = useCollectionPage<APIKey>(
+    "/api/v1/system/inventory/api-keys",
+    p.system,
+    p.refresh,
+    new URLSearchParams({ status }).toString(),
+  );
+  const { error, loading } = p.system ? inventory : organizationKeys;
   const groups = resourceKinds.filter((k) => p.system || k.kind !== "system");
   const catalog = registry.data?.actions ?? {};
   const environments = registry.data?.environments ?? [];
@@ -118,12 +127,14 @@ export function KeysPage(p: Props) {
       .map(([action]) => action)
       .sort();
   const selectedCount = Object.values(selections).reduce((sum, s) => sum + s.actions.length, 0);
-  const items = data?.items ?? [];
-  const visible = items.filter(
-    (key) =>
-      (status === "all" || keyState(key) === status) &&
-      `${key.name} ${key.id} ${key.prefix}`.toLowerCase().includes(search.toLowerCase()),
-  );
+  const items = (p.system ? inventory.items : organizationKeys.data?.items) ?? [];
+  const visible = p.system
+    ? items
+    : items.filter(
+        (key) =>
+          (status === "all" || keyState(key) === status) &&
+          `${key.name} ${key.id} ${key.prefix}`.toLowerCase().includes(search.toLowerCase()),
+      );
   function update(kind: string, patch: Partial<Selection>) {
     setSelections((current) => ({
       ...current,
@@ -205,7 +216,7 @@ export function KeysPage(p: Props) {
     <>
       <PageHeader
         eyebrow={p.system ? t("Access management") : t("个人设置")}
-        title={t("API Keys")}
+        title={p.system ? t("全平台 API 密钥") : t("API Keys")}
         description={t("管理脚本、CLI 和自动化任务的访问凭据。")}
         action={
           <Button onClick={startCreate}>
@@ -221,33 +232,44 @@ export function KeysPage(p: Props) {
             className="text-primary"
           />
           {t("访问密钥")}
-          <Badge variant="secondary">{items.length}</Badge>
+          {!p.system && <Badge variant="secondary">{items.length}</Badge>}
         </span>
         <span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
           <ShieldCheck size={14} />
           {t("权限始终受所属用户的当前角色约束")}
         </span>
       </div>
+      {p.system && (
+        <CollectionToolbar
+          page={inventory}
+          label={t("搜索名称、前缀、ID 或组织")}
+        />
+      )}
       <div className="mb-5 flex flex-wrap items-center gap-3">
-        <div className="relative min-w-48 flex-1 sm:max-w-sm">
-          <Search
-            size={15}
-            className="absolute left-3 top-2.5 text-muted-foreground"
-          />
-          <Input
-            aria-label={t("搜索 API Key")}
-            className="pl-9"
-            placeholder={t("搜索名称、前缀或 ID…")}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
+        {!p.system && (
+          <div className="relative min-w-48 flex-1 sm:max-w-sm">
+            <Search
+              size={15}
+              className="absolute left-3 top-2.5 text-muted-foreground"
+            />
+            <Input
+              aria-label={t("搜索 API Key")}
+              className="pl-9"
+              placeholder={t("搜索名称、前缀或 ID…")}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+        )}
         <div className="w-36">
           <SelectField
             label={t("密钥状态")}
             hideLabel
             value={status}
-            onChange={setStatus}
+            onChange={(value) => {
+              if (p.system) inventory.searchFor(inventory.search);
+              setStatus(value);
+            }}
           >
             <option value="all">{t("全部状态")}</option>
             <option value="active">{t("有效")}</option>
@@ -255,15 +277,17 @@ export function KeysPage(p: Props) {
             <option value="revoked">{t("已撤销")}</option>
           </SelectField>
         </div>
-        <span className="ml-auto text-xs text-muted-foreground">
-          {t("{{count}} 个密钥", { count: visible.length })}
-        </span>
+        {!p.system && (
+          <span className="ml-auto text-xs text-muted-foreground">
+            {t("{{count}} 个密钥", { count: visible.length })}
+          </span>
+        )}
       </div>
       {loading ? (
         <Loading />
       ) : error ? (
         <ErrorState error={error} />
-      ) : !items.length ? (
+      ) : !p.system && !items.length ? (
         <Empty
           title={t("创建你的第一个 API Key")}
           description={t("选择所需的 API 和资源范围，连接你的自动化工作流。")}
@@ -306,6 +330,18 @@ export function KeysPage(p: Props) {
                 </button>
               ),
             },
+            ...(p.system
+              ? [
+                  {
+                    title: t("所属组织"),
+                    render: (key: APIKey) => (
+                      <span title={key.organization_id}>
+                        {key.organization_name || key.organization_id || t("未绑定组织")}
+                      </span>
+                    ),
+                  },
+                ]
+              : []),
             {
               title: t("权限范围"),
               render: (key) => (
@@ -351,18 +387,23 @@ export function KeysPage(p: Props) {
                   >
                     {t("查看权限")}
                   </Button>
-                  <Confirm
-                    label={t("撤销")}
-                    disabled={key.revoked}
-                    description={t("此 Key 将无法再用于新的 API 请求，此操作不能恢复。")}
-                    onConfirm={() => revoke(key.id)}
-                  />
+                  {(!p.system ||
+                    !key.organization_id ||
+                    p.organizations.some((org) => org.id === key.organization_id)) && (
+                    <Confirm
+                      label={t("撤销")}
+                      disabled={key.revoked}
+                      description={t("此 Key 将无法再用于新的 API 请求，此操作不能恢复。")}
+                      onConfirm={() => revoke(key.id)}
+                    />
+                  )}
                 </div>
               ),
             },
           ]}
         />
       )}
+      {p.system && <CollectionPagination page={inventory} />}
       <div className="mt-7 grid gap-4 rounded-lg border bg-card/40 p-5 sm:grid-cols-[auto_1fr]">
         <Terminal
           size={18}

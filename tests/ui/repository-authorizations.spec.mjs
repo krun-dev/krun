@@ -34,7 +34,7 @@ test.afterAll(async () => {
   await new Promise((done) => server.close(done));
 });
 
-async function fixture(page, initialStatus, provider = "gitlab") {
+async function fixture(page, initialStatus, provider = "gitlab", systemAdmin = false) {
   const github = provider === "github";
   const endpoint = github ? base + "/worker-repositories/github" : grant;
   const state = { status: initialStatus, revoked: false, lists: 0, binding: null };
@@ -65,13 +65,15 @@ async function fixture(page, initialStatus, provider = "gitlab") {
     let status = 200;
     let json = { items: [] };
     if (path === "/api/auth/me") {
-      json = { user: { user_id: "repo-user", name: "Repository tester" }, workers_configured: true, revision: 1 };
+      json = { user: { user_id: "repo-user", name: "Repository tester" }, workers_configured: true, revision: 1, system_admin: systemAdmin };
     } else if (path === "/api/auth/providers") {
       json = { providers: [], development: false };
     } else if (path === "/api/auth/csrf") {
       json = { csrf_token: "fixture" };
     } else if (path === "/api/v1/orgs") {
-      json = { items: [{ id: "org-repos", name: "Repositories", revision: 1 }] };
+      const items = [{ id: "org-repos", name: "Repositories", revision: 1 }];
+      if (systemAdmin) items.push({ id: "org-current", name: "Current", revision: 1 });
+      json = { items };
     } else if (path.endsWith("/permissions")) {
       json = { organization_id: "org-repos", actions: { "organization.read": true, "worker.list": true }, revision: 1 };
     } else if (path === base + "/workers") {
@@ -128,24 +130,33 @@ test("repository authorization is checked on demand and can be restored from per
   expect(errors).toEqual([]);
 });
 
-test("repository OAuth returns to the original Worker and binds a selected repository", async ({ page }) => {
-  const { state, errors } = await fixture(page, "not_connected");
-  await page.goto(origin + "/?workspace=org-repos&page=workers&worker=worker-repos&worker_tab=source");
-  await page.getByRole("combobox", { name: "仓库平台" }).selectOption("gitlab");
-  await page.getByRole("button", { name: "连接账号", exact: true }).click();
-  const picker = page.getByRole("dialog", { name: "选择已授权仓库" });
-  await expect(picker).toBeVisible();
-  await expect(page).toHaveURL(/worker=worker-repos/);
-  await picker.getByRole("button", { name: /platform\/edge-api/ }).click();
-  await expect(page.getByLabel("仓库地址")).toHaveValue("platform/edge-api");
-  await page.getByRole("button", { name: "保存仓库配置", exact: true }).click();
-  await expect.poll(() => state.binding).toMatchObject({
-    source: { provider_id: "gitlab", repository: "platform/edge-api" },
-    expected_revision: 1,
-    use_authorization: true,
+for (const platform of [false, true]) {
+  test(`repository OAuth returns to the original Worker in ${platform ? "platform management" : "the organization"}`, async ({ page }) => {
+    const { state, errors } = await fixture(page, "not_connected", "gitlab", platform);
+    const entry = platform
+      ? "/?view=system&page=workers&workspace=org-current&inventory_org=org-repos&inventory_resource=worker-repos&worker_tab=source"
+      : "/?workspace=org-repos&page=workers&worker=worker-repos&worker_tab=source";
+    await page.goto(origin + entry);
+    await page.getByRole("combobox", { name: "仓库平台" }).selectOption("gitlab");
+    await page.getByRole("button", { name: "连接账号", exact: true }).click();
+    const picker = page.getByRole("dialog", { name: "选择已授权仓库" });
+    await expect(picker).toBeVisible();
+    await expect(page).toHaveURL(platform ? /inventory_resource=worker-repos/ : /worker=worker-repos/);
+    if (platform) {
+      await expect(page).toHaveURL(/view=system/);
+      await expect(page).toHaveURL(/workspace=org-current/);
+    }
+    await picker.getByRole("button", { name: /platform\/edge-api/ }).click();
+    await expect(page.getByLabel("仓库地址")).toHaveValue("platform/edge-api");
+    await page.getByRole("button", { name: "保存仓库配置", exact: true }).click();
+    await expect.poll(() => state.binding).toMatchObject({
+      source: { provider_id: "gitlab", repository: "platform/edge-api" },
+      expected_revision: 1,
+      use_authorization: true,
+    });
+    expect(errors).toEqual([]);
   });
-  expect(errors).toEqual([]);
-});
+}
 
 test("GitHub installation is only offered in repository picker help", async ({ page }) => {
   const { state, errors } = await fixture(page, "connected", "github");

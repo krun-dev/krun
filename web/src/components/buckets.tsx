@@ -29,7 +29,7 @@ import { BucketObjects } from "@/components/bucket-objects";
 
 export function BucketsPage({
   base,
-  system,
+  detail,
   canCreate,
   canUpdate,
   canWrite,
@@ -37,7 +37,7 @@ export function BucketsPage({
   notify,
 }: {
   base: string;
-  system: boolean;
+  detail?: { id: string; back: () => void };
   canCreate: boolean;
   canUpdate: boolean;
   canWrite: boolean;
@@ -53,16 +53,16 @@ export function BucketsPage({
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [selected, setSelected] = useState(
-    () => new URLSearchParams(location.search).get("bucket") || "",
+    () => detail?.id || new URLSearchParams(location.search).get("bucket") || "",
   );
-  const collection = useCollectionPage<WorkerBucket>(
-    base + "/buckets",
-    !system && !selected,
-    refresh,
-  );
+  const collection = useCollectionPage<WorkerBucket>(base + "/buckets", !selected, refresh);
   const buckets = collection.items;
   const error = selected ? detailError : collection.error;
   function selectBucket(id: string) {
+    if (detail && !id) {
+      detail.back();
+      return;
+    }
     setSelected(id);
     const url = new URL(location.href);
     url.searchParams.delete("prefix");
@@ -77,7 +77,7 @@ export function BucketsPage({
   useEffect(() => {
     setOpened(null);
     setDetailError("");
-    if (system || !selected) {
+    if (!selected) {
       return;
     }
     const controller = new AbortController();
@@ -98,7 +98,7 @@ export function BucketsPage({
         }
       });
     return () => controller.abort();
-  }, [base, system, selected, refresh]);
+  }, [base, selected, refresh]);
   async function createBucket() {
     setBusy(true);
     setFormError("");
@@ -133,25 +133,64 @@ export function BucketsPage({
       reload();
     }
   }
-  if (system) {
+  function statusAction(bucket: WorkerBucket, transferring = false) {
     return (
-      <Empty
-        title={t("请选择组织")}
-        description={t("对象存储按组织管理，请先进入一个组织。")}
-      />
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={busy || transferring || !canUpdate}
+        onClick={() => setTarget(bucket)}
+      >
+        {bucket.enabled ? t("停用") : t("启用")}
+      </Button>
     );
   }
+
+  const statusDialog = (
+    <Dialog
+      open={Boolean(target)}
+      onOpenChange={(open) => {
+        if (!busy && !open) {
+          setTarget(null);
+        }
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{target?.enabled ? t("停用桶") : t("启用桶")}</DialogTitle>
+          <DialogDescription>
+            {target?.enabled
+              ? t("停用会影响使用此桶的所有 Worker，已有数据保留。")
+              : t("启用后，Worker 可以重新绑定和访问此桶。")}
+          </DialogDescription>
+        </DialogHeader>
+        <p className="break-all font-mono text-sm">{target?.name}</p>
+        <Button
+          disabled={busy}
+          onClick={() => void toggleBucket()}
+        >
+          {t("确认")}
+        </Button>
+      </DialogContent>
+    </Dialog>
+  );
   if (opened?.enabled) {
     return (
-      <BucketObjects
-        key={base + opened.id}
-        base={base}
-        bucket={opened}
-        canWrite={canWrite}
-        canDelete={canDelete}
-        back={() => selectBucket("")}
-        notify={notify}
-      />
+      <>
+        <BucketObjects
+          key={base + opened.id}
+          base={base}
+          bucket={opened}
+          canWrite={canWrite}
+          canDelete={canDelete}
+          statusAction={
+            canUpdate ? (transferring) => statusAction(opened, transferring) : undefined
+          }
+          back={() => selectBucket("")}
+          notify={notify}
+        />
+        {statusDialog}
+      </>
     );
   }
   if (selected) {
@@ -176,6 +215,7 @@ export function BucketsPage({
               eyebrow={t("对象存储")}
               title={opened.name}
               description={t("已停用")}
+              action={canUpdate ? statusAction(opened) : undefined}
             />
             <p className="text-sm text-muted-foreground">
               {t("创建时间")} ·{" "}
@@ -187,6 +227,7 @@ export function BucketsPage({
         ) : (
           <Loading />
         )}
+        {statusDialog}
       </>
     );
   }
@@ -278,16 +319,7 @@ export function BucketsPage({
                     <TableCell className="hidden whitespace-nowrap md:table-cell">
                       {new Date(bucket.created_at).toLocaleString()}
                     </TableCell>
-                    <TableCell>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={busy || !canUpdate}
-                        onClick={() => setTarget(bucket)}
-                      >
-                        {bucket.enabled ? t("停用") : t("启用")}
-                      </Button>
-                    </TableCell>
+                    <TableCell>{statusAction(bucket)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -354,32 +386,7 @@ export function BucketsPage({
           </form>
         </DialogContent>
       </Dialog>
-      <Dialog
-        open={Boolean(target)}
-        onOpenChange={(open) => {
-          if (!busy && !open) {
-            setTarget(null);
-          }
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{target?.enabled ? t("停用桶") : t("启用桶")}</DialogTitle>
-            <DialogDescription>
-              {target?.enabled
-                ? t("停用会影响使用此桶的所有 Worker，已有数据保留。")
-                : t("启用后，Worker 可以重新绑定和访问此桶。")}
-            </DialogDescription>
-          </DialogHeader>
-          <p className="break-all font-mono text-sm">{target?.name}</p>
-          <Button
-            disabled={busy}
-            onClick={() => void toggleBucket()}
-          >
-            {t("确认")}
-          </Button>
-        </DialogContent>
-      </Dialog>
+      {statusDialog}
     </>
   );
 }

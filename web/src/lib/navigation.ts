@@ -26,7 +26,9 @@ export function canOpenSection(
   permissions: OrganizationPermissions | null,
 ): boolean {
   if (systemView) {
-    return systemAdmin && ["orgs", "users", "audit", "keys"].includes(section);
+    return (
+      systemAdmin && ["orgs", "users", "audit", "workers", "buckets", "keys"].includes(section)
+    );
   }
   if (section === "overview") {
     return true;
