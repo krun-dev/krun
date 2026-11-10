@@ -18,3 +18,8 @@ playwright-report/
 test-results/
 
 /user-docs/.astro/
+# 内部专属文档的挂载点，由 user-docs/plugins/internal-docs.mjs 在构建前写入
+/user-docs/src/content/docs/internal/
+/user-docs/public/internal-docs/
+# 内部文档源目录（内网构建时指向该目录，不进开源仓库）
+/docs-internal/
