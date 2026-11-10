@@ -224,15 +224,10 @@
   color: #17291e;
 }
 .krun-brand-mark {
-  display: grid;
-  place-items: center;
-  width: 29px;
-  height: 29px;
-  border-radius: 8px;
-  color: #fff;
-  background: #157a50;
-  font-size: 19px;
-  font-weight: 700;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  object-fit: contain;
 }
 .krun-brand-divider {
   width: 1px;

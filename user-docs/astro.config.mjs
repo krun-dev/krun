@@ -32,6 +32,7 @@ export default defineConfig({
       defaultLocale: "root",
       locales: { root: { label: "简体中文", lang: "zh-CN" } },
       customCss: ["./src/styles/custom.css"],
+      favicon: "/favicon.png",
       tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 4 },
       expressiveCode: {
         plugins: [
@@ -106,7 +107,13 @@ export default defineConfig({
           ],
         },
       ],
-      head: [{ tag: "script", attrs: { src: "/docs/docs-enhance.js", defer: true } }],
+      head: [
+        { tag: "script", attrs: { src: "/docs/docs-enhance.js", defer: true } },
+        {
+          tag: "link",
+          attrs: { rel: "apple-touch-icon", href: "/docs/apple-touch-icon.png" },
+        },
+      ],
       plugins: [pageActions({ position: "page-title" }), llmsTxt(), internalDocs()],
     }),
   ],
