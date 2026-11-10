@@ -197,6 +197,24 @@ func (s *Service) StaticAssetCredentials(
 	if !appconfig.RuntimePoolHasAccess(pool, access) {
 		return domain.StorageReadGrant{}, domain.Forbidden()
 	}
+	// Builds create both asset copies. A public grant requires an active public
+	// route for this digest, even if the same pool also serves private routes.
+	if prefix == "pub" {
+		hosts, err := s.Store.PublishedAssetHosts(ctx, organization, worker, digest, pool.ID)
+		if err != nil {
+			return domain.StorageReadGrant{}, err
+		}
+		public := false
+		for _, host := range hosts {
+			if routeDomain, ok := s.Config.DomainForHost(host); ok && routeDomain.Access == "public" {
+				public = true
+				break
+			}
+		}
+		if !public {
+			return domain.StorageReadGrant{}, domain.NotFound()
+		}
+	}
 	key := workerapp.WorkerAssetObjectKey(prefix, organization, worker, digest, "")
 	return s.Controller.ReadGrant(ctx, organization, worker+"/"+digest, key)
 }

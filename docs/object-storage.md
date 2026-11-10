@@ -35,14 +35,12 @@ region 对应的区域 endpoint，SDK 不隐式开启 dual-stack；需要时在 
 
 | 配置 | 行为 |
 | --- | --- |
-| `s3_bucket_mode: managed` | 控制面检查并在需要时创建专用桶 |
-| `s3_bucket_mode: external` | 使用已存在的桶，不创建桶、不修改桶策略 |
-| `s3_access_mode: signed` | 配置使用 SigV4，制品和资产使用短期预签名 URL；静态域名转到 Runtime |
-| `s3_access_mode: direct` | 配置和静态资产直接读取；静态域名转到配置的静态源站 |
+| `s3_bucket_mode: managed` | 控制面创建专用桶并清除桶策略，保持私有 |
+| `s3_bucket_mode: external` | 部署方提供已有的私有桶并维护权限 |
+| `s3_access_mode: signed` | 配置使用 SigV4，制品和资产使用短期预签名 URL，静态域名转到 Runtime |
 
-只有 `managed + direct` 会配置 `pub/`、`int/`、`config/` 前缀的匿名读取策略。
-`managed + signed` 创建桶后保持私有；`external + direct` 的源站访问由部署方配置。
-省略 access mode 时，managed 默认 direct，external 默认 signed；主配置示例显式选择 signed。
+省略 `s3_access_mode` 时默认 `signed`。已有 `direct` 配置需切换至 `signed`，
+并重新生成 Runtime 配置。外部桶由部署方撤销此前授予的匿名读取权限。
 业务 Worker 不接收存储凭据，也不获得可信 entry worker 的出站网络能力。
 
 ```yaml

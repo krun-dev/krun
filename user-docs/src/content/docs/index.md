@@ -19,10 +19,17 @@ sidebar:
 
 ## 2. 安装 CLI
 
-macOS 和 Linux 可以运行以下命令，自动识别系统和架构并安装到 `~/.local/bin/krun`：
+macOS 和 Linux 安装需要 curl 和 Python 3。运行以下命令，自动识别系统和架构并安装到 `~/.local/bin/krun`：
 
 ```sh
-curl -fsSL {{KRUN_ORIGIN}}/install.sh | sh -s -- {{KRUN_ORIGIN}}
+(
+  set -eu
+  installer=$(mktemp)
+  trap 'rm -f "$installer"' EXIT
+  status=$(curl -q -fsS -o "$installer" -w '%{http_code}' "{{KRUN_ORIGIN}}/install.sh")
+  [ "$status" = 200 ]
+  sh "$installer" "{{KRUN_ORIGIN}}"
+)
 ```
 
 如提示 `~/.local/bin` 不在 PATH 中，请按提示配置。详细用法见 [命令行工具](/docs/guides/krun-cli.html)。也可以手动下载对应版本：

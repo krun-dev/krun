@@ -60,8 +60,8 @@ workers:
       public_egress: deny
       runtime_service: runtime-internal
       validator_service: validator-internal
-      runtime_token: ${KRUN_RUNTIME_TOKEN:-replace-with-serving-runtime-token}
-      management_token: ${KRUN_MANAGEMENT_TOKEN:-replace-with-management-token}
+      runtime_token: ${KRUN_RUNTIME_TOKEN}
+      management_token: ${KRUN_MANAGEMENT_TOKEN}
       default: true
   network_profiles:
     - id: internal
@@ -78,7 +78,7 @@ workers:
       default: true
   secrets_active_key: v1
   secrets_keys:
-    v1: ${KRUN_WORKERS_SECRETS_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+    v1: ${KRUN_WORKERS_SECRETS_KEY}
   s3_endpoint: ${KRUN_ARTIFACT_ENDPOINT:-https://tos-s3-cn-beijing.volces.com}
   s3_region: ${KRUN_ARTIFACT_REGION:-cn-beijing}
   s3_addressing_style: virtual
@@ -91,7 +91,7 @@ workers:
   s3_secret_key: ${KRUN_ARTIFACT_SECRET:-replace-me}
   object_storage:
     default_store: primary
-    cursor_key: ${KRUN_OBJECT_STORAGE_CURSOR_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA}
+    cursor_key: ${KRUN_OBJECT_STORAGE_CURSOR_KEY}
     stores:
       - id: primary
         endpoint: https://tos-s3-cn-beijing.volces.com

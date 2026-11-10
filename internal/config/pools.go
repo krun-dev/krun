@@ -59,10 +59,19 @@ func (c *WorkersConfig) ValidateRuntimePools(dns *regexp.Regexp) error {
 				return fmt.Errorf("Workers runtime pool access has no configured domain")
 			}
 		}
-		if len(pool.RuntimeToken) < 24 || len(pool.ManagementToken) < 24 || seenRuntimeTokens[pool.RuntimeToken] || seenManagementTokens[pool.ManagementToken] {
+		for _, credential := range []struct{ name, token string }{
+			{"runtime_token", pool.RuntimeToken},
+			{"management_token", pool.ManagementToken},
+			{"validator_token", pool.ValidatorToken},
+		} {
+			if len(credential.token) < 24 || weakCredential(credential.token) {
+				return fmt.Errorf("Workers runtime pool %s requires a random %s of at least 24 characters", pool.ID, credential.name)
+			}
+		}
+		if seenRuntimeTokens[pool.RuntimeToken] || seenManagementTokens[pool.ManagementToken] {
 			return fmt.Errorf("Workers runtime pools require distinct credentials")
 		}
-		if len(pool.ValidatorToken) < 24 || pool.ValidatorToken == pool.RuntimeToken || pool.ManagementToken == pool.RuntimeToken || pool.ValidatorToken == pool.ManagementToken {
+		if pool.ValidatorToken == pool.RuntimeToken || pool.ManagementToken == pool.RuntimeToken || pool.ValidatorToken == pool.ManagementToken {
 			return fmt.Errorf("Workers validator and serving credentials must be distinct")
 		}
 		for _, credential := range []string{pool.RuntimeToken, pool.ValidatorToken, pool.ManagementToken} {

@@ -4,12 +4,12 @@ import (
 	"context"
 	sql "database/sql"
 	"errors"
-	models "github.com/krun-dev/krun/internal/storage/models"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/krun-dev/krun/internal/domain"
+	"github.com/krun-dev/krun/internal/storage/models"
 )
 
 func (s *Store) UpsertRepositoryConnectState(ctx context.Context, state string, pending domain.WorkerRepositoryConnectState) error {
@@ -68,8 +68,7 @@ func (s *Store) UpsertRepositoryConnection(ctx context.Context, connection domai
 		}
 		return nil
 	}
-	_, err := repositoryConnectionUpsert(s.orm, connection).Exec(ctx)
-	return err
+	return s.repositoryConnectionUpsert(ctx, s.orm, connection)
 }
 
 func (s *Store) DeleteRepositoryConnection(ctx context.Context, user, provider string) error {
@@ -99,12 +98,15 @@ func (s *Store) RepositoryConnection(ctx context.Context, user, provider string)
 	if err != nil {
 		return domain.WorkerRepositoryConnection{}, false, err
 	}
-	out := domain.WorkerRepositoryConnection{User: row.UserID, Provider: row.ProviderID, AccessToken: row.AccessToken, TokenType: row.TokenType, RefreshToken: row.RefreshToken, TokenRevision: row.TokenRevision, RefreshState: row.RefreshState, ReconnectRequired: row.ReconnectRequired, ConnectedAt: row.ConnectedAt}
+	out := domain.WorkerRepositoryConnection{User: row.UserID, Provider: row.ProviderID, TokenType: row.TokenType, TokenRevision: row.TokenRevision, RefreshState: row.RefreshState, ReconnectRequired: row.ReconnectRequired, ConnectedAt: row.ConnectedAt}
 	if row.ExpiresAt != nil {
 		out.ExpiresAt = *row.ExpiresAt
 	}
 	if row.RefreshClaimedAt != nil {
 		out.RefreshClaimedAt = *row.RefreshClaimedAt
+	}
+	if err := s.repositoryTokenKeys.open(&out, row.TokenKeyVersion, row.AccessTokenCiphertext, row.RefreshTokenCiphertext); err != nil {
+		return domain.WorkerRepositoryConnection{}, false, err
 	}
 	return out, true, nil
 }
@@ -113,10 +115,12 @@ type repositoryConnectionScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanRepositoryConnection(row repositoryConnectionScanner, user, provider string) (domain.WorkerRepositoryConnection, error) {
+func (s *Store) scanRepositoryConnection(row repositoryConnectionScanner, user, provider string) (domain.WorkerRepositoryConnection, error) {
 	var out domain.WorkerRepositoryConnection
 	var expires, claimed pgtype.Timestamptz
-	err := row.Scan(&out.AccessToken, &out.TokenType, &out.RefreshToken, &expires,
+	var access, refresh []byte
+	var version string
+	err := row.Scan(&access, &out.TokenType, &refresh, &version, &expires,
 		&out.TokenRevision, &out.RefreshState, &claimed, &out.ReconnectRequired, &out.ConnectedAt)
 	if err != nil {
 		return domain.WorkerRepositoryConnection{}, err
@@ -127,6 +131,9 @@ func scanRepositoryConnection(row repositoryConnectionScanner, user, provider st
 	}
 	if claimed.Valid {
 		out.RefreshClaimedAt = claimed.Time
+	}
+	if err := s.repositoryTokenKeys.open(&out, version, access, refresh); err != nil {
+		return domain.WorkerRepositoryConnection{}, err
 	}
 	return out, nil
 }
@@ -161,11 +168,11 @@ func (s *Store) ClaimRepositoryConnectionRefresh(ctx context.Context, user, prov
 		s.memState().RepositoryConnections[key] = connection
 		return connection, true, nil
 	}
-	out, err := scanRepositoryConnection(s.pool.QueryRow(ctx, `UPDATE krun_repository_connections SET
-		token_revision=token_revision+1, refresh_state='refreshing', refresh_claimed_at=now()
+	out, err := s.scanRepositoryConnection(s.pool.QueryRow(ctx, `UPDATE krun_repository_connections SET
+		token_revision=nextval('krun_repository_token_revision_seq'), refresh_state='refreshing', refresh_claimed_at=now()
 		WHERE user_id=$1 AND provider_id=$2 AND token_revision=$3 AND reconnect_required=false
 		  AND (refresh_state='ready' OR refresh_claimed_at < now() - interval '1 minute')
-		RETURNING access_token, token_type, refresh_token, expires_at, token_revision,
+		RETURNING access_token_ciphertext, token_type, refresh_token_ciphertext, token_key_version, expires_at, token_revision,
 			refresh_state, refresh_claimed_at, reconnect_required, connected_at`,
 		user, provider, expected), user, provider)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -188,13 +195,18 @@ func (s *Store) CompleteRepositoryConnectionRefresh(ctx context.Context, connect
 		s.memState().RepositoryConnections[key] = connection
 		return true, nil
 	}
+	access, refresh, err := s.repositoryTokenKeys.seal(connection)
+	if err != nil {
+		return false, err
+	}
 	tag, err := s.pool.Exec(ctx, `UPDATE krun_repository_connections SET
-		access_token=$4, token_type=$5, refresh_token=$6, expires_at=$7,
-		token_revision=token_revision+1, refresh_state='ready', refresh_claimed_at=NULL,
+		access_token_ciphertext=$4, token_type=$5, refresh_token_ciphertext=$6, expires_at=$7,
+		token_key_version=$8,
+		token_revision=nextval('krun_repository_token_revision_seq'), refresh_state='ready', refresh_claimed_at=NULL,
 		reconnect_required=false
 		WHERE user_id=$1 AND provider_id=$2 AND token_revision=$3 AND refresh_state='refreshing'`,
-		connection.User, connection.Provider, claimRevision, connection.AccessToken,
-		connection.TokenType, connection.RefreshToken, repositoryTokenExpiry(connection.ExpiresAt))
+		connection.User, connection.Provider, claimRevision, access,
+		connection.TokenType, refresh, repositoryTokenExpiry(connection.ExpiresAt), s.repositoryTokenKeys.Active)
 	return tag.RowsAffected() == 1, err
 }
 
@@ -216,10 +228,10 @@ func (s *Store) FailRepositoryConnectionRefresh(ctx context.Context, user, provi
 		return true, nil
 	}
 	tag, err := s.pool.Exec(ctx, `UPDATE krun_repository_connections SET
-		token_revision=token_revision+1, refresh_state='ready', refresh_claimed_at=NULL,
+		token_revision=nextval('krun_repository_token_revision_seq'), refresh_state='ready', refresh_claimed_at=NULL,
 		reconnect_required=$4,
-		access_token=CASE WHEN $4 THEN '' ELSE access_token END,
-		refresh_token=CASE WHEN $4 THEN '' ELSE refresh_token END
+		access_token_ciphertext=CASE WHEN $4 THEN NULL ELSE access_token_ciphertext END,
+		refresh_token_ciphertext=CASE WHEN $4 THEN NULL ELSE refresh_token_ciphertext END
 		WHERE user_id=$1 AND provider_id=$2 AND token_revision=$3 AND refresh_state='refreshing'`,
 		user, provider, claimRevision, reconnect)
 	return tag.RowsAffected() == 1, err
@@ -242,8 +254,8 @@ func (s *Store) RepositoryConnectionStatuses(ctx context.Context, user string) (
 	}
 	err := s.orm.NewSelect().Model((*models.RepositoryConnection)(nil)).
 		Column("provider_id").ColumnExpr(`CASE
-            WHEN access_token = '' OR reconnect_required THEN 'reconnect_required'
-            WHEN expires_at <= now() AND refresh_token = '' THEN 'reconnect_required'
+            WHEN access_token_ciphertext IS NULL OR reconnect_required THEN 'reconnect_required'
+            WHEN expires_at <= now() AND refresh_token_ciphertext IS NULL THEN 'reconnect_required'
             WHEN expires_at <= now() THEN 'refresh_due'
             ELSE 'connected' END AS status`).
 		Where("user_id = ?", user).Scan(ctx, &rows)
@@ -284,10 +296,10 @@ func (s *Store) RejectRepositoryConnection(ctx context.Context, grant domain.Wor
 		return nil
 	}
 	_, err := s.orm.NewUpdate().Model((*models.RepositoryConnection)(nil)).
-		Set("reconnect_required = true").Set("access_token = ''").Set("refresh_token = ''").
-		Set("token_revision = token_revision + 1").
+		Set("reconnect_required = true").Set("access_token_ciphertext = NULL").Set("refresh_token_ciphertext = NULL").
+		Set("token_revision = nextval('krun_repository_token_revision_seq')").
 		Where("user_id = ? AND provider_id = ?", grant.User, grant.Provider).
-		Where("token_revision = ? AND access_token = ? AND refresh_state <> 'refreshing'", grant.TokenRevision, grant.AccessToken).
+		Where("token_revision = ? AND refresh_state <> 'refreshing'", grant.TokenRevision).
 		Exec(ctx)
 	return err
 }
@@ -314,7 +326,7 @@ func (s *Store) UpsertRepositoryConnectionAudited(ctx context.Context, connectio
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = repositoryConnectionUpsert(tx.orm, connection).Exec(ctx); err != nil {
+	if err = s.repositoryConnectionUpsert(ctx, tx.orm, connection); err != nil {
 		return err
 	}
 

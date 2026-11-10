@@ -71,8 +71,8 @@ func (c *WorkerObjectStorageConfig) Validate() error {
 	}
 	if c.CursorKey != "" {
 		key, err := base64.RawURLEncoding.DecodeString(c.CursorKey)
-		if err != nil || len(key) != 32 {
-			return fmt.Errorf("object_storage cursor_key must be a base64url encoded 32-byte key")
+		if err != nil || len(key) != 32 || weakCredential(string(key)) {
+			return fmt.Errorf("object_storage cursor_key must be a random base64url-encoded 32-byte key")
 		}
 	}
 	if c.RequestTimeoutSeconds == 0 {

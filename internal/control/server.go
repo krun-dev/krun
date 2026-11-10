@@ -234,15 +234,20 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, e error) {
 	s.json(w, a.Status, map[string]any{"error": map[string]string{"code": a.Code, "message": localize.Text(localize.RequestLanguage(r.Header.Get("Accept-Language")), a.Message)}, "request_id": r.Header.Get("X-Krun-Request-ID")})
 }
 
+func (s *Server) secureCookies() bool {
+	scheme, _, _ := strings.Cut(s.Config.PublicURL, "://")
+	return strings.EqualFold(scheme, "https")
+}
+
 func (s *Server) cookieName(kind string) string {
-	if s.Config.Development {
+	if !s.secureCookies() {
 		return "krun_dev_" + kind
 	}
 	return "__Host-krun_" + kind
 }
 
 func (s *Server) setCookie(w http.ResponseWriter, kind, value string, maxAge int) {
-	http.SetCookie(w, &http.Cookie{Name: s.cookieName(kind), Value: value, Path: "/", HttpOnly: true, Secure: !s.Config.Development, SameSite: http.SameSiteLaxMode, MaxAge: maxAge})
+	http.SetCookie(w, &http.Cookie{Name: s.cookieName(kind), Value: value, Path: "/", HttpOnly: true, Secure: s.secureCookies(), SameSite: http.SameSiteLaxMode, MaxAge: maxAge})
 }
 
 func (s *Server) cookie(r *http.Request, kind string) string {
@@ -581,7 +586,7 @@ func (s *Server) csrfHandler(w http.ResponseWriter, r *http.Request) {
 func Serve(ctx context.Context, c appconfig.Config) error {
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
-	store, e := OpenStore(ctx, c.DB)
+	store, e := OpenStore(ctx, c)
 	if e != nil {
 		return e
 	}

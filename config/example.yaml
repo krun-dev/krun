@@ -200,9 +200,9 @@ workers:
       runtime_service: runtime-default
       # 仅当 validator_pool 选中此池时部署；不得与 runtime_service 相同。
       validator_service: runtime-validator-default
-      runtime_token: ${KRUN_RUNTIME_TOKEN:-replace-with-serving-runtime-token}
+      runtime_token: ${KRUN_RUNTIME_TOKEN}
       # 省略 validator_token 时从 runtime_token 按 pool 派生，validator 只挂载派生凭据。
-      management_token: ${KRUN_MANAGEMENT_TOKEN:-replace-with-runtime-management-token}
+      management_token: ${KRUN_MANAGEMENT_TOKEN}
       default: true
   # 组织用户只看到这里配置的产品档案名称和描述，不会看到 pool、access、selector
   # 或 Gateway。单一档案时控制台不显示选择器。
@@ -224,10 +224,10 @@ workers:
   preview_limit: 32
   # Worker Secret 使用 AES-256-GCM 加密后入库。active key 只用于新写入；
   # retained Release 仍引用旧版本时不要删除旧 key。生产值应由 KMS/密钥系统
-  # 注入环境变量，示例默认值只是可加载占位符，禁止用于真实环境。
+  # 通过环境变量提供随机生成的 32 字节密钥，使用标准 Base64 编码。
   secrets_active_key: v1
   secrets_keys:
-    v1: ${KRUN_WORKERS_SECRETS_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+    v1: ${KRUN_WORKERS_SECRETS_KEY}
   s3_endpoint: https://s3.example.com
   # 可选：浏览器/CLI 读取日志时可达的同一桶 S3 endpoint；不填沿用 s3_endpoint。
   # 例如控制面上传走内网，而此处配置公网 endpoint；全内网使用时可省略。
@@ -239,7 +239,7 @@ workers:
   s3_addressing_style: auto # auto / path / virtual；按端点能力选择，不按厂商切换代码
   s3_prefix: "" # 同一桶中的独立对象前缀，例如 dev/run；不带首尾斜杠
   s3_bucket_mode: managed # managed 自动建桶；external 使用已有桶且不修改策略
-  s3_access_mode: signed # signed 私有签名读取；direct 通过静态源站直接读取
+  s3_access_mode: signed # 配置与资产使用私有签名读取
   s3_bucket: krun-artifacts
   s3_location_id: primary
   s3_access_key: ${KRUN_S3_ACCESS:-replace-me}
@@ -256,7 +256,7 @@ workers:
   # 可选业务存储凭据；与上面的制品/配置存储分开。真实密钥只放主配置或环境变量。
   # object_storage:
   #   default_store: primary
-  #   cursor_key: ${KRUN_OBJECT_STORAGE_CURSOR_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA}
+  #   cursor_key: ${KRUN_OBJECT_STORAGE_CURSOR_KEY}
   #   credential_ttl_seconds: 3600
   #   refresh_before_seconds: 300
   #   credential_cache_entries: 1024

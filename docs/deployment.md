@@ -22,6 +22,10 @@ CLI 的正式版本来自当前干净提交上的唯一 `cli-vYYYY.M.N` Git 标�
 
 下载清单的版本号与打包进二进制的版本号一致，并记录提交、发布时间和各平台文件的 SHA-256。控制台用户的自动检查只读取当前同源入口的 `/downloads/manifest.json`。上传时先上传二进制，最后更新下载清单。
 
+加载包含 Workers 的配置示例前，先提供各 pool 的随机 Runtime 和管理令牌（例如
+`openssl rand -hex 32`），以及 `workers.secrets_keys` 对应的环境变量（`openssl rand -base64 32`）。
+配置了业务对象存储游标时，提供 32 字节随机密钥的无填充 Base64URL 编码。
+
 ## 后端配置
 
 ```yaml

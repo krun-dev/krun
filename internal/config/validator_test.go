@@ -8,6 +8,7 @@ import (
 )
 
 func TestValidationModeLoadsThroughMainConfig(t *testing.T) {
+	setExampleCredentials(t)
 	t.Setenv("KRUN_DATABASE_URL", "postgres://fixture/krun_test")
 	for _, selected := range []string{"", "public-a"} {
 		t.Run("validator_pool="+selected, func(t *testing.T) {

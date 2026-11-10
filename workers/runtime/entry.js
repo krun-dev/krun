@@ -520,7 +520,7 @@ async function platform(env, path, init = {}) {
   const response = await platformResponse(env, path, init);
 
   if (!response.ok) {
-    throw new Error("platform " + response.status);
+    throw Object.assign(new Error("platform " + response.status), { status: response.status });
   }
 
   return response.json();
@@ -1458,7 +1458,15 @@ async function staticDomainResponse(env, request, prefix) {
         env,
         "static/" + prefix + "/" + resource,
         "/static-assets/" + prefix + "/" + resource + "/credentials",
-      );
+      ).catch((error) => {
+        if (error.status === 404) {
+          return null;
+        }
+        throw error;
+      });
+      if (!grant) {
+        return { missing: true };
+      }
       const response = await signedRead(grant, name);
       if (response.status === 404) {
         return { missing: true };
@@ -1497,7 +1505,9 @@ async function staticDomainResponse(env, request, prefix) {
     return json({ error: "static asset not found" }, 404);
   }
 
-  return assetResponse(request, name, value);
+  const response = assetResponse(request, name, value);
+  response.headers.set("access-control-allow-origin", "*");
+  return response;
 }
 
 export class Private extends WorkerEntrypoint {

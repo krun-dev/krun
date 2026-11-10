@@ -2,6 +2,8 @@ package control
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -17,9 +19,11 @@ import (
 func enableTestObjectStorage(t *testing.T, s *Server) {
 	t.Helper()
 	s.Config.Workers.RuntimePools[0].ValidatorToken = "fixture-validator-token-for-tests"
+	cursorKey := sha256.Sum256([]byte("object storage cursor integration test"))
 	s.Config.Workers.ObjectStorage = &appconfig.WorkerObjectStorageConfig{
-		DefaultStore: "primary", CursorKey: strings.Repeat("A", 43),
-		Stores: []appconfig.WorkerObjectStore{{ID: "primary", Endpoint: "https://storage.example.com", Region: "us-east-1", Bucket: "worker-data", RootPrefix: "worker-data/v1", AddressingStyle: "path", Credentials: appconfig.WorkerStorageCredentialConfig{Type: "static", AccessKeyID: "example-access", SecretAccessKey: "example-secret"}}},
+		DefaultStore: "primary",
+		CursorKey:    base64.RawURLEncoding.EncodeToString(cursorKey[:]),
+		Stores:       []appconfig.WorkerObjectStore{{ID: "primary", Endpoint: "https://storage.example.com", Region: "us-east-1", Bucket: "worker-data", RootPrefix: "worker-data/v1", AddressingStyle: "path", Credentials: appconfig.WorkerStorageCredentialConfig{Type: "static", AccessKeyID: "example-access", SecretAccessKey: "example-secret"}}},
 	}
 	registry, err := storagecredentials.NewRegistry(s.Config.Workers.ObjectStorage)
 	if err != nil {

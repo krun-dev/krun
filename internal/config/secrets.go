@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 func (c *WorkersConfig) ValidateSecretKeys() error {
@@ -15,8 +16,8 @@ func (c *WorkersConfig) ValidateSecretKeys() error {
 	}
 	for version, encoded := range c.SecretsKeys {
 		key, err := base64.StdEncoding.DecodeString(encoded)
-		if !Slug.MatchString(version) || err != nil || len(key) != 32 {
-			return fmt.Errorf("Workers secrets_keys must map valid versions to base64 for exactly 32 bytes")
+		if !Slug.MatchString(version) || err != nil || len(key) != 32 || weakCredential(string(key)) {
+			return fmt.Errorf("Workers secrets_keys must map valid versions to random base64-encoded 32-byte keys")
 		}
 	}
 	if _, ok := c.SecretsKeys[c.SecretsActiveKey]; !ok {
@@ -38,4 +39,20 @@ func (c *WorkersConfig) WorkerSecretKey(version string) ([]byte, error) {
 		return nil, errors.New("Workers secret key is invalid")
 	}
 	return key, nil
+}
+
+// Catch published placeholders and obviously predictable values at startup.
+func weakCredential(value string) bool {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "replace-") {
+		return true
+	}
+	var seen [256]bool
+	distinct := 0
+	for i := range len(value) {
+		if !seen[value[i]] {
+			seen[value[i]] = true
+			distinct++
+		}
+	}
+	return distinct < 8
 }

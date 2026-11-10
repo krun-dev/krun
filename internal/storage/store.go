@@ -26,6 +26,7 @@ type Store struct {
 	oauthRefresh        map[string]domain.OAuthRefresh
 	pool                *pgxpool.Pool
 	orm                 *bun.DB
+	repositoryTokenKeys RepositoryTokenKeys
 	mu                  sync.Mutex
 	memory              *domain.State
 	// memoryAudits backs the in-memory store used by tests.
@@ -70,7 +71,7 @@ const (
 	PartitionAll = PartitionIAM | PartitionWorkers
 )
 
-func Open(ctx context.Context, dsn string) (*Store, error) {
+func Open(ctx context.Context, dsn string, keys RepositoryTokenKeys) (*Store, error) {
 	if dsn == "" {
 		return nil, errors.New("PostgreSQL db required")
 	}
@@ -89,7 +90,7 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 		pool.Close()
 		return nil, err
 	}
-	return &Store{pool: pool, orm: newORM(pool)}, nil
+	return &Store{pool: pool, orm: newORM(pool), repositoryTokenKeys: keys}, nil
 }
 
 func (s *Store) Close() {

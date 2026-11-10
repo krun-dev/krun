@@ -8,6 +8,7 @@ import (
 )
 
 func TestProductionExampleLoadsThroughMainConfig(t *testing.T) {
+	setExampleCredentials(t)
 	c, err := LoadConfig(filepath.Join("..", "..", "config", "production.example.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -30,6 +31,7 @@ func TestProductionExampleLoadsThroughMainConfig(t *testing.T) {
 }
 
 func TestLoadConfigRestrictsLocalBuilderToDevelopment(t *testing.T) {
+	setExampleCredentials(t)
 	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "production.example.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -47,6 +49,9 @@ func TestLoadConfigRestrictsLocalBuilderToDevelopment(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "server.yaml")
 			yaml := strings.Replace(local, "development: false", tc.development, 1)
+			if tc.allowed {
+				t.Setenv("KRUN_PUBLIC_URL", "http://127.0.0.1:8080")
+			}
 			if err := os.WriteFile(path, []byte(yaml), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -68,6 +73,7 @@ func TestLoadConfigRestrictsLocalBuilderToDevelopment(t *testing.T) {
 }
 
 func TestDeploymentValidationRejectsUnboundedOrInjectedInput(t *testing.T) {
+	setExampleCredentials(t)
 	for _, test := range []struct {
 		name   string
 		change func(*DeploymentConfig)
@@ -96,6 +102,7 @@ func TestDeploymentValidationRejectsUnboundedOrInjectedInput(t *testing.T) {
 }
 
 func TestThreeGatewayExampleLoadsThroughMainConfig(t *testing.T) {
+	setExampleCredentials(t)
 	c, err := LoadConfig(filepath.Join("..", "..", "config", "test.example.yaml"))
 	if err != nil {
 		t.Fatal(err)
