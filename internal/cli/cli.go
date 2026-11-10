@@ -31,6 +31,7 @@ type Profile struct {
 type Client struct {
 	Profile    Profile
 	configPath string
+	usedAPI    bool
 	Path       string
 	Out, Err   io.Writer
 	In         io.Reader
@@ -112,8 +113,11 @@ func (c *Client) requestOnce(ctx context.Context, method, path string, input any
 		headers[0](response.Header)
 	}
 	if output != nil && response.StatusCode != 204 {
-		return json.Unmarshal(data, output)
+		if err := json.Unmarshal(data, output); err != nil {
+			return err
+		}
 	}
+	c.usedAPI = true
 	return nil
 }
 func (c *Client) save() error {
@@ -167,12 +171,17 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		}
 	}()
 	var profileSelection, configPath string
+	var noUpdateCheck bool
 	endpoint := os.Getenv("KRUN_ENDPOINT")
 	filtered := []string{}
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--" {
 			filtered = append(filtered, args[i:]...)
 			break
+		}
+		if args[i] == "--no-update-check" {
+			noUpdateCheck = true
+			continue
 		}
 		name, value, inline := strings.Cut(args[i], "=")
 		if name == "--endpoint" || name == "--config" || name == "--profile" {
@@ -199,11 +208,15 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		}
 	}
 	if len(filtered) > 0 && filtered[0] == "--version" {
-		if len(filtered) != 1 {
-			return errors.New("--version does not accept arguments")
+		if len(filtered) == 1 {
+			_, err := fmt.Fprintln(out, "krun", Version)
+			return err
 		}
-		fmt.Fprintln(out, "krun", Version)
-		return nil
+		if len(filtered) == 2 && filtered[1] == "--verbose" {
+			_, err := fmt.Fprintf(out, "krun %s\nCommit: %s\nPublished: %s\n", Version, buildCommit, publishedAt)
+			return err
+		}
+		return errors.New("use --version or --version --verbose")
 	}
 	if len(filtered) == 0 || filtered[0] == "--help" {
 		fmt.Fprint(out, help)
@@ -219,6 +232,16 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		return e
 	}
 	c := &Client{Path: path, configPath: configPath, In: in, Out: out, Err: errOut}
+	if !noUpdateCheck && command != "logout" && os.Getenv("CI") == "" &&
+		terminalStream(in) && terminalStream(out) && terminalStream(errOut) {
+		defer func() {
+			if result == nil && c.usedAPI {
+				if cacheDir, err := os.UserCacheDir(); err == nil {
+					c.notifyCLIUpdate(ctx, cacheDir, time.Now())
+				}
+			}
+		}()
+	}
 	token := os.Getenv("KRUN_TOKEN")
 	if command == "deploy" {
 		return c.deploy(ctx, command, rest, func() error {
@@ -682,7 +705,7 @@ Workers
   krun r2 --help
 
 Account and configuration
-  krun --version
+  krun --version [--verbose]
   krun upgrade [--check]
   krun config --help
   krun login [--browser=false] [--device | --token-stdin] [--callback-port PORT]
@@ -712,7 +735,7 @@ Diagnostics
   krun audit [--org ID | --system] [--limit 50] [--cursor CURSOR]
   krun api --method METHOD --path /api/v1/... [--file FILE]
 
-Global options: --endpoint URL, --profile NAME|PATH
+Global options: --endpoint URL, --profile NAME|PATH, --no-update-check
 Local dry-run option: --config WRANGLER_FILE
 Organization commands use the profile default unless --org ID is specified.
 Environment: KRUN_ENDPOINT, KRUN_TOKEN (for automation)
