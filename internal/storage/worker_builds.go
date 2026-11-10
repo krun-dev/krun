@@ -281,30 +281,33 @@ func (s *Store) finishBuildOwned(ctx context.Context, id, replica, state, messag
 // Incrementing use_revision on the artifact row races directly with the GC
 // claimant's CAS; whichever wins prevents the other side from deleting or
 // reusing the same content-addressed object underneath an active build.
-func (s *Store) ReserveBuildArtifact(ctx context.Context, id, replica string, artifact domain.WorkerArtifact) error {
+func (s *Store) ReserveBuildArtifact(ctx context.Context, id, replica string, artifact *domain.WorkerArtifact, previousID string) error {
 	if s.pool == nil {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if s.memory == nil {
 			return errors.New("store is not initialized")
 		}
-		existing, ok := s.memory.Workers.Artifacts[artifact.ID]
-		if ok && existing.State == "deleting" {
-			return ErrArtifactBeingCollected
-		}
-		if ok && !sameArtifactContent(existing, artifact) {
-			return ErrArtifactBeingCollected
-		}
-		if !ok {
-			existing = artifact
-			existing.State = "staging"
-		}
-		existing.UseRevision++
-		s.memory.Workers.Artifacts[artifact.ID] = existing
 		build, ok := s.memory.Workers.Builds[id]
 		if !ok || build.State == "succeeded" || build.State == "failed" || build.ClaimedBy != replica {
 			return errors.New("build is no longer active")
 		}
+		if _, exists := s.memory.Workers.Artifacts[previousID]; exists {
+			artifact.ID = previousID
+		}
+		existing, ok := s.memory.Workers.Artifacts[artifact.ID]
+		if ok && existing.State == "deleting" {
+			return ErrArtifactBeingCollected
+		}
+		if ok && !sameArtifactContent(existing, *artifact) {
+			return ErrArtifactBeingCollected
+		}
+		if !ok {
+			existing = *artifact
+			existing.State = "staging"
+		}
+		existing.UseRevision++
+		s.memory.Workers.Artifacts[artifact.ID] = existing
 		build.Artifact = artifact.ID
 		s.memory.Workers.Builds[id] = build
 		return nil
@@ -314,17 +317,29 @@ func (s *Store) ReserveBuildArtifact(ctx context.Context, id, replica string, ar
 		return err
 	}
 	defer tx.Rollback(ctx)
+	// A content-addressed bundle and its static assets must have one metadata
+	// owner so garbage collection cannot remove objects used by another ID.
+	var previouslyStored bool
+	err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM krun_worker_artifacts WHERE artifact_id=$1)`, previousID).Scan(&previouslyStored)
+	if err != nil {
+		return err
+	}
+	if previouslyStored {
+		artifact.ID = previousID
+	}
 	flags, err := json.Marshal(artifact.CompatibilityFlags)
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO krun_worker_artifacts
+	if !previouslyStored {
+		if _, err = tx.Exec(ctx, `INSERT INTO krun_worker_artifacts
 		(artifact_id, org_id, state, profile, archive_digest, manifest_digest, module_digest, compatibility_date, compatibility_flags, size_bytes, object_key, storage_location, bucket, created_at)
 		VALUES ($1,$2,'staging',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		ON CONFLICT (artifact_id) DO NOTHING`, artifact.ID, artifact.Organization,
-		artifact.Profile, artifact.ArchiveDigest, artifact.ManifestDigest, artifact.ModuleDigest,
-		artifact.CompatibilityDate, flags, artifact.Size, artifact.ObjectKey, artifact.StorageLocation, artifact.Bucket, artifact.Created); err != nil {
-		return err
+			artifact.Profile, artifact.ArchiveDigest, artifact.ManifestDigest, artifact.ModuleDigest,
+			artifact.CompatibilityDate, flags, artifact.Size, artifact.ObjectKey, artifact.StorageLocation, artifact.Bucket, artifact.Created); err != nil {
+			return err
+		}
 	}
 	var state string
 	err = tx.QueryRow(ctx, `UPDATE krun_worker_artifacts SET use_revision=use_revision+1

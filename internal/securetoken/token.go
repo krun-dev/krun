@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"strings"
 )
 
 func Random() string {
@@ -14,7 +15,26 @@ func Random() string {
 	}
 	return base64.RawURLEncoding.EncodeToString(b)
 }
-func NewID(prefix string) string { return prefix + "_" + Random()[:16] }
+
+const idBytes = 12
+
+func NewID(prefix string) string {
+	var random [idBytes]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		panic(err)
+	}
+	return prefix + "-" + hex.EncodeToString(random[:])
+}
+
+// IsID reports whether value has the generated ID format for prefix.
+func IsID(value, prefix string) bool {
+	suffix, ok := strings.CutPrefix(value, prefix+"-")
+	if !ok || len(suffix) != hex.EncodedLen(idBytes) {
+		return false
+	}
+	return strings.Trim(suffix, "0123456789abcdef") == ""
+}
+
 func Digest(value string) string { b := sha256.Sum256([]byte(value)); return hex.EncodeToString(b[:]) }
 
 // UUID is the public identifier shared with Cloudflare-compatible version APIs.

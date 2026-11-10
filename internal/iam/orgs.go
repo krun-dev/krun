@@ -33,6 +33,9 @@ func (s Service) CreateOrganization(st *domain.State, p authorization.Principal,
 	if err != nil {
 		return domain.Organization{}, err
 	}
+	if securetoken.IsID(shortName, "org") {
+		return domain.Organization{}, domain.Problem(422, "LOCATOR_INVALID", "Choose a different organization short name")
+	}
 	for _, existing := range st.Organizations {
 		if existing.ShortName == shortName {
 			return domain.Organization{}, domain.Problem(409, "LOCATOR_CONFLICT", "Organization short name already exists")

@@ -188,7 +188,7 @@ func TestCLIWorkerPermissionsAndAuditContract(t *testing.T) {
 
 	created := mustRun("krun_cli_admin", "workers", "create", "--org", "org-a", "--name", "CLI Worker")
 	var worker Resource
-	if err := json.Unmarshal([]byte(created), &worker); err != nil || worker.Kind != "worker" || !strings.HasPrefix(worker.ID, "worker_") {
+	if err := json.Unmarshal([]byte(created), &worker); err != nil || worker.Kind != "worker" || !strings.HasPrefix(worker.ID, "worker-") {
 		t.Fatalf("incorrect Worker identity: %s (%v)", created, err)
 	}
 	listed := mustRun("krun_cli_admin", "workers", "list", "--org", "org-a")

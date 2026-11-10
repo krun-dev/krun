@@ -109,11 +109,14 @@ func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, 
 		}
 		version.Configuration = inheritedConfiguration(st, current)
 		raw, _ := json.Marshal(version)
-		version.ID = "rel_" + workerartifact.BytesDigest(raw)
+		digest := workerartifact.BytesDigest(raw)
+		version.ID = "rel-" + digest
 		version.Created = time.Now().UTC()
 		version.CreatedBy = p.User.ID
 		version.CreatedByName = p.User.Name
 		if old, ok := st.Workers.Versions[version.ID]; ok {
+			version = old
+		} else if old, ok := st.Workers.Versions["rel_"+digest]; ok {
 			version = old
 		}
 		st.Workers.Versions[version.ID] = version

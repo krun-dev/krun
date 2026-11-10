@@ -217,7 +217,7 @@ export function OrganizationInvitationDialog({ base, notify, reload }: Invitatio
                         value={recipient}
                         maxLength={recipientKind === "email" ? 254 : 128}
                         disabled={busy}
-                        placeholder={recipientKind === "email" ? "teammate@example.com" : "usr_…"}
+                        placeholder={recipientKind === "email" ? "teammate@example.com" : "usr-…"}
                         onChange={(event) => setRecipient(event.target.value)}
                       />
                     </Field>

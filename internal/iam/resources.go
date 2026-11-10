@@ -49,6 +49,9 @@ func (s Service) createResource(st *domain.State, t authorization.Target, kind, 
 	if !nameValid(name) {
 		return domain.Resource{}, domain.Problem(422, "INVALID_REQUEST", "Name required (max 128 bytes)")
 	}
+	if securetoken.IsID(locator, kind) {
+		return domain.Resource{}, domain.Problem(422, "LOCATOR_INVALID", "Choose a different resource locator")
+	}
 	if kind == "worker" {
 		switch locator {
 		case "domains", "network-profiles", "repository-providers":

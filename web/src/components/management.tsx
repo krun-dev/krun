@@ -638,7 +638,7 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
                     required
                     value={user}
                     onChange={(e) => setUser(e.target.value)}
-                    placeholder={subjectKind === "group" ? "grp_…" : "usr_…"}
+                    placeholder={subjectKind === "group" ? "grp-…" : "usr-…"}
                   />
                 </Field>
                 {section === "roles" && (

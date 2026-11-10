@@ -26,7 +26,7 @@ local-first 环境启动后，可以把示例发布到一个已有、未绑定�
 本地开发登录 Session，不创建或保存 API Key：
 
 ```bash
-KRUN_VERIFY_ORG=org_xxx \
+KRUN_VERIFY_ORG=org-xxx \
 KRUN_VERIFY_WORKER=worker_xxx \
 npm --prefix examples/workers-fullstack run verify:local
 ```

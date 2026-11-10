@@ -35,7 +35,7 @@ func TestCLIWorkerWorkflow(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The test replaces the asynchronous builder with a finalized artifact.
 		if path, id := filepath.Split(r.URL.Path); r.Method == http.MethodGet &&
-			strings.HasSuffix(path, "/builds/") && strings.HasPrefix(id, "bld_") {
+			strings.HasSuffix(path, "/builds/") && strings.HasPrefix(id, "bld-") {
 			if err := store.FinishBuild(r.Context(), id, "succeeded", "", "art_cli", ""); err != nil {
 				t.Errorf("finish fixture build: %v", err)
 				w.WriteHeader(http.StatusInternalServerError)

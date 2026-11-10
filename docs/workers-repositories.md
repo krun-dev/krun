@@ -25,7 +25,7 @@ workers:
       allow_private_network: true
       token: ${KRUN_GITLAB_REPOSITORY_TOKEN:-}
       allowed_repositories: [team/worker-service]
-      # organization_ids: [org_example]
+      # organization_ids: [org-example]
     - id: github
       type: github
       name: GitHub

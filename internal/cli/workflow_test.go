@@ -71,9 +71,11 @@ func TestR2TransfersPreserveBytesAndKeepControlCredentialsPrivate(t *testing.T) 
 		_, _ = w.Write(raw.Bytes())
 	}))
 	defer object.Close()
+	const newBucketID = "bkt-0123456789abcdef01234567"
+	const bucketsPath = "/api/v1/orgs/org-a/buckets/"
 	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer krun_key_fixture" ||
-			r.URL.Path != "/api/v1/orgs/org-a/buckets/bkt_a/objects/access" {
+			(r.URL.Path != bucketsPath+"bkt_a/objects/access" && r.URL.Path != bucketsPath+newBucketID+"/objects/access") {
 			t.Errorf("unexpected control request: %s", r.URL.Path)
 		}
 		var input domain.BucketObjectAccessInput
@@ -102,7 +104,11 @@ func TestR2TransfersPreserveBytesAndKeepControlCredentialsPrivate(t *testing.T) 
 	var out bytes.Buffer
 	run := func(action string, options ...string) error {
 		t.Helper()
-		args := []string{"r2", "object", action, "bkt_a/a/b + c", "--org", "org-a", "--profile", filepath.Join(dir, "profile.yaml")}
+		bucket := newBucketID
+		if action == "url" {
+			bucket = "bkt_a"
+		}
+		args := []string{"r2", "object", action, bucket + "/a/b + c", "--org", "org-a", "--profile", filepath.Join(dir, "profile.yaml")}
 		out.Reset()
 		return Run(t.Context(), append(args, options...), bytes.NewReader(raw.Bytes()), &out, io.Discard)
 	}

@@ -21,7 +21,10 @@ func RememberDeployment(st *domain.State, op domain.WorkerOperation) {
 	id := DeploymentID(op.ID)
 	st.Workers.Deployments[id] = domain.WorkerDeployment{ID: id, Organization: op.Organization, Worker: op.Worker, Environment: op.Environment, Version: op.Version, Operation: op.ID, Created: op.Created, Expires: op.Created.Add(DeploymentRetention)}
 }
-func DeploymentID(operation string) string   { return "dep_" + strings.TrimPrefix(operation, "op_") }
+func DeploymentID(operation string) string {
+	return "dep-" + strings.TrimPrefix(operation, "op-")
+}
+
 func DeploymentEnvironment(id string) string { return "d-" + securetoken.Digest(id)[:20] }
 func DeploymentHosts(config *appconfig.WorkersConfig, worker domain.Worker, id string) []string {
 	hosts := []string{}

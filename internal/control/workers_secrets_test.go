@@ -170,7 +170,7 @@ func TestWorkerSecretPutCreatesAndDeploysImmutableVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	versionJSON, _ := json.Marshal(version)
-	if strings.Contains(string(versionJSON), "secv_") || strings.Contains(string(versionJSON), "secret-value-never-return") {
+	if strings.Contains(string(versionJSON), version.SecretVersions["API_TOKEN"]) || strings.Contains(string(versionJSON), "secret-value-never-return") {
 		t.Fatalf("secret reference or value leaked in version JSON: %s", versionJSON)
 	}
 

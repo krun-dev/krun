@@ -172,7 +172,7 @@ JSON DTO 拒绝未知字段和重复键，正文上限 1 MiB。资源/组/Key/As
 例：组织范围角色授予：
 
 ```json
-{"subject_kind":"group","subject_id":"grp_xxx","role_id":"member","scope_kind":"organization","scope_id":"org_xxx","conditions":{}}
+{"subject_kind":"group","subject_id":"grp-xxx","role_id":"member","scope_kind":"organization","scope_id":"org-xxx","conditions":{}}
 ```
 
 Key 创建：`{name, expires_in, policy}`。`expires_in` 必填，`0` 表示长期有效，返回 `expires_at: null`；正数为 60 秒至 90 天，有限期限到期后拒绝认证与策略更新。撤销、禁用用户、身份来源限制及实时角色检查同样适用于长期有效 Key。策略见 `config/key-policy.example.yaml`。只读资源、列表、版本、发布、删除分别授权，不存在 `write` 或隐式超级 Key。精确 Key 列表发现可显式加入组织选择器上的 worker.list / model.list；返回条目仍逐资源过滤。
