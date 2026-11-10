@@ -63,9 +63,17 @@ Secret 与资产读取继续校验该池有效 placement。Version Secret 接口
 serving runtime token。候选验证通过 management token 认证，所需的 Secret 随验证请求传递。
 业务 Worker 无平台 token、对象存储密钥或控制面 binding。
 
-出口约束由 workerd 配置和 Kubernetes NetworkPolicy 共同落实。主 YAML 描述能力并
-校验匹配关系，不会凭空创建代理、网络规则或 Runtime Deployment。Secret 和 ASSETS
-binding 已实现；Service/数据库 binding 和跨池迁移均不在当前接口范围。
+## 公网出网
+
+池显式配置 `public_egress: direct` 后，serving workerd 给业务 Worker 提供独立公网出口。
+Worker 可通过 `fetch()` 访问公网 HTTP 和 HTTPS，通过 `cloudflare:sockets` 的 `connect()`
+访问公网 TCP。workerd 按实际解析地址过滤，拒绝私有地址和
+`workers.protected_egress_cidrs` 中的部署侧保护地址。部署方应在该列表加入公网可路由的
+控制面和管理地址。候选校验保持关闭全局出网。
+
+省略池的出口字段时默认使用 `deny`。配置改变后重新渲染并重启 serving workerd。
+实际连通性还受宿主机网络和部署环境出口规则约束。
+PostgreSQL 托管接入的池级限制和代理配置见 [Workers 出网](workers-egress.md)。
 
 ## 运维
 

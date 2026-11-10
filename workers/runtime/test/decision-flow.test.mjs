@@ -190,6 +190,9 @@ function platformFor(manifestConfig, fileList, rel, options = {}) {
       if (path === "/ack") {
         return Response.json({ ok: true });
       }
+      if (path === "/versions/" + rel.id + "/hyperdrive" && options.hyperdrive) {
+        return Response.json(options.hyperdrive);
+      }
       if (path === "/artifacts/" + rel.artifact_id && options.artifact) {
         return Response.json(options.artifact);
       }
@@ -868,6 +871,95 @@ await check("asset binding cannot replace variables or reserved platform binding
   const response = await call(new collisionEntry.Private(collisionEnv, ctx), "/api/load");
   assert.equal(response.status, 503);
 });
+await check(
+  "serving pools pass public egress to the child without exposing the binding",
+  async () => {
+    const source = `export default {
+    fetch() {
+      return new Response("ok");
+    }
+  };`;
+    const moduleDigest = await digest(source);
+    const manifest = {
+      schema_version: 2,
+      profile: "workerd-bundle-v2",
+      compatibility_date: "2026-09-28",
+      compatibility_flags: [],
+      main_module: "index.js",
+      modules: [
+        {
+          name: "index.js",
+          path: "modules/index.js",
+          type: "esm",
+          sha256: moduleDigest,
+          size_bytes: source.length,
+        },
+      ],
+    };
+    const archive = artifactArchive(manifest, { "index.js": source });
+    const descriptor = {
+      ...version,
+      id: "rel_egress",
+      profile: manifest.profile,
+      compatibility_date: manifest.compatibility_date,
+      compatibility_flags: manifest.compatibility_flags,
+      module_sha256: moduleDigest,
+      archive_sha256: await digest(archive),
+    };
+    artifactObjects.set("egress.tar.gz", archive);
+    const artifact = {
+      artifact_id: descriptor.artifact_id,
+      archive_sha256: descriptor.archive_sha256,
+      size: archive.length,
+      ...fixtureRead("http://artifacts.test/egress.tar.gz"),
+    };
+    const publicEgress = { fetch() {} };
+    const hyperdriveEgress = { fetch() {} };
+    const proxyDSN = "postgresql://krun:fixture@proxy.example.test:6432/krun?sslmode=verify-full";
+    for (const mode of ["serving", "closed", "validation", "hyperdrive"]) {
+      const hasDatabase = mode === "hyperdrive" || mode === "validation";
+      const candidate = {
+        ...descriptor,
+        ...(hasDatabase ? { hyperdrive_bindings: { DB: "config-id" } } : {}),
+      };
+      const env = makeEnv(null, [], descriptor.id, {
+        artifact,
+        exerciseLoader: true,
+        version: candidate,
+        hyperdrive: { DB: proxyDSN },
+      });
+      if (hasDatabase) {
+        env.HYPERDRIVE_EGRESS = hyperdriveEgress;
+      }
+      if (mode !== "closed") {
+        env.PUBLIC_EGRESS = publicEgress;
+      }
+      const entry = await freshEntry();
+      const response =
+        mode === "validation"
+          ? await new entry.Management(env, {}).fetch(
+              new Request("http://pod/validate", {
+                method: "POST",
+                headers: { authorization: "Bearer m", "content-type": "application/json" },
+                body: JSON.stringify({ version: candidate, artifact }),
+              }),
+            )
+          : await call(new entry.Private(env, {}), "/api/egress");
+      assert.equal(response.status, 200, mode);
+      const child = await env.__loaderConfig;
+      const expected =
+        mode === "hyperdrive" ? hyperdriveEgress : mode === "serving" ? publicEgress : null;
+      assert.equal(child.globalOutbound, expected, mode);
+      assert.equal(Object.hasOwn(child.env, "PUBLIC_EGRESS"), false, mode);
+      assert.equal(Object.hasOwn(child.env, "HYPERDRIVE_EGRESS"), false, mode);
+      if (mode === "hyperdrive") {
+        assert.equal(child.env.DB.connectionString, proxyDSN);
+      } else if (mode === "validation") {
+        assert.match(child.env.DB.connectionString, /invalid\.example/);
+      }
+    }
+  },
+);
 await check("candidate validation rejects undeclared artifact entries", async () => {
   const module = 'export default {fetch(){return new Response("ok")}}';
   const moduleDigest = await digest(module);

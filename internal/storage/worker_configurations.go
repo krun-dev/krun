@@ -38,17 +38,22 @@ func (s *Store) writeWorkerConfigurations(ctx context.Context, tx pgx.Tx, before
 		if err != nil {
 			return err
 		}
+		bindings, err := json.Marshal(c.HyperdriveBindings)
+		if err != nil {
+			return err
+		}
 		row := models.Configuration{
-			ConfigurationID: id,
-			OrgID:           c.Organization,
-			WorkerID:        c.Worker,
-			EnvName:         c.Environment,
-			Name:            c.Name,
-			Message:         c.Message,
-			Variables:       variables,
-			VersionMetadata: c.VersionMetadata,
-			AssetsBinding:   c.AssetsBinding,
-			CreatedAt:       c.Created,
+			HyperdriveBindings: bindings,
+			ConfigurationID:    id,
+			OrgID:              c.Organization,
+			WorkerID:           c.Worker,
+			EnvName:            c.Environment,
+			Name:               c.Name,
+			Message:            c.Message,
+			Variables:          variables,
+			VersionMetadata:    c.VersionMetadata,
+			AssetsBinding:      c.AssetsBinding,
+			CreatedAt:          c.Created,
 		}
 		if err := storageMutation(ctx, tx, s.orm.NewInsert().Model(&row).Returning("NULL"), true); err != nil {
 			return err
@@ -101,7 +106,7 @@ func readWorkerConfigurations(results pgx.BatchResults, st *domain.State) error 
 	for rows.Next() {
 		var c domain.WorkerConfiguration
 		var variables []byte
-		if err := rows.Scan(&c.ID, &c.Organization, &c.Worker, &c.Environment, &c.Name, &c.Message, &variables, &c.VersionMetadata, &c.AssetsBinding, &c.Created); err != nil {
+		if err := rows.Scan(&c.ID, &c.Organization, &c.Worker, &c.Environment, &c.Name, &c.Message, &variables, &c.VersionMetadata, &c.AssetsBinding, &c.Created, &c.HyperdriveBindings); err != nil {
 			return err
 		}
 		if err := json.Unmarshal(variables, &c.Variables); err != nil {

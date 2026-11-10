@@ -67,7 +67,7 @@ func TestBucketAPIAndCloudflareBindings(t *testing.T) {
 	if err := store.View(context.Background(), PartitionAll, func(st *State) error {
 		app := s.workerApplication(nil)
 		app.Require = func(*State, Principal, string, Target) error { return nil }
-		if err := app.StageBindings(st, Principal{}, workerapp.WorkerRef{Organization: "org-a", Worker: "svc-a", Environment: "production"}, input); err != nil {
+		if err := app.StageBindings(t.Context(), st, Principal{}, workerapp.WorkerRef{Organization: "org-a", Worker: "svc-a", Environment: "production"}, input); err != nil {
 			return err
 		}
 		env := st.Workers.Workers["svc-a"].Environments["production"]

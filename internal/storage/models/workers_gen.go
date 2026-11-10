@@ -41,8 +41,27 @@ type Domain struct {
 	Ordinal       int    `bun:"ordinal"`
 }
 
+type HyperdriveConfig struct {
+	bun.BaseModel `bun:"table:krun_worker_hyperdrive_configs,alias:krun_worker_hyperdrive_configs"`
+	ConfigID      string    `bun:"config_id,pk"`
+	OrgID         string    `bun:"org_id"`
+	Name          string    `bun:"name"`
+	Host          string    `bun:"host"`
+	Port          int       `bun:"port"`
+	DatabaseName  string    `bun:"database_name"`
+	UserName      string    `bun:"user_name"`
+	SecretID      string    `bun:"secret_id"`
+	KeyVersion    string    `bun:"key_version"`
+	ValueDigest   string    `bun:"value_digest"`
+	Ciphertext    []byte    `bun:"ciphertext"`
+	Nonce         []byte    `bun:"nonce"`
+	Revision      int       `bun:"revision"`
+	CreatedAt     time.Time `bun:"created_at"`
+}
+
 type Environment struct {
 	bun.BaseModel      `bun:"table:krun_worker_environments,alias:krun_worker_environments"`
+	HyperdriveBindings json.RawMessage `bun:"hyperdrive_bindings,type:jsonb"`
 	VersionMetadata    string          `bun:"version_metadata"`
 	AssetsBinding      string          `bun:"assets_binding"`
 	WorkerID           string          `bun:"worker_id,pk"`
@@ -171,17 +190,18 @@ type Artifact struct {
 }
 
 type Configuration struct {
-	bun.BaseModel   `bun:"table:krun_worker_configurations,alias:krun_worker_configurations"`
-	ConfigurationID string          `bun:"configuration_id,pk"`
-	OrgID           string          `bun:"org_id"`
-	WorkerID        string          `bun:"worker_id"`
-	EnvName         string          `bun:"env_name"`
-	Name            string          `bun:"name"`
-	Message         string          `bun:"message"`
-	Variables       json.RawMessage `bun:"variables,type:jsonb"`
-	VersionMetadata string          `bun:"version_metadata"`
-	AssetsBinding   string          `bun:"assets_binding"`
-	CreatedAt       time.Time       `bun:"created_at"`
+	bun.BaseModel      `bun:"table:krun_worker_configurations,alias:krun_worker_configurations"`
+	ConfigurationID    string          `bun:"configuration_id,pk"`
+	OrgID              string          `bun:"org_id"`
+	WorkerID           string          `bun:"worker_id"`
+	EnvName            string          `bun:"env_name"`
+	Name               string          `bun:"name"`
+	Message            string          `bun:"message"`
+	Variables          json.RawMessage `bun:"variables,type:jsonb"`
+	HyperdriveBindings json.RawMessage `bun:"hyperdrive_bindings,type:jsonb"`
+	VersionMetadata    string          `bun:"version_metadata"`
+	AssetsBinding      string          `bun:"assets_binding"`
+	CreatedAt          time.Time       `bun:"created_at"`
 }
 
 type ConfigurationSecret struct {
@@ -203,6 +223,7 @@ type Version struct {
 	ConfigurationID    string          `bun:"configuration_id"`
 	CreatedBy          string          `bun:"created_by"`
 	CreatedByName      string          `bun:"created_by_name"`
+	HyperdriveBindings json.RawMessage `bun:"hyperdrive_bindings,type:jsonb"`
 	VersionMetadata    string          `bun:"version_metadata"`
 	AssetsBinding      string          `bun:"assets_binding"`
 	Tag                string          `bun:"tag"`

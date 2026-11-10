@@ -97,6 +97,7 @@ func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p a
 func SnapshotVersion(org, worker, environment string, artifact domain.WorkerArtifact, config domain.WorkerEnvironment) domain.WorkerVersion {
 	return domain.WorkerVersion{
 		R2Bindings:         domain.CloneR2Bindings(config.R2Bindings),
+		HyperdriveBindings: cloneHyperdriveBindings(config.HyperdriveBindings),
 		ID:                 securetoken.UUID(),
 		VersionMetadata:    config.VersionMetadata,
 		AssetsBinding:      config.AssetsBinding,

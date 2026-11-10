@@ -87,7 +87,7 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 			}
 		}
 		if len(versionIDs) > 0 {
-			rows, err = s.pool.Query(ctx, `SELECT version_id, org_id, worker_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message, created_by, created_by_name, configuration_id
+			rows, err = s.pool.Query(ctx, `SELECT version_id, org_id, worker_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message, created_by, created_by_name, configuration_id, hyperdrive_bindings
 				FROM krun_worker_versions WHERE version_id = ANY($1)`, versionIDs)
 			if err != nil {
 				return state, err
@@ -170,7 +170,7 @@ func readVersionRows(rows pgx.Rows, state *domain.WorkerState) error {
 	for rows.Next() {
 		var r domain.WorkerVersion
 		var variables, flags []byte
-		if err := rows.Scan(&r.ID, &r.Organization, &r.Worker, &r.Environment, &r.Artifact, &r.Profile, &r.ArchiveDigest, &r.ModuleDigest, &r.CompatibilityDate, &flags, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created, &r.VersionMetadata, &r.AssetsBinding, &r.Tag, &r.Message, &r.CreatedBy, &r.CreatedByName, &r.Configuration); err != nil {
+		if err := rows.Scan(&r.ID, &r.Organization, &r.Worker, &r.Environment, &r.Artifact, &r.Profile, &r.ArchiveDigest, &r.ModuleDigest, &r.CompatibilityDate, &flags, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created, &r.VersionMetadata, &r.AssetsBinding, &r.Tag, &r.Message, &r.CreatedBy, &r.CreatedByName, &r.Configuration, &r.HyperdriveBindings); err != nil {
 			return err
 		}
 		if err := json.Unmarshal(flags, &r.CompatibilityFlags); err != nil {

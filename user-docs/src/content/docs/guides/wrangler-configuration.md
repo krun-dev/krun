@@ -56,6 +56,7 @@ krun 支持项目中的 `wrangler.jsonc`、`wrangler.json` 和 `wrangler.toml`�
 | `account_id` | 不据此选择 krun 组织；使用当前控制台组织 | 使用 krun 组织 ID，也可通过 `CLOUDFLARE_ACCOUNT_ID` 设置 |
 | `vars` | 不自动注入运行环境；在 krun 目标环境中配置变量 | 支持字符串和 JSON 值，随 Version 冻结 |
 | `r2_buckets` | 不自动创建桶或绑定；在 krun 创建逻辑桶并配置目标环境的 R2 binding | 支持 `binding`、`bucket_name`，引用同组织已启用的逻辑桶；不支持非 `default` 的 jurisdiction |
+| `hyperdrive` | 在 krun 的目标环境中选择 PostgreSQL 托管配置并添加绑定 | 支持 `binding` 和 `id`，引用同组织的 PostgreSQL 托管配置。见 [PostgreSQL 托管接入](/docs/guides/workers-hyperdrive.html) |
 | `version_metadata.binding` | 在 krun 目标环境中配置版本元数据 binding | 支持注入 `id`、`tag`、`timestamp` |
 | `env.<name>` | 选择 krun 构建或发布环境不会自动启用 Wrangler 的同名配置段；仓库构建使用顶层配置，不传 `--env` | `--env` 由 Wrangler 解析；生成的不同 Script 名称对应不同 krun Worker，不映射到同一 Worker 的 krun 环境 |
 | `keep_vars` / `--keep-vars` | 不作为仓库产物配置导入 | 支持保留未提交的普通变量，同名新值仍覆盖；普通上传默认替换变量 |

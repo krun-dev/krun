@@ -207,6 +207,9 @@ func (c *WorkersConfig) Validate() error {
 		return fmt.Errorf("invalid Workers config base URL")
 	}
 	c.ConfigBaseURL = strings.TrimSuffix(c.ConfigBaseURL, "/")
+	if err := c.validateProtectedEgressCIDRs(); err != nil {
+		return err
+	}
 	if err := c.ValidateRuntimePools(dns); err != nil {
 		return err
 	}

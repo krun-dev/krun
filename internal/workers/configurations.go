@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"maps"
 	"reflect"
 	"sort"
 	"strings"
@@ -38,9 +39,10 @@ type WorkerConfigurationDeployInput struct {
 func configurationEnvironment(c domain.WorkerConfiguration) domain.WorkerEnvironment {
 	return domain.WorkerEnvironment{
 		Name: c.Environment, Enabled: true,
-		Variables:       domain.CloneWorkerVariables(c.Variables),
-		R2Bindings:      domain.CloneR2Bindings(c.R2Bindings),
-		VersionMetadata: c.VersionMetadata, AssetsBinding: c.AssetsBinding,
+		Variables:          domain.CloneWorkerVariables(c.Variables),
+		R2Bindings:         domain.CloneR2Bindings(c.R2Bindings),
+		HyperdriveBindings: cloneHyperdriveBindings(c.HyperdriveBindings),
+		VersionMetadata:    c.VersionMetadata, AssetsBinding: c.AssetsBinding,
 		SecretVersions: domain.CloneStringsMap(c.SecretVersions),
 		SecretNames:    domain.WorkerSecretNames(c.SecretVersions),
 	}
@@ -126,7 +128,8 @@ func (s *Service) WorkerConfigurationCreate(ctx context.Context, st *domain.Stat
 		}
 		config = domain.WorkerEnvironment{
 			Variables: version.Variables, R2Bindings: version.R2Bindings,
-			SecretVersions: version.SecretVersions, VersionMetadata: version.VersionMetadata,
+			HyperdriveBindings: cloneHyperdriveBindings(version.HyperdriveBindings),
+			SecretVersions:     version.SecretVersions, VersionMetadata: version.VersionMetadata,
 			AssetsBinding: version.AssetsBinding,
 		}
 	}
@@ -187,7 +190,8 @@ func (s *Service) WorkerConfigurationCreate(ctx context.Context, st *domain.Stat
 		ID: securetoken.NewID("cfg"), Organization: ref.Organization, Worker: ref.Worker,
 		Environment: ref.Environment, Name: name, Message: in.Message,
 		Variables: domain.CloneWorkerVariables(config.Variables), R2Bindings: domain.CloneR2Bindings(config.R2Bindings),
-		VersionMetadata: config.VersionMetadata, AssetsBinding: config.AssetsBinding,
+		HyperdriveBindings: cloneHyperdriveBindings(config.HyperdriveBindings),
+		VersionMetadata:    config.VersionMetadata, AssetsBinding: config.AssetsBinding,
 		SecretVersions: domain.CloneStringsMap(config.SecretVersions), SecretNames: domain.WorkerSecretNames(config.SecretVersions),
 		Created: time.Now().UTC(),
 	}
@@ -271,6 +275,7 @@ func (s *Service) WorkerConfigurationDeploy(ctx context.Context, st *domain.Stat
 	}
 	current.Variables = config.Variables
 	current.R2Bindings = config.R2Bindings
+	current.HyperdriveBindings = config.HyperdriveBindings
 	current.SecretVersions = config.SecretVersions
 	current.SecretNames = config.SecretNames
 	current.VersionMetadata = config.VersionMetadata
@@ -308,6 +313,7 @@ func inheritedConfiguration(st *domain.State, env domain.WorkerEnvironment) stri
 	}
 	if !reflect.DeepEqual(domain.CloneWorkerVariables(configuration.Variables), domain.CloneWorkerVariables(env.Variables)) ||
 		!reflect.DeepEqual(domain.CloneR2Bindings(configuration.R2Bindings), domain.CloneR2Bindings(env.R2Bindings)) ||
+		!maps.Equal(configuration.HyperdriveBindings, env.HyperdriveBindings) ||
 		!reflect.DeepEqual(domain.CloneStringsMap(configuration.SecretVersions), domain.CloneStringsMap(env.SecretVersions)) {
 		return ""
 	}

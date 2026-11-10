@@ -53,7 +53,42 @@ func Render(workers *config.WorkersConfig, pool config.WorkerRuntimePool, contro
 		bindings = objectStorageBindings(workers)
 		services = objectStorageServices(workers)
 	}
+	egressBinding := ""
+	egressService := ""
+	denied := make([]string, 0, len(workers.ProtectedEgressCIDRs))
+	for _, cidr := range workers.ProtectedEgressCIDRs {
+		denied = append(denied, quote(cidr))
+	}
+	if !validator && pool.PublicEgress == "direct" {
+		egressBinding = `          (name = "PUBLIC_EGRESS", service = "worker-public-egress"),`
+		egressService = fmt.Sprintf(`    (
+      name = "worker-public-egress",
+      network = (
+        allow = ["public"],
+        deny = [%s],
+        tlsOptions = (trustBrowserCas = true)
+      )
+    ),`, strings.Join(denied, ","))
+	}
+	if !validator && workers.Hyperdrive != nil && (pool.PublicEgress == "direct" || pool.PrivateEgress == "direct") {
+		egressBinding += "\n          (name = \"HYPERDRIVE_EGRESS\", service = \"worker-hyperdrive-egress\"),"
+		allow := []string{quote(workers.Hyperdrive.CIDR())}
+		if pool.PublicEgress == "direct" {
+			allow = append(allow, quote("public"))
+		}
+		egressService += fmt.Sprintf(`
+    (
+      name = "worker-hyperdrive-egress",
+      network = (
+        allow = [%s],
+        deny = [%s],
+        tlsOptions = (trustBrowserCas = true)
+      )
+    ),`, strings.Join(allow, ","), strings.Join(denied, ","))
+	}
 	replacer := strings.NewReplacer(
+		"__PUBLIC_EGRESS_BINDING__", egressBinding,
+		"__PUBLIC_EGRESS_SERVICE__", egressService,
 		"__CONTROL_EXTERNAL__", controlExternal,
 		"__STORAGE_ALLOW__", strings.Join(allowed, ","),
 		"__POOL__", quote(pool.ID),

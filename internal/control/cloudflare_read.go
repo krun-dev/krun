@@ -1,6 +1,7 @@
 package control
 
 import (
+	"maps"
 	"net/http"
 	"slices"
 	"sort"
@@ -83,6 +84,9 @@ func cfBindings(env WorkerEnvironment) []any {
 	for _, name := range names {
 		out = append(out, map[string]any{"name": name, "type": "r2_bucket", "bucket_name": env.R2Bindings[name].BucketName})
 	}
+	for _, name := range slices.Sorted(maps.Keys(env.HyperdriveBindings)) {
+		out = append(out, map[string]any{"name": name, "type": "hyperdrive", "id": env.HyperdriveBindings[name]})
+	}
 	keys := make([]string, 0, len(env.Variables))
 	for name := range env.Variables {
 		keys = append(keys, name)
@@ -154,7 +158,7 @@ func (s *Server) cfScriptDetails(st *State, p Principal, r *http.Request) (any, 
 	return map[string]any{"id": name, "name": name, "tag": workerID, "subdomain": subdomain, "previews_base_config": map[string]any{"env": cfEnvBindings(base)}, "default_environment": map[string]any{"environment": "production", "script": map[string]any{"id": name, "tag": workerID, "last_deployed_from": "api", "compatibility_date": version.CompatibilityDate, "compatibility_flags": version.CompatibilityFlags, "bindings": cfBindings(env)}}}, 200, nil
 }
 func cfVersion(v WorkerVersion, number int) map[string]any {
-	return map[string]any{"id": v.ID, "number": number, "metadata": map[string]any{"created_on": v.Created, "has_preview": false, "source": "api", "author_id": "krun", "author_email": ""}, "annotations": map[string]any{"workers/tag": v.Tag, "workers/message": v.Message}, "resources": map[string]any{"script": map[string]any{"etag": v.ArchiveDigest, "handlers": []string{"fetch"}}, "script_runtime": map[string]any{"compatibility_date": v.CompatibilityDate, "compatibility_flags": v.CompatibilityFlags}, "bindings": cfBindings(WorkerEnvironment{R2Bindings: v.R2Bindings, Variables: v.Variables, SecretVersions: v.SecretVersions, VersionMetadata: v.VersionMetadata, AssetsBinding: v.AssetsBinding})}}
+	return map[string]any{"id": v.ID, "number": number, "metadata": map[string]any{"created_on": v.Created, "has_preview": false, "source": "api", "author_id": "krun", "author_email": ""}, "annotations": map[string]any{"workers/tag": v.Tag, "workers/message": v.Message}, "resources": map[string]any{"script": map[string]any{"etag": v.ArchiveDigest, "handlers": []string{"fetch"}}, "script_runtime": map[string]any{"compatibility_date": v.CompatibilityDate, "compatibility_flags": v.CompatibilityFlags}, "bindings": cfBindings(WorkerEnvironment{HyperdriveBindings: v.HyperdriveBindings, R2Bindings: v.R2Bindings, Variables: v.Variables, SecretVersions: v.SecretVersions, VersionMetadata: v.VersionMetadata, AssetsBinding: v.AssetsBinding})}}
 }
 func (s *Server) cfVersions(st *State, p Principal, r *http.Request) (any, int, error) {
 	out, _, err := s.workerApplication(r).WorkerVersionList(r.Context(), st, p, workerRef(r))

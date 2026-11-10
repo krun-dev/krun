@@ -85,6 +85,7 @@ async function fixture(page, options = {}) {
         credential_kind: "session",
         revision: 1,
         workers_configured: true,
+        hyperdrive_configured: state.hyperdriveConfigured === true,
       };
     } else if (path === "/api/v1/roles" && state.permissionCatalog) {
       data = state.permissionCatalog;
@@ -761,3 +762,37 @@ test("system administrators can read runtime pool configuration without an organ
   await page.reload();
   await expect(page.getByRole("heading", { name: "运行资源池" })).toBeVisible();
 });
+
+for (const theme of ["light", "dark"]) {
+  test(`Hyperdrive can create a configuration in ${theme} mode`, async ({ page }) => {
+    await page.addInitScript((value) => localStorage.setItem("krun.theme", value), theme);
+    await fixture(page, { actions: { "org-a": admin }, hyperdriveConfigured: true });
+    const items = [];
+    await page.route(new RegExp("/api/v1/orgs/org-a/hyperdrive$"), async (route) => {
+      if (route.request().method() === "POST") {
+        const body = route.request().postDataJSON();
+        expect(body.origin.password).toBe("fixture-password");
+        const { password, ...origin } = body.origin;
+        items.push({ id: "a".repeat(32), name: body.name, ...origin });
+        await route.fulfill({ json: items.at(-1) });
+      } else {
+        await route.fulfill({ json: { items } });
+      }
+    });
+    await page.goto(origin + "/?page=hyperdrive&workspace=org-a");
+    await expect(page.getByRole("heading", { name: "Hyperdrive", exact: true })).toBeVisible();
+    await expect
+      .poll(() => page.locator("html").evaluate((element) => element.classList.contains("dark")))
+      .toBe(theme === "dark");
+    await page.getByRole("button", { name: "创建 Hyperdrive 配置" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("名称").fill("orders");
+    await dialog.getByLabel("源库域名").fill("orders.example.test");
+    await dialog.getByLabel("库名").fill("orders");
+    await dialog.getByLabel("源库用户名").fill("app");
+    await dialog.getByLabel("源库密码").fill("fixture-password");
+    await dialog.getByRole("button", { name: "保存" }).click();
+    await expect(page.getByRole("cell", { name: "orders", exact: true })).toBeVisible();
+    await expect(page.getByText("fixture-password")).toHaveCount(0);
+  });
+}

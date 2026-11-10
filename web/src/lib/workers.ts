@@ -47,6 +47,7 @@ export type Build = {
 };
 export type Environment = {
   r2_buckets?: Record<string, R2Binding>;
+  hyperdrive_bindings?: Record<string, string>;
   name: string;
   enabled: boolean;
   /** Selected domain ids from the platform catalog. */
@@ -89,6 +90,7 @@ export type Version = {
   created_by?: string;
   created_by_name?: string;
   r2_buckets?: Record<string, R2Binding>;
+  hyperdrive_bindings?: Record<string, string>;
   id: string;
   artifact_id: string;
   environment: string;

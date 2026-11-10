@@ -15,12 +15,15 @@ import (
 )
 
 type cfBinding struct {
-	BucketName   string          `json:"bucket_name,omitempty"`
-	Jurisdiction string          `json:"jurisdiction,omitempty"`
-	Name         string          `json:"name"`
-	Type         string          `json:"type"`
-	Text         string          `json:"text"`
-	JSON         json.RawMessage `json:"json"`
+	ID               string          `json:"id,omitempty"`
+	Password         *string         `json:"password,omitempty"`
+	ConnectionString *string         `json:"connection_string,omitempty"`
+	BucketName       string          `json:"bucket_name,omitempty"`
+	Jurisdiction     string          `json:"jurisdiction,omitempty"`
+	Name             string          `json:"name"`
+	Type             string          `json:"type"`
+	Text             string          `json:"text"`
+	JSON             json.RawMessage `json:"json"`
 }
 type cfUploadMetadata struct {
 	Main        string                `json:"main_module"`
@@ -109,6 +112,8 @@ func cfBindingInput(meta cfUploadMetadata, preview bool) (workerapp.BindingsInpu
 	if !preview {
 		values := map[string]string{}
 		in.R2Buckets = &values
+		hyperdrive := map[string]string{}
+		in.HyperdriveBindings = &hyperdrive
 		in.VersionMetadata = new(string)
 		in.AssetsBinding = new(string)
 	}
@@ -121,6 +126,8 @@ func cfBindingInput(meta cfUploadMetadata, preview bool) (workerapp.BindingsInpu
 			in.KeepJSONVariables = true
 		} else if kind == "r2_bucket" {
 			in.KeepR2Buckets = true
+		} else if kind == "hyperdrive" {
+			in.KeepHyperdrive = true
 		} else if kind != "secret_key" {
 			return in, problem(422, "UNSUPPORTED_BINDING", "Unsupported keep_bindings type")
 		}
@@ -145,6 +152,15 @@ func cfBindingInput(meta cfUploadMetadata, preview bool) (workerapp.BindingsInpu
 				in.R2Buckets = &values
 			}
 			(*in.R2Buckets)[name] = b.BucketName
+		case "hyperdrive":
+			if b.ID == "" || b.Password != nil || b.ConnectionString != nil {
+				return problem(422, "UNSUPPORTED_BINDING", "Hyperdrive binding requires a configuration ID")
+			}
+			if in.HyperdriveBindings == nil {
+				values := map[string]string{}
+				in.HyperdriveBindings = &values
+			}
+			(*in.HyperdriveBindings)[name] = b.ID
 		case "plain_text":
 			in.Variables[name] = b.Text
 		case "json":
@@ -259,7 +275,7 @@ func (s *Server) cfUpload(w http.ResponseWriter, r *http.Request) {
 	err = s.cfCall(r, true, func(st *State, p Principal) error {
 		app := s.workerApplication(r)
 		ref := workerRef(r)
-		if e := app.StageBindings(st, p, ref, input); e != nil {
+		if e := app.StageBindings(r.Context(), st, p, ref, input); e != nil {
 			return e
 		}
 		out, _, e := app.WorkerVersionUpload(r.Context(), st, p, ref, workerapp.WorkerVersionUploadInput{Build: build.ID, Key: securetoken.UUID(), Tag: meta.Annotations["workers/tag"], Message: meta.Annotations["workers/message"]})

@@ -2,6 +2,7 @@ package config
 
 // Workers is opt-in: existing authentication deployments keep their current behavior.
 type WorkersConfig struct {
+	Hyperdrive *WorkerHyperdriveConfig `json:"hyperdrive,omitempty"`
 	// RuntimeAPIURL overrides the cluster Service used by workerd to call the
 	// authenticated Runtime API. Only deployment operators may configure it.
 	RuntimeAPIURL        string                     `json:"runtime_api_url,omitempty"`
@@ -29,6 +30,8 @@ type WorkersConfig struct {
 	// deployment-defined network profiles; access modes, pool ids and services
 	// never leave the system scope.
 	RuntimePools []WorkerRuntimePool `json:"runtime_pools"`
+	// ProtectedEgressCIDRs blocks deployment-owned addresses even when publicly routed.
+	ProtectedEgressCIDRs []string `json:"protected_egress_cidrs,omitempty"`
 	// ValidatorPool optionally selects one pool's dedicated validator for all
 	// candidates. Empty selects a Ready serving Pod in the business pool.
 	ValidatorPool string `json:"validator_pool,omitempty"`

@@ -24,6 +24,7 @@ const config :W.Config = (
           (name = "R2_METADATA_SOURCE", text = embed "/app/storage/metadata.js"),
           (name = "R2_XML_SOURCE", text = embed "/app/storage/xml.js"),
 __OBJECT_STORAGE_BINDINGS__
+__PUBLIC_EGRESS_BINDING__
           (name = "LOADER", workerLoader = (id = __LOADER_ID__)),
           (name = "PLATFORM", service = "platform"),
           (name = "POD_NAME", text = embed "/pod/name"),
@@ -50,6 +51,7 @@ __STORAGE_BINDINGS__
       )
     ),
 __OBJECT_STORAGE_SERVICES__
+__PUBLIC_EGRESS_SERVICE__
     (name = "deny", network = (allow = []))
   ],
   sockets = [

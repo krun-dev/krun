@@ -105,6 +105,7 @@ export type Me = {
   credential_kind: string;
   revision: number;
   workers_configured: boolean;
+  hyperdrive_configured?: boolean;
 };
 export type Organization = {
   id: string;

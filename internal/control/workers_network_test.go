@@ -106,8 +106,8 @@ func TestRuntimePoolOptionalValidatorService(t *testing.T) {
 func multiPoolCatalogConfig() *appconfig.WorkersConfig {
 	c := catalogConfig()
 	c.RuntimePools = []appconfig.WorkerRuntimePool{
-		{ID: "private-a", Access: []string{"private"}, Labels: map[string]string{"zone": "internal"}, RuntimeService: "runtime-private", ValidatorService: "validator-private", RuntimeToken: "fixture-private-runtime-credential", ManagementToken: "fixture-private-management-credential", Default: true},
-		{ID: "public-b", Access: []string{"public"}, Labels: map[string]string{"zone": "external"}, RuntimeService: "runtime-public", ValidatorService: "validator-public", RuntimeToken: "fixture-public-runtime-credential", ManagementToken: "fixture-public-management-credential"},
+		{ID: "private-a", Access: []string{"private"}, PrivateEgress: "direct", PublicEgress: "deny", Labels: map[string]string{"zone": "internal"}, RuntimeService: "runtime-private", ValidatorService: "validator-private", RuntimeToken: "fixture-private-runtime-credential", ManagementToken: "fixture-private-management-credential", Default: true},
+		{ID: "public-b", Access: []string{"public"}, PrivateEgress: "deny", PublicEgress: "direct", Labels: map[string]string{"zone": "external"}, RuntimeService: "runtime-public", ValidatorService: "validator-public", RuntimeToken: "fixture-public-runtime-credential", ManagementToken: "fixture-public-management-credential"},
 	}
 	c.NetworkProfiles = []appconfig.WorkerNetworkProfile{
 		{ID: "internal-service", Name: "Internal service", Description: "Reachable from the deployment's internal network.", DomainSelector: map[string]string{"exposure": "internal"}, PoolSelector: map[string]string{"zone": "internal"}, Requirements: appconfig.WorkerNetworkRequirements{Ingress: []string{"private"}, PrivateEgress: "direct", PublicEgress: "deny"}, Default: true},
@@ -163,7 +163,7 @@ func TestRuntimePoolsExposeOnlyProductNetworkProfiles(t *testing.T) {
 
 func TestRuntimePoolsRejectAmbiguousDomainBackend(t *testing.T) {
 	c := multiPoolCatalogConfig()
-	c.RuntimePools = append(c.RuntimePools, appconfig.WorkerRuntimePool{ID: "public-c", Access: []string{"public"}, Labels: map[string]string{"zone": "external"}, RuntimeService: "runtime-public-2", ValidatorService: "validator-public-2", RuntimeToken: "fixture-alternate-runtime-credential", ManagementToken: "fixture-alternate-management-credential"})
+	c.RuntimePools = append(c.RuntimePools, appconfig.WorkerRuntimePool{ID: "public-c", Access: []string{"public"}, PublicEgress: "direct", Labels: map[string]string{"zone": "external"}, RuntimeService: "runtime-public-2", ValidatorService: "validator-public-2", RuntimeToken: "fixture-alternate-runtime-credential", ManagementToken: "fixture-alternate-management-credential"})
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "exactly one runtime pool") {
 		t.Fatalf("ambiguous flat wildcard backend accepted: %v", err)
 	}

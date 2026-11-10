@@ -15,11 +15,12 @@ type WorkerEnvironmentCreateInput struct {
 }
 
 type WorkerEnvironmentUpdateInput struct {
-	R2Buckets       *map[string]string `json:"r2_buckets,omitempty"`
-	VersionMetadata *string            `json:"version_metadata,omitempty"`
-	Revision        int                `json:"expected_revision"`
-	Enabled         *bool              `json:"enabled"`
-	Variables       map[string]any     `json:"variables"`
+	HyperdriveBindings *map[string]string `json:"hyperdrive_bindings,omitempty"`
+	R2Buckets          *map[string]string `json:"r2_buckets,omitempty"`
+	VersionMetadata    *string            `json:"version_metadata,omitempty"`
+	Revision           int                `json:"expected_revision"`
+	Enabled            *bool              `json:"enabled"`
+	Variables          map[string]any     `json:"variables"`
 }
 
 func (s *Service) WorkerEnvironments(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
@@ -88,6 +89,7 @@ func (s *Service) WorkerEnvironmentCreate(ctx context.Context, st *domain.State,
 	if ws.PreviewBase != nil && !in.IgnoreBase {
 		env.Variables = domain.CloneWorkerVariables(ws.PreviewBase.Variables)
 		env.R2Bindings = domain.CloneR2Bindings(ws.PreviewBase.R2Bindings)
+		env.HyperdriveBindings = cloneHyperdriveBindings(ws.PreviewBase.HyperdriveBindings)
 		env.VersionMetadata = ws.PreviewBase.VersionMetadata
 		env.SecretVersions = domain.CloneStringsMap(ws.PreviewBase.SecretVersions)
 		env.SecretNames = domain.WorkerSecretNames(env.SecretVersions)
@@ -174,6 +176,12 @@ func (s *Service) WorkerEnvironmentUpdate(ctx context.Context, st *domain.State,
 			return nil, Read, err
 		}
 		current.R2Bindings = resolved
+	}
+	if in.HyperdriveBindings != nil {
+		if err := s.validateHyperdriveBindings(ctx, t.Organization, *in.HyperdriveBindings); err != nil {
+			return nil, Read, err
+		}
+		current.HyperdriveBindings = cloneHyperdriveBindings(*in.HyperdriveBindings)
 	}
 	if err := ValidateWorkerBindings(current); err != nil {
 		return nil, Read, err

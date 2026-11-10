@@ -10,6 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Field, SelectField } from "@/components/common";
 import { workerURL } from "./shared";
 import { R2BindingsEditor } from "./r2-bindings";
+import { HyperdriveBindingsEditor } from "./hyperdrive-bindings";
 import { bindingRows, bindingInput } from "@/lib/object-storage";
 import { variableRows, variableInput } from "@/lib/worker-variables";
 import { VariablesEditor, VersionMetadataField } from "./variables";
@@ -37,26 +38,35 @@ export function EnvironmentSettings({
   const [variables, setVariables] = useState(() => variableRows(env.variables));
   const [versionMetadata, setVersionMetadata] = useState(env.version_metadata || "");
   const [r2Bindings, setR2Bindings] = useState(() => bindingRows(env.r2_buckets));
+  const [hyperdriveBindings, setHyperdriveBindings] = useState(() =>
+    Object.entries(env.hyperdrive_bindings || {}).map(([name, id]) => ({ name, id })),
+  );
   const [revision, setRevision] = useState(env.configuration_revision);
   const [busy, setBusy] = useState(false);
   const domainLabel = (id: string) =>
     domains.find((d) => d.id === id)?.label || domains.find((d) => d.id === id)?.domain || id;
   const current = env.version_id ? data.versions[env.version_id] : undefined;
   const stale = revision !== env.configuration_revision;
-  async function save(section: "variables" | "r2") {
+  async function save(section: "variables" | "r2" | "hyperdrive") {
     setBusy(true);
     try {
       const input =
         section === "variables"
           ? { variables: variableInput(variables), version_metadata: versionMetadata }
-          : {
-              r2_buckets: bindingInput(
-                r2Bindings,
-                env.variables,
-                env.secret_names || [],
-                env.version_metadata || "",
-              ),
-            };
+          : section === "hyperdrive"
+            ? {
+                hyperdrive_bindings: Object.fromEntries(
+                  hyperdriveBindings.map((row) => [row.name.trim(), row.id]),
+                ),
+              }
+            : {
+                r2_buckets: bindingInput(
+                  r2Bindings,
+                  env.variables,
+                  env.secret_names || [],
+                  env.version_metadata || "",
+                ),
+              };
       const result = await api<Environment>(base + "/environments/" + env.name, "PATCH", {
         ...input,
         expected_revision: revision,
@@ -172,6 +182,13 @@ export function EnvironmentSettings({
             </Button>
           </div>
         </R2BindingsEditor>
+        <HyperdriveBindingsEditor
+          organizationBase={organizationBase}
+          rows={hyperdriveBindings}
+          onChange={setHyperdriveBindings}
+          disabled={busy || active || stale}
+          onSave={() => void save("hyperdrive")}
+        />
         {stale ? (
           <p
             role="alert"
@@ -188,6 +205,9 @@ export function EnvironmentSettings({
               setVariables(variableRows(env.variables));
               setVersionMetadata(env.version_metadata || "");
               setR2Bindings(bindingRows(env.r2_buckets));
+              setHyperdriveBindings(
+                Object.entries(env.hyperdrive_bindings || {}).map(([name, id]) => ({ name, id })),
+              );
               setRevision(env.configuration_revision);
             }}
           >

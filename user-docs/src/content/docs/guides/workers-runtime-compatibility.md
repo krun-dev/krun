@@ -29,6 +29,7 @@ krun 基于 workerd 运行模块格式的 JavaScript / TypeScript Worker。代�
 **krun 只兼容组件文档明确列出的 API、参数及用法。官方参考中的同名 API 不代表所有选项和行为都受支持。** Cloudflare 专属扩展（例如 `request.cf`）、其他产品和网络能力不构成 krun 的支持承诺。
 
 - **R2**：支持 `head`、`get`、`put`、`delete`、`list`、`createMultipartUpload`、`resumeMultipartUpload`，以及上传对象的 `uploadPart`、`complete`、`abort`。`list` 每页最多 64 项，批量 `delete` 最多 1000 项；不支持 `startAfter`、SSE-C、PUT checksum 或组合条件。其他参数及返回值限制见 [对象存储](/docs/guides/component-object-storage.html)。
+- **Hyperdrive**：支持 PostgreSQL。Worker 把 `env.<绑定名>.connectionString` 交给 PostgreSQL 驱动。配置与绑定见 [PostgreSQL 托管接入](/docs/guides/workers-hyperdrive.html)。
 - **Cache**：支持 `caches.default`、`caches.open` 和 cache 的 `put`、`match`、`delete`。缓存只在单个 runtime 进程内生效；不支持 `ignoreSearch`、`ignoreVary`、SWR 或 Cloudflare CDN 缓存语义，详见 [Workers](/docs/guides/component-workers.html)。
 - **绑定与发布**：绑定名称需与代码中的 `env` 属性一致，桶名是实际资源名称。控制台仓库构建需要在目标环境手动配置桶绑定，保存后发布；仓库配置不会自动创建桶或修改环境绑定。
 
