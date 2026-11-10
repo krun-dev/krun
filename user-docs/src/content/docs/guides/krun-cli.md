@@ -64,9 +64,14 @@ Worker、构建、部署、仓库、对象存储和组织管理命令会使用�
 
 ```sh
 krun --version
+krun --version --verbose
 krun upgrade --check
 krun upgrade
 ```
+
+正式版使用年、月和当月发布序号。例如，`2026.11.3` 是 2026 年 11 月的第 3 次发布。用 `--version --verbose` 可以查看构建提交和发布时间。
+
+在终端成功执行连接控制台的命令后，正式版 CLI 每 24 小时最多向该控制台检查一次更新。有更高版本时，终端会提示用 `krun upgrade` 安装。提示写到 stderr。CI、非交互调用和开发版跳过检查。也可以用全局参数 `--no-update-check` 关闭本次自动检查。
 
 升级会从配置的控制台下载当前系统和架构的已发布 CLI，支持 macOS、Linux、Windows 的 amd64/arm64。无需登录，也不会发送 API Token。`--check` 只检查，不替换文件。
 

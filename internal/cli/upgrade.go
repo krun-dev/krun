@@ -18,6 +18,8 @@ import (
 
 // Version is set by the download build using -ldflags.
 var Version = "dev"
+var buildCommit = "unknown"
+var publishedAt = "unreleased"
 
 const maxUpgradeSize = 128 << 20
 
@@ -66,22 +68,10 @@ func (c *Client) upgradeExecutable(ctx context.Context, executable string, check
 	if err != nil {
 		return err
 	}
-	response, err := c.downloadCLI(ctx, "manifest.json")
+	version, expected, err := c.publishedCLI(ctx, name)
 	if err != nil {
 		return err
 	}
-	var release cliRelease
-	err = json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&release)
-	response.Body.Close()
-	if err != nil {
-		return fmt.Errorf("invalid CLI manifest: %w", err)
-	}
-	expected := release.Files[name]
-	digest, err := hex.DecodeString(expected)
-	if strings.TrimSpace(release.Version) == "" || err != nil || len(digest) != sha256.Size {
-		return fmt.Errorf("CLI manifest has no valid release for %s", name)
-	}
-	expected = strings.ToLower(expected)
 	current, err := os.Open(executable)
 	if err != nil {
 		return err
@@ -93,18 +83,37 @@ func (c *Client) upgradeExecutable(ctx context.Context, executable string, check
 		return err
 	}
 	if hex.EncodeToString(hash.Sum(nil)) == expected {
-		fmt.Fprintln(c.Out, "krun is up to date:", release.Version)
+		fmt.Fprintln(c.Out, "krun is up to date:", version)
 		return nil
 	}
 	if check {
-		fmt.Fprintf(c.Out, "Installed: %s\nPublished: %s\nRun krun upgrade to install the published CLI.\n", Version, release.Version)
+		fmt.Fprintf(c.Out, "Installed: %s\nPublished: %s\nRun krun upgrade to install the published CLI.\n", Version, version)
 		return nil
 	}
 	if err := c.installCLI(ctx, executable, name, expected); err != nil {
 		return err
 	}
-	fmt.Fprintf(c.Out, "Upgraded krun to %s (%s).\n", release.Version, executable)
+	fmt.Fprintf(c.Out, "Upgraded krun to %s (%s).\n", version, executable)
 	return nil
+}
+
+func (c *Client) publishedCLI(ctx context.Context, name string) (string, string, error) {
+	response, err := c.downloadCLI(ctx, "manifest.json")
+	if err != nil {
+		return "", "", err
+	}
+	var release cliRelease
+	err = json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&release)
+	response.Body.Close()
+	if err != nil {
+		return "", "", fmt.Errorf("invalid CLI manifest: %w", err)
+	}
+	expected := release.Files[name]
+	digest, err := hex.DecodeString(expected)
+	if strings.TrimSpace(release.Version) == "" || err != nil || len(digest) != sha256.Size {
+		return "", "", fmt.Errorf("CLI manifest has no valid release for %s", name)
+	}
+	return release.Version, strings.ToLower(expected), nil
 }
 
 // Downloads are public static files. Never attach API credentials or follow
