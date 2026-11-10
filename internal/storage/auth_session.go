@@ -89,7 +89,16 @@ func (s *Store) LogoutSessionAudited(ctx context.Context, sessionHash, browserHa
 	}
 	defer tx.Rollback(ctx)
 	if sessionHash != "" {
-		if _, err = tx.Exec(ctx, `DELETE FROM krun_sessions WHERE session_hash=$1`, sessionHash); err != nil {
+		// Revoking the grant invalidates all its access and refresh tokens.
+		// The grant row also serializes this update against refresh rotation.
+		if _, err = tx.Exec(ctx, `
+			WITH ended AS (
+				DELETE FROM krun_sessions WHERE session_hash=$1
+				RETURNING oauth_grant_id
+			)
+			UPDATE krun_oauth_grants SET revoked=true
+			WHERE grant_id=(SELECT oauth_grant_id FROM ended WHERE oauth_grant_id<>'')
+			  AND revoked=false`, sessionHash); err != nil {
 			return err
 		}
 	}

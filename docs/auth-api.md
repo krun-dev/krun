@@ -15,7 +15,7 @@
 | POST | /api/auth/:provider/email/code | 仅 email 来源；JSON `{email,return_to}`，Origin + 浏览器 CSRF，发送邮箱验证码，返回 challenge_id / expires_in / retry_after |
 | POST | /api/auth/:provider/email/verify | JSON `{challenge_id,code}`，Origin + 浏览器 CSRF，原子消费验证码并建立浏览器 Session，返回 redirect_url |
 | GET | /api/auth/me | 支持浏览器 Session、CLI Session 和 API Key；返回当前主体、凭据类型、系统管理员状态及权限修订 |
-| POST | /api/auth/logout | 浏览器或 CLI Session 撤销；清浏览器 Cookie |
+| POST | /api/auth/logout | 结束当前 Session 并清除浏览器 Cookie。使用 OAuth access token 登出时，同一事务撤销其所属授权 |
 | GET | /api/auth/oauth/authorize | 授权码流程；注册客户端、loopback 回调、state、PKCE S256 校验，转向静态授权页 |
 | POST | /api/auth/oauth/device/auth | OAuth 设备码流程；5 分钟有效，返回确认码和浏览器地址 |
 | GET | /api/auth/oauth/requests/:request | 授权页面所需的应用名称、实际 scopes、状态及到期时间；不返回凭据 |
@@ -25,7 +25,8 @@
 
 krun CLI 和 Wrangler 共用 OAuth 授权与凭据存储。Access Token 有效 1 小时；携带
 `offline_access` 时签发最长 30 天的刷新授权。刷新令牌每次使用后轮换，旧令牌重放会
-撤销整次授权；主动退出也会立即使该授权的全部 access/refresh 失效。浏览器 Session
+撤销整次授权。使用 access token 调用 `/api/auth/logout`，或使用 access/refresh token
+调用 `/api/auth/oauth/revoke`，都会使所属授权下的全部 access/refresh 失效。浏览器 Session
 绝对期限 8 小时、闲置期限 30 分钟。OAuth access 只检查自己的绝对期限，不因闲置
 30 分钟提前失效。用户禁用、来源禁用和 auth_version 变化仍即时生效。
 

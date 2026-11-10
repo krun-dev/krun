@@ -125,6 +125,53 @@ func TestOAuthPKCEOneShotRotationAndRevocation(t *testing.T) {
 		t.Fatal("revoke left access valid")
 	}
 }
+func TestOAuthAccessLogoutRevokesItsGrant(t *testing.T) {
+	s, store := testServer(t)
+	oauthBrowser(t, s, store)
+
+	issue := func() authapp.OAuthTokens {
+		form := oauthCodeTest(t, s, authapp.OAuthCLIClient, "krun:control offline_access")
+		return oauthDecodeTest(t, oauthFormTest(s, oauthPrefix+"/token", form))
+	}
+	refreshForm := func(token string) url.Values {
+		return url.Values{
+			"grant_type":    {"refresh_token"},
+			"client_id":     {authapp.OAuthCLIClient},
+			"refresh_token": {token},
+		}
+	}
+	first := issue()
+	second := oauthDecodeTest(t, oauthFormTest(s, oauthPrefix+"/token", refreshForm(first.Refresh)))
+	other := issue()
+
+	browserCookies := []*http.Cookie{{Name: s.cookieName("session"), Value: "oauth-browser"}}
+	if w := browserRequest(s, http.MethodPost, "/api/auth/logout", url.Values{"csrf_token": {"oauth-csrf"}}, browserCookies); w.Code != http.StatusNoContent {
+		t.Fatalf("browser logout returned %d", w.Code)
+	}
+	if w := request(s, http.MethodGet, "/api/auth/me", second.Access, ""); w.Code != http.StatusOK {
+		t.Fatalf("browser logout affected OAuth access: %d", w.Code)
+	}
+	if w := request(s, http.MethodPost, "/api/auth/logout", first.Access, "{}"); w.Code != http.StatusNoContent {
+		t.Fatalf("OAuth access logout returned %d", w.Code)
+	}
+
+	for _, token := range []string{first.Access, second.Access} {
+		if w := request(s, http.MethodGet, "/api/auth/me", token, ""); w.Code != http.StatusUnauthorized {
+			t.Errorf("access from the revoked grant returned %d", w.Code)
+		}
+	}
+	w := oauthFormTest(s, oauthPrefix+"/token", refreshForm(second.Refresh))
+	var failure struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &failure); err != nil || w.Code != http.StatusBadRequest || failure.Error != "invalid_grant" {
+		t.Errorf("refresh after logout returned %d with error %q", w.Code, failure.Error)
+	}
+	if w := request(s, http.MethodGet, "/api/auth/me", other.Access, ""); w.Code != http.StatusOK {
+		t.Errorf("access from another grant returned %d", w.Code)
+	}
+}
+
 func TestOAuthDeviceDenyAndApprovalBoundaries(t *testing.T) {
 	s, store := testServer(t)
 	oauthBrowser(t, s, store)
