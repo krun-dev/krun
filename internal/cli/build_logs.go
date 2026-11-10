@@ -70,7 +70,7 @@ func (c *Client) buildLogs(ctx context.Context, args []string) error {
 // Object requests deliberately carry no control-plane credentials.
 func (c *Client) readBuildLogObject(ctx context.Context, target string) (string, error) {
 	u, err := url.Parse(target)
-	if err != nil || u.User != nil || (u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost"))) {
+	if err != nil || u.User != nil || (u.Scheme != "https" && !(u.Scheme == "http" && loopbackHost(u.Hostname()))) {
 		return "", errors.New("invalid log object URL")
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", target, nil)

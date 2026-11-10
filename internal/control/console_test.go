@@ -215,3 +215,26 @@ func TestStaticBuildRootServesOnlyConsoleArtifact(t *testing.T) {
 		t.Fatalf("file outside dist/console became public: %d %q", w.Code, w.Body.String())
 	}
 }
+
+func TestConsoleCookiesFollowOriginScheme(t *testing.T) {
+	for _, tc := range []struct {
+		origin string
+		secure bool
+		name   string
+	}{
+		{"http://localhost:8080", false, "krun_dev_session"},
+		{"https://localhost:8080", true, "__Host-krun_session"},
+		{"https://console.example.com", true, "__Host-krun_session"},
+	} {
+		s := &Server{}
+		s.Config.PublicURL = tc.origin
+		s.Config.Development = tc.origin != "https://console.example.com"
+		response := httptest.NewRecorder()
+		s.setCookie(response, "session", "value", 60)
+		cookies := response.Result().Cookies()
+		if len(cookies) != 1 || cookies[0].Name != tc.name || cookies[0].Secure != tc.secure ||
+			!cookies[0].HttpOnly || cookies[0].Path != "/" || cookies[0].Domain != "" {
+			t.Errorf("unexpected cookie attributes for %s", tc.origin)
+		}
+	}
+}

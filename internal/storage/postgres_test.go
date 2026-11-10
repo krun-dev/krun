@@ -39,7 +39,7 @@ func postgresTestStore(t *testing.T) *Store {
 	query := parsed.Query()
 	query.Set("search_path", name)
 	parsed.RawQuery = query.Encode()
-	store, err := Open(ctx, parsed.String())
+	store, err := Open(ctx, parsed.String(), RepositoryTokenKeys{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestPostgresUsesSingleSchemaBaseline(t *testing.T) {
 	query := u.Query()
 	query.Set("search_path", schema)
 	u.RawQuery = query.Encode()
-	store, err := Open(ctx, u.String())
+	store, err := Open(ctx, u.String(), RepositoryTokenKeys{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestPostgresUsesSingleSchemaBaseline(t *testing.T) {
 	if err := store.pool.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='schema_baseline'`).Scan(&baseline); err != nil || baseline != bytesDigest([]byte(schemaSQL)) {
 		t.Fatalf("baseline=%q err=%v", baseline, err)
 	}
-	reopened, err := Open(ctx, u.String())
+	reopened, err := Open(ctx, u.String(), RepositoryTokenKeys{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestPostgresUsesSingleSchemaBaseline(t *testing.T) {
 }
 
 func TestOpenStoreRequiresPostgres(t *testing.T) {
-	if _, err := Open(context.Background(), ""); err == nil {
+	if _, err := Open(context.Background(), "", RepositoryTokenKeys{}); err == nil {
 		t.Fatal("store without PostgreSQL accepted")
 	}
 }
@@ -152,7 +152,7 @@ func TestPostgresSchemaBaselineMismatchPreservesData(t *testing.T) {
 		if _, err := store.pool.Exec(ctx, query); err != nil {
 			t.Fatal(err)
 		}
-		rejected, err := Open(ctx, store.pool.Config().ConnString())
+		rejected, err := Open(ctx, store.pool.Config().ConnString(), RepositoryTokenKeys{})
 		if rejected != nil {
 			rejected.Close()
 		}

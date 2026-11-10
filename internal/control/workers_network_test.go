@@ -29,8 +29,8 @@ func catalogConfig() *appconfig.WorkersConfig {
 		BuilderScript: "workers/builder/build-worker.mjs",
 		RuntimePools: []appconfig.WorkerRuntimePool{{
 			ID: "default", Access: []string{"public", "private"}, PrivateEgress: "direct", PublicEgress: "direct",
-			RuntimeService: "runtime-default", ValidatorService: "runtime-validator-default", RuntimeToken: strings.Repeat("r", 24),
-			ManagementToken: strings.Repeat("m", 24), Default: true,
+			RuntimeService: "runtime-default", ValidatorService: "runtime-validator-default", RuntimeToken: "fixture-default-runtime-credential",
+			ManagementToken: "fixture-default-management-credential", Default: true,
 		}},
 		NetworkProfiles: []appconfig.WorkerNetworkProfile{{
 			ID: "default", Name: "Default", Default: true, Approval: "none", Visibility: "public",
@@ -106,8 +106,8 @@ func TestRuntimePoolOptionalValidatorService(t *testing.T) {
 func multiPoolCatalogConfig() *appconfig.WorkersConfig {
 	c := catalogConfig()
 	c.RuntimePools = []appconfig.WorkerRuntimePool{
-		{ID: "private-a", Access: []string{"private"}, Labels: map[string]string{"zone": "internal"}, RuntimeService: "runtime-private", ValidatorService: "validator-private", RuntimeToken: strings.Repeat("p", 24), ManagementToken: strings.Repeat("q", 24), Default: true},
-		{ID: "public-b", Access: []string{"public"}, Labels: map[string]string{"zone": "external"}, RuntimeService: "runtime-public", ValidatorService: "validator-public", RuntimeToken: strings.Repeat("u", 24), ManagementToken: strings.Repeat("v", 24)},
+		{ID: "private-a", Access: []string{"private"}, Labels: map[string]string{"zone": "internal"}, RuntimeService: "runtime-private", ValidatorService: "validator-private", RuntimeToken: "fixture-private-runtime-credential", ManagementToken: "fixture-private-management-credential", Default: true},
+		{ID: "public-b", Access: []string{"public"}, Labels: map[string]string{"zone": "external"}, RuntimeService: "runtime-public", ValidatorService: "validator-public", RuntimeToken: "fixture-public-runtime-credential", ManagementToken: "fixture-public-management-credential"},
 	}
 	c.NetworkProfiles = []appconfig.WorkerNetworkProfile{
 		{ID: "internal-service", Name: "Internal service", Description: "Reachable from the deployment's internal network.", DomainSelector: map[string]string{"exposure": "internal"}, PoolSelector: map[string]string{"zone": "internal"}, Requirements: appconfig.WorkerNetworkRequirements{Ingress: []string{"private"}, PrivateEgress: "direct", PublicEgress: "deny"}, Default: true},
@@ -163,7 +163,7 @@ func TestRuntimePoolsExposeOnlyProductNetworkProfiles(t *testing.T) {
 
 func TestRuntimePoolsRejectAmbiguousDomainBackend(t *testing.T) {
 	c := multiPoolCatalogConfig()
-	c.RuntimePools = append(c.RuntimePools, appconfig.WorkerRuntimePool{ID: "public-c", Access: []string{"public"}, Labels: map[string]string{"zone": "external"}, RuntimeService: "runtime-public-2", ValidatorService: "validator-public-2", RuntimeToken: strings.Repeat("x", 24), ManagementToken: strings.Repeat("y", 24)})
+	c.RuntimePools = append(c.RuntimePools, appconfig.WorkerRuntimePool{ID: "public-c", Access: []string{"public"}, Labels: map[string]string{"zone": "external"}, RuntimeService: "runtime-public-2", ValidatorService: "validator-public-2", RuntimeToken: "fixture-alternate-runtime-credential", ManagementToken: "fixture-alternate-management-credential"})
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "exactly one runtime pool") {
 		t.Fatalf("ambiguous flat wildcard backend accepted: %v", err)
 	}
@@ -825,12 +825,12 @@ func TestProcessOperationValidationMembers(t *testing.T) {
 			expectedUID := "runtime-pod-1"
 			expectedPool := "default"
 			expectedRole := "runtime"
-			expectedToken := strings.Repeat("m", 24)
+			expectedToken := "fixture-default-management-credential"
 			if strings.HasPrefix(mode, "dedicated") || mode == "no-validator" {
 				expectedUID = "validator-pod-1"
 				expectedPool = "validation"
 				expectedRole = "validator"
-				expectedToken = strings.Repeat("v", 24)
+				expectedToken = "fixture-public-management-credential"
 			}
 			apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
@@ -929,7 +929,7 @@ func TestProcessOperationValidationMembers(t *testing.T) {
 				sourcePool = "public"
 				c.RuntimePools[0].ID = sourcePool
 			}
-			c.RuntimePools[0].ManagementToken = strings.Repeat("m", 24)
+			c.RuntimePools[0].ManagementToken = "fixture-default-management-credential"
 			s.Config.Workers = c
 			s3, err := workerapp.NewWorkerS3(c)
 			if err != nil {

@@ -47,7 +47,7 @@ func run() (result error) {
 	if command == "serve" {
 		return control.Serve(ctx, c)
 	}
-	s, e := control.OpenStore(ctx, c.DB)
+	s, e := control.OpenStore(ctx, c)
 	if e != nil {
 		return e
 	}

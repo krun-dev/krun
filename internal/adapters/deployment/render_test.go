@@ -1,6 +1,7 @@
 package deployment
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"os"
@@ -16,8 +17,11 @@ func fixture(t *testing.T) config.Config {
 	t.Setenv("KRUN_CONTROL_IMAGE", "registry.example.com/krun/control:fixture")
 	t.Setenv("KRUN_RUNTIME_IMAGE", "registry.example.com/krun/runtime:fixture")
 	t.Setenv("KRUN_BUILDER_IMAGE", "registry.example.com/krun/builder:fixture")
-	t.Setenv("KRUN_WORKERS_SECRETS_KEY", "ERERERERERERERERERERERERERERERERERERERERERE=")
-	t.Setenv("KRUN_OBJECT_STORAGE_CURSOR_KEY", strings.Repeat("B", 43))
+	var key [32]byte
+	rand.Read(key[:])
+	t.Setenv("KRUN_WORKERS_SECRETS_KEY", base64.StdEncoding.EncodeToString(key[:]))
+	rand.Read(key[:])
+	t.Setenv("KRUN_OBJECT_STORAGE_CURSOR_KEY", base64.RawURLEncoding.EncodeToString(key[:]))
 	t.Setenv("KRUN_OIDC_CLIENT_ID", "fixture-client")
 	t.Setenv("KRUN_OIDC_SECRET", "fixture-client-secret")
 	t.Setenv("KRUN_GITLAB_CLIENT_ID", "fixture-gitlab-client")

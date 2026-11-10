@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 
+	"github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/storage"
 )
 
@@ -17,7 +18,16 @@ const (
 )
 
 // OpenStore creates the storage implementation without exposing its driver.
-func OpenStore(ctx context.Context, dsn string) (*Store, error) { return storage.Open(ctx, dsn) }
+func OpenStore(ctx context.Context, c config.Config) (*Store, error) {
+	var keys storage.RepositoryTokenKeys
+	if c.Workers != nil {
+		keys = storage.RepositoryTokenKeys{
+			Active: c.Workers.SecretsActiveKey,
+			Lookup: c.Workers.WorkerSecretKey,
+		}
+	}
+	return storage.Open(ctx, c.DB, keys)
+}
 
 type workerDirtyWorker = storage.DirtyWorker
 

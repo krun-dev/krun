@@ -226,8 +226,8 @@ func TestMultiPoolRuntimeConfigIsolation(t *testing.T) {
 	s, store := testServer(t)
 	c := testWorkersConfig()
 	c.RuntimePools = []appconfig.WorkerRuntimePool{
-		{ID: "private-a", Access: []string{"private"}, RuntimeService: "runtime-private", ValidatorService: "validator-private", RuntimeToken: strings.Repeat("p", 24), ManagementToken: strings.Repeat("q", 24), Default: true},
-		{ID: "public-b", Access: []string{"public"}, RuntimeService: "runtime-public", ValidatorService: "validator-public", RuntimeToken: strings.Repeat("u", 24), ManagementToken: strings.Repeat("v", 24)},
+		{ID: "private-a", Access: []string{"private"}, RuntimeService: "runtime-private", ValidatorService: "validator-private", RuntimeToken: "fixture-private-runtime-credential", ManagementToken: "fixture-private-management-credential", Default: true},
+		{ID: "public-b", Access: []string{"public"}, RuntimeService: "runtime-public", ValidatorService: "validator-public", RuntimeToken: "fixture-public-runtime-credential", ManagementToken: "fixture-public-management-credential"},
 	}
 	s.Config.Workers = c
 	s.routes()
@@ -247,15 +247,15 @@ func TestMultiPoolRuntimeConfigIsolation(t *testing.T) {
 		s.serveInternal(w, r)
 		return w
 	}
-	privateSnapshot := requestPool("private-a", strings.Repeat("p", 24), "/snapshot")
+	privateSnapshot := requestPool("private-a", "fixture-private-runtime-credential", "/snapshot")
 	if privateSnapshot.Code != http.StatusOK || !strings.Contains(privateSnapshot.Body.String(), `"lazy_routes":true`) || strings.Contains(privateSnapshot.Body.String(), "workers.test") {
 		t.Fatalf("private snapshot isolation: %d %s", privateSnapshot.Code, privateSnapshot.Body.String())
 	}
-	privateChanges := requestPool("private-a", strings.Repeat("p", 24), "/changes?since=1&wait=1s")
+	privateChanges := requestPool("private-a", "fixture-private-runtime-credential", "/changes?since=1&wait=1s")
 	if privateChanges.Code != http.StatusOK || !strings.Contains(privateChanges.Body.String(), "private.workers.test") || strings.Contains(privateChanges.Body.String(), "public.workers.test") {
 		t.Fatalf("private changes isolation: %d %s", privateChanges.Code, privateChanges.Body.String())
 	}
-	wrongCredential := requestPool("private-a", strings.Repeat("u", 24), "/snapshot")
+	wrongCredential := requestPool("private-a", "fixture-public-runtime-credential", "/snapshot")
 	if wrongCredential.Code != http.StatusForbidden {
 		t.Fatalf("cross-pool credential accepted: %d %s", wrongCredential.Code, wrongCredential.Body.String())
 	}

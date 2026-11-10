@@ -8,18 +8,19 @@ import (
 )
 
 type RepositoryConnection struct {
-	bun.BaseModel     `bun:"table:krun_repository_connections,alias:krun_repository_connections"`
-	UserID            string     `bun:"user_id,pk"`
-	ProviderID        string     `bun:"provider_id,pk"`
-	AccessToken       string     `bun:"access_token"`
-	TokenType         string     `bun:"token_type"`
-	RefreshToken      string     `bun:"refresh_token"`
-	ExpiresAt         *time.Time `bun:"expires_at"`
-	TokenRevision     int64      `bun:"token_revision"`
-	RefreshState      string     `bun:"refresh_state"`
-	RefreshClaimedAt  *time.Time `bun:"refresh_claimed_at"`
-	ReconnectRequired bool       `bun:"reconnect_required"`
-	ConnectedAt       time.Time  `bun:"connected_at"`
+	bun.BaseModel          `bun:"table:krun_repository_connections,alias:krun_repository_connections"`
+	UserID                 string     `bun:"user_id,pk"`
+	ProviderID             string     `bun:"provider_id,pk"`
+	AccessTokenCiphertext  []byte     `bun:"access_token_ciphertext"`
+	TokenType              string     `bun:"token_type"`
+	RefreshTokenCiphertext []byte     `bun:"refresh_token_ciphertext"`
+	TokenKeyVersion        string     `bun:"token_key_version"`
+	ExpiresAt              *time.Time `bun:"expires_at"`
+	TokenRevision          int64      `bun:"token_revision"`
+	RefreshState           string     `bun:"refresh_state"`
+	RefreshClaimedAt       *time.Time `bun:"refresh_claimed_at"`
+	ReconnectRequired      bool       `bun:"reconnect_required"`
+	ConnectedAt            time.Time  `bun:"connected_at"`
 }
 
 type RepositoryConnectState struct {

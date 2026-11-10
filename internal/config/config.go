@@ -146,7 +146,12 @@ func (c *Config) Validate() error {
 		return errors.New("public_url must be an origin without a subpath")
 	}
 	c.PublicURL = strings.TrimSuffix(c.PublicURL, "/")
-	if u.Scheme != "https" && !(c.Development && u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost")) {
+	host := u.Hostname()
+	loopback := strings.EqualFold(host, "localhost") || net.ParseIP(host).IsLoopback()
+	if c.Development && !loopback {
+		return errors.New("development: true requires a loopback public_url")
+	}
+	if u.Scheme != "https" && !(c.Development && u.Scheme == "http") {
 		return errors.New("HTTPS required; development HTTP must use loopback")
 	}
 	if strings.TrimSpace(c.DB) == "" {

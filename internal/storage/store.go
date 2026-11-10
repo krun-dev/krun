@@ -19,8 +19,9 @@ import (
 //
 // No upstream HTTP calls may run inside Update.
 type Store struct {
-	pool *pgxpool.Pool
-	orm  *bun.DB
+	pool                *pgxpool.Pool
+	orm                 *bun.DB
+	repositoryTokenKeys RepositoryTokenKeys
 
 	configMu sync.Mutex
 	configCh chan struct{}
@@ -41,7 +42,7 @@ const (
 	PartitionAll = PartitionIAM | PartitionWorkers
 )
 
-func Open(ctx context.Context, dsn string) (*Store, error) {
+func Open(ctx context.Context, dsn string, keys RepositoryTokenKeys) (*Store, error) {
 	if dsn == "" {
 		return nil, errors.New("PostgreSQL db required")
 	}
@@ -60,7 +61,7 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 		pool.Close()
 		return nil, err
 	}
-	return &Store{pool: pool, orm: newORM(pool)}, nil
+	return &Store{pool: pool, orm: newORM(pool), repositoryTokenKeys: keys}, nil
 }
 
 func (s *Store) Close() {

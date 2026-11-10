@@ -91,8 +91,8 @@ workers:
       public_egress: deny
       runtime_service: runtime-internal
       validator_service: validator-internal
-      runtime_token: ${KRUN_INTERNAL_RUNTIME_TOKEN:-replace-with-internal-runtime-token}
-      management_token: ${KRUN_INTERNAL_MANAGEMENT_TOKEN:-replace-with-internal-management-token}
+      runtime_token: ${KRUN_INTERNAL_RUNTIME_TOKEN}
+      management_token: ${KRUN_INTERNAL_MANAGEMENT_TOKEN}
       default: true
     - id: office-a
       access:
@@ -103,8 +103,8 @@ workers:
       public_egress: deny
       runtime_service: runtime-office
       validator_service: validator-office
-      runtime_token: ${KRUN_OFFICE_RUNTIME_TOKEN:-replace-with-office-runtime-token}
-      management_token: ${KRUN_OFFICE_MANAGEMENT_TOKEN:-replace-with-office-management-token}
+      runtime_token: ${KRUN_OFFICE_RUNTIME_TOKEN}
+      management_token: ${KRUN_OFFICE_MANAGEMENT_TOKEN}
       default: false
     - id: public-a
       access:
@@ -115,8 +115,8 @@ workers:
       public_egress: deny
       runtime_service: runtime-public
       validator_service: validator-public
-      runtime_token: ${KRUN_PUBLIC_RUNTIME_TOKEN:-replace-with-public-runtime-token}
-      management_token: ${KRUN_PUBLIC_MANAGEMENT_TOKEN:-replace-with-public-management-token}
+      runtime_token: ${KRUN_PUBLIC_RUNTIME_TOKEN}
+      management_token: ${KRUN_PUBLIC_MANAGEMENT_TOKEN}
       default: false
   network_profiles:
     - id: internal
@@ -166,7 +166,7 @@ workers:
       default: false
   secrets_active_key: v1
   secrets_keys:
-    v1: ${KRUN_WORKERS_SECRETS_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+    v1: ${KRUN_WORKERS_SECRETS_KEY}
   s3_endpoint: ${KRUN_ARTIFACT_ENDPOINT:-https://tos-s3-cn-beijing.volces.com}
   s3_region: ${KRUN_ARTIFACT_REGION:-cn-beijing}
   s3_addressing_style: virtual
@@ -179,7 +179,7 @@ workers:
   s3_secret_key: ${KRUN_ARTIFACT_SECRET:-replace-me}
   object_storage:
     default_store: primary
-    cursor_key: ${KRUN_OBJECT_STORAGE_CURSOR_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA}
+    cursor_key: ${KRUN_OBJECT_STORAGE_CURSOR_KEY}
     stores:
       - id: primary
         endpoint: https://tos-s3-cn-beijing.volces.com

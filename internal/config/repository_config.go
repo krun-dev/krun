@@ -64,6 +64,9 @@ func (c *WorkersConfig) ValidateRepositoryProviders() error {
 		if p.GitHubAppSlug != "" && (p.Type != "github" || !Slug.MatchString(p.GitHubAppSlug) || p.ClientID == "" || p.ClientSecret == "") {
 			return fmt.Errorf("Workers GitHub App requires a valid slug and OAuth client credentials")
 		}
+		if p.Enabled && p.ClientID != "" && c.SecretsActiveKey == "" {
+			return fmt.Errorf("Workers repository OAuth requires secrets_active_key and secrets_keys")
+		}
 		if strings.ContainsAny(p.Token, "\r\n") {
 			return fmt.Errorf("invalid Workers repository token")
 		}
