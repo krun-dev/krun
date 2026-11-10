@@ -45,4 +45,4 @@ go vet ./...
 
 数据库测试需要专用、可写的测试数据库；存储包为每个数据库用例创建并清理独立 schema。`architecture_test.go` 阻止 SQL/驱动进入业务层以及下层导入控制器或 HTTP/对象存储依赖。
 
-Bun 负责常规实体映射和读写，专用 pgx 批量/CAS 语句保留。ORM 复用原连接池；业务层接触不到 Bun、`database/sql`、pgx 或连接。没有 ORM 建表、迁移、关联保存或级联。模型用法参考 [Bun models](https://bun.uptrace.dev/guide/models.html) 和 [transactions](https://bun.uptrace.dev/guide/transactions.html)。
+单表实体的常规查询和写入使用 Bun 及生成的行模型。涉及批量投影、队列或租约、复杂 CAS 和有界清理的专用 SQL 可以继续使用 pgx。ORM 复用原连接池；业务层接触不到 Bun、`database/sql`、pgx 或连接。没有 ORM 建表、迁移、关联保存或级联。模型用法参考 [Bun models](https://bun.uptrace.dev/guide/models.html) 和 [transactions](https://bun.uptrace.dev/guide/transactions.html)。

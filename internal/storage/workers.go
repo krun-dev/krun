@@ -2,12 +2,14 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"reflect"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/krun-dev/krun/internal/domain"
+	"github.com/krun-dev/krun/internal/storage/models"
 )
 
 // persistWorkers writes only changed Workers rows. Operation and build state
@@ -531,19 +533,26 @@ func sameBuildPrivate(a, b domain.WorkerBuildPrivate) bool {
 // workerBuildPrivate fetches one potentially large source row and its log object key. List and
 // metadata endpoints deliberately never materialize this table.
 func (s *Store) WorkerBuildPrivate(ctx context.Context, id string) (domain.WorkerBuildPrivate, bool, error) {
-	var private domain.WorkerBuildPrivate
-	var files []byte
-	err := s.pool.QueryRow(ctx, `SELECT actor_user_id, actor_key_id, actor_auth_version, source_key, files, log_key
-        FROM krun_worker_build_private WHERE build_id=$1`, id).
-		Scan(&private.Actor.User, &private.Actor.Key, &private.Actor.AuthVersion, &private.SourceKey, &files, &private.LogKey)
-	if errors.Is(err, pgx.ErrNoRows) {
+	var row models.BuildPrivate
+	err := s.orm.NewSelect().Model(&row).Where("build_id = ?", id).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
 		return domain.WorkerBuildPrivate{}, false, nil
 	}
 	if err != nil {
 		return domain.WorkerBuildPrivate{}, false, err
 	}
-	if len(files) > 0 {
-		if err = json.Unmarshal(files, &private.Files); err != nil {
+
+	private := domain.WorkerBuildPrivate{
+		Actor: domain.WorkerActor{
+			User:        row.ActorUserID,
+			Key:         row.ActorKeyID,
+			AuthVersion: row.ActorAuthVersion,
+		},
+		SourceKey: row.SourceKey,
+		LogKey:    row.LogKey,
+	}
+	if len(row.Files) > 0 {
+		if err = json.Unmarshal(row.Files, &private.Files); err != nil {
 			return domain.WorkerBuildPrivate{}, false, err
 		}
 	}

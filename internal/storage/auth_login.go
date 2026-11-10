@@ -152,7 +152,10 @@ func (s *Store) EmailLogin(ctx context.Context, hash string) (domain.EmailLogin,
 // invalidateEmailLogin makes a challenge unusable while retaining it for the
 // send cooldown. It is used when delivery fails after the row was inserted.
 func (s *Store) InvalidateEmailLogin(ctx context.Context, hash string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE krun_email_logins SET consumed=true WHERE challenge_hash=$1 AND consumed=false`, hash)
+	_, err := s.orm.NewUpdate().Model((*models.EmailLogin)(nil)).
+		Set("consumed = TRUE").
+		Where("challenge_hash = ? AND consumed = FALSE", hash).
+		Exec(ctx)
 	return err
 }
 
