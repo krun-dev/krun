@@ -17,23 +17,17 @@ func (s *State) RecordAudit(a Audit) {
 
 func NewState() *State {
 	return &State{
-		Workers:                 NewWorkerState(),
-		Sources:                 map[string]string{},
-		Users:                   map[string]User{},
-		Organizations:           map[string]Organization{},
-		Members:                 map[string]Member{},
-		Groups:                  map[string]Group{},
-		Assignments:             map[string]Assignment{},
-		Resources:               map[string]Resource{},
-		Keys:                    map[string]APIKey{},
-		KeyHashes:               map[string]string{},
-		Sessions:                map[string]Session{},
-		Browsers:                map[string]Browser{},
-		Logins:                  map[string]Login{},
-		EmailLogins:             map[string]EmailLogin{},
-		Invitations:             map[string]time.Time{},
-		RepositoryConnections:   map[string]WorkerRepositoryConnection{},
-		RepositoryConnectStates: map[string]WorkerRepositoryConnectState{},
+		Workers:       NewWorkerState(),
+		Sources:       map[string]string{},
+		Users:         map[string]User{},
+		Organizations: map[string]Organization{},
+		Members:       map[string]Member{},
+		Groups:        map[string]Group{},
+		Assignments:   map[string]Assignment{},
+		Resources:     map[string]Resource{},
+		Keys:          map[string]APIKey{},
+		KeyHashes:     map[string]string{},
+		Invitations:   map[string]time.Time{},
 	}
 }
 
@@ -168,24 +162,6 @@ func CloneState(src *State) (*State, error) {
 		target := dst.Workers.Configurations[id]
 		target.SecretVersions = CloneStringsMap(source.SecretVersions)
 		dst.Workers.Configurations[id] = target
-	}
-	// Refresh tokens and their CAS/lease metadata are intentionally omitted
-	// from JSON. Preserve them only for the in-memory test store; PostgreSQL
-	// never loads repository credentials into a generic State snapshot.
-	for key, source := range src.RepositoryConnections {
-		connection, ok := dst.RepositoryConnections[key]
-		if !ok {
-			continue
-		}
-		connection.AccessToken = source.AccessToken
-		connection.TokenType = source.TokenType
-		connection.RefreshToken = source.RefreshToken
-		connection.ExpiresAt = source.ExpiresAt
-		connection.TokenRevision = source.TokenRevision
-		connection.RefreshState = source.RefreshState
-		connection.RefreshClaimedAt = source.RefreshClaimedAt
-		connection.ReconnectRequired = source.ReconnectRequired
-		dst.RepositoryConnections[key] = connection
 	}
 	// Build lease metadata is also storage-private, but the diff writer needs
 	// the exact pre-image for its state/owner CAS.

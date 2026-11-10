@@ -11,10 +11,8 @@ import (
 	"time"
 
 	objectstore "github.com/krun-dev/krun/internal/adapters/objectstore"
-	workerartifact "github.com/krun-dev/krun/internal/artifact"
 	appconfig "github.com/krun-dev/krun/internal/config"
 	domain "github.com/krun-dev/krun/internal/domain"
-	storage "github.com/krun-dev/krun/internal/storage"
 )
 
 type WorkerConfigSnapshot struct {
@@ -167,16 +165,6 @@ func EnvHostName(pattern, env string) string {
 	return ""
 }
 
-// workerConfigDigest is the identity of a projection. A matching digest means
-// the publisher has nothing new for the runtime and must not create a revision.
-func WorkerConfigDigest(p domain.WorkerConfigProjection) (string, []byte, error) {
-	raw, err := json.Marshal(p)
-	if err != nil {
-		return "", nil, err
-	}
-	return workerartifact.BytesDigest(raw), raw, nil
-}
-
 func SameWorkerConfigRoute(a, b domain.WorkerConfigRoute) bool { return a == b }
 
 // diffWorkerConfig emits the ops needed to move a runtime from prev to next.
@@ -286,49 +274,7 @@ type WorkerConfigLatest struct {
 func (w *Controller) PublishConfig(ctx context.Context) (int64, error) {
 	w.configMu.Lock()
 	defer w.configMu.Unlock()
-	if w.Service.Store.Persistent() {
-		return w.PublishConfigDelta(ctx)
-	}
-	// OpenStore requires PostgreSQL. This adapter is only used by memory fixtures.
-	s := w.Service.Store
-	var next domain.WorkerConfigProjection
-	if err := s.View(ctx, storage.PartitionAll, func(st *domain.State) error { next = WorkerConfigFromState(st, w.Config); return nil }); err != nil {
-		return 0, err
-	}
-	for attempt := 0; attempt < 8; attempt++ {
-		previous, found, err := s.LatestConfigRevision(ctx)
-		if err != nil {
-			return 0, err
-		}
-		var baseline *domain.WorkerConfigProjection
-		if found {
-			baseline = &domain.WorkerConfigProjection{}
-			if err = json.Unmarshal(previous.Payload, baseline); err != nil {
-				return 0, err
-			}
-		}
-		ops := DiffWorkerConfig(baseline, next)
-		if len(ops) == 0 {
-			return previous.Revision, nil
-		}
-		digest, payload, err := WorkerConfigDigest(next)
-		if err != nil {
-			return 0, err
-		}
-		raw, err := json.Marshal(ops)
-		if err != nil {
-			return 0, err
-		}
-		revision, _, won, err := s.AppendConfigRevisionCAS(ctx, previous.Revision, digest, payload, raw, storage.WorkerConfigOpsRetain)
-		if err != nil {
-			return 0, err
-		}
-		if won {
-			s.SignalConfig()
-			return revision, nil
-		}
-	}
-	return 0, errors.New("edge config publisher CAS contention")
+	return w.PublishConfigDelta(ctx)
 }
 
 func (w *Controller) WriteConfigLatest(ctx context.Context, key string, next WorkerConfigLatest) error {

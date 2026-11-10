@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"sort"
 	"time"
 
 	"github.com/krun-dev/krun/internal/domain"
@@ -32,16 +31,6 @@ func invitationDomain(row models.OrgInvitationLink) domain.OrganizationInvitatio
 }
 
 func (s *Store) OrganizationInvitation(ctx context.Context, id, hash string) (domain.OrganizationInvitation, bool, error) {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		for _, in := range s.organizationInvitations {
-			if id != "" && in.ID == id || hash != "" && in.TokenHash == hash {
-				return in.WithStatus(now()), true, nil
-			}
-		}
-		return domain.OrganizationInvitation{}, false, nil
-	}
 	var row models.OrgInvitationLink
 	query := s.orm.NewSelect().Model(&row)
 	if id != "" {
@@ -57,41 +46,12 @@ func (s *Store) OrganizationInvitation(ctx context.Context, id, hash string) (do
 }
 
 func (s *Store) OrganizationInvitationRedeemed(ctx context.Context, id, user string) (bool, error) {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		return s.invitationRedemptions[id][user], nil
-	}
 	return s.orm.NewSelect().Model((*models.OrgInvitationRedemption)(nil)).Where("invitation_id = ? AND user_id = ?", id, user).Exists(ctx)
 }
 
 func (s *Store) ListOrganizationInvitations(ctx context.Context, organization, after string, limit int) ([]domain.OrganizationInvitation, error) {
 	cutoff := now().Add(-7 * 24 * time.Hour)
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		out := []domain.OrganizationInvitation{}
-		cursor, hasCursor := s.organizationInvitations[after]
-		for _, in := range s.organizationInvitations {
-			if in.Organization != organization || !in.Expires.After(cutoff) {
-				continue
-			}
-			if after != "" && (!hasCursor || cursor.Organization != organization || in.Created.After(cursor.Created) || in.Created.Equal(cursor.Created) && in.ID >= after) {
-				continue
-			}
-			out = append(out, in.WithStatus(now()))
-		}
-		sort.Slice(out, func(i, j int) bool {
-			if out[i].Created.Equal(out[j].Created) {
-				return out[i].ID > out[j].ID
-			}
-			return out[i].Created.After(out[j].Created)
-		})
-		if len(out) > limit {
-			out = out[:limit]
-		}
-		return out, nil
-	}
+
 	rows := []models.OrgInvitationLink{}
 	query := s.orm.NewSelect().Model(&rows).Where("org_id = ? AND expires_at > ?", organization, cutoff).
 		OrderExpr("created_at DESC, invitation_id DESC").Limit(int64(limit))
@@ -117,31 +77,6 @@ func invitationConflict() error {
 }
 
 func (s *Store) CreateOrganizationInvitation(ctx context.Context, in domain.OrganizationInvitation, orgRevision int, audit domain.Audit) error {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		org, found := s.memory.Organizations[in.Organization]
-		if !found || org.Revision != orgRevision {
-			return invitationConflict()
-		}
-		active := 0
-		for _, existing := range s.organizationInvitations {
-			if existing.Organization == in.Organization && existing.WithStatus(now()).Status == "active" {
-				active++
-			}
-		}
-		if active >= organizationInvitationLimit {
-			return invitationLimitError()
-		}
-		if s.organizationInvitations == nil {
-			s.organizationInvitations = map[string]domain.OrganizationInvitation{}
-		}
-		s.organizationInvitations[in.ID] = in
-		org.Revision++
-		s.memory.Organizations[org.ID] = org
-		s.recordInvitationMemoryAudit(audit)
-		return nil
-	}
 	tx, err := s.beginORMTransaction(ctx)
 	if err != nil {
 		return err
@@ -169,22 +104,6 @@ func (s *Store) CreateOrganizationInvitation(ctx context.Context, in domain.Orga
 }
 
 func (s *Store) RevokeOrganizationInvitation(ctx context.Context, organization, id string, audit domain.Audit) error {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		in, found := s.organizationInvitations[id]
-		if !found || in.Organization != organization {
-			return domain.NotFound()
-		}
-		if in.Revoked == nil {
-			at := now()
-			in.Revoked = &at
-			in.Revision++
-			s.organizationInvitations[id] = in
-			s.recordInvitationMemoryAudit(audit)
-		}
-		return nil
-	}
 	tx, err := s.beginORMTransaction(ctx)
 	if err != nil {
 		return err
@@ -227,14 +146,4 @@ func writeInvitationAudit(ctx context.Context, tx ormTransaction, audit domain.A
 		return err
 	}
 	return insertAudits(ctx, tx, []domain.Audit{audit})
-}
-
-func (s *Store) recordInvitationMemoryAudit(audit domain.Audit) {
-	s.memory.Revision++
-	audit.Revision = s.memory.Revision
-	s.memoryAudits = append(s.memoryAudits, audit)
-	s.memoryAudits = PruneMemoryAudits(s.memoryAudits, now())
-	if s.onPersist != nil {
-		s.onPersist()
-	}
 }

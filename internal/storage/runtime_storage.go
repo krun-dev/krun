@@ -11,36 +11,6 @@ import (
 // RuntimeBucket resolves exactly one live, currently deployed binding. No hot
 // path writes or tenant-wide IAM/state load are needed.
 func (s *Store) RuntimeBucket(ctx context.Context, versionID, binding, pool string) (domain.WorkerBucket, error) {
-	if s.pool == nil {
-		var bucket domain.WorkerBucket
-		err := s.View(ctx, PartitionAll, func(st *domain.State) error {
-			version, exists := st.Workers.Versions[versionID]
-			if !exists || !domain.WorkerAvailableInPool(st.Workers, version.Worker, pool) || st.Resources[version.Worker].ID == "" || st.Organizations[version.Organization].ID == "" {
-				return domain.NotFound()
-			}
-			worker := st.Workers.Workers[version.Worker]
-			env := worker.Environments[version.Environment]
-			deployed := env.Version == versionID
-			for _, deployment := range st.Workers.Deployments {
-				if deployment.Version == versionID && deployment.Committed != nil && deployment.Expires.After(now()) {
-					deployed = true
-				}
-			}
-			if !env.Enabled || !deployed {
-				return domain.NotFound()
-			}
-			ref, exists := version.R2Bindings[binding]
-			if !exists {
-				return domain.NotFound()
-			}
-			bucket, exists = st.Workers.Buckets[ref.BucketID]
-			if !exists || !bucket.Enabled || bucket.Organization != version.Organization {
-				return domain.NotFound()
-			}
-			return nil
-		})
-		return bucket, err
-	}
 	var bucket domain.WorkerBucket
 	err := s.pool.QueryRow(ctx, `SELECT k.bucket_id,k.org_id,k.name,k.store_id,k.enabled,k.revision,k.created_at
  FROM krun_worker_version_r2 b JOIN krun_worker_versions v ON v.version_id=b.version_id

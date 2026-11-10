@@ -153,12 +153,13 @@ TOS 凭据和前缀隔离通过，不等于 R2 API、流、分片或 Cloudflare 
 制品与静态资产的真实 STS / workerd 验证：
 
 ```sh
-go test ./internal/control -run '^TestConfiguredRuntimeReads$' -v -count=1 \
+KRUN_TEST_POSTGRES_URL="$TEST_DATABASE_URL" \
+  go test ./internal/control -run '^TestConfiguredRuntimeReads$' -v -count=1 \
   -args -runtime-storage-config=../../.data/dev.yaml
 ```
 
 这项测试要求主配置显式选择 `s3_runtime_credentials.type: tos_assume_role`，不会回退到
-静态凭据。元数据使用内存测试夹具；权限 handler、生产模板生成的 serving / validator、
+静态凭据。元数据写入专用 PostgreSQL 测试库的独立 schema。权限 handler、生产模板生成的 serving / validator、
 STS 和对象存储均使用真实实现。测试仅在 `s3_prefix/integration-tests/<随机ID>/` 下创建
 配置头、制品、清单和资产，验证配置签名读取、静态响应与缓存、代码执行、凭据不进入
 业务 env，以及云端对写入、删除、列举、相邻目录读取的拒绝，结束后删除对象并确认不存在。

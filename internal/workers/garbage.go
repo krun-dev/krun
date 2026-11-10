@@ -19,9 +19,6 @@ func WorkerArtifactManifestKey(a domain.WorkerArtifact) string {
 }
 
 func (w *Controller) CollectArtifactAssets(ctx context.Context, a domain.WorkerArtifact) (bool, error) {
-	if !w.Service.Store.Persistent() {
-		return true, nil
-	}
 	keys, err := w.Service.Store.ArtifactAssetObjects(ctx, a.ID, 1000)
 	if err != nil {
 		return false, err

@@ -18,11 +18,6 @@ type invitationReadScopeKey struct{}
 // OrganizationInvitationContext reads only this organization's authorization
 // facts and the supplied actor, creator and optional directed recipient.
 func (s *Store) OrganizationInvitationContext(ctx context.Context, organization string, users ...string) (*domain.State, error) {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		return domain.CloneState(s.memory)
-	}
 	ctx = context.WithValue(ctx, invitationReadScopeKey{}, invitationReadScope{organization: organization, users: users})
 	st := domain.NewState()
 	if err := s.loadIAM(ctx, st); err != nil {

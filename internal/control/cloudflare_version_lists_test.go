@@ -32,13 +32,16 @@ func TestCloudflareVersionListsKeepTheirProtocolWhenConsolePages(t *testing.T) {
 				Version:      version.ID,
 				Operation:    fmt.Sprintf("cf-operation-%03d", index),
 				Created:      version.Created,
-				Committed:    &created,
 				Expires:      created.Add(time.Hour),
 			}
 			st.Workers.Deployments[deployment.ID] = deployment
 		}
 		return nil
 	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := postgresTestPool(store).Exec(t.Context(), "UPDATE krun_worker_deployments SET committed_at=created_at WHERE worker_id=$1", active.Worker); err != nil {
 		t.Fatal(err)
 	}
 

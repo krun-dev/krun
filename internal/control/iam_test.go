@@ -5,9 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
-	"time"
-
-	appconfig "github.com/krun-dev/krun/internal/config"
 )
 
 // The service mutates a disposable working copy. A failed last-admin check must
@@ -15,31 +12,6 @@ import (
 func TestIAMLastAdministratorFailureRollsBack(t *testing.T) {
 	s, store := testServer(t)
 	checkIAMLastAdministratorRollback(t, s, store)
-}
-
-func TestPostgresIAMLastAdministratorFailureRollsBack(t *testing.T) {
-	store := postgresTestStore(t)
-	ctx := context.Background()
-	cfg := appconfig.Config{DB: "postgres://test-only/krun_test", Development: true, PublicURL: "http://127.0.0.1:8080", Providers: []appconfig.ProviderConfig{{ID: "local", Source: "local", Type: "dev", Registration: "jit"}}}
-	server, err := NewServer(ctx, cfg, store)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, admin, _ := fixture()
-	state.Bootstrapped = true
-	state.Sources["local"] = appconfig.Fingerprint(cfg.Providers[0])
-	if err := store.Update(ctx, PartitionIAM, func(st *State) error {
-		state.Sources = st.Sources
-		state.Revision = st.Revision + 1
-		*st = *state
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.InsertSession(ctx, "krun_cli_admin", Session{User: admin.ID, AuthVersion: admin.AuthVersion, CLI: true, Created: now(), Seen: now(), Absolute: now().Add(time.Hour)}); err != nil {
-		t.Fatal(err)
-	}
-	checkIAMLastAdministratorRollback(t, server, store)
 }
 
 func checkIAMLastAdministratorRollback(t *testing.T, s *Server, store *Store) {

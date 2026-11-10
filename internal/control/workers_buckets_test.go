@@ -60,7 +60,7 @@ func TestBucketAPIAndCloudflareBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
+	if err := store.View(context.Background(), PartitionAll, func(st *State) error {
 		app := s.workerApplication(nil)
 		app.Require = func(*State, Principal, string, Target) error { return nil }
 		if err := app.StageBindings(st, Principal{}, workerapp.WorkerRef{Organization: "org-a", Worker: "svc-a", Environment: "production"}, input); err != nil {
@@ -96,7 +96,10 @@ func TestStorageCredentialAuthorizationAndDisable(t *testing.T) {
 		env.Version = "version-test"
 		service.Environments["production"] = env
 		st.Workers.Workers["svc-a"] = service
-		st.Workers.Versions["version-test"] = WorkerVersion{ID: "version-test", Organization: "org-a", Worker: "svc-a", Environment: "production", R2Bindings: map[string]domain.WorkerR2Binding{"IMAGES": {BucketID: "bucket-test", BucketName: "images", StoreID: "primary"}}}
+		st.Workers.Artifacts["artifact-test"] = WorkerArtifact{ID: "artifact-test", Organization: "org-a", State: "finalized", Created: now()}
+		poolID := s.Config.Workers.RuntimePools[0].ID
+		st.Workers.Placements[workerPlacementKey("svc-a", poolID)] = WorkerPlacement{Worker: "svc-a", Organization: "org-a", Pool: poolID, Role: "primary", State: "active", Revision: 1, Created: now(), Updated: now()}
+		st.Workers.Versions["version-test"] = WorkerVersion{Artifact: "artifact-test", Created: now(), ID: "version-test", Organization: "org-a", Worker: "svc-a", Environment: "production", R2Bindings: map[string]domain.WorkerR2Binding{"IMAGES": {BucketID: "bucket-test", BucketName: "images", StoreID: "primary"}}}
 		return nil
 	}); err != nil {
 		t.Fatal(err)

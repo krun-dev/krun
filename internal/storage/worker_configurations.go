@@ -165,31 +165,6 @@ func readWorkerConfigurationR2(results pgx.BatchResults, st *domain.State) error
 // deployments protect their configurations; deleting an environment removes
 // its snapshots and bindings together. Each background pass removes <=1000.
 func (s *Store) retainWorkerConfigurations(ctx context.Context) error {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.memory == nil || s.memory.Workers == nil {
-			return nil
-		}
-		protected := map[string]bool{}
-		for _, worker := range s.memory.Workers.Workers {
-			for _, env := range worker.Environments {
-				protected[s.memory.Workers.Versions[env.Version].Configuration] = true
-				protected[s.memory.Workers.Versions[env.Confirmed].Configuration] = true
-			}
-		}
-		for _, op := range s.memory.Workers.Operations {
-			if op.State == "queued" || op.State == "validating" || op.State == "committed" {
-				protected[s.memory.Workers.Versions[op.Version].Configuration] = true
-			}
-		}
-		for id, c := range s.memory.Workers.Configurations {
-			if !protected[id] && !c.Created.After(now().Add(-WorkerConfigurationRetain)) {
-				delete(s.memory.Workers.Configurations, id)
-			}
-		}
-		return nil
-	}
 	_, err := s.pool.Exec(ctx, `WITH victims AS MATERIALIZED(
  SELECT c.configuration_id FROM krun_worker_configurations c
  WHERE c.created_at<=$1

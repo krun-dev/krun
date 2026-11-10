@@ -85,21 +85,7 @@ func (s *Service) CSRF(ctx context.Context, sessionHash, browserHash, ip string)
 }
 func (s *Service) Logout(ctx context.Context, st *domain.State, p authorization.Principal, browserHash, requestID string) error {
 	audit.Record(st, p, requestID, "auth.logout", p.User.ID, true)
-	if s.Store.Persistent() {
-		audits := append([]domain.Audit(nil), st.PendingAudits...)
-		st.PendingAudits = nil
-		return s.Store.LogoutSessionAudited(ctx, p.SessionHash, browserHash, audits)
-	}
-	if err := s.Store.DeleteSession(ctx, p.SessionHash); err != nil {
-		return err
-	}
-	browser, ok, err := s.Store.BrowserFor(ctx, browserHash)
-	if err != nil {
-		return err
-	}
-	if ok {
-		browser.Generation++
-		return s.Store.UpsertBrowser(ctx, browserHash, browser)
-	}
-	return nil
+	audits := append([]domain.Audit(nil), st.PendingAudits...)
+	st.PendingAudits = nil
+	return s.Store.LogoutSessionAudited(ctx, p.SessionHash, browserHash, audits)
 }

@@ -531,10 +531,6 @@ func sameBuildPrivate(a, b domain.WorkerBuildPrivate) bool {
 // workerBuildPrivate fetches one potentially large source row and its log object key. List and
 // metadata endpoints deliberately never materialize this table.
 func (s *Store) WorkerBuildPrivate(ctx context.Context, id string) (domain.WorkerBuildPrivate, bool, error) {
-	if s.pool == nil {
-		private, ok := s.memState().Workers.BuildPrivate[id]
-		return private, ok, nil
-	}
 	var private domain.WorkerBuildPrivate
 	var files []byte
 	err := s.pool.QueryRow(ctx, `SELECT actor_user_id, actor_key_id, actor_auth_version, source_key, files, log_key

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/krun-dev/krun/internal/domain"
@@ -34,15 +33,6 @@ func oauthAuthorization(row models.OauthAuthorization) domain.OAuthAuthorization
 	return a
 }
 func (s *Store) InsertOAuthAuthorization(ctx context.Context, a domain.OAuthAuthorization) error {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.oauthAuthorizations == nil {
-			s.oauthAuthorizations = map[string]domain.OAuthAuthorization{}
-		}
-		s.oauthAuthorizations[a.Hash] = a
-		return nil
-	}
 	row := oauthAuthorizationRow(a)
 	_, err := s.orm.NewInsert().Model(&row).Returning("NULL").Exec(ctx)
 	return err
@@ -50,16 +40,6 @@ func (s *Store) InsertOAuthAuthorization(ctx context.Context, a domain.OAuthAuth
 
 // Lookup keys are fixed by the caller; no database objects leave storage.
 func (s *Store) OAuthAuthorization(ctx context.Context, kind, value string) (domain.OAuthAuthorization, bool, error) {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		for _, a := range s.oauthAuthorizations {
-			if kind == "hash" && a.Hash == value || kind == "code" && a.CodeHash == value || kind == "user" && a.UserCode == value {
-				return a, true, nil
-			}
-		}
-		return domain.OAuthAuthorization{}, false, nil
-	}
 	column := "auth_hash"
 	switch kind {
 	case "hash":
@@ -78,17 +58,6 @@ func (s *Store) OAuthAuthorization(ctx context.Context, kind, value string) (dom
 	return oauthAuthorization(row), err == nil, err
 }
 func (s *Store) DecideOAuthAuthorization(ctx context.Context, a domain.OAuthAuthorization, audits []domain.Audit) error {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		old, ok := s.oauthAuthorizations[a.Hash]
-		if !ok || old.Decision != "pending" || !now().Before(old.Expires) {
-			return ErrOAuthGrant
-		}
-		s.oauthAuthorizations[a.Hash] = a
-		s.memoryAudits = append(s.memoryAudits, audits...)
-		return nil
-	}
 	tx, err := s.beginORMTransaction(ctx)
 	if err != nil {
 		return err
@@ -112,12 +81,6 @@ func (s *Store) DecideOAuthAuthorization(ctx context.Context, a domain.OAuthAuth
 	return tx.Commit(ctx)
 }
 func (s *Store) OAuthUser(ctx context.Context, id string) (domain.User, bool, error) {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		u, ok := s.memory.Users[id]
-		return u, ok, nil
-	}
 	var r models.User
 	err := s.orm.NewSelect().Model(&r).Where("user_id = ?", id).Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -126,13 +89,6 @@ func (s *Store) OAuthUser(ctx context.Context, id string) (domain.User, bool, er
 	return domain.User{ID: r.UserID, Source: r.Source, Subject: r.Subject, Name: r.Name, Email: r.Email, Status: r.Status, AuthVersion: r.AuthVersion}, err == nil, err
 }
 func (s *Store) OAuthRefreshGrant(ctx context.Context, hash string) (domain.OAuthRefresh, domain.OAuthGrant, bool, error) {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		r, ok := s.oauthRefresh[hash]
-		g, exists := s.oauthGrants[r.Grant]
-		return r, g, ok && exists, nil
-	}
 	var r models.OauthRefreshToken
 	err := s.orm.NewSelect().Model(&r).Where("token_hash = ?", hash).Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -152,38 +108,6 @@ func (s *Store) OAuthRefreshGrant(ctx context.Context, hash string) (domain.OAut
 // ExchangeOAuth atomically consumes one code/refresh and inserts its replacement
 // credentials. Each CAS loser issues nothing. Network calls happen elsewhere.
 func (s *Store) ExchangeOAuth(ctx context.Context, authorizationHash, refreshHash string, g domain.OAuthGrant, r domain.OAuthRefresh, session domain.Session) error {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.oauthGrants == nil {
-			s.oauthGrants = map[string]domain.OAuthGrant{}
-		}
-		if s.oauthRefresh == nil {
-			s.oauthRefresh = map[string]domain.OAuthRefresh{}
-		}
-		if authorizationHash != "" {
-			a, ok := s.oauthAuthorizations[authorizationHash]
-			if !ok || a.Consumed || a.Decision != "approved" || !now().Before(a.Expires) {
-				return ErrOAuthGrant
-			}
-			a.Consumed = true
-			s.oauthAuthorizations[a.Hash] = a
-		} else {
-			old, ok := s.oauthRefresh[refreshHash]
-			existing := s.oauthGrants[g.ID]
-			if !ok || old.Consumed || existing.Revoked || !now().Before(existing.Expires) || !now().Before(old.Expires) {
-				return ErrOAuthGrant
-			}
-			old.Consumed = true
-			s.oauthRefresh[refreshHash] = old
-		}
-		s.oauthGrants[g.ID] = g
-		if r.Hash != "" {
-			s.oauthRefresh[r.Hash] = r
-		}
-		s.memory.Sessions[session.Hash] = session
-		return nil
-	}
 	tx, err := s.beginORMTransaction(ctx)
 	if err != nil {
 		return err
@@ -243,42 +167,14 @@ func (s *Store) ExchangeOAuth(ctx context.Context, authorizationHash, refreshHas
 	return tx.Commit(ctx)
 }
 func (s *Store) RevokeOAuthGrant(ctx context.Context, id string) error {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		g, ok := s.oauthGrants[id]
-		if ok {
-			g.Revoked = true
-			s.oauthGrants[id] = g
-		}
-		return nil
-	}
 	_, err := s.orm.NewUpdate().Model((*models.OauthGrant)(nil)).Set("revoked = true").Where("grant_id = ?", id).Exec(ctx)
 	return err
 }
 func (s *Store) OAuthGrantForToken(ctx context.Context, hash, client string) (string, error) {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		id := ""
-		if r, ok := s.oauthRefresh[hash]; ok {
-			id = r.Grant
-		} else if session, ok := s.memory.Sessions[hash]; ok {
-			id = session.OAuthGrant
-		}
-		if g, ok := s.oauthGrants[id]; ok && g.Client == client {
-			return id, nil
-		}
-		return "", nil
-	}
 	var id string
 	err := s.pool.QueryRow(ctx, `SELECT g.grant_id FROM krun_oauth_grants g WHERE g.client_id=$2 AND (g.grant_id IN(SELECT grant_id FROM krun_oauth_refresh_tokens WHERE token_hash=$1) OR g.grant_id IN(SELECT oauth_grant_id FROM krun_sessions WHERE session_hash=$1)) LIMIT 1`, hash, client).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}
 	return id, err
-}
-func (s *Store) oauthGrantActive(id string) bool {
-	g, ok := s.oauthGrants[id]
-	return ok && !g.Revoked && time.Now().Before(g.Expires)
 }

@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"encoding/json"
-	"errors"
 
 	"github.com/krun-dev/krun/internal/domain"
 	"github.com/krun-dev/krun/internal/storage/models"
@@ -12,16 +11,6 @@ import (
 // StartUploadedBuild reserves bounded work for synchronous trusted packaging.
 // An unrelated controller cannot claim the upload while its lease is fresh.
 func (s *Store) StartUploadedBuild(ctx context.Context, b domain.WorkerBuild, actor domain.WorkerActor) error {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.memory == nil {
-			return errors.New("store is not initialized")
-		}
-		s.memory.Workers.Builds[b.ID] = b
-		s.memory.Workers.BuildPrivate[b.ID] = domain.WorkerBuildPrivate{Actor: actor}
-		return nil
-	}
 	tx, err := s.beginORMTransaction(ctx)
 	if err != nil {
 		return err

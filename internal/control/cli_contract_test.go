@@ -126,14 +126,7 @@ func TestCLIControlOAuthLoginRefreshAndLogoutContract(t *testing.T) {
 			if initial.Token == "" || initial.RefreshToken == "" {
 				t.Fatal("CLI did not save rotating credentials")
 			}
-			if err := store.Update(context.Background(), PartitionIAM, func(st *State) error {
-				session := st.Sessions[digest(initial.Token)]
-				session.Absolute = now().Add(-time.Minute)
-				st.Sessions[digest(initial.Token)] = session
-				return nil
-			}); err != nil {
-				t.Fatal(err)
-			}
+			expireTestSession(t, store, initial.Token)
 			var status bytes.Buffer
 			if err := kruncli.Run(context.Background(), []string{"whoami", "--profile", profilePath}, strings.NewReader(""), &status, &status); err != nil {
 				t.Fatal("automatic refresh failed", err)

@@ -29,9 +29,6 @@ func (s *Store) PendingConfigCheckpoints(ctx context.Context, limit int) ([]Conf
 }
 
 func (s *Store) PublishedConfigCheckpoints(ctx context.Context) ([]ConfigCheckpoint, error) {
-	if s.pool == nil {
-		return nil, nil
-	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT pool, shard, revision, published_revision
 		FROM worker_config_checkpoints WHERE published_revision>0`)
@@ -51,9 +48,7 @@ func (s *Store) MarkConfigCheckpointPublished(ctx context.Context, pool, shard s
 
 func (s *Store) RuntimeConfigRoute(ctx context.Context, host, pool string) (domain.WorkerConfigProjection, int64, error) {
 	out := domain.WorkerConfigProjection{Versions: map[string]domain.WorkerVersion{}}
-	if s.pool == nil {
-		return out, 0, domain.NotFound()
-	}
+
 	var route domain.WorkerConfigRoute
 	var payload []byte
 	var revision int64

@@ -18,6 +18,7 @@ import (
 	"github.com/krun-dev/krun/internal/adapters/storagecredentials"
 	workerartifact "github.com/krun-dev/krun/internal/artifact"
 	appconfig "github.com/krun-dev/krun/internal/config"
+	"github.com/krun-dev/krun/internal/domain"
 	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
@@ -530,34 +531,41 @@ func TestServiceDomainsUpdateAddsAndRemovesHosts(t *testing.T) {
 	if updated.Revision != 1 {
 		t.Fatalf("domain revision after add: %d", updated.Revision)
 	}
-	envs := request(s, "GET", base+"/environments", "krun_cli_admin", "")
-	var list struct {
-		Items []WorkerEnvironment `json:"items"`
-	}
-	_ = json.Unmarshal(envs.Body.Bytes(), &list)
-	for _, env := range list.Items {
-		if len(env.Hosts) != 2 {
-			t.Fatalf("%s: expected two hosts, got %v", env.Name, env.Hosts)
+	assertHosts := func(want int) {
+		t.Helper()
+		response := request(s, "GET", base+"/environments", "krun_cli_admin", "")
+		var list struct {
+			Items []WorkerEnvironment `json:"items"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &list); err != nil || response.Code != 200 || len(list.Items) != 2 {
+			t.Fatalf("list environments: %d %s (%v)", response.Code, response.Body, err)
+		}
+		for _, env := range list.Items {
+			if len(env.Hosts) != want {
+				t.Fatalf("%s: expected %d hosts, got %v", env.Name, want, env.Hosts)
+			}
+			if want == 1 && !strings.HasSuffix(env.Hosts[0], ".workers.test") {
+				t.Fatalf("%s: wrong remaining host %v", env.Name, env.Hosts)
+			}
 		}
 	}
+	assertHosts(2)
 
 	// Removing it drops the host everywhere and prunes nothing else.
 	r = request(s, "PUT", base+"/domains", "krun_cli_admin", `{"domains":["internal"],"expected_revision":1}`)
 	if r.Code != 200 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
-		ws := st.Workers.Workers["svc-a"]
-		if len(ws.Domains) != 1 || ws.Domains[0] != "internal" {
-			t.Error("service domains:", ws.Domains)
-		}
-		for name, env := range ws.Environments {
-			if len(env.Hosts) != 1 || !strings.HasSuffix(env.Hosts[0], ".workers.test") {
-				t.Errorf("%s hosts: %v", name, env.Hosts)
-			}
+	assertHosts(1)
+	if err := store.View(t.Context(), PartitionWorkers, func(st *State) error {
+		domains := st.Workers.Workers["svc-a"].Domains
+		if len(domains) != 1 || domains[0] != "internal" {
+			t.Fatalf("service domains: %v", domains)
 		}
 		return nil
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestServiceDomainsRejectInvalidSelection(t *testing.T) {
@@ -623,7 +631,7 @@ func TestServiceDomainsRequiresCurrentRevision(t *testing.T) {
 }
 
 func TestWorkerConfigProjectionCoversEveryDomain(t *testing.T) {
-	st, _ := workerConfigFixture()
+	st := workerConfigFixture()
 	ws := st.Workers.Workers["svc-a"]
 	ws.Domains = []string{"internal", "external"}
 	st.Workers.Workers["svc-a"] = ws
@@ -652,7 +660,7 @@ func TestWorkerConfigProjectionCoversEveryDomain(t *testing.T) {
 }
 
 func TestWorkerConfigProjectionRequiresDurablePlacement(t *testing.T) {
-	st, _ := workerConfigFixture()
+	st := workerConfigFixture()
 	service := st.Workers.Workers["svc-a"]
 	service.NetworkProfile = "default"
 	service.Domains = []string{"external"}
@@ -936,9 +944,19 @@ func TestProcessOperationValidationMembers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			version := WorkerVersion{ID: "rel-cas", Worker: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-cas", ArchiveDigest: code.ArchiveDigest, ModuleDigest: code.Digest}
+			version := WorkerVersion{ID: "rel-cas", Worker: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-cas", Profile: code.Profile, ArchiveDigest: code.ArchiveDigest, ModuleDigest: code.Digest, CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: code.CompatibilityFlags, Created: now()}
 			artifact := WorkerArtifact{ID: "art-cas", Organization: "org-a", State: "finalized", Profile: code.Profile, ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: code.CompatibilityFlags, Size: len(raw), ObjectKey: "v1/org-a/sha256/" + code.ArchiveDigest + "/bundle.tar.gz", StorageLocation: "test", Bucket: "artifacts", Created: now()}
-			op := WorkerOperation{ID: "op-cas", Kind: "publish", Worker: "svc-a", Organization: "org-a", Environment: "production", State: "validating", Version: version.ID, ExpectedRevision: 99, Created: now()}
+			op := WorkerOperation{
+				ID: "op-cas", Kind: "publish", Worker: "svc-a", Organization: "org-a",
+				Environment: "production", State: "validating", Version: version.ID,
+				ExpectedRevision: 99, Created: now(),
+				Steps: []domain.WorkerStep{
+					{Name: "artifact", State: "done"},
+					{Name: "candidate", State: "running"},
+					{Name: "commit", State: "pending"},
+					{Name: "synchronize", State: "pending"},
+				},
+			}
 			encrypted, err := workerapp.EncryptWorkerSecret(c, "org-a", "svc-a", "production", "API_SECRET", "admin", "candidate-only")
 			if err != nil {
 				t.Fatal(err)
@@ -946,13 +964,17 @@ func TestProcessOperationValidationMembers(t *testing.T) {
 			version.SecretVersions = map[string]string{"API_SECRET": encrypted.Version.ID}
 			version.SecretDigest = workerapp.WorkerSecretsDigest(version.SecretVersions)
 			state := WorkerState{
-				Placements: map[string]WorkerPlacement{"svc-a\x00" + sourcePool: {Worker: "svc-a", Organization: "org-a", Pool: sourcePool, Role: "primary", State: "active"}},
+				Placements: map[string]WorkerPlacement{"svc-a\x00" + sourcePool: {Worker: "svc-a", Organization: "org-a", Pool: sourcePool, Role: "primary", State: "active", Revision: 1, Created: now(), Updated: now()}},
 				Versions:   map[string]WorkerVersion{version.ID: version}, Artifacts: map[string]WorkerArtifact{artifact.ID: artifact},
 				Operations: map[string]WorkerOperation{op.ID: op}, OperationPrivate: map[string]WorkerOperationPrivate{op.ID: {Actor: WorkerActor{User: "admin", AuthVersion: 1}}},
 			}
 			if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
+				st.Workers.Artifacts[artifact.ID] = artifact
 				st.Workers.Versions[version.ID] = version
+				st.Workers.Operations[op.ID] = op
+				st.Workers.OperationPrivate[op.ID] = state.OperationPrivate[op.ID]
 				st.Workers.Placements = state.Placements
+				st.Workers.SecretVersions[encrypted.Version.ID] = encrypted.Version
 				st.PendingWorkerSecrets = map[string]encryptedWorkerSecret{encrypted.Version.ID: encrypted}
 				return nil
 			}); err != nil {

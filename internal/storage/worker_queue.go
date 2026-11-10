@@ -28,9 +28,7 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 		Placements:       map[string]domain.WorkerPlacement{},
 		SecretVersions:   map[string]domain.WorkerSecretVersion{},
 	}
-	if s.pool == nil {
-		return state, nil
-	}
+
 	rows, err := s.pool.Query(ctx, `SELECT operation_id, kind, org_id, worker_id, env_name, state, build_id, version_id, expected_revision, config_revision, edge_revision, deployment_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at
 		FROM krun_worker_operations
 		WHERE state NOT IN ('succeeded','failed','available','superseded') AND reconcile_after<=now() AND (state IN ('queued','committed') OR claimed_by=$2 OR claimed_at IS NULL OR claimed_at<now()-'60 seconds'::interval)
@@ -267,9 +265,6 @@ type WorkerQueueReplicaKey struct{}
 // Rescheduling rotates unfinished tasks behind new arrivals instead of keeping
 // the oldest 100 as a global admission window shared by every replica.
 func (s *Store) ScheduleWorkerRetry(ctx context.Context, kind, id string) error {
-	if s.pool == nil {
-		return nil
-	}
 	table, column := "krun_worker_builds", "build_id"
 	if kind == "operation" {
 		table, column = "krun_worker_operations", "operation_id"
@@ -279,9 +274,6 @@ func (s *Store) ScheduleWorkerRetry(ctx context.Context, kind, id string) error 
 }
 
 func (s *Store) WorkerExecutionStarted(ctx context.Context, kind, id string, fallback time.Time) (time.Time, error) {
-	if s.pool == nil {
-		return fallback, nil
-	}
 	table, column := "krun_worker_builds", "build_id"
 	if kind == "operation" {
 		table, column = "krun_worker_operations", "operation_id"

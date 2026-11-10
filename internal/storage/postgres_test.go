@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/krun-dev/krun/internal/domain"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -98,11 +100,6 @@ func TestPostgresUsesSingleSchemaBaseline(t *testing.T) {
 	}
 }
 
-// truncateControlTables empties every control-plane table. Sessions, browsers
-// and login transactions are included because rate limits and expiry are
-// checked against them. A closed pool is not an error: tests may restart the
-// store themselves.
-
 func TestOpenStoreRequiresPostgres(t *testing.T) {
 	if _, err := Open(context.Background(), ""); err == nil {
 		t.Fatal("store without PostgreSQL accepted")
@@ -128,7 +125,7 @@ func TestPostgresReconnectsBeforeMutation(t *testing.T) {
 		t.Fatal("terminate pooled connection", err)
 	}
 	calls := 0
-	if err = store.Update(ctx, PartitionAll, func(st *State) error { calls++; st.Revision++; return nil }); err != nil {
+	if err = store.Update(ctx, PartitionAll, func(st *domain.State) error { calls++; st.Revision++; return nil }); err != nil {
 		t.Fatal("failed to replace terminated connection", err)
 	}
 	if calls != 1 {
@@ -165,6 +162,98 @@ func TestPostgresSchemaBaselineMismatchPreservesData(t *testing.T) {
 		var count int
 		if err = store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_users WHERE user_id='baseline-survivor'`).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("existing row changed: count=%d err=%v", count, err)
+		}
+	}
+}
+
+func TestPostgresReadSnapshotDiscardsMutations(t *testing.T) {
+	store := postgresTestStore(t)
+	ctx := t.Context()
+	if _, err := store.pool.Exec(ctx, "INSERT INTO krun_users (user_id,source,subject,status) VALUES ('stable','local','stable','active')"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Mutate(ctx, PartitionIAM, 0, func(st *domain.State) error {
+		if _, ok := st.Users["stable"]; !ok {
+			t.Fatal("fixture user missing from read snapshot")
+		}
+		delete(st.Users, "stable")
+		st.Users["temporary"] = domain.User{ID: "temporary", Status: "active"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Open(ctx, PartitionIAM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := state.Users["stable"]; !ok {
+		t.Fatal("read-only snapshot removed a stored user")
+	}
+	if _, ok := state.Users["temporary"]; ok {
+		t.Fatal("read-only snapshot inserted a stored user")
+	}
+}
+
+func TestPostgresAuditRetentionBoundaryAndIdleCleanup(t *testing.T) {
+	store := postgresTestStore(t)
+	ctx := t.Context()
+	at := now().Truncate(time.Microsecond)
+	cutoff := at.Add(-AuditRetention)
+	if err := store.AppendAudits(ctx, []domain.Audit{
+		{ID: "expired", Time: cutoff.Add(-time.Microsecond)},
+		{ID: "boundary", Time: cutoff},
+		{ID: "recent", Time: at},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteAuditsBefore(ctx, cutoff); err != nil {
+		t.Fatal(err)
+	}
+	assertCount := func(want int) {
+		t.Helper()
+		var count int
+		if err := store.pool.QueryRow(ctx, "SELECT count(*) FROM krun_audits").Scan(&count); err != nil || count != want {
+			t.Fatalf("audit count=%d want=%d err=%v", count, want, err)
+		}
+	}
+	assertCount(2)
+	if _, err := store.pool.Exec(ctx, "UPDATE krun_audits SET time=$1 WHERE id='boundary'", cutoff.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	retentionCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	failures := make(chan error, 1)
+	go func() {
+		defer close(done)
+		store.RunRetention(retentionCtx, 10*time.Millisecond, func(err error) {
+			select {
+			case failures <- err:
+			default:
+			}
+		})
+	}()
+	defer func() { cancel(); <-done }()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	poll := time.NewTicker(10 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		select {
+		case err := <-failures:
+			t.Fatal(err)
+		case <-deadline.C:
+			t.Fatal("idle retention did not delete expired audit")
+		case <-poll.C:
+			var expired bool
+			err := store.pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM krun_audits WHERE id='boundary')").Scan(&expired)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !expired {
+				assertCount(1)
+				return
+			}
 		}
 	}
 }

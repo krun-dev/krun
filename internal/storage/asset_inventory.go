@@ -5,7 +5,7 @@ import (
 )
 
 func (s *Store) RegisterAssetObjects(ctx context.Context, artifact string, keys []string) error {
-	if s.pool == nil || len(keys) == 0 {
+	if len(keys) == 0 {
 		return nil
 	}
 	_, err := s.pool.Exec(ctx, `INSERT INTO worker_asset_objects(object_key,artifact_id) SELECT unnest($1::text[]),$2 ON CONFLICT(object_key) DO NOTHING`, keys, artifact)

@@ -17,22 +17,6 @@ import (
 // in the same transaction. Concurrent starts cannot create two valid states at
 // the same generation.
 func (s *Store) BeginLoginState(ctx context.Context, browserHash string, expected domain.Browser, stateHash string, login domain.Login) (domain.Login, error) {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.memory == nil {
-			return domain.Login{}, errors.New("store is not initialized")
-		}
-		current, ok := s.memory.Browsers[browserHash]
-		if !ok || current.Generation != expected.Generation || current.CSRF != expected.CSRF || !now().Before(current.Expires) {
-			return domain.Login{}, domain.Problem(403, "AUTH_STATE_INVALID", "Login state changed")
-		}
-		current.Generation++
-		s.memory.Browsers[browserHash] = current
-		login.Generation = current.Generation
-		s.memory.Logins[stateHash] = login
-		return login, nil
-	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return domain.Login{}, err
@@ -68,39 +52,6 @@ type emailSendLock struct{ scope, hash string }
 // that transaction. This closes the count-then-insert race without storing raw
 // email addresses or client IPs in the lock table.
 func (s *Store) BeginEmailLogin(ctx context.Context, browserHash string, expected domain.Browser, challengeHash string, login domain.EmailLogin, window time.Duration, ipLimit int) (domain.EmailLogin, error) {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.memory == nil {
-			return domain.EmailLogin{}, errors.New("store is not initialized")
-		}
-		current, ok := s.memory.Browsers[browserHash]
-		if !ok || current.Generation != expected.Generation || current.CSRF != expected.CSRF || !now().Before(current.Expires) {
-			return domain.EmailLogin{}, domain.Problem(403, "AUTH_STATE_INVALID", "Login state changed")
-		}
-		since := now().Add(-window)
-		fromIP := 0
-		for _, item := range s.memory.EmailLogins {
-			if item.Sent.Before(since) {
-				continue
-			}
-			if item.Email == login.Email || item.Browser == browserHash {
-				return domain.EmailLogin{}, domain.Problem(429, "RATE_LIMITED", "Wait 60 seconds before requesting another code")
-			}
-			if item.IP == login.IP {
-				fromIP++
-			}
-		}
-		if fromIP >= ipLimit {
-			return domain.EmailLogin{}, domain.Problem(429, "RATE_LIMITED", "Try again later")
-		}
-		current.Generation++
-		current.Expires = now().Add(15 * time.Minute)
-		s.memory.Browsers[browserHash] = current
-		login.Generation = current.Generation
-		s.memory.EmailLogins[challengeHash] = login
-		return login, nil
-	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return domain.EmailLogin{}, err
@@ -165,10 +116,6 @@ func (s *Store) BeginEmailLogin(ctx context.Context, browserHash string, expecte
 }
 
 func (s *Store) LoginState(ctx context.Context, hash string) (domain.Login, bool, error) {
-	if s.pool == nil {
-		login, ok := s.memState().Logins[hash]
-		return login, ok, nil
-	}
 	var row models.LoginState
 	err := s.orm.NewSelect().Model(&row).Where("state_hash = ?", hash).Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -183,16 +130,6 @@ func (s *Store) LoginState(ctx context.Context, hash string) (domain.Login, bool
 // consumeLoginState marks a login transaction used. The conditional update is
 // what makes a replayed callback lose: rows affected is 0 when it was taken.
 func (s *Store) ConsumeLoginState(ctx context.Context, hash string) (bool, error) {
-	if s.pool == nil {
-		st := s.memState()
-		login, ok := st.Logins[hash]
-		if !ok || login.Consumed {
-			return false, nil
-		}
-		login.Consumed = true
-		st.Logins[hash] = login
-		return true, nil
-	}
 	tag, err := s.pool.Exec(ctx, `UPDATE krun_login_states SET consumed=true WHERE state_hash=$1 AND consumed=false`, hash)
 	if err != nil {
 		return false, err
@@ -201,10 +138,6 @@ func (s *Store) ConsumeLoginState(ctx context.Context, hash string) (bool, error
 }
 
 func (s *Store) EmailLogin(ctx context.Context, hash string) (domain.EmailLogin, bool, error) {
-	if s.pool == nil {
-		login, ok := s.memState().EmailLogins[hash]
-		return login, ok, nil
-	}
 	var row models.EmailLogin
 	err := s.orm.NewSelect().Model(&row).Where("challenge_hash = ?", hash).Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -219,16 +152,6 @@ func (s *Store) EmailLogin(ctx context.Context, hash string) (domain.EmailLogin,
 // invalidateEmailLogin makes a challenge unusable while retaining it for the
 // send cooldown. It is used when delivery fails after the row was inserted.
 func (s *Store) InvalidateEmailLogin(ctx context.Context, hash string) error {
-	if s.pool == nil {
-		if st := s.memState(); st != nil {
-			login, ok := st.EmailLogins[hash]
-			if ok && !login.Consumed {
-				login.Consumed = true
-				st.EmailLogins[hash] = login
-			}
-		}
-		return nil
-	}
 	_, err := s.pool.Exec(ctx, `UPDATE krun_email_logins SET consumed=true WHERE challenge_hash=$1 AND consumed=false`, hash)
 	return err
 }
@@ -237,16 +160,6 @@ func (s *Store) InvalidateEmailLogin(ctx context.Context, hash string) error {
 // challenge is live. The conditional update prevents concurrent requests from
 // losing increments or exceeding the attempt budget with stale snapshots.
 func (s *Store) FailEmailLogin(ctx context.Context, hash string) (bool, error) {
-	if s.pool == nil {
-		st := s.memState()
-		login, ok := st.EmailLogins[hash]
-		if !ok || login.Consumed || login.Attempts >= 5 || !now().Before(login.Expires) {
-			return false, nil
-		}
-		login.Attempts++
-		st.EmailLogins[hash] = login
-		return true, nil
-	}
 	tag, err := s.pool.Exec(ctx, `UPDATE krun_email_logins SET attempts=attempts+1 WHERE challenge_hash=$1 AND consumed=false AND attempts < 5 AND expires_at > now()`, hash)
 	if err != nil {
 		return false, err

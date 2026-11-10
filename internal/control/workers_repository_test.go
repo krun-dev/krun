@@ -315,11 +315,8 @@ func TestRepositoryConnectionLifecycle(t *testing.T) {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	// 手工放置连接后 providers 列表应标记 connected
-	if e := store.Update(context.Background(), PartitionAll, func(st *State) error {
-		st.RepositoryConnections["admin\x00github"] = WorkerRepositoryConnection{User: "admin", Provider: "github", AccessToken: "tok"}
-		return nil
-	}); e != nil {
-		t.Fatal(e)
+	if err := store.UpsertRepositoryConnection(t.Context(), WorkerRepositoryConnection{User: "admin", Provider: "github", AccessToken: "tok", ConnectedAt: now()}); err != nil {
+		t.Fatal(err)
 	}
 	r := request(s, "GET", "/api/v1/orgs/org-a/workers/repository-providers", "krun_cli_admin", "")
 	var out struct {

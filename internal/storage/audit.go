@@ -2,8 +2,6 @@ package storage
 
 import (
 	"context"
-	"errors"
-	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -54,17 +52,7 @@ func (s *Store) AppendAudits(ctx context.Context, entries []domain.Audit) error 
 	if len(entries) == 0 {
 		return nil
 	}
-	if s.pool != nil {
-		return s.flushAudits(ctx, entries)
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.memory == nil {
-		return errors.New("store is not initialized")
-	}
-	s.memoryAudits = append(s.memoryAudits, entries...)
-	s.memoryAudits = PruneMemoryAudits(s.memoryAudits, now())
-	return nil
+	return s.flushAudits(ctx, entries)
 }
 
 func deniedAudits(entries []domain.Audit) []domain.Audit {
@@ -77,18 +65,6 @@ func deniedAudits(entries []domain.Audit) []domain.Audit {
 	return denied
 }
 
-func PruneMemoryAudits(entries []domain.Audit, at time.Time) []domain.Audit {
-	cutoff := at.Add(-AuditRetention)
-	kept := entries[:0]
-	for _, entry := range entries {
-		if !entry.Time.Before(cutoff) {
-			kept = append(kept, entry)
-		}
-	}
-	clear(entries[len(kept):])
-	return kept
-}
-
 // ReadAudits returns entries newer than cutoff, newest first, optionally
 // scoped to an organization.
 func (s *Store) ReadAudits(ctx context.Context, cutoff time.Time, organization string, limit int) ([]domain.Audit, error) {
@@ -98,62 +74,26 @@ func (s *Store) ReadAudits(ctx context.Context, cutoff time.Time, organization s
 // ReadAuditSnapshot applies the time window before limiting the result so newer
 // records cannot displace rows from a previous snapshot.
 func (s *Store) ReadAuditSnapshot(ctx context.Context, cutoff, asOf time.Time, organization string, limit int) ([]domain.Audit, error) {
-	if s.pool != nil {
-		rows, err := s.pool.Query(ctx, `SELECT id, time, actor, credential, key_id, action, resource, organization_id, allowed, request_id, revision FROM krun_audits WHERE time BETWEEN $1 AND $2
+	rows, err := s.pool.Query(ctx, `SELECT id, time, actor, credential, key_id, action, resource, organization_id, allowed, request_id, revision FROM krun_audits WHERE time BETWEEN $1 AND $2
 			  AND ($3 = '' OR organization_id = $3)
 			ORDER BY time DESC, id DESC LIMIT $4`, cutoff, asOf, organization, limit)
-		if err != nil {
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []domain.Audit{}
+	for rows.Next() {
+		var a domain.Audit
+		if err = rows.Scan(&a.ID, &a.Time, &a.Actor, &a.Credential, &a.KeyID, &a.Action, &a.Resource, &a.Organization, &a.Allowed, &a.RequestID, &a.Revision); err != nil {
 			return nil, err
 		}
-		defer rows.Close()
-		out := []domain.Audit{}
-		for rows.Next() {
-			var a domain.Audit
-			if err = rows.Scan(&a.ID, &a.Time, &a.Actor, &a.Credential, &a.KeyID, &a.Action, &a.Resource, &a.Organization, &a.Allowed, &a.RequestID, &a.Revision); err != nil {
-				return nil, err
-			}
-			out = append(out, a)
-		}
-		return out, rows.Err()
-	}
-	// No lock here: audit queries run inside protected()'s Update transaction,
-	// so taking mu would self-deadlock. Tests using the memory store are
-	// single-threaded.
-	all := PruneMemoryAudits(append([]domain.Audit(nil), s.memoryAudits...), now())
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].Time.Equal(all[j].Time) {
-			return all[i].ID > all[j].ID
-		}
-		return all[i].Time.After(all[j].Time)
-	})
-	out := []domain.Audit{}
-	for _, a := range all {
-		if a.Time.Before(cutoff) || a.Time.After(asOf) || (organization != "" && a.Organization != organization) {
-			continue
-		}
 		out = append(out, a)
-		if len(out) == limit {
-			break
-		}
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 // deleteAuditsBefore drops entries older than the retention window.
 func (s *Store) DeleteAuditsBefore(ctx context.Context, cutoff time.Time) error {
-	if s.pool != nil {
-		_, err := s.pool.Exec(ctx, `DELETE FROM krun_audits WHERE time < $1`, cutoff)
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	kept := s.memoryAudits[:0]
-	for _, entry := range s.memoryAudits {
-		if !entry.Time.Before(cutoff) {
-			kept = append(kept, entry)
-		}
-	}
-	clear(s.memoryAudits[len(kept):])
-	s.memoryAudits = kept
-	return nil
+	_, err := s.pool.Exec(ctx, `DELETE FROM krun_audits WHERE time < $1`, cutoff)
+	return err
 }

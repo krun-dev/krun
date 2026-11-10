@@ -13,13 +13,12 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 			return r, err
 		}
 	}
-	if !s.Store.Persistent() {
-		return r, nil
-	}
+
 	// IAM writes need the other users and grants they may affect. In particular,
 	// changing organization sources checks every organization administrator.
 	// Resource and Workers endpoints only need their target.
 	isResource := strings.Contains(r.Pattern, "/workers") || strings.Contains(r.Pattern, "/models")
+	auditRoute := strings.HasSuffix(r.Pattern, "/audit")
 	simpleIAM := strings.HasPrefix(r.URL.Path, oauthPrefix+"/") ||
 		r.URL.Path == "/api/auth/me" ||
 		r.URL.Path == "/api/auth/logout" ||
@@ -27,11 +26,11 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 		r.URL.Path == "/api/v1/orgs" ||
 		r.Pattern == "GET /api/v1/orgs/{org}" ||
 		r.Pattern == "GET /api/v1/orgs/{org}/permissions" ||
-		strings.HasSuffix(r.Pattern, "/audit")
+		auditRoute
 	if !isResource && !strings.Contains(r.Pattern, "/workers/") && !simpleIAM && !cloudflare {
 		return r, nil
 	}
-	scope := stateReadScope{ActorOnly: simpleIAM || cloudflare && r.PathValue("org") == "", AllOrganizations: cloudflare && r.PathValue("org") == "" || r.URL.Path == "/api/v1/orgs" && r.Method == "GET", User: c.session.User, Key: c.keyID, Organization: r.PathValue("org"), Worker: r.PathValue("resource"), Kind: resourceKind(r), Limit: 100, After: r.URL.Query().Get("after")}
+	scope := stateReadScope{ActorOnly: simpleIAM || cloudflare && r.PathValue("org") == "", AllOrganizations: cloudflare && r.PathValue("org") == "" || r.URL.Path == "/api/v1/orgs" && r.Method == "GET", User: c.session.User, Key: c.keyID, Organization: r.PathValue("org"), Worker: r.PathValue("resource"), Kind: resourceKind(r), Limit: 100}
 	if c.isKey {
 		owner, found, err := s.Store.APIKeyOwner(r.Context(), c.keyID)
 		if err != nil {
@@ -42,12 +41,16 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 		}
 		scope.User = owner
 	}
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 1 || n > 200 {
-			return r, problem(422, "PAGE_INVALID", "limit must be between 1 and 200")
+	// Audit and Cloudflare endpoints own their pagination contracts.
+	if !auditRoute && !cloudflare {
+		scope.After = r.URL.Query().Get("after")
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil || n < 1 || n > 200 {
+				return r, problem(422, "PAGE_INVALID", "limit must be between 1 and 200")
+			}
+			scope.Limit = n
 		}
-		scope.Limit = n
 	}
 	if scope.Worker == "" && strings.HasSuffix(r.URL.Path, "/workers") {
 		scope.Worker = workerFilter(r)

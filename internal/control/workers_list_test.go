@@ -95,7 +95,7 @@ func TestBucketSearchPaginationDetailsAndCFCollection(t *testing.T) {
 			id := fmt.Sprintf("bucket-%03d", i)
 			st.Workers.Buckets[id] = domain.WorkerBucket{ID: id, Organization: "org-a", Name: fmt.Sprintf("images-%03d", i), Enabled: i != 0, Revision: 1, Created: created}
 		}
-		st.Workers.Buckets["bucket-other"] = domain.WorkerBucket{ID: "bucket-other", Organization: "org-b", Name: "images-other", Enabled: true, Created: created}
+		st.Workers.Buckets["bucket-other"] = domain.WorkerBucket{ID: "bucket-other", Organization: "org-b", Name: "images-other", Enabled: true, Revision: 1, Created: created}
 		return nil
 	}); err != nil {
 		t.Fatal(err)

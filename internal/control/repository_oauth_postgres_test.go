@@ -37,7 +37,7 @@ func TestPostgresRepositoryRefreshClaimHasSingleWinner(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			claimed, won, claimErr := store.ClaimRepositoryConnectionRefresh(ctx, current.User, current.Provider, current.TokenRevision, now())
+			claimed, won, claimErr := store.ClaimRepositoryConnectionRefresh(ctx, current.User, current.Provider, current.TokenRevision)
 			results <- result{claimed, won, claimErr}
 		}()
 	}

@@ -132,9 +132,6 @@ func (w *Controller) Run(ctx context.Context) {
 			w.localWG.Wait()
 			return
 		case <-ticker.C:
-			if !w.Service.Store.Persistent() {
-				continue
-			}
 
 			cycle, cancel := context.WithTimeout(ctx, 25*time.Second)
 			e := w.Reconcile(cycle)

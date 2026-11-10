@@ -67,12 +67,10 @@ func TestWorkerBuildPermissionScopeAndIdempotency(t *testing.T) {
 	if r := request(s, "GET", "/api/v1/orgs/org-b/workers/svc-b/builds/"+b.ID, "krun_cli_admin", ""); r.Code != 404 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
-		if len(st.Workers.Builds) != 1 || len(st.Workers.BuildPrivate[b.ID].Files) != 1 {
-			t.Fatal("queue/source not persisted")
-		}
-		return nil
-	})
+	private, found, err := store.WorkerBuildPrivate(t.Context(), b.ID)
+	if err != nil || !found || len(private.Files) != 1 {
+		t.Fatalf("queue/source not persisted: found=%v files=%d err=%v", found, len(private.Files), err)
+	}
 	if err := store.FinishBuild(context.Background(), b.ID, "failed", "test failure", "", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +161,7 @@ func TestWorkerOverviewAggregatesPollingState(t *testing.T) {
 	s, store, base := workerTestServer(t)
 	build := seedWorkerBuild(t, s, store, base)
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
-		version := WorkerVersion{ID: "rel-overview", Worker: "svc-a", Organization: "org-a", Environment: "production", Artifact: build.Artifact, Created: now()}
+		version := WorkerVersion{ID: "rel-overview", Worker: "svc-a", Organization: "org-a", Environment: "production", Artifact: build.Artifact, ArchiveDigest: "archive", ModuleDigest: "module", Created: now()}
 		st.Workers.Versions[version.ID] = version
 		service := st.Workers.Workers["svc-a"]
 		env := service.Environments["production"]
@@ -222,13 +220,17 @@ func seedWorkerBuild(t *testing.T, s *Server, store *Store, base string) WorkerB
 	}
 	var b WorkerBuild
 	_ = json.Unmarshal(r.Body.Bytes(), &b)
-	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
-		b.State = "succeeded"
-		b.Artifact = "a"
-		st.Workers.Builds[b.ID] = b
-		st.Workers.Artifacts["a"] = WorkerArtifact{ID: "a", Organization: "org-a", State: "finalized", ArchiveDigest: "archive", ModuleDigest: "module"}
+	b.Artifact = "a"
+	b.State = "succeeded"
+	if err := store.Update(t.Context(), PartitionWorkers, func(st *State) error {
+		st.Workers.Artifacts[b.Artifact] = WorkerArtifact{ID: b.Artifact, Organization: "org-a", State: "finalized", ArchiveDigest: "archive", ModuleDigest: "module"}
 		return nil
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishBuild(t.Context(), b.ID, b.State, "", b.Artifact, ""); err != nil {
+		t.Fatal(err)
+	}
 	return b
 }
 

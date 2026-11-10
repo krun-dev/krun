@@ -19,12 +19,7 @@ func TestCLIWorkerWorkflow(t *testing.T) {
 	enableWorkerSecrets(s.Config.Workers)
 	s.Config.Workers.RepositoryProviders = repositoryTestProviders()
 	s.Config.Workers.RepositoryProviders[0].ClientID = "fixture-client"
-	if err := store.Update(t.Context(), PartitionAll, func(st *State) error {
-		org := st.Organizations["org-a"]
-		org.ShortName = "cli-test"
-		st.Organizations[org.ID] = org
-		return nil
-	}); err != nil {
+	if _, err := postgresTestPool(store).Exec(t.Context(), "UPDATE krun_organizations SET short_name='cli-test' WHERE org_id='org-a'"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.UpsertRepositoryConnection(t.Context(), domain.WorkerRepositoryConnection{

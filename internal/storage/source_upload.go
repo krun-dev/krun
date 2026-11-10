@@ -21,9 +21,6 @@ type SourceUpload struct {
 // returned. Builds only accept keys present here, so an old arbitrary object
 // cannot be introduced while object GC is deciding whether to delete it.
 func (s *Store) IssueWorkerSourceUpload(ctx context.Context, key, organization string) error {
-	if s.pool == nil {
-		return nil
-	}
 	_, err := s.pool.Exec(ctx, `INSERT INTO krun_worker_source_uploads
 		(object_key, org_id, state, created_at) VALUES ($1,$2,'issued',now())
 		ON CONFLICT (object_key) DO NOTHING`, key, organization)
@@ -56,14 +53,6 @@ func reserveWorkerSourceUpload(ctx context.Context, tx pgx.Tx, key, organization
 // window), so registering immediately after upload is sufficient; the build
 // row and metadata become visible atomically.
 func (s *Store) registerGeneratedBuildSource(ctx context.Context, build, organization, key string) error {
-	if s.pool == nil {
-		if st := s.memState(); st != nil {
-			private := st.Workers.BuildPrivate[build]
-			private.SourceKey, private.Files = key, nil
-			st.Workers.BuildPrivate[build] = private
-		}
-		return nil
-	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -98,9 +87,6 @@ func registerGeneratedBuildSourceTx(ctx context.Context, tx pgx.Tx, build, organ
 }
 
 func (s *Store) GarbageWorkerSourceUploads(ctx context.Context, cutoff time.Time, limit int) ([]SourceUpload, error) {
-	if s.pool == nil {
-		return nil, nil
-	}
 	rows, err := s.pool.Query(ctx, `SELECT object_key, org_id, use_revision
 		FROM krun_worker_source_uploads u
 		WHERE u.created_at <= $1
@@ -124,9 +110,6 @@ func (s *Store) GarbageWorkerSourceUploads(ctx context.Context, cutoff time.Time
 }
 
 func (s *Store) ClaimGarbageWorkerSourceUpload(ctx context.Context, key, replica string, expectedRevision int64) (bool, error) {
-	if s.pool == nil {
-		return false, nil
-	}
 	tag, err := s.pool.Exec(ctx, `UPDATE krun_worker_source_uploads u
 		SET state='deleting', gc_claimed_by=$2, gc_claimed_at=now()
 		WHERE object_key=$1 AND use_revision=$3
@@ -141,9 +124,6 @@ func (s *Store) ClaimGarbageWorkerSourceUpload(ctx context.Context, key, replica
 }
 
 func (s *Store) DeleteGarbageWorkerSourceUpload(ctx context.Context, key, replica string) error {
-	if s.pool == nil {
-		return nil
-	}
 	_, err := s.pool.Exec(ctx, `DELETE FROM krun_worker_source_uploads u
 		WHERE object_key=$1 AND state='deleting' AND gc_claimed_by=$2
 		  AND NOT EXISTS (SELECT 1 FROM krun_worker_build_private p WHERE p.source_key=u.object_key)`, key, replica)

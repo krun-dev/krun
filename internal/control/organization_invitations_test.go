@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/domain"
 	"github.com/krun-dev/krun/internal/securetoken"
 )
@@ -22,24 +21,9 @@ type invitationCreated struct {
 	URL        string                        `json:"invite_url"`
 }
 
-func invitationTestServer(t *testing.T, persistent bool) (*Server, *Store) {
+func invitationTestServer(t *testing.T) (*Server, *Store) {
 	t.Helper()
-	var server *Server
-	var store *Store
-	if persistent {
-		store = postgresTestStore(t)
-		cfg := appconfig.Config{
-			DB: "postgres://test-only/krun_test", Development: true, PublicURL: "http://127.0.0.1:8080",
-			Providers: []appconfig.ProviderConfig{{ID: "local", Source: "local", Type: "dev", Registration: "jit"}},
-		}
-		var err error
-		server, err = NewServer(context.Background(), cfg, store)
-		if err != nil {
-			t.Fatal(err)
-		}
-	} else {
-		server, store = testServer(t)
-	}
+	server, store := testServer(t)
 	if err := store.Update(context.Background(), PartitionIAM, func(st *State) error {
 		initial, _, _ := fixture()
 		initial.Sources = st.Sources
@@ -105,11 +89,10 @@ func invitationBody(created invitationCreated) string {
 	return fmt.Sprintf(`{"token":%q}`, token)
 }
 
-func TestOrganizationInvitationHTTP(t *testing.T)         { checkOrganizationInvitationHTTP(t, false) }
-func TestPostgresOrganizationInvitationHTTP(t *testing.T) { checkOrganizationInvitationHTTP(t, true) }
+func TestPostgresOrganizationInvitationHTTP(t *testing.T) { checkOrganizationInvitationHTTP(t) }
 
-func checkOrganizationInvitationHTTP(t *testing.T, persistent bool) {
-	s, store := invitationTestServer(t, persistent)
+func checkOrganizationInvitationHTTP(t *testing.T) {
+	s, store := invitationTestServer(t)
 	created := createTestInvitation(t, s, `{}`)
 	if created.Invitation.Role != "member" || created.Invitation.MaxUses != 1 || !strings.HasPrefix(created.URL, s.Config.PublicURL+"/?page=join#invite=krun_invite_") {
 		t.Fatalf("unexpected defaults: %+v", created.Invitation)
@@ -181,7 +164,7 @@ func checkOrganizationInvitationHTTP(t *testing.T, persistent bool) {
 }
 
 func TestPostgresOrganizationInvitationQuotaConcurrency(t *testing.T) {
-	s, store := invitationTestServer(t, true)
+	s, store := invitationTestServer(t)
 	created := createTestInvitation(t, s, `{"max_uses":5}`)
 	var joined atomic.Int32
 	errors := make(chan string, 24)
@@ -240,7 +223,7 @@ func TestPostgresOrganizationInvitationQuotaConcurrency(t *testing.T) {
 }
 
 func TestPostgresOrganizationInvitationRollback(t *testing.T) {
-	s, store := invitationTestServer(t, true)
+	s, store := invitationTestServer(t)
 	created := createTestInvitation(t, s, `{}`)
 	in, _, err := store.OrganizationInvitation(context.Background(), created.Invitation.ID, "")
 	if err != nil {
@@ -273,16 +256,12 @@ func TestPostgresOrganizationInvitationRollback(t *testing.T) {
 	}
 }
 
-func TestOrganizationInvitationRecipients(t *testing.T) {
-	checkOrganizationInvitationRecipients(t, false)
-}
-
 func TestPostgresOrganizationInvitationRecipients(t *testing.T) {
-	checkOrganizationInvitationRecipients(t, true)
+	checkOrganizationInvitationRecipients(t)
 }
 
-func checkOrganizationInvitationRecipients(t *testing.T, persistent bool) {
-	s, store := invitationTestServer(t, persistent)
+func checkOrganizationInvitationRecipients(t *testing.T) {
+	s, store := invitationTestServer(t)
 	created := createTestInvitation(t, s, `{"target_user_id":"recipient-0","role_id":"viewer"}`)
 	for _, user := range []string{"recipient-1", "recipient-0"} {
 		response := invitationBrowserRequest(s, user, "POST", "/api/v1/invitation-links/accept", invitationBody(created))
@@ -344,7 +323,7 @@ func checkOrganizationInvitationRecipients(t *testing.T, persistent bool) {
 func TestPostgresOrganizationInvitationSameUserConcurrency(t *testing.T) {
 	for _, crossLink := range []bool{false, true} {
 		t.Run(fmt.Sprintf("cross-link=%t", crossLink), func(t *testing.T) {
-			s, store := invitationTestServer(t, true)
+			s, store := invitationTestServer(t)
 			first := createTestInvitation(t, s, `{"max_uses":10}`)
 			second := first
 			if crossLink {
@@ -385,7 +364,7 @@ func TestPostgresOrganizationInvitationSameUserConcurrency(t *testing.T) {
 }
 
 func TestPostgresOrganizationInvitationRevokeConcurrency(t *testing.T) {
-	s, store := invitationTestServer(t, true)
+	s, store := invitationTestServer(t)
 	created := createTestInvitation(t, s, `{}`)
 	start := make(chan struct{})
 	response := make(chan *httptest.ResponseRecorder, 1)
