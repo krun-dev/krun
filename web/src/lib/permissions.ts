@@ -8,7 +8,7 @@ export const resourceKinds = [
     description: "组织、成员及角色管理",
   },
   { kind: "worker", label: "Worker", description: "Worker、版本与运行操作" },
-  { kind: "model", label: "模型", description: "模型、版本与调用操作" },
+  { kind: "model", label: "模型目录", description: "目录元数据管理，模型版本与调用权限预留" },
   { kind: "api_key", label: "API Keys", description: "密钥元数据与生命周期" },
   { kind: "system", label: "平台", description: "系统用户与平台管理" },
 ] as const;

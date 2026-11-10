@@ -12,6 +12,7 @@ var actions = map[string][]string{
 	"organization.read": {"organization"}, "organization.update": {"organization"}, "organization.delete": {"organization"}, "member.read": {"organization"}, "member.manage": {"organization"}, "iam.read": {"organization"}, "iam.grant": {"organization"}, "iam.revoke": {"organization"},
 	"apiKey.create": {"organization", "system"}, "apiKey.read": {"api_key"}, "apiKey.update": {"api_key"}, "apiKey.revoke": {"api_key"},
 	"worker.list": {"organization"}, "worker.create": {"organization"}, "worker.read": {"worker"}, "worker.update": {"worker"}, "worker.delete": {"worker"}, "worker.publish": {"worker"}, "worker.rollback": {"worker"}, "worker.version.read": {"worker"}, "worker.version.create": {"worker"}, "worker.invoke": {"worker"},
+	// Model CRUD covers resource catalog metadata. Lifecycle and invocation actions are reserved.
 	"model.list": {"organization"}, "model.create": {"organization"}, "model.read": {"model"}, "model.update": {"model"}, "model.delete": {"model"}, "model.publish": {"model"}, "model.rollback": {"model"}, "model.version.read": {"model"}, "model.version.create": {"model"}, "model.use": {"model"}, "model.invoke": {"model"}, "build.start": {"worker", "model"}, "log.read": {"worker", "model"}, "source.read": {"worker", "model"}, "binding.attach": {"worker"}, "binding.detach": {"worker"},
 }
 var roleActions = map[string][]string{

@@ -669,7 +669,7 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
                           >
                             <option value="organization">{t("整个组织")}</option>
                             <option value="worker">{t("指定Worker")}</option>
-                            <option value="model">{t("指定模型")}</option>
+                            <option value="model">{t("指定模型目录条目")}</option>
                           </SelectField>
                         </Field>
                         {scopeKind !== "organization" && (
