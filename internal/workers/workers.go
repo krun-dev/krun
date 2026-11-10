@@ -75,7 +75,7 @@ func (s *Service) ReplaceWorkerPlacement(st *domain.State, ws domain.Worker, poo
 //
 // The environment map is copied first: normalizeWorker writes into it in
 // place, so returning the stored map by reference would let a read mutate the
-// loaded state (and, in the memory store, be observed as a write).
+// request-local state.
 func (s *Service) WorkerView(st *domain.State, t authorization.Target) domain.Worker {
 	if st.Workers == nil {
 		st.Workers = domain.NewWorkerState()

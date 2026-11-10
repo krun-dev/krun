@@ -6,27 +6,6 @@ import (
 	"testing"
 )
 
-func TestOperationEdgeRevisionIsFrozenInMemory(t *testing.T) {
-	store := memoryStore()
-	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
-		st.Workers.Operations["op-edge"] = WorkerOperation{ID: "op-edge", State: "committed"}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	first, err := store.SetOperationEdgeRevision(context.Background(), "op-edge", 7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := store.SetOperationEdgeRevision(context.Background(), "op-edge", 29)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first != 7 || second != 7 || memorySnapshot(t, store).Workers.Operations["op-edge"].EdgeRevision != 7 {
-		t.Fatalf("edge revision moved: first=%d second=%d stored=%d", first, second, memorySnapshot(t, store).Workers.Operations["op-edge"].EdgeRevision)
-	}
-}
-
 func TestPostgresOperationEdgeRevisionIsFrozen(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()

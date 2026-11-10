@@ -9,7 +9,6 @@ import (
 	repooauth "github.com/krun-dev/krun/internal/adapters/repositoryoauth"
 	appconfig "github.com/krun-dev/krun/internal/config"
 	domain "github.com/krun-dev/krun/internal/domain"
-	storage "github.com/krun-dev/krun/internal/storage"
 )
 
 // RepositoryCredential is used by ordinary bindings, including public and
@@ -76,17 +75,7 @@ func (s *Service) userRepositoryGrant(ctx context.Context, provider appconfig.Wo
 }
 
 func (s *Service) ReadRepositoryConnection(ctx context.Context, user, provider string) (domain.WorkerRepositoryConnection, bool, error) {
-	if s.Store.Persistent() {
-		return s.Store.RepositoryConnection(ctx, user, provider)
-	}
-	var connection domain.WorkerRepositoryConnection
-	var ok bool
-	var err error
-	err = s.Store.View(ctx, storage.PartitionWorkers, func(*domain.State) error {
-		connection, ok, err = s.Store.RepositoryConnection(ctx, user, provider)
-		return err
-	})
-	return connection, ok, err
+	return s.Store.RepositoryConnection(ctx, user, provider)
 }
 
 func (s *Service) ClaimRepositoryCredentialRefresh(ctx context.Context, connection domain.WorkerRepositoryConnection) (domain.WorkerRepositoryConnection, bool, error) {
@@ -94,41 +83,16 @@ func (s *Service) ClaimRepositoryCredentialRefresh(ctx context.Context, connecti
 	if expected == 0 {
 		expected = 1
 	}
-	if s.Store.Persistent() {
-		return s.Store.ClaimRepositoryConnectionRefresh(ctx, connection.User, connection.Provider, expected, time.Now().UTC())
-	}
-	var claimed domain.WorkerRepositoryConnection
-	var ok bool
-	var err error
-	err = s.Store.Update(ctx, storage.PartitionWorkers, func(*domain.State) error {
-		claimed, ok, err = s.Store.ClaimRepositoryConnectionRefresh(ctx, connection.User, connection.Provider, expected, time.Now().UTC())
-		return err
-	})
-	return claimed, ok, err
+	return s.Store.ClaimRepositoryConnectionRefresh(ctx, connection.User, connection.Provider, expected)
 }
 
 func (s *Service) CompleteRepositoryCredentialRefresh(ctx context.Context, connection domain.WorkerRepositoryConnection, claimRevision int64) (bool, error) {
-	if s.Store.Persistent() {
-		return s.Store.CompleteRepositoryConnectionRefresh(ctx, connection, claimRevision)
-	}
-	var completed bool
-	var err error
-	err = s.Store.Update(ctx, storage.PartitionWorkers, func(*domain.State) error {
-		completed, err = s.Store.CompleteRepositoryConnectionRefresh(ctx, connection, claimRevision)
-		return err
-	})
-	return completed, err
+	return s.Store.CompleteRepositoryConnectionRefresh(ctx, connection, claimRevision)
 }
 
 func (s *Service) FailRepositoryCredentialRefresh(ctx context.Context, connection domain.WorkerRepositoryConnection, claimRevision int64, reconnect bool) error {
-	if s.Store.Persistent() {
-		_, err := s.Store.FailRepositoryConnectionRefresh(ctx, connection.User, connection.Provider, claimRevision, reconnect)
-		return err
-	}
-	return s.Store.Update(ctx, storage.PartitionWorkers, func(*domain.State) error {
-		_, err := s.Store.FailRepositoryConnectionRefresh(ctx, connection.User, connection.Provider, claimRevision, reconnect)
-		return err
-	})
+	_, err := s.Store.FailRepositoryConnectionRefresh(ctx, connection.User, connection.Provider, claimRevision, reconnect)
+	return err
 }
 
 // A provider may rotate the refresh token before the build request context is

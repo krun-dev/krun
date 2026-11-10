@@ -9,7 +9,6 @@ import (
 	repooauth "github.com/krun-dev/krun/internal/adapters/repositoryoauth"
 	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/domain"
-	"github.com/krun-dev/krun/internal/storage"
 )
 
 type CatalogPage struct {
@@ -47,12 +46,7 @@ func (s *Service) Catalog(ctx context.Context, provider appconfig.WorkerReposito
 }
 
 func (s *Service) rejectGrant(ctx context.Context, grant domain.WorkerRepositoryConnection) error {
-	if s.Store.Persistent() {
-		return s.Store.RejectRepositoryConnection(ctx, grant)
-	}
-	return s.Store.Update(ctx, storage.PartitionWorkers, func(*domain.State) error {
-		return s.Store.RejectRepositoryConnection(ctx, grant)
-	})
+	return s.Store.RejectRepositoryConnection(ctx, grant)
 }
 
 // CheckBindingAuthorization runs while saving binding metadata or enqueueing a

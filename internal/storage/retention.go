@@ -16,16 +16,7 @@ func (s *Store) RetainExpired(ctx context.Context) error {
 	if err := s.retainOrganizationInvitations(ctx); err != nil {
 		return err
 	}
-	if s.pool == nil {
-		s.mu.Lock()
-		for id, a := range s.assetSessions {
-			if !now().Before(a.Expires) {
-				delete(s.assetSessions, id)
-			}
-		}
-		s.mu.Unlock()
-		return s.DeleteAuditsBefore(ctx, now().Add(-AuditRetention))
-	}
+
 	at := now()
 	// Idle timeout and absolute expiry match the checks in authenticate.
 	sessionCutoff := at.Add(-30 * time.Minute)
@@ -84,9 +75,6 @@ func (s *Store) RetainExpired(ctx context.Context) error {
 const workerArtifactGCLease = "10 minutes"
 
 func (s *Store) GarbageArtifacts(ctx context.Context, cutoff time.Time, limit int) ([]domain.WorkerArtifact, error) {
-	if s.pool == nil {
-		return nil, nil
-	}
 	rows, err := s.pool.Query(ctx, `SELECT artifact_id, org_id, state, archive_digest,
 		manifest_digest, module_digest, size_bytes, object_key, storage_location, bucket, created_at, use_revision
 		FROM krun_worker_artifacts a
@@ -116,9 +104,6 @@ func (s *Store) GarbageArtifacts(ctx context.Context, cutoff time.Time, limit in
 }
 
 func (s *Store) ClaimGarbageArtifact(ctx context.Context, id, replica string, expectedRevision int64) (bool, error) {
-	if s.pool == nil {
-		return false, nil
-	}
 	tag, err := s.pool.Exec(ctx, `UPDATE krun_worker_artifacts a
 		SET state='deleting', gc_claimed_by=$2, gc_claimed_at=now()
 		WHERE a.artifact_id=$1 AND (
@@ -134,9 +119,6 @@ func (s *Store) ClaimGarbageArtifact(ctx context.Context, id, replica string, ex
 }
 
 func (s *Store) DeleteGarbageArtifact(ctx context.Context, id, replica string) error {
-	if s.pool == nil {
-		return nil
-	}
 	_, err := s.pool.Exec(ctx, `DELETE FROM krun_worker_artifacts a
 		WHERE a.artifact_id=$1 AND a.state='deleting' AND a.gc_claimed_by=$2 AND NOT EXISTS (
 			SELECT 1 FROM krun_worker_versions r WHERE r.artifact_id=a.artifact_id
@@ -151,9 +133,6 @@ func (s *Store) DeleteGarbageArtifact(ctx context.Context, id, replica string) e
 // can never succeed; an operator must clean the old store and then remove (or
 // deliberately re-home) this metadata row.
 func (s *Store) BlockGarbageArtifact(ctx context.Context, id, replica string, expectedRevision int64) (bool, error) {
-	if s.pool == nil {
-		return false, nil
-	}
 	tag, err := s.pool.Exec(ctx, `UPDATE krun_worker_artifacts a
 		SET state='cleanup_blocked', gc_claimed_by=$2, gc_claimed_at=now()
 		WHERE artifact_id=$1 AND use_revision=$3 AND state IN ('staging','finalized','deleting')

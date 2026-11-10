@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"crypto/subtle"
 	sql "database/sql"
 	"errors"
 	"time"
@@ -21,19 +20,7 @@ func (s *Store) APIKeyIDByHash(ctx context.Context, hash string) (string, bool, 
 	if hash == "" {
 		return "", false, nil
 	}
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.memory == nil {
-			return "", false, errors.New("store is not initialized")
-		}
-		for id, candidate := range s.memory.KeyHashes {
-			if subtle.ConstantTimeCompare([]byte(hash), []byte(candidate)) == 1 {
-				return id, true, nil
-			}
-		}
-		return "", false, nil
-	}
+
 	var row models.APIKeyHash
 	err := s.orm.NewSelect().Model(&row).Column("key_id").Where("hash = ?", hash).Limit(1).Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -46,15 +33,7 @@ func (s *Store) SessionByHash(ctx context.Context, hash string) (domain.Session,
 	if hash == "" {
 		return domain.Session{}, false, nil
 	}
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		session, ok := s.memState().Sessions[hash]
-		if ok && session.OAuthGrant != "" && !s.oauthGrantActive(session.OAuthGrant) {
-			return domain.Session{}, false, nil
-		}
-		return session, ok, nil
-	}
+
 	var row models.Session
 	err := s.orm.NewSelect().Model(&row).Where("session_hash = ?", hash).Where("oauth_grant_id = '' OR EXISTS(SELECT 1 FROM krun_oauth_grants g WHERE g.grant_id=krun_sessions.oauth_grant_id AND g.revoked=false AND g.expires_at>now())").Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -69,45 +48,13 @@ func (s *Store) SessionByHash(ctx context.Context, hash string) (domain.Session,
 // touchSession refreshes seen_at only when the stored value is older than the
 // throttle. It deliberately does not fail the request when it loses a race.
 func (s *Store) TouchSession(ctx context.Context, hash string) error {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if st := s.memState(); st != nil {
-			if session, ok := st.Sessions[hash]; ok && now().Sub(session.Seen) >= seenThrottle {
-				session.Seen = now()
-				st.Sessions[hash] = session
-			}
-		}
-		return nil
-	}
 	_, err := s.orm.NewUpdate().Model((*models.Session)(nil)).Set("seen_at = now()").Where("session_hash = ?", hash).Where("seen_at < now() - ?::interval", seenThrottle.String()).Exec(ctx)
 	return err
 }
 
 func (s *Store) InsertSession(ctx context.Context, token string, session domain.Session) error {
-	if s.pool == nil {
-		if st := s.memState(); st != nil {
-			st.Sessions[digest(token)] = session
-		}
-		return nil
-	}
 	row := sessionModel(digest(token), session)
 	_, err := s.orm.NewInsert().Model(&row).Returning("NULL").Exec(ctx)
-	return err
-}
-
-func (s *Store) DeleteSession(ctx context.Context, hash string) error {
-	if hash == "" {
-		return nil
-	}
-	if s.pool == nil {
-		if st := s.memState(); st != nil {
-			delete(st.Sessions, hash)
-		}
-		return nil
-	}
-	row := models.Session{SessionHash: hash}
-	_, err := s.orm.NewDelete().Model(&row).WherePK().Exec(ctx)
 	return err
 }
 
@@ -117,10 +64,7 @@ func (s *Store) BrowserFor(ctx context.Context, hash string) (domain.Browser, bo
 	if hash == "" {
 		return domain.Browser{}, false, nil
 	}
-	if s.pool == nil {
-		browser, ok := s.memState().Browsers[hash]
-		return browser, ok, nil
-	}
+
 	var row models.Browser
 	err := s.orm.NewSelect().Model(&row).Where("browser_hash = ?", hash).Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -133,12 +77,6 @@ func (s *Store) BrowserFor(ctx context.Context, hash string) (domain.Browser, bo
 }
 
 func (s *Store) UpsertBrowser(ctx context.Context, hash string, browser domain.Browser) error {
-	if s.pool == nil {
-		if st := s.memState(); st != nil {
-			st.Browsers[hash] = browser
-		}
-		return nil
-	}
 	row := models.Browser{BrowserHash: hash, CSRF: browser.CSRF, Generation: browser.Generation, ExpiresAt: browser.Expires}
 	_, err := s.orm.NewInsert().Model(&row).On("CONFLICT (browser_hash) DO UPDATE").Set("csrf = EXCLUDED.csrf").Set("generation = EXCLUDED.generation").Set("expires_at = EXCLUDED.expires_at").Returning("NULL").Exec(ctx)
 	return err

@@ -8,7 +8,6 @@ import (
 	"github.com/krun-dev/krun/internal/authorization"
 	"github.com/krun-dev/krun/internal/domain"
 	"github.com/krun-dev/krun/internal/securetoken"
-	"github.com/krun-dev/krun/internal/storage"
 )
 
 func AuditEntry(p authorization.Principal, requestID, action, provider, organization string, allowed bool) domain.Audit {
@@ -40,12 +39,9 @@ func (s *Service) StartConnection(ctx context.Context, st *domain.State, p autho
 
 func (s *Service) saveConnectState(ctx context.Context, st *domain.State, p authorization.Principal, state string, pending domain.WorkerRepositoryConnectState, requestID string) error {
 	st.RecordAudit(AuditEntry(p, requestID, "workers.repository.connect.start", pending.Provider, pending.Organization, true))
-	if s.Store.Persistent() {
-		audits := append([]domain.Audit(nil), st.PendingAudits...)
-		st.PendingAudits = nil
-		return s.Store.UpsertRepositoryConnectStateAudited(ctx, state, pending, audits)
-	}
-	return s.Store.UpsertRepositoryConnectState(ctx, state, pending)
+	audits := append([]domain.Audit(nil), st.PendingAudits...)
+	st.PendingAudits = nil
+	return s.Store.UpsertRepositoryConnectStateAudited(ctx, state, pending, audits)
 }
 
 func browserLaunchKey(ticket string) string {
@@ -92,11 +88,7 @@ func (s *Service) OpenBrowserLaunch(ctx context.Context, p authorization.Princip
 		redirect, err = s.StartConnection(ctx, st, p, organization, provider, browser, requestID)
 		return err
 	}
-	if s.Store.Persistent() {
-		err := open(&domain.State{})
-		return redirect, err
-	}
-	err := s.Store.Update(ctx, storage.PartitionWorkers, open)
+	err := open(&domain.State{})
 	return redirect, err
 }
 
@@ -110,14 +102,7 @@ func (s *Service) CompleteConnection(ctx context.Context, in ConnectInput) (Conn
 	var pending domain.WorkerRepositoryConnectState
 	var consumed bool
 	var err error
-	if s.Store.Persistent() {
-		pending, consumed, err = s.Store.ConsumeRepositoryConnectState(ctx, in.State, in.Browser, in.User)
-	} else {
-		err = s.Store.Update(ctx, storage.PartitionWorkers, func(*domain.State) error {
-			pending, consumed, err = s.Store.ConsumeRepositoryConnectState(ctx, in.State, in.Browser, in.User)
-			return err
-		})
-	}
+	pending, consumed, err = s.Store.ConsumeRepositoryConnectState(ctx, in.State, in.Browser, in.User)
 	if err != nil {
 		return ConnectResult{}, err
 	}
@@ -152,17 +137,7 @@ func (s *Service) CompleteConnection(ctx context.Context, in ConnectInput) (Conn
 	}
 	connection := domain.WorkerRepositoryConnection{User: pending.User, Provider: authorizationKey(provider), AccessToken: token.AccessToken, TokenType: token.TokenType, RefreshToken: token.RefreshToken, ExpiresAt: token.Expiry, ConnectedAt: time.Now().UTC(), RefreshState: "ready"}
 	entry := AuditEntry(authorization.Principal{User: domain.User{ID: pending.User}, Kind: "session"}, in.RequestID, "workers.repository.connect", pending.Provider, pending.Organization, true)
-	if s.Store.Persistent() {
-		err = s.Store.UpsertRepositoryConnectionAudited(ctx, connection, []domain.Audit{entry})
-	} else {
-		err = s.Store.Update(ctx, storage.PartitionWorkers, func(st *domain.State) error {
-			if err := s.Store.UpsertRepositoryConnection(ctx, connection); err != nil {
-				return err
-			}
-			st.RecordAudit(entry)
-			return nil
-		})
-	}
+	err = s.Store.UpsertRepositoryConnectionAudited(ctx, connection, []domain.Audit{entry})
 	return out, err
 }
 func (s *Service) Disconnect(ctx context.Context, st *domain.State, p authorization.Principal, organization, provider, requestID string) error {
@@ -171,10 +146,7 @@ func (s *Service) Disconnect(ctx context.Context, st *domain.State, p authorizat
 		return err
 	}
 	st.RecordAudit(AuditEntry(p, requestID, "workers.repository.disconnect", provider, organization, true))
-	if s.Store.Persistent() {
-		audits := append([]domain.Audit(nil), st.PendingAudits...)
-		st.PendingAudits = nil
-		return s.Store.DeleteRepositoryConnectionAudited(ctx, p.User.ID, authorizationKey(configured), audits)
-	}
-	return s.Store.DeleteRepositoryConnection(ctx, p.User.ID, authorizationKey(configured))
+	audits := append([]domain.Audit(nil), st.PendingAudits...)
+	st.PendingAudits = nil
+	return s.Store.DeleteRepositoryConnectionAudited(ctx, p.User.ID, authorizationKey(configured), audits)
 }

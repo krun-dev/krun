@@ -1,7 +1,6 @@
 package control
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -19,11 +18,9 @@ const oauthTestVerifier = "oauth-pkce-fixture-verifier-0123456789012345678901234
 
 func oauthBrowser(t *testing.T, s *Server, store *Store) {
 	t.Helper()
-	if err := store.Update(context.Background(), PartitionIAM, func(st *State) error {
-		at := now()
-		st.Sessions[digest("oauth-browser")] = Session{Hash: digest("oauth-browser"), User: "admin", AuthVersion: 1, CSRF: "oauth-csrf", Created: at, Seen: at, Absolute: at.Add(time.Hour)}
-		return nil
-	}); err != nil {
+	at := now()
+	session := Session{User: "admin", AuthVersion: 1, CSRF: "oauth-csrf", Created: at, Seen: at, Absolute: at.Add(time.Hour)}
+	if err := store.InsertSession(t.Context(), "oauth-browser", session); err != nil {
 		t.Fatal(err)
 	}
 }

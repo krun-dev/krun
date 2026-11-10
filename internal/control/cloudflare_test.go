@@ -14,12 +14,7 @@ import (
 
 func cfTestServer(t *testing.T) (*Server, *Store, string) {
 	s, store, _ := workerTestServer(t)
-	if err := store.Mutate(context.Background(), PartitionIAM, PartitionIAM, func(st *State) error {
-		resource := st.Resources["svc-a"]
-		resource.Locator = "fixture"
-		st.Resources[resource.ID] = resource
-		return nil
-	}); err != nil {
+	if _, err := postgresTestPool(store).Exec(t.Context(), "UPDATE krun_resources SET locator='fixture' WHERE resource_id='svc-a'"); err != nil {
 		t.Fatal(err)
 	}
 	return s, store, cfPrefix + "/accounts/org-a/workers/scripts/fixture"

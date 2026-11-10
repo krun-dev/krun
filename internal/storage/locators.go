@@ -25,19 +25,6 @@ func insertLocator(ctx context.Context, message string, query *bun.InsertQuery) 
 }
 
 func (s *Store) OrganizationID(ctx context.Context, ref string) (string, error) {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if _, exists := s.memory.Organizations[ref]; exists {
-			return ref, nil
-		}
-		for _, org := range s.memory.Organizations {
-			if org.ShortName != "" && org.ShortName == ref {
-				return org.ID, nil
-			}
-		}
-		return "", domain.NotFound()
-	}
 	var id string
 	err := s.pool.QueryRow(ctx, `SELECT org_id FROM krun_organizations WHERE org_id=$1 OR (short_name=$1 AND short_name<>'') ORDER BY (org_id=$1) DESC LIMIT 1`, ref).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -49,19 +36,6 @@ func (s *Store) OrganizationID(ctx context.Context, ref string) (string, error) 
 // ResourceID resolves within the parent scope. Cloudflare accepts script names
 // only; native clients can also use the explicit internal ID.
 func (s *Store) ResourceID(ctx context.Context, org, kind, ref string, allowID bool) (string, error) {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if r, ok := s.memory.Resources[ref]; allowID && ok && r.Organization == org && r.Kind == kind {
-			return r.ID, nil
-		}
-		for _, r := range s.memory.Resources {
-			if r.Organization == org && r.Kind == kind && r.Locator != "" && r.Locator == ref {
-				return r.ID, nil
-			}
-		}
-		return "", domain.NotFound()
-	}
 	var id string
 	err := s.pool.QueryRow(ctx, `
 		SELECT resource_id FROM krun_resources

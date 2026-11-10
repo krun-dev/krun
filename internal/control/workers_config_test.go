@@ -1,20 +1,21 @@
 package control
 
 import (
-	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	appconfig "github.com/krun-dev/krun/internal/config"
+	"github.com/krun-dev/krun/internal/storage"
 	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
-func workerConfigFixture() (*State, *Store) {
-	store := memoryStore()
+func workerConfigFixture() *State {
 	st, _, _ := fixture()
 	// Hosts are derived from the domain catalog, not stored.
 	ws := Worker{Worker: "svc-a", Organization: "org-a", Domains: []string{"internal"}, Environments: map[string]WorkerEnvironment{
@@ -28,8 +29,7 @@ func workerConfigFixture() (*State, *Store) {
 	st.Workers.Versions["rel-1"] = WorkerVersion{ID: "rel-1", Worker: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1", ArchiveDigest: "archive-1", ModuleDigest: "module-1", Variables: map[string]any{"A": "1"}}
 	st.Workers.Versions["rel-unused"] = WorkerVersion{ID: "rel-unused", Worker: "svc-a", Organization: "org-a", Environment: "production", Artifact: "art-1"}
 	st.Workers.Workers["svc-deleted"] = Worker{Worker: "svc-deleted", Organization: "org-a", Environments: map[string]WorkerEnvironment{}}
-	_ = store.Update(context.Background(), PartitionAll, func(state *State) error { *state = *st; return nil })
-	return st, store
+	return st
 }
 
 func workerProjectionConfig(domains []appconfig.WorkerDomain) *appconfig.WorkersConfig {
@@ -66,7 +66,7 @@ func workerProjectionConfig(domains []appconfig.WorkerDomain) *appconfig.Workers
 }
 
 func TestWorkerConfigProjection(t *testing.T) {
-	st, _ := workerConfigFixture()
+	st := workerConfigFixture()
 	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}})
 	p := workerapp.WorkerConfigFromState(st, config)
 	if len(p.Routes) != 3 {
@@ -89,17 +89,10 @@ func TestWorkerConfigProjection(t *testing.T) {
 	if _, ok := p.Versions["rel-1"]; !ok || len(p.Versions) != 1 {
 		t.Fatalf("only referenced versions should be projected: %+v", p.Versions)
 	}
-	digest, _, err := workerapp.WorkerConfigDigest(p)
-	if err != nil || digest == "" {
-		t.Fatal(err)
-	}
-	if again, _, _ := workerapp.WorkerConfigDigest(workerapp.WorkerConfigFromState(st, config)); again != digest {
-		t.Fatal("projection digest is not deterministic")
-	}
 }
 
 func TestWorkerConfigDiffOrdering(t *testing.T) {
-	st, _ := workerConfigFixture()
+	st := workerConfigFixture()
 	first := workerapp.WorkerConfigFromState(st, workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}}))
 	ops := workerapp.DiffWorkerConfig(nil, first)
 	seenRoute := false
@@ -138,59 +131,38 @@ func TestWorkerConfigDiffOrdering(t *testing.T) {
 	}
 }
 
-func TestConfigRevisionStoreAndAcks(t *testing.T) {
-	store := memoryStore()
-	ctx := context.Background()
-	for i := 1; i <= 5; i++ {
-		revision, floor, err := store.AppendConfigRevision(ctx, "digest-"+string(rune('0'+i)), []byte(`{"routes":[]}`), []byte(`[]`), 3)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if int(revision) != i {
-			t.Fatalf("revision %d", revision)
-		}
-		wantFloor := int64(1)
-		if i > 3 {
-			wantFloor = int64(i - 2)
-		}
-		if floor != wantFloor {
-			t.Fatalf("floor for %d: got %d want %d", i, floor, wantFloor)
-		}
-	}
-	items, floor, head, err := store.ConfigRevisionsSince(ctx, 1, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if head != 5 || floor != 3 || len(items) != 3 || items[0].Revision != 3 || items[2].Revision != 5 {
-		t.Fatalf("since: floor=%d items=%+v", floor, items)
-	}
-	latest, ok, err := store.LatestConfigRevision(ctx)
-	if err != nil || !ok || latest.Revision != 5 {
-		t.Fatalf("latest: %+v %v %v", latest, ok, err)
-	}
-	if err := store.RecordAck(ctx, WorkerAck{Pod: "pod-1", UID: "uid-1", Pool: "default", Revision: 4, Time: now()}); err != nil {
-		t.Fatal(err)
-	}
-	acks, err := store.ReadAcks(ctx)
-	if err != nil || acks["uid-1"].Revision != 4 {
-		t.Fatalf("acks: %+v %v", acks, err)
+func appendTestConfigDelta(t *testing.T, store *Store, previous int64, ops ...workerConfigOp) {
+	t.Helper()
+	revision, won, err := store.AppendConfigDelta(t.Context(), previous, nil, ops)
+	if err != nil || !won || revision != previous+1 {
+		t.Fatalf("append delta: revision=%d won=%v err=%v", revision, won, err)
 	}
 }
 
-func TestConfigRevisionCASRejectsStalePublisher(t *testing.T) {
-	store := memoryStore()
-	ctx := context.Background()
-	revision, _, appended, err := store.AppendConfigRevisionCAS(ctx, 0, "first", []byte(`{"routes":[]}`), []byte(`[]`), 10)
-	if err != nil || !appended || revision != 1 {
-		t.Fatalf("first CAS: revision=%d appended=%v err=%v", revision, appended, err)
+func TestConfigRevisionStoreAndAcks(t *testing.T) {
+	store := postgresTestStore(t)
+	ctx := t.Context()
+	head := int64(storage.WorkerConfigOpsRetain) + 1
+	pool := postgresTestPool(store)
+	if _, err := pool.Exec(ctx, "INSERT INTO worker_config_revisions (config_revision,digest) SELECT n,'fixture' FROM generate_series(1,$1::bigint) AS n", head); err != nil {
+		t.Fatal(err)
 	}
-	revision, _, appended, err = store.AppendConfigRevisionCAS(ctx, 0, "stale", []byte(`{"routes":[]}`), []byte(`[]`), 10)
-	if err != nil || appended || revision != 1 {
-		t.Fatalf("stale CAS: revision=%d appended=%v err=%v", revision, appended, err)
+	if _, err := pool.Exec(ctx, "UPDATE krun_meta SET value=$1 WHERE key='worker_config_head'", fmt.Sprint(head)); err != nil {
+		t.Fatal(err)
 	}
-	items, _, _, err := store.ConfigRevisionsSince(ctx, 0, 10)
-	if err != nil || len(items) != 1 || items[0].Digest != "first" {
-		t.Fatalf("stale publisher created a duplicate revision: %+v err=%v", items, err)
+	appendTestConfigDelta(t, store, head, workerConfigOp{Type: "route_delete", Host: "stale.workers.test", Pool: "default"})
+	items, floor, latest, err := store.ConfigRevisionsSince(ctx, 1, storage.WorkerConfigOpsRetain)
+	if err != nil || latest != head+1 || floor != 3 || len(items) != storage.WorkerConfigOpsRetain || items[0].Revision != 3 || items[len(items)-1].Revision != latest {
+		t.Fatalf("revisions=%d floor=%d latest=%d err=%v", len(items), floor, latest, err)
+	}
+	for _, revision := range []int64{latest, latest - 1} {
+		if err := store.RecordAck(ctx, WorkerAck{Pod: "pod-1", UID: "uid-1", Pool: "default", Revision: int(revision), Time: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	acks, err := store.ReadAcks(ctx)
+	if err != nil || acks["uid-1"].Revision != int(latest) {
+		t.Fatalf("acks: %+v %v", acks, err)
 	}
 }
 
@@ -212,15 +184,11 @@ func TestWorkerRuntimeConfigChanges(t *testing.T) {
 		return c
 	}()
 	s.routes()
-	ctx := context.Background()
 	if response := runtimeConfigRequest(s, token, "/changes?since=117&wait=1s"); response.Code != 409 || !strings.Contains(response.Body.String(), `"config_revision":0`) {
 		t.Fatalf("runtime ahead of an empty control-plane history must resync: %d %s", response.Code, response.Body.String())
 	}
-	payload, _ := json.Marshal(workerConfigProjection{Routes: []workerConfigRoute{{Host: "w.workers.test", Enabled: true, Version: "rel-1", Pool: "default"}}, Versions: map[string]WorkerVersion{}})
-	ops, _ := json.Marshal([]workerConfigOp{{Type: "route_upsert", Pool: "default", Host: "w.workers.test"}})
-	if _, _, err := store.AppendConfigRevision(ctx, "d1", payload, ops, 512); err != nil {
-		t.Fatal(err)
-	}
+	op := workerConfigOp{Type: "route_delete", Pool: "default", Host: "w.workers.test"}
+	appendTestConfigDelta(t, store, 0, op)
 	if r := runtimeConfigRequest(s, token, "/changes?since=0&wait=1s"); r.Code != 409 || !strings.Contains(r.Body.String(), "RESYNC") {
 		t.Fatalf("since=0 must resync: %d %s", r.Code, r.Body.String())
 	}
@@ -231,9 +199,7 @@ func TestWorkerRuntimeConfigChanges(t *testing.T) {
 	if r.Code != 204 {
 		t.Fatalf("no newer revision: %d %s", r.Code, r.Body.String())
 	}
-	if _, _, err := store.AppendConfigRevision(ctx, "d2", payload, ops, 512); err != nil {
-		t.Fatal(err)
-	}
+	appendTestConfigDelta(t, store, 1, op)
 	r = runtimeConfigRequest(s, token, "/changes?since=1&wait=1s")
 	if r.Code != 200 {
 		t.Fatalf("batch: %d %s", r.Code, r.Body.String())
@@ -265,28 +231,13 @@ func TestMultiPoolRuntimeConfigIsolation(t *testing.T) {
 	}
 	s.Config.Workers = c
 	s.routes()
-	ctx := context.Background()
-	projection := workerConfigProjection{
-		Routes: []workerConfigRoute{
-			{Host: "private.workers.test", Enabled: true, Version: "rel-private", Pool: "private-a"},
-			{Host: "public.workers.test", Enabled: true, Version: "rel-public", Pool: "public-b"},
-		},
-		Versions: map[string]WorkerVersion{
-			"rel-private": {ID: "rel-private"},
-			"rel-public":  {ID: "rel-public"},
-		},
-	}
-	payload, _ := json.Marshal(projection)
-	if _, _, err := store.AppendConfigRevision(ctx, "d1", payload, []byte(`[]`), 512); err != nil {
-		t.Fatal(err)
-	}
-	ops, _ := json.Marshal([]workerConfigOp{
-		{Type: "route_upsert", Pool: "private-a", Host: "private.workers.test", Route: &projection.Routes[0]},
-		{Type: "route_upsert", Pool: "public-b", Host: "public.workers.test", Route: &projection.Routes[1]},
-	})
-	if _, _, err := store.AppendConfigRevision(ctx, "d2", payload, ops, 512); err != nil {
-		t.Fatal(err)
-	}
+	appendTestConfigDelta(t, store, 0, workerConfigOp{Type: "route_delete", Pool: "private-a", Host: "old.workers.test"})
+	privateRoute := workerConfigRoute{Worker: "svc-a", Host: "private.workers.test", Enabled: true, Pool: "private-a"}
+	publicRoute := workerConfigRoute{Worker: "svc-a", Host: "public.workers.test", Enabled: true, Pool: "public-b"}
+	appendTestConfigDelta(t, store, 1,
+		workerConfigOp{Type: "route_upsert", Pool: privateRoute.Pool, Host: privateRoute.Host, Route: &privateRoute},
+		workerConfigOp{Type: "route_upsert", Pool: publicRoute.Pool, Host: publicRoute.Host, Route: &publicRoute},
+	)
 
 	requestPool := func(pool, token, path string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("GET", "/api/internal/workers/config"+path, nil)

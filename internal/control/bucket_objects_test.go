@@ -77,7 +77,7 @@ func TestObjectBrowserAuthorizationAndControlOnly(t *testing.T) {
 	}
 	s.bucketObjects = bucketobjects.New(s.Config.Workers.ObjectStorage, registry)
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
-		st.Workers.Buckets["bkt-fixture"] = domain.WorkerBucket{ID: "bkt-fixture", Organization: "org-a", Name: "images", Store: "primary", Enabled: true, Revision: 1}
+		st.Workers.Buckets["bkt-fixture"] = domain.WorkerBucket{ID: "bkt-fixture", Organization: "org-a", Name: "images", Store: "primary", Enabled: true, Revision: 1, Created: now()}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -139,13 +139,8 @@ func TestObjectBrowserAuthorizationAndControlOnly(t *testing.T) {
 	if out := request(s, "DELETE", base+"?key=hello.txt", "krun_cli_admin", ""); out.Code != 200 {
 		t.Fatal("delete failed", out.Code, out.Body.String())
 	}
-	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
-		bucket := st.Workers.Buckets["bkt-fixture"]
-		bucket.Enabled = false
-		st.Workers.Buckets[bucket.ID] = bucket
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+	if out := request(s, "PATCH", "/api/v1/orgs/org-a/buckets/bkt-fixture", "krun_cli_admin", `{"enabled":false,"revision":1}`); out.Code != 200 {
+		t.Fatalf("disable bucket: %d %s", out.Code, out.Body)
 	}
 	if out := request(s, "POST", base+"/access", "krun_cli_admin", `{"key":"hello.txt","operation":"read"}`); out.Code != 404 {
 		t.Fatal("disabled bucket issued a new capability", out.Code)

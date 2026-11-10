@@ -40,7 +40,7 @@ func TestPostgresRepositoryRefreshClaimHasSingleWinner(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			claimed, won, claimErr := store.ClaimRepositoryConnectionRefresh(ctx, current.User, current.Provider, current.TokenRevision, now())
+			claimed, won, claimErr := store.ClaimRepositoryConnectionRefresh(ctx, current.User, current.Provider, current.TokenRevision)
 			results <- result{claimed, won, claimErr}
 		}()
 	}
@@ -91,7 +91,7 @@ func TestPostgresRepositoryRefreshClaimHasSingleWinner(t *testing.T) {
 		t.Fatalf("rejected grant status: %v %v", statuses, err)
 	}
 
-	if err := store.DeleteRepositoryConnection(ctx, current.User, current.Provider); err != nil {
+	if err := store.DeleteRepositoryConnectionAudited(ctx, current.User, current.Provider, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.UpsertRepositoryConnection(ctx, rotated); err != nil {

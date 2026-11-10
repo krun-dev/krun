@@ -87,7 +87,7 @@ func emailChallenge(t *testing.T, s *Server, cookies []*http.Cookie, csrf string
 }
 
 func TestEmailLoginIdentitySessionAndReplay(t *testing.T) {
-	store := memoryStore()
+	store := postgresTestStore(t)
 	s, code := emailTestServer(t, store)
 	cookies, csrf := emailBrowser(t, s)
 	challenge := emailChallenge(t, s, cookies, csrf)
@@ -112,25 +112,27 @@ func TestEmailLoginIdentitySessionAndReplay(t *testing.T) {
 		if len(st.Assignments) != 0 || len(st.Members) != 0 {
 			t.Error("email login granted privileges")
 		}
-		if st.EmailLogins[digest(challenge)].CodeHash == *code {
-			t.Error("plaintext code stored")
-		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+	stored, found, err := store.EmailLogin(t.Context(), digest(challenge))
+	if err != nil || !found || stored.CodeHash == *code {
+		t.Fatalf("expected hashed email challenge: found=%v err=%v", found, err)
 	}
 	if w := emailRequest(s, "/api/auth/email/email/verify", input, cookies, csrf); w.Code != 400 {
 		t.Fatal("replayed code accepted", w.Code)
 	}
 	// A fresh browser can log in to the same local identity without merging SSO identities.
-	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
-		for k, v := range st.EmailLogins {
-			v.Sent = now().Add(-time.Minute)
-			st.EmailLogins[k] = v
-		}
+	if _, err := postgresTestPool(store).Exec(t.Context(), "UPDATE krun_email_logins SET sent_at=now()-interval '1 minute'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(t.Context(), PartitionIAM, func(st *State) error {
 		st.Users["sso"] = User{ID: "sso", Source: "other", Subject: "person@example.com", Email: "person@example.com", Status: "active"}
 		return nil
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	cookies, csrf = emailBrowser(t, s)
 	challenge = emailChallenge(t, s, cookies, csrf)
 	w = emailRequest(s, "/api/auth/email/email/verify", map[string]string{"challenge_id": challenge, "code": *code}, cookies, csrf)
@@ -148,7 +150,7 @@ func TestEmailLoginIdentitySessionAndReplay(t *testing.T) {
 func TestEmailCodeSecurityBoundaries(t *testing.T) {
 	for _, test := range []string{"csrf", "origin", "other-browser", "expired", "attempt-limit", "superseded", "config-change", "delivery-failure", "cooldown", "redirect", "invalid-email", "user-disabled", "invite-only"} {
 		t.Run(test, func(t *testing.T) {
-			store := memoryStore()
+			store := postgresTestStore(t)
 			s, code := emailTestServer(t, store)
 			cookies, csrf := emailBrowser(t, s)
 			if test == "redirect" || test == "invalid-email" {
@@ -169,14 +171,11 @@ func TestEmailCodeSecurityBoundaries(t *testing.T) {
 				if w.Code != 503 || strings.Contains(w.Body.String(), "SECRET") {
 					t.Fatal(w.Code, w.Body.String())
 				}
-				_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
-					for _, v := range st.EmailLogins {
-						if !v.Consumed {
-							t.Error("undelivered code active")
-						}
-					}
-					return nil
-				})
+				var active int
+				err := postgresTestPool(store).QueryRow(t.Context(), "SELECT count(*) FROM krun_email_logins WHERE NOT consumed").Scan(&active)
+				if err != nil || active != 0 {
+					t.Fatalf("undelivered codes active=%d err=%v", active, err)
+				}
 				return
 			}
 			if test == "invite-only" {
@@ -194,12 +193,9 @@ func TestEmailCodeSecurityBoundaries(t *testing.T) {
 			case "other-browser":
 				cookies, csrf = emailBrowser(t, s)
 			case "expired":
-				_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
-					v := st.EmailLogins[digest(challenge)]
-					v.Expires = now().Add(-time.Second)
-					st.EmailLogins[digest(challenge)] = v
-					return nil
-				})
+				if _, err := postgresTestPool(store).Exec(t.Context(), "UPDATE krun_email_logins SET expires_at=now() WHERE challenge_hash=$1", digest(challenge)); err != nil {
+					t.Fatal(err)
+				}
 			case "attempt-limit":
 				wrong := map[string]string{"challenge_id": challenge, "code": "wrong"}
 				for i := 0; i < 5; i++ {
@@ -208,12 +204,9 @@ func TestEmailCodeSecurityBoundaries(t *testing.T) {
 					}
 				}
 			case "superseded":
-				_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
-					b := st.Browsers[digest(cookies[0].Value)]
-					b.Generation++
-					st.Browsers[digest(cookies[0].Value)] = b
-					return nil
-				})
+				if _, err := postgresTestPool(store).Exec(t.Context(), "UPDATE krun_browsers SET generation=generation+1 WHERE browser_hash=$1", digest(cookies[0].Value)); err != nil {
+					t.Fatal(err)
+				}
 			case "config-change":
 				s.providers["email"].Config.Name = "changed"
 			case "cooldown":
@@ -279,7 +272,7 @@ func TestDisabledLoginSources(t *testing.T) {
 	c = emailTestConfig()
 	c.Providers[0].Enabled = &falseValue
 	c.SMTP = appconfig.SMTPConfig{}
-	emailDisabled, err := NewServer(context.Background(), c, memoryStore())
+	emailDisabled, err := NewServer(context.Background(), c, postgresTestStore(t))
 	if err != nil {
 		t.Fatal(err)
 	}

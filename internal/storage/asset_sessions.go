@@ -4,23 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
 
 	"github.com/krun-dev/krun/internal/domain"
 	"github.com/krun-dev/krun/internal/storage/models"
 )
 
 func (s *Store) InsertWorkerAssetSession(ctx context.Context, session domain.WorkerAssetSession) error {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.assetSessions == nil {
-			s.assetSessions = map[string]domain.WorkerAssetSession{}
-		}
-		session.Files = append([]domain.WorkerAssetSessionFile(nil), session.Files...)
-		s.assetSessions[session.ID] = session
-		return nil
-	}
 	tx, err := s.beginORMTransaction(ctx)
 	if err != nil {
 		return err
@@ -52,21 +41,6 @@ func (s *Store) InsertWorkerAssetSession(ctx context.Context, session domain.Wor
 }
 
 func (s *Store) WorkerAssetSession(ctx context.Context, org, hash string, completion bool) (domain.WorkerAssetSession, error) {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		for _, a := range s.assetSessions {
-			expected := a.UploadHash
-			if completion {
-				expected = a.CompletionHash
-			}
-			if a.Organization == org && expected == hash && time.Now().Before(a.Expires) {
-				a.Files = append([]domain.WorkerAssetSessionFile(nil), a.Files...)
-				return a, nil
-			}
-		}
-		return domain.WorkerAssetSession{}, domain.Problem(401, "ASSET_UPLOAD_EXPIRED", "Asset upload token is invalid or expired")
-	}
 	column := "upload_hash"
 	if completion {
 		column = "completion_hash"
@@ -91,22 +65,6 @@ func (s *Store) WorkerAssetSession(ctx context.Context, org, hash string, comple
 }
 
 func (s *Store) MarkWorkerAssetUploaded(ctx context.Context, id, hash, contentType string) error {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		a, ok := s.assetSessions[id]
-		if !ok || !time.Now().Before(a.Expires) {
-			return domain.NotFound()
-		}
-		for i, f := range a.Files {
-			if f.Hash == hash {
-				a.Files[i].Uploaded = true
-				a.Files[i].ContentType = contentType
-			}
-		}
-		s.assetSessions[id] = a
-		return nil
-	}
 	result, err := s.orm.NewUpdate().Model((*models.AssetSessionFile)(nil)).Set("uploaded = true").Set("content_type = ?", contentType).Where("session_id = ? AND hash = ?", id, hash).Where("EXISTS (SELECT 1 FROM krun_worker_asset_sessions s WHERE s.session_id = ? AND s.expires_at > now())", id).Exec(ctx)
 	if err != nil {
 		return err

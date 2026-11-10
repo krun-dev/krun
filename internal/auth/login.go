@@ -28,26 +28,13 @@ type LoginInput struct {
 func (s *Service) CommitLogin(ctx context.Context, in LoginInput) error {
 	id := in.Identity
 
-	if s.Store.Persistent() {
-		ctx = context.WithValue(ctx, storage.LoginScopeKey{}, storage.LoginScope{Source: in.Provider.Source, Subject: id.Subject})
-	}
+	ctx = context.WithValue(ctx, storage.LoginScopeKey{}, storage.LoginScope{Source: in.Provider.Source, Subject: id.Subject})
 
 	at := time.Now().UTC()
 	session := domain.Session{Hash: securetoken.Digest(in.SessionToken), CSRF: securetoken.Random(), Created: at, Seen: at, Absolute: at.Add(8 * time.Hour)}
 	for attempt := 0; ; attempt++ {
 		err := s.Store.Update(ctx, storage.PartitionIAM, func(st *domain.State) error {
-			if !s.Store.Persistent() {
-				browser, ok := st.Browsers[in.BrowserHash]
-				if !ok || browser.Generation != in.ExpectedGeneration || !time.Now().UTC().Before(browser.Expires) {
-					return domain.Problem(403, "AUTH_STATE_INVALID", "Login state changed")
-				}
-				if in.ChallengeHash != "" {
-					challenge, ok := st.EmailLogins[in.ChallengeHash]
-					if !ok || challenge.Generation != in.ExpectedGeneration || challenge.Consumed || challenge.Attempts >= 5 || !time.Now().UTC().Before(challenge.Expires) {
-						return domain.Problem(400, "EMAIL_CODE_INVALID", "Invalid or expired verification code")
-					}
-				}
-			}
+
 			var user domain.User
 			for _, u := range st.Users {
 				if u.Source == in.Provider.Source && u.Subject == id.Subject {
@@ -74,23 +61,7 @@ func (s *Service) CommitLogin(ctx context.Context, in LoginInput) error {
 			session.User = user.ID
 			session.AuthVersion = user.AuthVersion
 			oldSessionHash := in.OldSessionHash
-			if !s.Store.Persistent() {
-				if in.ChallengeHash != "" {
-					challenge := st.EmailLogins[in.ChallengeHash]
-					challenge.Attempts++
-					challenge.Consumed = true
-					st.EmailLogins[in.ChallengeHash] = challenge
-				}
-				if oldSessionHash != "" {
-					delete(st.Sessions, oldSessionHash)
-				}
-				st.Sessions[session.Hash] = session
-				browser := st.Browsers[in.BrowserHash]
-				browser.Generation++
-				st.Browsers[in.BrowserHash] = browser
-			} else {
-				st.PendingLogin = &domain.LoginCommit{Session: session, DeleteSessionHash: oldSessionHash, BrowserHash: in.BrowserHash, ExpectedGeneration: in.ExpectedGeneration, EmailChallengeHash: in.ChallengeHash}
-			}
+			st.PendingLogin = &domain.LoginCommit{Session: session, DeleteSessionHash: oldSessionHash, BrowserHash: in.BrowserHash, ExpectedGeneration: in.ExpectedGeneration, EmailChallengeHash: in.ChallengeHash}
 			audit.Record(st, authorization.Principal{User: user, Kind: "session"}, in.RequestID, "auth.login", user.ID, true)
 			return nil
 		})

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -15,22 +14,11 @@ import (
 
 // KRUN_TEST_POSTGRES_URL must point at an isolated disposable test database.
 func TestPostgresSharedTransactions(t *testing.T) {
-	dsn := os.Getenv("KRUN_TEST_POSTGRES_URL")
-	if dsn == "" {
-		t.Skip("set KRUN_TEST_POSTGRES_URL for PostgreSQL integration")
-	}
+	open := postgresTestOpener(t)
+	a := open()
+	b := open()
 	ctx := context.Background()
-	a, e := openStoreForTest(t, ctx, dsn)
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer a.Close()
-	b, e := openStoreForTest(t, ctx, dsn)
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer b.Close()
-	if e = a.Update(ctx, PartitionAll, func(st *State) error {
+	if e := a.Update(ctx, PartitionAll, func(st *State) error {
 		*st = *newState()
 		st.Users["pg-user"] = User{ID: "pg-user", Status: "active"}
 		return nil
@@ -54,13 +42,13 @@ func TestPostgresSharedTransactions(t *testing.T) {
 	if success != 1 {
 		t.Fatalf("expected one bootstrap commit, got %d", success)
 	}
-	if e = a.Update(ctx, PartitionAll, func(st *State) error {
+	if e := a.Update(ctx, PartitionAll, func(st *State) error {
 		st.Users["pg-user"] = User{ID: "pg-user", Status: "disabled"}
 		return errors.New("rollback")
 	}); e == nil {
 		t.Fatal("expected transaction rollback")
 	}
-	if e = b.Update(ctx, PartitionAll, func(st *State) error {
+	if e := b.Update(ctx, PartitionAll, func(st *State) error {
 		if st.Users["pg-user"].Status != "active" {
 			t.Error("rolled back write visible across replica")
 		}
@@ -73,67 +61,9 @@ func TestPostgresSharedTransactions(t *testing.T) {
 	}
 }
 
-// truncatedTests records which tests already started from a clean database, so
-// a test that deliberately reopens the store mid-run keeps its rows.
-var truncatedTests sync.Map
-
-func postgresTestStore(t *testing.T) *Store {
-	t.Helper()
-	dsn := os.Getenv("KRUN_TEST_POSTGRES_URL")
-	if dsn == "" {
-		t.Skip("set KRUN_TEST_POSTGRES_URL for PostgreSQL integration")
-	}
-	store, err := openStoreForTest(t, context.Background(), dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Cleanups run last-registered-first: register Close first so the truncate
-	// runs while the pool is still live. Tests that close it themselves are
-	// handled by truncateControlTables's closed-pool guard.
-	t.Cleanup(store.Close)
-	t.Cleanup(func() { truncateControlTables(t, store) })
-	if _, seen := truncatedTests.LoadOrStore(t.Name(), true); !seen {
-		truncateControlTables(t, store)
-	}
-	return store
-}
-
-func truncateControlTables(t *testing.T, store *Store) {
-	t.Helper()
-	if postgresTestPool(store) == nil || postgresTestPool(store).Ping(context.Background()) != nil {
-		return
-	}
-	tables := []string{
-		"krun_worker_configuration_secrets", "krun_worker_configuration_r2", "krun_worker_configurations",
-		"krun_org_invitation_redemptions", "krun_org_invitation_links",
-		"worker_retention_scopes", "worker_asset_objects", "worker_config_dirty", "worker_config_checkpoints", "worker_config_ops", "worker_config_revisions", "worker_config_routes", "worker_config_versions", "worker_runtime_acks",
-		"krun_rate_limits", "krun_audits",
-		"krun_sessions", "krun_browsers", "krun_login_states", "krun_email_logins",
-		"krun_worker_asset_session_files", "krun_worker_asset_sessions", "krun_oauth_refresh_tokens", "krun_oauth_grants", "krun_oauth_authorizations", "krun_invitations", "krun_repository_connect_states",
-		"krun_repository_connections", "krun_api_key_hashes", "krun_api_keys",
-		"krun_assignments", "krun_group_members", "krun_groups", "krun_members",
-		"krun_org_sources", "krun_organizations", "krun_resources", "krun_users",
-		"krun_identity_providers", "krun_identity_sources",
-		"krun_worker_deployments", "krun_worker_history", "krun_worker_idempotency", "krun_worker_operations",
-		"krun_worker_placements",
-		"krun_worker_version_r2", "krun_worker_environment_r2", "krun_worker_buckets", "krun_worker_version_secrets", "krun_worker_versions", "krun_worker_environment_secrets",
-		"krun_worker_secret_versions", "krun_worker_artifacts", "krun_worker_build_private",
-		"krun_worker_source_uploads",
-		"krun_worker_builds", "krun_worker_environments", "krun_worker_domains",
-		"krun_workers",
-	}
-	for _, table := range tables {
-		if _, err := postgresTestPool(store).Exec(context.Background(), `DELETE FROM `+table); err != nil {
-			return
-		}
-	}
-	_, _ = postgresTestPool(store).Exec(context.Background(), `DELETE FROM krun_meta WHERE key IN ('revision','bootstrapped','worker_config_head')`)
-	_, _ = postgresTestPool(store).Exec(context.Background(), `INSERT INTO krun_meta (key,value) VALUES
-		('worker_config_head','0') ON CONFLICT (key) DO NOTHING`)
-}
-
 func TestPostgresBrowserLoginSurvivesRestart(t *testing.T) {
-	store := postgresTestStore(t)
+	open := postgresTestOpener(t)
+	store := open()
 	ctx := context.Background()
 	if err := store.Update(ctx, PartitionAll, func(st *State) error { *st = *newState(); return nil }); err != nil {
 		t.Fatal(err)
@@ -156,7 +86,7 @@ func TestPostgresBrowserLoginSurvivesRestart(t *testing.T) {
 		t.Fatal("login begin failed", begin.Code)
 	}
 	store.Close()
-	store = postgresTestStore(t)
+	store = open()
 	s, err = NewServer(ctx, c, store)
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +97,7 @@ func TestPostgresBrowserLoginSurvivesRestart(t *testing.T) {
 	}
 	cookies = append(cookies, complete.Result().Cookies()...)
 	store.Close()
-	store = postgresTestStore(t)
+	store = open()
 	s, err = NewServer(ctx, c, store)
 	if err != nil {
 		t.Fatal(err)

@@ -22,7 +22,7 @@ func TestCloudflareJSONAndMetadataBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = store.Update(context.Background(), PartitionWorkers, func(st *State) error {
+	if err = store.View(context.Background(), PartitionAll, func(st *State) error {
 		p := Principal{User: st.Users["admin"], Kind: "cli_session"}
 		// Isolate snapshot and binding validation from the Cedar policy tests.
 		p.User = domain.User{ID: "admin", Source: "local", Status: "active"}
@@ -137,7 +137,7 @@ func TestCloudflareKeepVariableTypes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = store.Update(context.Background(), PartitionWorkers, func(st *State) error {
+			err = store.View(context.Background(), PartitionAll, func(st *State) error {
 				service := st.Workers.Workers["svc-a"]
 				env := service.Environments["production"]
 				env.Variables = map[string]any{"TEXT": "old", "CHANGED": "old", "JSON": map[string]any{"enabled": true}, "NULL": nil}

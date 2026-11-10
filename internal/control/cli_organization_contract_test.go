@@ -20,12 +20,7 @@ import (
 )
 
 func TestCLIOrganizationManagementContract(t *testing.T) {
-	t.Run("memory", func(t *testing.T) {
-		checkCLIOrganizationManagement(t, memoryStore())
-	})
-	t.Run("postgres", func(t *testing.T) {
-		checkCLIOrganizationManagement(t, postgresTestStore(t))
-	})
+	checkCLIOrganizationManagement(t, postgresTestStore(t))
 }
 
 func checkCLIOrganizationManagement(t *testing.T, store *Store) {

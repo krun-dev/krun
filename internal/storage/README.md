@@ -33,7 +33,7 @@ HTTP 与业务入口调用本包，所有层共享 `domain`。本包不依赖 HT
 
 跨表不变量由存储方法持有事务：调用方不能传入连接或自行拼事务。IAM 与 Workers 分区独立提交；HTTP、OAuth、Kubernetes 和对象存储调用不进入数据库事务。CAS、dirty generation 条件确认、保留期和幂等清理也由本层实现。
 
-`Open` 必须连接 PostgreSQL。`NewMemory` 是显式创建的测试后端，复用相同的数据访问契约，不会作为数据库失败时的降级路径。`config_memory.go` 仅为该后端保存合成快照；生产配置仍走 normalized delta。
+生产和存储集成测试统一使用 PostgreSQL。测试在专用数据库内为每个用例创建独立 schema，配置分发测试使用与生产相同的增量发布路径。
 
 验证：
 

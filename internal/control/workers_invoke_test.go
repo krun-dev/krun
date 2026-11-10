@@ -204,13 +204,9 @@ func TestWorkerInvokeRejectsInvalidRequestsWithoutNetwork(t *testing.T) {
 
 func TestWorkerInvokeSessionCSRF(t *testing.T) {
 	s, store, endpoint, _ := publishedWorkerInvokeServer(t)
-	if err := store.Update(context.Background(), PartitionAll, func(st *State) error {
-		session := st.Sessions[digest("krun_cli_admin")]
-		session.CLI = false
-		session.CSRF = "expected-csrf"
-		st.Sessions[digest("browser-admin")] = session
-		return nil
-	}); err != nil {
+	at := now()
+	session := Session{User: "admin", AuthVersion: 1, CSRF: "expected-csrf", Created: at, Seen: at, Absolute: at.Add(time.Hour)}
+	if err := store.InsertSession(t.Context(), "browser-admin", session); err != nil {
 		t.Fatal(err)
 	}
 	var calls int

@@ -12,9 +12,6 @@ const workerClaimLease = "60 seconds"
 
 // claimOperation prepares a queued operation for validation.
 func (s *Store) ClaimOperation(ctx context.Context, id, replica string) (bool, error) {
-	if s.pool == nil {
-		return true, nil
-	}
 	tag, err := s.pool.Exec(ctx, `UPDATE krun_worker_operations
 		SET state='validating', claimed_by=$2, claimed_at=now(), started_at=COALESCE(started_at,now())
 		WHERE operation_id=$1 AND state='queued'`, id, replica)
@@ -27,9 +24,6 @@ func (s *Store) ClaimOperation(ctx context.Context, id, replica string) (bool, e
 // claimStaleOperation refreshes the current owner's validating lease or takes
 // over one whose claimer died.
 func (s *Store) ClaimStaleOperation(ctx context.Context, id, replica string) (bool, error) {
-	if s.pool == nil {
-		return false, nil
-	}
 	tag, err := s.pool.Exec(ctx, `UPDATE krun_worker_operations
 		SET claimed_by=$2, claimed_at=now()
 		WHERE operation_id=$1 AND state='validating'
@@ -44,9 +38,6 @@ func (s *Store) ClaimStaleOperation(ctx context.Context, id, replica string) (bo
 // carry the revision the operation validated against, so a configuration edit
 // that landed in between makes this a no-op instead of an overwrite.
 func (s *Store) CommitOperation(ctx context.Context, op domain.WorkerOperation) (bool, error) {
-	if s.pool == nil {
-		return false, nil
-	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -121,9 +112,6 @@ func (s *Store) CommitOperation(ctx context.Context, op domain.WorkerOperation) 
 // confirmOperation records convergence once every serving Pod has acked the
 // edge revision. It also appends the version history entry.
 func (s *Store) ConfirmOperation(ctx context.Context, op domain.WorkerOperation) error {
-	if s.pool == nil {
-		return nil
-	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -159,22 +147,6 @@ func (s *Store) ConfirmOperation(ctx context.Context, op domain.WorkerOperation)
 // convergence: later unrelated publishes must not move an older operation's
 // acknowledgement target forward forever.
 func (s *Store) SetOperationEdgeRevision(ctx context.Context, id string, revision int64) (int64, error) {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.memory == nil {
-			return 0, errors.New("store is not initialized")
-		}
-		op, ok := s.memory.Workers.Operations[id]
-		if !ok || op.State != "committed" {
-			return 0, nil
-		}
-		if op.EdgeRevision == 0 {
-			op.EdgeRevision = int(revision)
-			s.memory.Workers.Operations[id] = op
-		}
-		return int64(op.EdgeRevision), nil
-	}
 	tag, err := s.pool.Exec(ctx, `UPDATE krun_worker_operations SET edge_revision=$2
 		WHERE operation_id=$1 AND state='committed' AND edge_revision=0`, id, revision)
 	if err != nil {
@@ -192,20 +164,14 @@ func (s *Store) SetOperationEdgeRevision(ctx context.Context, id string, revisio
 }
 
 func (s *Store) NoteOperationMessage(ctx context.Context, id, message string) error {
-	if s.pool == nil {
-		return nil
-	}
 	_, err := s.pool.Exec(ctx, `UPDATE krun_worker_operations SET error=$2
 		WHERE operation_id=$1 AND state NOT IN ('succeeded','failed','available','superseded')`, id, message)
 	return err
 }
 
 // failOperation marks an in-flight operation failed and stamps whichever step
-// was running, matching what the in-memory helper used to do.
+// was running.
 func (s *Store) FailOperation(ctx context.Context, id, message string) error {
-	if s.pool == nil {
-		return nil
-	}
 	_, err := s.pool.Exec(ctx, `UPDATE krun_worker_operations
 		SET state='failed', error=$2, finished_at=now(),
 		    steps = COALESCE((

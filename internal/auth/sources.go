@@ -11,9 +11,7 @@ import (
 
 func (s *Service) RegisterSources(ctx context.Context, providers []appconfig.ProviderConfig) error {
 	registrationCtx := ctx
-	if s.Store.Persistent() {
-		registrationCtx = storage.WithReadScope(ctx, storage.ReadScope{ActorOnly: true})
-	}
+	registrationCtx = storage.WithReadScope(ctx, storage.ReadScope{ActorOnly: true})
 	if e := s.Store.Update(registrationCtx, storage.PartitionIAM, func(st *domain.State) error {
 		for _, p := range providers {
 			fp := appconfig.Fingerprint(p)

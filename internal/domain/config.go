@@ -33,7 +33,6 @@ type WorkerConfigOp struct {
 type WorkerConfigRevision struct {
 	Revision int64
 	Digest   string
-	Payload  []byte
 	Ops      []byte
 	Created  time.Time
 }

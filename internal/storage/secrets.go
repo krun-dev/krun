@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"errors"
-	"sort"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/krun-dev/krun/internal/domain"
@@ -81,27 +80,6 @@ func replaceWorkerVersionSecrets(ctx context.Context, tx pgx.Tx, version, worker
 // encryptedVersionSecrets reads exactly one Version's bindings. Secret values
 // are never included in loadWorkers, edge snapshots, or generic state clones.
 func (s *Store) EncryptedVersionSecrets(ctx context.Context, versionID, runtimePool string) (string, []domain.EncryptedWorkerSecret, error) {
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.memory == nil {
-			return "", nil, errors.New("store is not initialized")
-		}
-		version, ok := s.memory.Workers.Versions[versionID]
-		if !ok || !domain.WorkerAvailableInPool(s.memory.Workers, version.Worker, runtimePool) {
-			return "", nil, domain.NotFound()
-		}
-		out := make([]domain.EncryptedWorkerSecret, 0, len(version.SecretVersions))
-		for name, versionID := range version.SecretVersions {
-			encrypted, ok := s.memorySecretValues[versionID]
-			if !ok || encrypted.Version.Name != name || encrypted.Version.Worker != version.Worker || encrypted.Version.Environment != version.Environment {
-				return "", nil, errors.New("Worker secret binding is inconsistent")
-			}
-			out = append(out, encrypted)
-		}
-		sort.Slice(out, func(i, j int) bool { return out[i].Version.Name < out[j].Version.Name })
-		return version.SecretDigest, out, nil
-	}
 	var digest string
 	if err := s.pool.QueryRow(ctx, `SELECT version.secret_digest
 		FROM krun_worker_versions version

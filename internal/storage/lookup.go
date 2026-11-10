@@ -4,18 +4,13 @@ import (
 	"context"
 	sql "database/sql"
 	"errors"
+
 	models "github.com/krun-dev/krun/internal/storage/models"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func (s *Store) Persistent() bool { return s.pool != nil }
-
 func (s *Store) APIKeyOwner(ctx context.Context, key string) (string, bool, error) {
-	if s.pool == nil {
-		value, ok := s.memState().Keys[key]
-		return value.Owner, ok, nil
-	}
 	var row models.APIKey
 	err := s.orm.NewSelect().Model(&row).Column("owner_user_id").Where("key_id = ?", key).Limit(1).Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {

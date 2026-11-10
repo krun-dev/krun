@@ -11,9 +11,6 @@ import (
 // membership, direct role and redemption. False means another link already
 // created this membership; the entire attempted claim is then rolled back.
 func (s *Store) RedeemOrganizationInvitation(ctx context.Context, in domain.OrganizationInvitation, user domain.User, assignment domain.Assignment, audit domain.Audit) (bool, error) {
-	if s.pool == nil {
-		return s.redeemMemoryInvitation(in, user, assignment, audit)
-	}
 	tx, err := s.beginORMTransaction(ctx)
 	if err != nil {
 		return false, err
@@ -64,38 +61,5 @@ func (s *Store) RedeemOrganizationInvitation(ctx context.Context, in domain.Orga
 	if err := tx.Commit(ctx); err != nil {
 		return false, err
 	}
-	return true, nil
-}
-
-func (s *Store) redeemMemoryInvitation(in domain.OrganizationInvitation, user domain.User, assignment domain.Assignment, audit domain.Audit) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	current, found := s.organizationInvitations[in.ID]
-	if !found || current.Revision != in.Revision || current.WithStatus(now()).Status != "active" || s.memory.Users[user.ID] != user {
-		return false, invitationConflict()
-	}
-	if s.invitationRedemptions[in.ID][user.ID] {
-		return false, domain.Problem(409, "INVITATION_ALREADY_USED", "A new invitation is required after membership removal")
-	}
-	if _, exists := s.memory.Assignments[assignment.ID]; exists {
-		return false, invitationConflict()
-	}
-	key := domain.MemberKey(in.Organization, user.ID)
-	if _, found := s.memory.Members[key]; found {
-		return false, nil
-	}
-	if s.invitationRedemptions == nil {
-		s.invitationRedemptions = map[string]map[string]bool{}
-	}
-	if s.invitationRedemptions[in.ID] == nil {
-		s.invitationRedemptions[in.ID] = map[string]bool{}
-	}
-	s.invitationRedemptions[in.ID][user.ID] = true
-	current.UseCount++
-	current.Revision++
-	s.organizationInvitations[in.ID] = current
-	s.memory.Members[key] = domain.Member{Organization: in.Organization, User: user.ID}
-	s.memory.Assignments[assignment.ID] = assignment
-	s.recordInvitationMemoryAudit(audit)
 	return true, nil
 }

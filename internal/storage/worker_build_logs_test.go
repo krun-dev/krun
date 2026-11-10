@@ -9,8 +9,7 @@ import (
 )
 
 func TestBuildLogPublicationRejectsStaleAndTerminalOwners(t *testing.T) {
-	t.Run("memory", func(t *testing.T) { testBuildLogPublication(t, memoryStore()) })
-	t.Run("postgres", func(t *testing.T) { testBuildLogPublication(t, postgresTestStore(t)) })
+	testBuildLogPublication(t, postgresTestStore(t))
 }
 
 func testBuildLogPublication(t *testing.T, s *Store) {
@@ -41,17 +40,15 @@ func testBuildLogPublication(t *testing.T, s *Store) {
 	if err := s.SetClaimedBuildLogKey(ctx, "b", "new", "live"); err != nil {
 		t.Fatal(err)
 	}
-	if s.Persistent() {
-		pending, err := s.PendingWork(context.WithValue(ctx, WorkerQueueReplicaKey{}, "new"), 100)
-		if err != nil || pending.BuildPrivate["b"].LogKey != "live" {
-			t.Fatalf("queue lost log object key: %+v %v", pending.BuildPrivate["b"], err)
-		}
-		build := pending.Builds["b"]
-		build.Entrypoint = "index.ts"
-		private := pending.BuildPrivate["b"]
-		if err := s.StoreClaimedRepositoryBuild(ctx, "b", "new", build, private); err != nil {
-			t.Fatal("save prepared build metadata:", err)
-		}
+	pending, err := s.PendingWork(context.WithValue(ctx, WorkerQueueReplicaKey{}, "new"), 100)
+	if err != nil || pending.BuildPrivate["b"].LogKey != "live" {
+		t.Fatalf("queue lost log object key: %+v %v", pending.BuildPrivate["b"], err)
+	}
+	build := pending.Builds["b"]
+	build.Entrypoint = "index.ts"
+	private := pending.BuildPrivate["b"]
+	if err := s.StoreClaimedRepositoryBuild(ctx, "b", "new", build, private); err != nil {
+		t.Fatal("save prepared build metadata:", err)
 	}
 	if err := s.FinishClaimedBuild(ctx, "b", "new", "failed", "test", "", "final"); err != nil {
 		t.Fatal(err)

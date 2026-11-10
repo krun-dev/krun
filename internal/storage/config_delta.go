@@ -195,9 +195,6 @@ func (s *Store) WorkerConfigShard(ctx context.Context, pool, shard string) (doma
 // Infrastructure catalogue changes can affect every hostname. They enqueue a
 // one-time rebuild, then the normal publisher still processes bounded batches.
 func (s *Store) EnsureWorkerConfigCatalogue(ctx context.Context, digest string) error {
-	if s.pool == nil {
-		return nil
-	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err

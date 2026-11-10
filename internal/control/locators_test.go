@@ -1,26 +1,16 @@
 package control
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestNativeAndCloudflareResourceLocators(t *testing.T) {
 	s, store, _ := workerTestServer(t)
 	exerciseResourceLocators(t, s)
-	if err := store.Update(context.Background(), PartitionIAM, func(st *State) error {
-		hash := digest("krun_cli_admin")
-		session := st.Sessions[hash]
-		session.Absolute = now().Add(-time.Hour)
-		st.Sessions[hash] = session
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
+	expireTestSession(t, store, "krun_cli_admin")
 	for _, route := range []string{
 		"/api/v1/orgs/platform/workers/tu-pian-chu-li",
 		"/api/v1/orgs/platform/workers/unknown",
@@ -33,25 +23,8 @@ func TestNativeAndCloudflareResourceLocators(t *testing.T) {
 }
 
 func TestPostgresNativeAndCloudflareResourceLocators(t *testing.T) {
-	store := postgresTestStore(t)
-	s, memory, _ := workerTestServer(t)
-	ctx := context.Background()
-	err := memory.View(ctx, PartitionAll, func(fixture *State) error {
-		return store.Update(ctx, PartitionAll, func(st *State) error {
-			*st = *fixture
-			return nil
-		})
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	s, _, _ := workerTestServer(t)
 	const token = "krun_cli_admin"
-	if err := store.InsertSession(ctx, token, Session{
-		User: "admin", AuthVersion: 1, CLI: true, Created: now(), Seen: now(), Absolute: now().Add(time.Hour),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	s.Store = store
 	exerciseResourceLocators(t, s)
 	const route = "/api/v1/orgs/platform/workers"
 	start := make(chan struct{})

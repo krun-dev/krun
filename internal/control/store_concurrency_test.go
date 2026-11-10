@@ -3,7 +3,6 @@ package control
 import (
 	"context"
 	"errors"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -12,19 +11,9 @@ import (
 	"github.com/krun-dev/krun/internal/iam"
 )
 
-func secondPostgresStore(t *testing.T) *Store {
-	t.Helper()
-	store, err := openStoreForTest(t, context.Background(), os.Getenv("KRUN_TEST_POSTGRES_URL"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(store.Close)
-	return store
-}
-
 func TestPostgresIAMRevisionCASRejectsLostUpdate(t *testing.T) {
-	store := postgresTestStore(t)
-	other := secondPostgresStore(t)
+	open := postgresTestOpener(t)
+	store, other := open(), open()
 	ctx := context.Background()
 	if err := store.Update(ctx, PartitionIAM, func(st *State) error {
 		st.Resources["svc-cas"] = Resource{ID: "svc-cas", Kind: "worker", Organization: "org-cas", Name: "before", Revision: 1}
@@ -91,8 +80,8 @@ func TestPostgresIAMRevisionCASRejectsLostUpdate(t *testing.T) {
 }
 
 func TestPostgresOrganizationAdminRevocationsCannotBothCommit(t *testing.T) {
-	store := postgresTestStore(t)
-	other := secondPostgresStore(t)
+	open := postgresTestOpener(t)
+	store, other := open(), open()
 	ctx := context.Background()
 	state, admin, viewer := fixture()
 	target := Target{Kind: "organization", ID: "org-a"}
@@ -137,8 +126,8 @@ func TestPostgresOrganizationAdminRevocationsCannotBothCommit(t *testing.T) {
 }
 
 func TestPostgresOrganizationRevisionCASRejectsLostUpdate(t *testing.T) {
-	store := postgresTestStore(t)
-	other := secondPostgresStore(t)
+	open := postgresTestOpener(t)
+	store, other := open(), open()
 	ctx := context.Background()
 	if err := store.Update(ctx, PartitionIAM, func(st *State) error {
 		st.Organizations["org-cas"] = Organization{ID: "org-cas", Name: "before", Sources: []string{}, Revision: 1}
@@ -180,8 +169,8 @@ func TestPostgresOrganizationRevisionCASRejectsLostUpdate(t *testing.T) {
 }
 
 func TestPostgresUserProfileCASRejectsLostUpdate(t *testing.T) {
-	store := postgresTestStore(t)
-	other := secondPostgresStore(t)
+	open := postgresTestOpener(t)
+	store, other := open(), open()
 	ctx := context.Background()
 	if err := store.Update(ctx, PartitionIAM, func(st *State) error {
 		st.Users["profile-user"] = User{ID: "profile-user", Source: "source", Subject: "subject", Name: "before", Email: "before@example.com", Status: "active", AuthVersion: 1}
@@ -215,8 +204,8 @@ func TestPostgresUserProfileCASRejectsLostUpdate(t *testing.T) {
 }
 
 func TestPostgresConcurrentJITIdentityIsRetryable(t *testing.T) {
-	store := postgresTestStore(t)
-	other := secondPostgresStore(t)
+	open := postgresTestOpener(t)
+	store, other := open(), open()
 	ctx := context.Background()
 	ready := make(chan struct{}, 2)
 	version := make(chan struct{})
@@ -261,8 +250,8 @@ func TestPostgresConcurrentJITIdentityIsRetryable(t *testing.T) {
 }
 
 func TestPostgresIdentityRegistrationIsInsertOrVerify(t *testing.T) {
-	store := postgresTestStore(t)
-	other := secondPostgresStore(t)
+	open := postgresTestOpener(t)
+	store, other := open(), open()
 	ctx := context.Background()
 	ready := make(chan struct{}, 2)
 	version := make(chan struct{})
@@ -341,8 +330,8 @@ func TestOrganizationUpdateRequiresExpectedRevision(t *testing.T) {
 }
 
 func TestPostgresIAMRevisionsAndAuditsAreRequestLocal(t *testing.T) {
-	store := postgresTestStore(t)
-	other := secondPostgresStore(t)
+	open := postgresTestOpener(t)
+	store, other := open(), open()
 	ctx := context.Background()
 	if err := store.Update(ctx, PartitionIAM, func(st *State) error {
 		for _, id := range []string{"svc-one", "svc-two"} {
@@ -459,8 +448,8 @@ func TestPostgresAPIKeyHashLookupDoesNotHydrateIAMSnapshot(t *testing.T) {
 }
 
 func TestPostgresDistributedRateLimitIsAtomic(t *testing.T) {
-	store := postgresTestStore(t)
-	other := secondPostgresStore(t)
+	open := postgresTestOpener(t)
+	store, other := open(), open()
 	ctx := context.Background()
 	const requests = 32
 	const limit = 16
@@ -505,21 +494,6 @@ func TestPostgresDistributedRateLimitIsAtomic(t *testing.T) {
 	// updating the same hot row. The durable counter saturates at limit+1.
 	if count != limit+1 {
 		t.Fatalf("distributed count=%d, want saturated %d", count, limit+1)
-	}
-}
-
-func TestMemoryRateLimit(t *testing.T) {
-	store := memoryStore()
-	ctx := context.Background()
-	for i := 0; i < 2; i++ {
-		exceeded, err := store.RateLimitExceeded(ctx, "login", "client", time.Minute, 2)
-		if err != nil || exceeded {
-			t.Fatalf("request %d unexpectedly limited: exceeded=%v err=%v", i+1, exceeded, err)
-		}
-	}
-	exceeded, err := store.RateLimitExceeded(ctx, "login", "client", time.Minute, 2)
-	if err != nil || !exceeded {
-		t.Fatalf("third request must be limited: exceeded=%v err=%v", exceeded, err)
 	}
 }
 
@@ -595,8 +569,8 @@ func TestPostgresWorkersSnapshotExcludesSecretsAndBuildBlobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Workers.BuildPrivate) != 0 || len(state.RepositoryConnections) != 0 {
-		t.Fatalf("generic Workers snapshot loaded sensitive rows: private=%d connections=%d", len(state.Workers.BuildPrivate), len(state.RepositoryConnections))
+	if len(state.Workers.BuildPrivate) != 0 {
+		t.Fatal("generic Workers snapshot loaded private build rows")
 	}
 	private, ok, err := store.WorkerBuildPrivate(ctx, "build-private")
 	if err != nil || !ok || private.LogKey != "build-logs/log" || private.Files["index.js"] != "secret source" {

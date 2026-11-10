@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"sync"
 
@@ -20,40 +19,12 @@ import (
 //
 // No upstream HTTP calls may run inside Update.
 type Store struct {
-	assetSessions       map[string]domain.WorkerAssetSession
-	oauthAuthorizations map[string]domain.OAuthAuthorization
-	oauthGrants         map[string]domain.OAuthGrant
-	oauthRefresh        map[string]domain.OAuthRefresh
 	pool                *pgxpool.Pool
 	orm                 *bun.DB
 	repositoryTokenKeys RepositoryTokenKeys
-	mu                  sync.Mutex
-	memory              *domain.State
-	// memoryAudits backs the in-memory store used by tests.
-	memoryAudits []domain.Audit
-	// memoryRateLimits backs distributed rate-limit buckets in memory tests.
-	rateMu           sync.Mutex
-	memoryRateLimits map[rateLimitBucket]int
-	// memTx is the working copy of an in-flight memory Update. Session helpers
-	// write here so their changes are not overwritten by the clone commit.
-	memTx *domain.State
-	// onPersist, when set, is called whenever a write would be committed. It
-	// exists so a test can assert that read requests never write.
-	onPersist func()
 
-	// Config distribution state. Revision/ops live outside the control-plane
-	// rows so runtime reads never touch them.
-	configMu   sync.Mutex
-	configCh   chan struct{}
-	configRevs []domain.WorkerConfigRevision
-	configSeq  int64
-
-	ackMu sync.Mutex
-	acks  map[string]domain.WorkerAck
-	// memorySecretValues backs encrypted secret rows in the test-only store.
-	memorySecretValues      map[string]domain.EncryptedWorkerSecret
-	organizationInvitations map[string]domain.OrganizationInvitation
-	invitationRedemptions   map[string]map[string]bool
+	configMu sync.Mutex
+	configCh chan struct{}
 }
 
 // StatePartition selects which tables Update loads and persists. Keeping the
@@ -97,28 +68,14 @@ func (s *Store) Close() {
 	if s.orm != nil {
 		_ = s.orm.Close()
 	}
-	if s.pool != nil {
-		s.pool.Close()
-	}
+	s.pool.Close()
 }
 
 // Ping verifies that the store can serve a query without loading any control
-// plane tables. The in-memory implementation is used only by tests, where an
-// initialized state is the equivalent readiness check.
+// plane tables.
 func (s *Store) Ping(ctx context.Context) error {
-	if s.pool != nil {
-		var one int
-		return s.pool.QueryRow(ctx, `SELECT 1`).Scan(&one)
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.memory == nil {
-		return errors.New("store is not initialized")
-	}
-	return nil
+	var one int
+	return s.pool.QueryRow(ctx, `SELECT 1`).Scan(&one)
 }
 
 // load reads one partition into a fresh State.
@@ -152,164 +109,49 @@ func (s *Store) Update(ctx context.Context, partition StatePartition, fn func(*d
 // Workers handlers use it to authorize against IAM while writing Workers rows,
 // which keeps IAM and Workers out of a shared transaction (AGENTS.md §9).
 func (s *Store) Mutate(ctx context.Context, loadPartition, persistPartition StatePartition, fn func(*domain.State) error) error {
-	if s.pool != nil {
-		st, err := s.load(ctx, loadPartition|persistPartition)
-		if err != nil {
-			return err
-		}
-		// A read persists nothing, so it needs no pre-image to diff against.
-		// Skipping the clone here keeps GET requests to one batched read.
-		if persistPartition == 0 {
-			if err = fn(st); err != nil {
-				if auditErr := s.flushAudits(ctx, deniedAudits(st.PendingAudits)); auditErr != nil {
-					return auditErr
-				}
-				return err
-			}
-			return s.flushAudits(ctx, st.PendingAudits)
-		}
-		before, err := domain.CloneState(st)
-		if err != nil {
-			return err
-		}
+	st, err := s.load(ctx, loadPartition|persistPartition)
+	if err != nil {
+		return err
+	}
+	// A read persists nothing, so it needs no pre-image to diff against.
+	// Skipping the clone here keeps GET requests to one batched read.
+	if persistPartition == 0 {
 		if err = fn(st); err != nil {
 			if auditErr := s.flushAudits(ctx, deniedAudits(st.PendingAudits)); auditErr != nil {
 				return auditErr
 			}
 			return err
 		}
-		if persistPartition&PartitionIAM != 0 {
-			if err = s.persistIAM(ctx, before, st, st.PendingAudits); err != nil {
-				return err
-			}
-			st.PendingAudits = nil
-		}
-		if persistPartition&PartitionWorkers != 0 {
-			if err = s.persistWorkers(ctx, before, st, st.PendingAudits); err != nil {
-				return err
-			}
-			st.PendingAudits = nil
-		}
 		return s.flushAudits(ctx, st.PendingAudits)
 	}
-	if persistPartition == 0 {
-		return s.readMemory(fn)
-	}
-	return s.updateMemory(fn)
-}
-
-// readMemory gives tests the same request-local snapshot semantics as the
-// PostgreSQL read path. Handler mutations are discarded, while audit entries
-// are copied to their separately retained stream.
-func (s *Store) readMemory(fn func(*domain.State) error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.memory == nil {
-		return errors.New("store is not initialized")
-	}
-	st, err := domain.CloneState(s.memory)
+	before, err := domain.CloneState(st)
 	if err != nil {
 		return err
 	}
-	err = fn(st)
-	audits := st.PendingAudits
-	if err != nil {
-		audits = deniedAudits(audits)
-	}
-	s.memoryAudits = append(s.memoryAudits, audits...)
-	s.memoryAudits = PruneMemoryAudits(s.memoryAudits, now())
-	return err
-}
-
-func (s *Store) updateMemory(fn func(*domain.State) error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.memory == nil {
-		return errors.New("store is not initialized")
-	}
-	src := s.memory
-	after, err := domain.CloneState(s.memory)
-	if err != nil {
+	if err = fn(st); err != nil {
+		if auditErr := s.flushAudits(ctx, deniedAudits(st.PendingAudits)); auditErr != nil {
+			return auditErr
+		}
 		return err
 	}
-	// Session helpers called from inside fn must land on this working copy;
-	// otherwise the assignment below would discard them.
-	s.memTx = after
-	defer func() { s.memTx = nil }()
-	if err = fn(after); err != nil {
-		s.memoryAudits = append(s.memoryAudits, deniedAudits(after.PendingAudits)...)
-		s.memoryAudits = PruneMemoryAudits(s.memoryAudits, now())
-		return err
-	}
-	if len(after.PendingWorkerSecrets) > 0 {
-		if s.memorySecretValues == nil {
-			s.memorySecretValues = map[string]domain.EncryptedWorkerSecret{}
+	if persistPartition&PartitionIAM != 0 {
+		if err = s.persistIAM(ctx, before, st, st.PendingAudits); err != nil {
+			return err
 		}
-		for id, secret := range after.PendingWorkerSecrets {
-			s.memorySecretValues[id] = secret
+		st.PendingAudits = nil
+	}
+	if persistPartition&PartitionWorkers != 0 {
+		if err = s.persistWorkers(ctx, before, st, st.PendingAudits); err != nil {
+			return err
 		}
-		after.PendingWorkerSecrets = nil
+		st.PendingAudits = nil
 	}
-	audits := after.PendingAudits
-	after.PendingAudits = nil
-	s.memory = after
-	for id, invitation := range s.organizationInvitations {
-		if _, exists := after.Organizations[invitation.Organization]; !exists {
-			delete(s.organizationInvitations, id)
-			delete(s.invitationRedemptions, id)
-		}
-	}
-	if s.onPersist != nil && !sameStateContent(src, after) {
-		s.onPersist()
-	}
-	s.memoryAudits = append(s.memoryAudits, audits...)
-	s.memoryAudits = PruneMemoryAudits(s.memoryAudits, now())
-	return nil
-}
-
-// sameStateContent reports whether two snapshots carry identical data. It is
-// only used by the read-path assertion in tests.
-func sameStateContent(a, b *domain.State) bool {
-	left, err := json.Marshal(a)
-	if err != nil {
-		return false
-	}
-	right, err := json.Marshal(b)
-	if err != nil || len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if left[i] != right[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// memState is the state the single-row helpers operate on when there is no
-// database. Memory stores are test-only and single-threaded.
-func (s *Store) memState() *domain.State {
-	if s.memTx != nil {
-		return s.memTx
-	}
-	return s.memory
+	return s.flushAudits(ctx, st.PendingAudits)
 }
 
 // View runs fn against a read-only snapshot. It never writes.
 func (s *Store) View(ctx context.Context, partition StatePartition, fn func(*domain.State) error) error {
-	if s.pool != nil {
-		st, err := s.load(ctx, partition)
-		if err != nil {
-			return err
-		}
-		return fn(st)
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.memory == nil {
-		return errors.New("store is not initialized")
-	}
-	st, err := domain.CloneState(s.memory)
+	st, err := s.load(ctx, partition)
 	if err != nil {
 		return err
 	}

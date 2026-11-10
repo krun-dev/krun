@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -23,11 +24,14 @@ import (
 
 var runtimeStorageConfig = flag.String("runtime-storage-config", "", "Main YAML for opt-in real STS/workerd asset and artifact tests")
 
-// Metadata uses the in-memory test fixture; authorization handlers, the rendered
+// Metadata uses an isolated PostgreSQL test schema; authorization handlers, the rendered
 // serving/validator runtimes, STS sessions and object storage are real.
 func TestConfiguredRuntimeReads(t *testing.T) {
 	if *runtimeStorageConfig == "" {
 		t.Skip("provide -runtime-storage-config for real STS and S3 reads")
+	}
+	if os.Getenv("KRUN_TEST_POSTGRES_URL") == "" {
+		t.Fatal("set KRUN_TEST_POSTGRES_URL to a dedicated PostgreSQL test database")
 	}
 	cfg, err := config.LoadConfig(*runtimeStorageConfig)
 	if err != nil || cfg.Workers == nil || cfg.Workers.S3RuntimeCredentials == nil || cfg.Workers.S3RuntimeCredentials.Type != "tos_assume_role" {
@@ -51,16 +55,6 @@ func TestConfiguredRuntimeReads(t *testing.T) {
 	w.ConfigBaseURL = w.S3ObjectURL(w.S3RuntimeEndpoint, "config")
 	s.Config.Workers = &w
 	s.routes()
-	manager, err := storagecredentials.NewArtifactManager(&w)
-	if err != nil {
-		t.Fatal("runtime STS manager unavailable")
-	}
-	client, err := objectstore.NewWorkerS3(&w)
-	if err != nil {
-		t.Fatal("fixture writer unavailable")
-	}
-	controller := &workerapp.Controller{Service: s.workerApplication(nil), Config: &w, S3: client, PutObject: client.PutObject, ReadCredentials: manager}
-	s.workers = controller
 	html := []byte("<!doctype html><title>live STS assets</title>")
 	script := []byte(`export default {
   async fetch(request, env) {
@@ -85,24 +79,54 @@ func TestConfiguredRuntimeReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	version := seedPublishedWorker(t, store)
-	version.Profile = code.Profile
-	version.ArchiveDigest = code.ArchiveDigest
-	version.ModuleDigest = code.Digest
-	version.CompatibilityDate = code.CompatibilityDate
-	version.CompatibilityFlags = code.CompatibilityFlags
+	at := now()
 	artifact := WorkerArtifact{
-		ID: version.Artifact, Organization: version.Organization, State: "finalized", Profile: code.Profile,
-		StorageLocation: w.S3LocationID, Bucket: w.S3Bucket, ObjectKey: "v1/" + version.Organization + "/sha256/" + code.ArchiveDigest + "/bundle.tar.gz",
-		ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifestDigest, ModuleDigest: code.Digest, Size: len(archive), Created: now(),
+		ID: "art-live-reads", Organization: "org-a", State: "finalized", Profile: code.Profile,
+		StorageLocation: w.S3LocationID, Bucket: w.S3Bucket,
+		ObjectKey:     "v1/org-a/sha256/" + code.ArchiveDigest + "/bundle.tar.gz",
+		ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifestDigest, ModuleDigest: code.Digest,
+		CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: code.CompatibilityFlags,
+		Size: len(archive), Created: at,
 	}
+	version := WorkerVersion{
+		ID: "rel-live-reads", Organization: artifact.Organization, Worker: "svc-a", Environment: "production",
+		Artifact: artifact.ID, Profile: artifact.Profile, ArchiveDigest: artifact.ArchiveDigest,
+		ModuleDigest: artifact.ModuleDigest, CompatibilityDate: artifact.CompatibilityDate,
+		CompatibilityFlags: artifact.CompatibilityFlags, Created: at,
+	}
+	pool := w.RuntimePools[0].ID
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Versions[version.ID] = version
 		st.Workers.Artifacts[artifact.ID] = artifact
+
+		worker := st.Workers.Workers[version.Worker]
+		env := worker.Environments[version.Environment]
+		env.Version, env.Confirmed = version.ID, version.ID
+		worker.Environments[version.Environment] = env
+		st.Workers.Workers[worker.Worker] = worker
+
+		st.Workers.Placements[workerPlacementKey(worker.Worker, pool)] = WorkerPlacement{
+			Worker: worker.Worker, Organization: worker.Organization, Pool: pool, NetworkProfile: worker.NetworkProfile,
+			Role: "primary", State: "active", Revision: 1, Created: at, Updated: at,
+		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, stored, err := store.RuntimeVersion(ctx, version.ID, pool); err != nil || stored.ObjectKey != artifact.ObjectKey {
+		t.Fatalf("fixture version is unavailable to runtime pool %s: %v", pool, err)
+	}
+
+	manager, err := storagecredentials.NewArtifactManager(&w)
+	if err != nil {
+		t.Fatal("runtime STS manager unavailable")
+	}
+	client, err := objectstore.NewWorkerS3(&w)
+	if err != nil {
+		t.Fatal("fixture writer unavailable")
+	}
+	controller := &workerapp.Controller{Service: s.workerApplication(nil), Config: &w, S3: client, PutObject: client.PutObject, ReadCredentials: manager}
+	s.workers = controller
 	objects := map[string][]byte{artifact.ObjectKey: archive, workerapp.WorkerArtifactManifestKey(artifact): code.ManifestRaw}
 	metadata := map[string]objectstore.PutObjectOptions{}
 	for _, prefix := range []string{"int", "pub"} {

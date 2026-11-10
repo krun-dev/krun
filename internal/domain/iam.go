@@ -154,15 +154,7 @@ type State struct {
 	Resources     map[string]Resource
 	Keys          map[string]APIKey
 	KeyHashes     map[string]string
-	Sessions      map[string]Session
-	Browsers      map[string]Browser
-	Logins        map[string]Login
-	EmailLogins   map[string]EmailLogin
 	Invitations   map[string]time.Time
-	// Per-user OAuth connections for repository access, keyed by user ID + provider ID.
-	RepositoryConnections map[string]WorkerRepositoryConnection
-	// In-flight repository OAuth connect requests, keyed by CSRF state.
-	RepositoryConnectStates map[string]WorkerRepositoryConnectState
 	// PendingAudits belongs to this loaded/mutated snapshot. Keeping it on the
 	// request-local State (and out of JSON) prevents concurrent requests from
 	// clearing or flushing one another's audit decisions.

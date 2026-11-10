@@ -13,10 +13,7 @@ import (
 
 	identityprovider "github.com/krun-dev/krun/internal/adapters/identity"
 	appconfig "github.com/krun-dev/krun/internal/config"
-	"github.com/krun-dev/krun/internal/storage"
 )
-
-func memoryStore() *Store { return storage.NewMemory(storage.MemoryOptions{}) }
 
 func fixture() (*State, User, User) {
 	st := newState()
@@ -38,7 +35,7 @@ func fixture() (*State, User, User) {
 
 func testServer(t *testing.T) (*Server, *Store) {
 	t.Helper()
-	store := memoryStore()
+	store := postgresTestStore(t)
 	c := appconfig.Config{DB: "postgres://test-only/krun_test", Development: true, PublicURL: "http://127.0.0.1:8080", Providers: []appconfig.ProviderConfig{{ID: "local", Source: "local", Type: "dev", Registration: "jit"}}}
 	s, e := NewServer(context.Background(), c, store)
 	if e != nil {
@@ -46,13 +43,21 @@ func testServer(t *testing.T) (*Server, *Store) {
 	}
 	st, admin, viewer := fixture()
 	st.Bootstrapped = true
-	st.Sources["local"] = appconfig.Fingerprint(c.Providers[0])
-	for _, u := range []User{admin, viewer} {
-		token := "krun_cli_" + u.ID
-		st.Sessions[digest(token)] = Session{User: u.ID, AuthVersion: 1, CLI: true, Created: now(), Seen: now(), Absolute: now().Add(time.Hour)}
-	}
-	if e = store.Update(context.Background(), PartitionAll, func(state *State) error { *state = *st; return nil }); e != nil {
+	ctx := context.Background()
+	if e = store.Update(ctx, PartitionIAM, func(state *State) error {
+		st.Sources = state.Sources
+		st.Revision = state.Revision + 1
+		*state = *st
+		return nil
+	}); e != nil {
 		t.Fatal(e)
+	}
+	for _, user := range []User{admin, viewer} {
+		token := "krun_cli_" + user.ID
+		session := Session{User: user.ID, AuthVersion: user.AuthVersion, CLI: true, Created: now(), Seen: now(), Absolute: now().Add(time.Hour)}
+		if e = store.InsertSession(ctx, token, session); e != nil {
+			t.Fatal(e)
+		}
 	}
 	return s, store
 }
@@ -229,10 +234,10 @@ func TestLoginReturnPathUsesRootQueryNavigation(t *testing.T) {
 func TestSessionCSRFAndAmbiguousCredential(t *testing.T) {
 	s, store := testServer(t)
 	token := randomToken()
-	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
-		st.Sessions[digest(token)] = Session{User: "admin", AuthVersion: 1, Seen: now(), Absolute: now().Add(time.Hour), CSRF: "csrf"}
-		return nil
-	})
+	session := Session{User: "admin", AuthVersion: 1, Created: now(), Seen: now(), Absolute: now().Add(time.Hour), CSRF: "csrf"}
+	if err := store.InsertSession(t.Context(), token, session); err != nil {
+		t.Fatal(err)
+	}
 	r := httptest.NewRequest("POST", "/api/v1/orgs", strings.NewReader(`{"name":"X"}`))
 	r.Header.Set("Content-Type", "application/json")
 	r.AddCookie(&http.Cookie{Name: s.cookieName("session"), Value: token})
@@ -281,13 +286,7 @@ func TestLoginGenerationAndSessionExpiration(t *testing.T) {
 	if good.Header().Get("Location") != "/" {
 		t.Fatal("current generation login failed")
 	}
-	_ = store.Update(context.Background(), PartitionAll, func(st *State) error {
-		session := st.Sessions[digest("krun_cli_viewer")]
-		session.Absolute = now().Add(-time.Minute)
-		st.Sessions[session.Hash] = session
-		st.Sessions[digest("krun_cli_viewer")] = session
-		return nil
-	})
+	expireTestSession(t, store, "krun_cli_viewer")
 	if request(s, "GET", "/api/auth/me", "krun_cli_viewer", "").Code != 401 {
 		t.Fatal("absolute timeout ignored")
 	}
@@ -318,7 +317,7 @@ func TestConfigurationGuardsAndSourceTombstones(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatal("Workers with internal_listen rejected:", err)
 	}
-	store := memoryStore()
+	store := postgresTestStore(t)
 	c.Listen = "127.0.0.1:8080"
 	c.InternalListen = ""
 	c.Workers = nil
@@ -363,8 +362,12 @@ func TestCSRFIssuanceIsPostOnlyAndRateLimited(t *testing.T) {
 			t.Fatalf("over-limit CSRF request accepted: %d %s", w.Code, w.Body.String())
 		}
 	}
-	if len(memorySnapshot(t, store).Browsers) != 30 {
-		t.Fatalf("browser rows=%d, want bounded 30", len(memorySnapshot(t, store).Browsers))
+	var count int
+	if err := postgresTestPool(store).QueryRow(t.Context(), "SELECT count(*) FROM krun_browsers").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 30 {
+		t.Fatalf("browser rows=%d, want bounded 30", count)
 	}
 
 }
@@ -374,8 +377,8 @@ func TestDeniedReadsDoNotAppendAuditRows(t *testing.T) {
 	if w := request(s, http.MethodGet, "/api/v1/orgs/org-b", "krun_cli_viewer", ""); w.Code < 400 {
 		t.Fatalf("denied read status=%d body=%s", w.Code, w.Body.String())
 	}
-	if len(memoryAudits(t, store)) != 0 {
-		t.Fatalf("denied read appended %d audit rows", len(memoryAudits(t, store)))
+	if len(testAudits(t, store)) != 0 {
+		t.Fatalf("denied read appended %d audit rows", len(testAudits(t, store)))
 	}
 }
 
@@ -389,8 +392,8 @@ func TestCallbackFailuresAndRateLimitsDoNotAppendAuditRows(t *testing.T) {
 	if location := last.Header().Get("Location"); !strings.Contains(location, "RATE_LIMITED") {
 		t.Fatalf("callback was not rate limited: status=%d location=%q", last.Code, location)
 	}
-	if len(memoryAudits(t, store)) != 0 {
-		t.Fatalf("attacker-controlled callback failures appended %d audit rows", len(memoryAudits(t, store)))
+	if len(testAudits(t, store)) != 0 {
+		t.Fatalf("attacker-controlled callback failures appended %d audit rows", len(testAudits(t, store)))
 	}
 }
 

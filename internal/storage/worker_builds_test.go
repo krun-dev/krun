@@ -7,8 +7,7 @@ import (
 )
 
 func TestReserveBuildArtifactReusesExistingContentIdentity(t *testing.T) {
-	t.Run("memory", func(t *testing.T) { testReserveBuildArtifact(t, memoryStore()) })
-	t.Run("postgres", func(t *testing.T) { testReserveBuildArtifact(t, postgresTestStore(t)) })
+	testReserveBuildArtifact(t, postgresTestStore(t))
 }
 
 func testReserveBuildArtifact(t *testing.T, s *Store) {

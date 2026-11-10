@@ -7,23 +7,7 @@ import (
 
 func (s *Store) retainOrganizationInvitations(ctx context.Context) error {
 	cutoff := now().Add(-7 * 24 * time.Hour)
-	if s.pool == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		removed := 0
-		for id, in := range s.organizationInvitations {
-			_, hasOrg := s.memory.Organizations[in.Organization]
-			if !in.Expires.After(cutoff) || !hasOrg {
-				delete(s.invitationRedemptions, id)
-				delete(s.organizationInvitations, id)
-				removed++
-				if removed >= 1000 {
-					break
-				}
-			}
-		}
-		return nil
-	}
+
 	_, err := s.pool.Exec(ctx, `WITH victims AS MATERIALIZED (
 		SELECT invitation_id FROM krun_org_invitation_links i
 		WHERE expires_at <= $1 OR NOT EXISTS (SELECT 1 FROM krun_organizations o WHERE o.org_id=i.org_id)

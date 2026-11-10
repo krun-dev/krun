@@ -10,7 +10,7 @@ import (
 )
 
 // Resolve only after authentication, authorization and state persistence finish.
-// Network calls must not hold the in-memory store's lock or a SQL transaction.
+// Network calls must run outside the database transaction.
 type deferredResponse struct {
 	run func(context.Context) (any, int, error)
 }

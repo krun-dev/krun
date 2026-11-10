@@ -14,7 +14,7 @@ npm run build
 make check-static-build
 ```
 
-通过 `KRUN_TEST_POSTGRES_URL` 提供专用 PostgreSQL 测试数据库后，Go 测试会执行数据库集成用例。测试会修改该数据库，请仅使用可清空的测试实例。未提供连接串时，数据库集成测试跳过；CI 配置了专用 PostgreSQL service。
+通过 `KRUN_TEST_POSTGRES_URL` 提供专用 PostgreSQL 18 测试库。控制面和存储集成测试为每个用例创建独立 schema，并在结束后删除。测试账号须有创建 schema 的权限。未提供连接串时，这些集成测试跳过，纯逻辑测试仍运行。CI 配置了专用 PostgreSQL service。
 
 ## 端到端与 UI
 
