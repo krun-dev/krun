@@ -1,3 +1,7 @@
+<p align="center">
+  <img src=".github/brand/krun-symbol.png" alt="krun" width="112" height="112" />
+</p>
+
 # krun
 
 krun 是一个自托管应用平台，目标是在自己的基础设施上提供类似 Cloudflare Workers、D1 和 R2 的计算与存储能力，并兼容其中部分 API。在这些基础能力之上，krun 希望支持多种类型的应用运行时，让团队能够部署和管理不同形态的应用。
