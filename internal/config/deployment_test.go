@@ -51,6 +51,7 @@ func TestLoadConfigRestrictsLocalBuilderToDevelopment(t *testing.T) {
 			yaml := strings.Replace(local, "development: false", tc.development, 1)
 			if tc.allowed {
 				t.Setenv("KRUN_PUBLIC_URL", "http://127.0.0.1:8080")
+				yaml = strings.ReplaceAll(yaml, "0.0.0.0:", "127.0.0.1:")
 			}
 			if err := os.WriteFile(path, []byte(yaml), 0600); err != nil {
 				t.Fatal(err)

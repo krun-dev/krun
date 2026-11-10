@@ -1,6 +1,7 @@
 # 服务端配置总示例：复制后修改地址、数据库和需要启用的登录来源。
 # 生产：development: false，listen 可绑定 0.0.0.0，public_url 使用真实 HTTPS origin。
-# 本地：development: true，listen: 127.0.0.1:8080，public_url: http://127.0.0.1:5173。
+# 本地：development: true 时，listen 和 internal_listen 必须使用回环 IP，如 127.0.0.1。
+# Vite 本地入口可设 public_url: http://127.0.0.1:5173。
 # 若不用 Vite、直接访问 Go 提供的静态前端，本地 public_url 改为 http://127.0.0.1:8080。
 listen: 0.0.0.0:8080
 # Workers runtime 的配置流、制品下载与 ACK 只监听此端口。启用下方 workers:

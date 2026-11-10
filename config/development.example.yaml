@@ -2,7 +2,9 @@
 # 从本模板复制后填写真实值：cp config/development.example.yaml .data/dev.yaml
 # 本地开发拓扑：控制面/Postgres/MinIO/builder 跑在开发机；集群只跑 serving runtime、
 # 独立 validator workerd 与 kgateway。完整 workers: 配置见 config/example.yaml。
+# 开发模式只接受回环 IP 作为监听地址；启用 workers: 时同时配置 internal_listen。
 listen: 127.0.0.1:8080
+# internal_listen: 127.0.0.1:8081
 # 合并部署兼容开关：主端口把 /api/internal/workers/* 转发到本机 internal_listen。
 # 默认 false；开启后仍校验 pool 凭据，并且内部监听器仍需正常启动。
 merged_deployment: false

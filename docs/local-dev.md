@@ -37,6 +37,7 @@ SSH 隧道或 `dev-*.sh` 启动生产。两者共用 `internal/adapters/runtimeb
 
 关键字段：
 
+- `development: true`：`public_url` 必须指向回环地址，`listen` 和启用 Workers 时的 `internal_listen` 必须填写回环 IP，例如 `127.0.0.1:8080` 或 `"[::1]:8080"`。集群 runtime 需要直连开发机监听端口时，使用非开发模式和 Kubernetes builder。
 - `builder_mode: local`：要求主配置设置 `development: true`，且 `public_url` 指向回环地址。builder 在本机以 `node workers/builder/build-worker.mjs` 运行，不创建 Kubernetes Job。Wrangler/custom build 会执行仓库代码，因此此模式只用于开发者自己的可信仓库；面向不可信租户必须使用 Kubernetes builder，并建议配置 `builder_runtime_class` 为 gVisor/Kata 等强隔离运行时。
 - `gateways` / `domains`：网关实例与域名清单。每个域名绑定一个网关，并带一个只用于展示的 `label`；服务从中选择要用哪些域名。
 - 网关的 `base`（如 `http://127.0.0.1:38080`）：控制台 invoke 经 SSH 隧道打到对应的集群网关实例。

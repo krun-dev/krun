@@ -117,15 +117,23 @@ func (c *Config) Validate() error {
 	if c.Listen == "" {
 		c.Listen = "127.0.0.1:8080"
 	}
-	if _, _, err := net.SplitHostPort(c.Listen); err != nil {
+	listenHost, _, err := net.SplitHostPort(c.Listen)
+	if err != nil {
 		return errors.New("listen must be host:port")
+	}
+	if c.Development && !net.ParseIP(listenHost).IsLoopback() {
+		return errors.New("development: true requires a loopback listen IP address")
 	}
 	if c.Workers != nil && strings.TrimSpace(c.InternalListen) == "" {
 		return errors.New("internal_listen required when Workers are configured")
 	}
 	if c.InternalListen != "" {
-		if _, _, err := net.SplitHostPort(c.InternalListen); err != nil {
+		internalHost, _, err := net.SplitHostPort(c.InternalListen)
+		if err != nil {
 			return errors.New("internal_listen must be host:port")
+		}
+		if c.Development && !net.ParseIP(internalHost).IsLoopback() {
+			return errors.New("development: true requires a loopback internal_listen IP address")
 		}
 		if c.InternalListen == c.Listen {
 			return errors.New("internal_listen must differ from listen")

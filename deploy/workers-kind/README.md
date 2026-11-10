@@ -62,15 +62,16 @@ KUBECONFIG="$KUBECONFIG" KIND_CLUSTER_NAME="$KIND_CLUSTER_NAME" node e2e.mjs
 - 在目标 kind 节点做临时网络故障注入，随后撤销同一规则。
 
 因此运行者需要 Docker 权限以及 kind 节点中的 `crictl`、`nsenter`、`iptables`。
-测试默认从 tester Pod 请求 API；设置 `KRUN_E2E_TRANSPORT=port-forward` 可改用本机
-4380 端口。写请求不自动重试，只有幂等 GET 会有限重试。
+控制面 API 通过脚本启动的 `kubectl port-forward` 访问，默认只绑定本机 `127.0.0.1:4380`。
+集群内的 Gateway 和 MinIO 请求仍从 tester Pod 发出。GET 和带幂等键的写请求可有限重试。
 
 证据写入 gitignored 的 `evidence/`；临时 API Key 只写入权限为 0600 的
 `generated/api-key.json`。验收结束后应删除测试 namespace/集群或按组织 ID 清理测试
 数据，不能把生成凭据提交到仓库。
 
-Runtime 内部 API 位于独立端口 9001，只允许 runtime 网络访问；外部 9000 只暴露
-`/api/*`，不额外增加根级路由。
+Go 控制台和 Runtime API 都在 backend Pod 内绑定回环 IP。backend Service 只开放 9001，
+由同 Pod 的转发容器连接到内部 Runtime API。NetworkPolicy 只允许 serving runtime 和
+validator 访问该端口，Runtime API 仍验证池凭据。
 
 ## 同源 UI 与规模回归
 
@@ -82,6 +83,9 @@ Runtime 内部 API 位于独立端口 9001，只允许 runtime 网络访问；�
 `KRUN_E2E_ORIGIN` 为同一个测试 origin，并在 UI 测试中使用对应的 `KRUN_UI_ORIGIN`：
 
 ```bash
+# 在单独终端保持转发运行
+kubectl -n workers-mvp port-forward deployment/backend 4380:9000 --address=127.0.0.1
+
 npx playwright install chromium
 KRUN_UI_ORIGIN=http://127.0.0.1:4380 npm run test:ui
 ```
