@@ -143,8 +143,9 @@ func TestAuditPaginationValidation(t *testing.T) {
 func TestAuditCSVExportSnapshotAndRedaction(t *testing.T) {
 	s, store := testServer(t)
 	seedAuditPages(t, store)
+	// PostgreSQL stores timestamptz with microsecond precision.
 	entry := Audit{
-		ID: "csv-row", Time: now().Add(-time.Minute), Organization: "org-a",
+		ID: "csv-row", Time: now().Add(-time.Minute).Truncate(time.Microsecond), Organization: "org-a",
 		Actor: "  =1+1", KeyID: "key-private", Credential: "api_key",
 		Action: "worker.update", Resource: "资源,\"引号\"\n下一行",
 		Allowed: true, RequestID: "request-private", Revision: 7,
