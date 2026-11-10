@@ -172,14 +172,13 @@
   box-shadow: 0 0 12px #3ecf8e60;
 }
 .run-hero h1 {
-  margin: 0;
-  font-size: clamp(64px, 7.8vw, 106px);
+  max-width: 960px;
+  margin: 0 auto;
+  font-size: clamp(32px, 5.4vw, 68px);
   font-weight: 600;
-  line-height: 1.06;
-  letter-spacing: -0.065em;
-}
-.run-hero h1 > span {
-  color: #3ecf8e;
+  line-height: 1.18;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
 }
 .run-hero-lead {
   margin-top: 28px;
@@ -820,7 +819,7 @@
     margin-bottom: 25px;
   }
   .run-hero h1 {
-    font-size: clamp(48px, 11.5vw, 80px);
+    font-size: clamp(28px, 8vw, 32px);
   }
   .run-hero-lead {
     font-size: 18px;
@@ -1017,6 +1016,10 @@
 .run-home[data-theme="light"] .run-section-label,
 .run-home[data-theme="light"] .run-footer > span {
   color: #717b75;
+}
+.run-section-label.run-agent-label {
+  color: var(--muted-foreground);
+  font-size: 12px;
 }
 .run-home[data-theme="light"] .run-product-card {
   background: linear-gradient(145deg, #fff, #f8faf9 70%);
