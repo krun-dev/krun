@@ -23,16 +23,16 @@ func (s *Store) UpsertRepositoryConnectState(ctx context.Context, state string, 
 	return err
 }
 
-// consumeRepositoryConnectState is the one-shot CSRF boundary for repository
-// OAuth. PostgreSQL validates the browser binding and expiry in the same
+// ConsumeRepositoryConnectState is the one-shot CSRF boundary for repository
+// OAuth. PostgreSQL validates the browser binding, user and expiry in the same
 // DELETE ... RETURNING statement, so two callbacks cannot both exchange a
 // code. The memory branch is called from Store.Update and is protected by the
 // store mutex.
-func (s *Store) ConsumeRepositoryConnectState(ctx context.Context, state, browser string) (domain.WorkerRepositoryConnectState, bool, error) {
+func (s *Store) ConsumeRepositoryConnectState(ctx context.Context, state, browser, user string) (domain.WorkerRepositoryConnectState, bool, error) {
 	if s.pool == nil {
 		st := s.memState()
 		pending, ok := st.RepositoryConnectStates[state]
-		if !ok || pending.Browser != browser || !now().Before(pending.Expires) {
+		if !ok || pending.Browser != browser || pending.User != user || !now().Before(pending.Expires) {
 			return domain.WorkerRepositoryConnectState{}, false, nil
 		}
 		delete(st.RepositoryConnectStates, state)
@@ -40,8 +40,8 @@ func (s *Store) ConsumeRepositoryConnectState(ctx context.Context, state, browse
 	}
 	var out domain.WorkerRepositoryConnectState
 	err := s.pool.QueryRow(ctx, `DELETE FROM krun_repository_connect_states
-        WHERE state=$1 AND browser_hash=$2 AND expires_at > now()
-        RETURNING user_id, provider_id, org_id, browser_hash, expires_at`, state, browser).
+        WHERE state=$1 AND browser_hash=$2 AND user_id=$3 AND expires_at > now()
+        RETURNING user_id, provider_id, org_id, browser_hash, expires_at`, state, browser, user).
 		Scan(&out.User, &out.Provider, &out.Organization, &out.Browser, &out.Expires)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.WorkerRepositoryConnectState{}, false, nil

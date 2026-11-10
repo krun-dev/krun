@@ -28,6 +28,7 @@ import (
 	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/configfile"
 	"github.com/krun-dev/krun/internal/localize"
+	"github.com/krun-dev/krun/internal/securetoken"
 	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
@@ -561,13 +562,18 @@ func (s *Server) csrfHandler(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, problem(403, "CSRF_INVALID", "CSRF verification failed"))
 		return
 	}
-	out, err := s.authApplication().CSRF(r.Context(), digest(s.cookie(r, "session")), digest(s.cookie(r, "browser")), s.clientIP(r))
+	browser := s.cookie(r, "browser")
+	out, err := s.authApplication().CSRF(r.Context(), digest(s.cookie(r, "session")), digest(browser), s.clientIP(r))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	if out.BrowserToken != "" {
 		s.setCookie(w, "browser", out.BrowserToken, 900)
+	} else if browser == "" {
+		// A signed-in browser can outlive its binding cookie. Give it a new
+		// binding before the console submits a repository connection request.
+		s.setCookie(w, "browser", securetoken.Random(), 900)
 	}
 	s.json(w, 200, map[string]string{"csrf_token": out.Token})
 }

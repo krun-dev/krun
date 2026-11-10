@@ -24,6 +24,14 @@ func (s *Server) repositoryOAuthContext(parent context.Context, provider appconf
 // workerRepositoryConnect starts a connection: returns the provider's
 // authorization URL with CSRF state bound to this user and browser.
 func (s *Server) workerRepositoryConnect(st *State, p Principal, r *http.Request) (any, int, error) {
+	if p.Kind != "session" {
+		return nil, 0, forbidden()
+	}
+	browser := s.cookie(r, "browser")
+	if browser == "" {
+		return nil, 0, repositoryStateInvalid()
+	}
+
 	target, err := s.orgTarget(st, r)
 	if err != nil {
 		return nil, 0, err
@@ -31,7 +39,9 @@ func (s *Server) workerRepositoryConnect(st *State, p Principal, r *http.Request
 	if err = s.require(st, p, r, "worker.list", target); err != nil {
 		return nil, 0, err
 	}
-	redirect, err := s.repositoryApplication().StartConnection(r.Context(), st, p, target.ID, r.PathValue("provider"), digest(s.cookie(r, "browser")), r.Header.Get("X-Krun-Request-ID"))
+	redirect, err := s.repositoryApplication().StartConnection(
+		r.Context(), st, p, target.ID, r.PathValue("provider"), digest(browser), r.Header.Get("X-Krun-Request-ID"),
+	)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -65,6 +75,35 @@ func (s *Server) workerRepositoryCLILaunch(st *State, p Principal, r *http.Reque
 type repositoryBrowserRedirect struct {
 	url          string
 	browserToken string
+}
+
+func repositoryStateInvalid() error {
+	return problem(403, "WORKER_REPOSITORY_STATE_INVALID", "Connect request expired; try again")
+}
+
+func (s *Server) repositoryCallbackPrincipal(r *http.Request) (Principal, error) {
+	if s.cookie(r, "session") == "" || r.Header.Get("Authorization") != "" {
+		return Principal{}, repositoryStateInvalid()
+	}
+	credentials, err := s.readCredentials(r)
+	if err != nil {
+		return Principal{}, err
+	}
+	if !credentials.hasSession {
+		return Principal{}, repositoryStateInvalid()
+	}
+
+	var principal Principal
+	ctx := withStateScope(r.Context(), stateReadScope{User: credentials.session.User, ActorOnly: true})
+	err = s.Store.View(ctx, PartitionIAM, func(st *State) error {
+		var authErr error
+		principal, authErr = s.authenticate(st, credentials, r)
+		if authErr != nil || principal.Kind != "session" {
+			return repositoryStateInvalid()
+		}
+		return nil
+	})
+	return principal, err
 }
 
 func (s *Server) workerRepositoryBrowserOpen(st *State, p Principal, r *http.Request) (any, int, error) {
@@ -113,7 +152,25 @@ func (s *Server) workerRepositoryCallback(w http.ResponseWriter, r *http.Request
 		s.repositoryCallbackFailure(w, r, problem(400, "INVALID_REQUEST", "OAuth state and code are required"), "")
 		return
 	}
-	connection, err := s.repositoryApplication().CompleteConnection(r.Context(), repositories.ConnectInput{State: in.State, Code: in.Code, Provider: r.PathValue("provider"), Browser: digest(s.cookie(r, "browser")), RequestID: r.Header.Get("X-Krun-Request-ID"), Denied: providerDenied})
+	browser := s.cookie(r, "browser")
+	if browser == "" {
+		s.repositoryCallbackFailure(w, r, repositoryStateInvalid(), "")
+		return
+	}
+	principal, err := s.repositoryCallbackPrincipal(r)
+	if err != nil {
+		s.repositoryCallbackFailure(w, r, err, "")
+		return
+	}
+	connection, err := s.repositoryApplication().CompleteConnection(r.Context(), repositories.ConnectInput{
+		State:     in.State,
+		Code:      in.Code,
+		Provider:  r.PathValue("provider"),
+		Browser:   digest(browser),
+		User:      principal.User.ID,
+		RequestID: r.Header.Get("X-Krun-Request-ID"),
+		Denied:    providerDenied,
+	})
 	if err != nil {
 		s.repositoryCallbackFailure(w, r, err, connection.Organization)
 		return

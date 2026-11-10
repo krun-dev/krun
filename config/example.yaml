@@ -150,6 +150,8 @@ workers:
   kubernetes_api: https://kubernetes.default.svc
   kubernetes_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
   kubernetes_ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+  # local 仅允许 development: true，并且只用于可信仓库。
+  builder_mode: kubernetes
   builder_image: krun-worker-builder:20261013
   builder_pull_policy: IfNotPresent
   # 生产多租户建议配置 gVisor/Kata 等 RuntimeClass；留空使用集群默认运行时。

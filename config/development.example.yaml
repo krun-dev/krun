@@ -22,6 +22,7 @@ providers:
   # 接入真实 SSO 时参考 config/example.yaml；Workers 与认证配置同文件，完整 workers: 段见 config/example.yaml。
   # 默认复用业务 pool 的 Ready serving Pod；独立校验可设 validator_pool: <pool-id>。
   # local-first 隧道脚本使用 validator_pool: default，与独立 validator 的隧道配套。
+  # 本地构建在同一 workers: 段设置 builder_mode: local，仅用于可信仓库。
   # runtime_api_url: https://console.example.com # 可选；空值使用现有 Service/本地控制面地址。
   # HTTPS origin 不带路径，由部署方维护 DNS、TLS 和 /api/internal/workers/* 路由。
   # 本地连接集群时在同一 workers: 段配置：

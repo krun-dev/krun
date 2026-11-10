@@ -82,7 +82,7 @@ func (s *Service) OpenBrowserLaunch(ctx context.Context, p authorization.Princip
 	binding := browserLaunchBinding(p.User.ID, organization, provider)
 	var redirect string
 	open := func(st *domain.State) error {
-		_, ok, err := s.Store.ConsumeRepositoryConnectState(ctx, key, binding)
+		_, ok, err := s.Store.ConsumeRepositoryConnectState(ctx, key, binding, p.User.ID)
 		if err != nil {
 			return err
 		}
@@ -101,8 +101,8 @@ func (s *Service) OpenBrowserLaunch(ctx context.Context, p authorization.Princip
 }
 
 type ConnectInput struct {
-	State, Code, Provider, Browser, RequestID string
-	Denied                                    bool
+	State, Code, Provider, Browser, User, RequestID string
+	Denied                                          bool
 }
 type ConnectResult struct{ Provider, Organization string }
 
@@ -111,10 +111,10 @@ func (s *Service) CompleteConnection(ctx context.Context, in ConnectInput) (Conn
 	var consumed bool
 	var err error
 	if s.Store.Persistent() {
-		pending, consumed, err = s.Store.ConsumeRepositoryConnectState(ctx, in.State, in.Browser)
+		pending, consumed, err = s.Store.ConsumeRepositoryConnectState(ctx, in.State, in.Browser, in.User)
 	} else {
 		err = s.Store.Update(ctx, storage.PartitionWorkers, func(*domain.State) error {
-			pending, consumed, err = s.Store.ConsumeRepositoryConnectState(ctx, in.State, in.Browser)
+			pending, consumed, err = s.Store.ConsumeRepositoryConnectState(ctx, in.State, in.Browser, in.User)
 			return err
 		})
 	}
