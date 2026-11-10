@@ -192,29 +192,36 @@ func TestWorkerSecretPutCreatesAndDeploysImmutableVersion(t *testing.T) {
 		t.Fatalf("runtime secret response is cacheable: %q", authorized.Header().Get("Cache-Control"))
 	}
 
-	// Selecting a shared validator must not grant its token read access to the
-	// source pool's secrets, even if it forges the source pool header.
+	server.Config.Workers.RuntimePools[0].ValidatorToken = "fixture-default-validator-credential"
+	defaultPool := server.Config.Workers.DefaultRuntimePool()
 	validator := appconfig.WorkerRuntimePool{
 		ID:             "validation",
-		ValidatorToken: strings.Repeat("v", 24),
+		RuntimeToken:   "fixture-validation-runtime-credential",
+		ValidatorToken: "fixture-shared-validator-credential",
 	}
 	server.Config.Workers.RuntimePools = append(server.Config.Workers.RuntimePools, validator)
 	server.Config.Workers.ValidatorPool = validator.ID
 	for _, test := range []struct {
+		name   string
 		pool   string
+		token  string
 		status int
 	}{
-		{validator.ID, http.StatusNotFound},
-		{"default", http.StatusForbidden},
+		{"same-pool validator", defaultPool.ID, defaultPool.ValidatorToken, http.StatusForbidden},
+		{"shared validator", validator.ID, validator.ValidatorToken, http.StatusForbidden},
+		{"shared validator claiming source pool", defaultPool.ID, validator.ValidatorToken, http.StatusForbidden},
+		{"serving token without placement", validator.ID, validator.RuntimeToken, http.StatusNotFound},
 	} {
-		response := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/api/internal/workers/versions/"+version.ID+"/secrets", nil)
-		req.Header.Set("Authorization", "Bearer "+validator.ValidatorToken)
-		req.Header.Set("X-Runtime-Pool", test.pool)
-		server.serveInternal(response, req)
-		if response.Code != test.status || strings.Contains(response.Body.String(), "secret-value-never-return") {
-			t.Fatalf("shared validator secret access for pool %s: %d", test.pool, response.Code)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/internal/workers/versions/"+version.ID+"/secrets", nil)
+			req.Header.Set("Authorization", "Bearer "+test.token)
+			req.Header.Set("X-Runtime-Pool", test.pool)
+			server.serveInternal(response, req)
+			if response.Code != test.status || strings.Contains(response.Body.String(), "secret-value-never-return") {
+				t.Fatalf("secret response status %d, want %d without a secret", response.Code, test.status)
+			}
+		})
 	}
 
 	// Model convergence so a delete can create the next immutable version.

@@ -222,7 +222,7 @@ header 与该 pool 独立 token，不能只信任 header：
 | `GET /api/internal/workers/versions/{id}/assets` | 资产 manifest |
 | `POST /api/internal/workers/versions/{id}/assets/credentials` | 续期本 Version 资产目录的只读授权 |
 | `POST /api/internal/workers/static-assets/{prefix}/{org}/{worker}/{digest}/credentials` | signed 静态域的目录级只读授权 |
-| `GET /api/internal/workers/versions/{id}/secrets` | 精确 Version 的 Secret 值，仅供 runtime Loader |
+| `GET /api/internal/workers/versions/{id}/secrets` | 精确 Version 的 Secret 值，仅接受 serving runtime token，并校验本池 placement |
 | `GET /api/internal/workers/artifacts/{id}` | 制品元数据与目录级只读授权 |
 | `POST /api/internal/workers/ack` | 上报已应用的 config revision（每 Pod 一行） |
 
