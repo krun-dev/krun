@@ -1,4 +1,4 @@
-.PHONY: build test check-secrets check-static check-static-build check-storage-models dev dev-down runtime-image runtime-config clean
+.PHONY: build test test-go check-secrets check-static check-static-build check-storage-models dev dev-down runtime-image runtime-config clean
 build:
 	npm ci
 	npm run build
@@ -17,12 +17,18 @@ check-static-build:
 check-storage-models:
 	python3 scripts/gen-storage-models.py --check
 
-test:
+test-go:
+	@if [ -z "$${KRUN_TEST_POSTGRES_URL:-}" ]; then \
+		echo "Set KRUN_TEST_POSTGRES_URL to a dedicated PostgreSQL test database. See docs/verification.md." >&2; \
+		exit 1; \
+	fi
+	go test -race ./...
+
+test: test-go
 	python3 scripts/gen-storage-models.py --check
 	./scripts/check-secrets.sh
 	python3 scripts/check-static-console.py
 	npm run check:web-format
-	go test -race ./...
 	go vet ./...
 	npm run check
 	npm run check:workers-format
