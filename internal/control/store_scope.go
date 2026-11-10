@@ -26,6 +26,7 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 		r.URL.Path == "/api/v1/orgs" ||
 		r.Pattern == "GET /api/v1/orgs/{org}" ||
 		r.Pattern == "GET /api/v1/orgs/{org}/permissions" ||
+		r.Pattern == "GET /api/v1/system/config" ||
 		r.Pattern == "GET /api/v1/system/inventory/{kind}" ||
 		auditRoute
 	if !isResource && !strings.Contains(r.Pattern, "/workers/") && !simpleIAM && !cloudflare {

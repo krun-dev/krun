@@ -1,8 +1,10 @@
 # Workers 资源池与网络配置
 
 资源池、Network Profile、Gateway 和域名统一由主 YAML 的 `workers:` 段配置，字段以
-[配置示例](../config/example.yaml) 和 `WorkersConfig` 为准。控制台没有资源池管理、策略
-rollout 或跨池迁移 API。
+[配置示例](../config/example.yaml) 和 `WorkersConfig` 为准。系统管理员可在
+「平台管理 → 系统配置」只读查看当前控制面加载的资源池、默认池、入口与出口策略、
+候选校验方式及匹配的 Network Profile。页面显示配置声明，实际副本数和健康状态由集群提供。
+凭据、内部地址、服务名及标签和选择器原文仅保留在部署侧。
 
 ## 资源池与服务分配
 
@@ -63,7 +65,7 @@ serving runtime token。候选验证通过 management token 认证，所需的 S
 
 出口约束由 workerd 配置和 Kubernetes NetworkPolicy 共同落实。主 YAML 描述能力并
 校验匹配关系，不会凭空创建代理、网络规则或 Runtime Deployment。Secret 和 ASSETS
-binding 已实现；Service/数据库 binding、资源池管理页面和跨池迁移均不在当前接口范围。
+binding 已实现；Service/数据库 binding 和跨池迁移均不在当前接口范围。
 
 ## 运维
 

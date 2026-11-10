@@ -9,6 +9,7 @@ export type Section =
   | "check"
   | "audit"
   | "users"
+  | "system-config"
   | "workers"
   | "buckets";
 
@@ -27,7 +28,8 @@ export function canOpenSection(
 ): boolean {
   if (systemView) {
     return (
-      systemAdmin && ["orgs", "users", "audit", "workers", "buckets", "keys"].includes(section)
+      systemAdmin &&
+      ["orgs", "users", "audit", "workers", "buckets", "keys", "system-config"].includes(section)
     );
   }
   if (section === "overview") {
