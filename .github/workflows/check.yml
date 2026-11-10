@@ -56,7 +56,7 @@ jobs:
       - run: npm ci --prefix workers/runtime && npm test --prefix workers/runtime
       - run: npm ci --prefix examples/workers-fullstack && npm test --prefix examples/workers-fullstack && npm run build --prefix examples/workers-fullstack
       - run: go vet ./...
-      - run: go test -race ./...
+      - run: make test-go
         env:
           KRUN_TEST_POSTGRES_URL: postgres://krun:krun_test@127.0.0.1:5432/krun_test?sslmode=disable
       - run: go build ./cmd/krun ./cmd/krun-server
