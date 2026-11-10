@@ -15,7 +15,8 @@
     "check:web-format": "prettier --check \"web/src/**/*.{ts,tsx,mjs,css,json}\"",
     "format:workers": "prettier --write \"workers/runtime/**/*.js\" \"workers/runtime/test/*.mjs\" deploy/workers-dev/storage.e2e.mjs deploy/workers-kind/cloudflare.e2e.mjs workers/runtime/package.json \"deploy/workers-dev/fixtures/*.{js,ts}\"",
     "check:workers-format": "prettier --check \"workers/runtime/**/*.js\" \"workers/runtime/test/*.mjs\" deploy/workers-dev/storage.e2e.mjs deploy/workers-kind/cloudflare.e2e.mjs workers/runtime/package.json \"deploy/workers-dev/fixtures/*.{js,ts}\"",
-    "docs:dev": "astro dev --ignore-lock --root user-docs"
+    "docs:dev": "astro dev --ignore-lock --root user-docs",
+    "docs:build": "astro build --root user-docs"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

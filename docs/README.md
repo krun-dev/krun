@@ -14,6 +14,28 @@ krun 是一个自托管应用平台，目标是提供类似 Cloudflare Workers�
 Quick Start 位于 `index.md`，访问入口为 `/docs/`。新增文档放在 `guides/`，使用
 Markdown 和 Starlight 的标题 frontmatter；在 `user-docs/astro.config.mjs` 配置导航，
 章节目录、搜索和 `llms.txt` 自动生成。
+
+内部专属文档不进本仓库，构建时通过挂载点接入。把 `KRUN_INTERNAL_DOCS_DIR` 指向一个
+包含 `docs/`（Markdown 页面）和可选 `public/`（资源文件）、`sidebar.json`（该分组的
+侧边栏条目）的目录，构建会把页面挂到 `/docs/internal/*` 并追加「内部文档」侧边栏分组；
+未设置该变量时开源构建完全不含内部内容。挂载目录由插件写入并带标记文件，构建结束或
+下次公开构建时自动清理，路径也已被 Git 忽略。
+
+```bash
+KRUN_INTERNAL_DOCS_DIR=../docs-internal npm run docs:build
+KRUN_INTERNAL_DOCS_DIR=../docs-internal npm run docs:dev
+```
+
+`sidebar.json` 缺省时 Starlight 自动按目录生成条目，目录名会原样出现在侧边栏；内部仓库
+可以改用 `slug`/`label` 结构自行命名，例如：
+
+```json
+[
+  { "slug": "internal" },
+  { "label": "运维手册", "items": [{ "slug": "internal/guides/release" }] }
+]
+```
+
 文中 `{{KRUN_ORIGIN}}` 在浏览器显示和复制时替换为当前 origin，Markdown 原文保留
 占位符。Go 和 OSS 部署时不需要文档服务进程。
 | 内容 | 入口 |

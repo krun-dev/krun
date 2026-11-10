@@ -6,6 +6,7 @@ const { entry, toc } = Astro.locals.starlightRoute;
 const hasSections = toc?.items.some((item) => item.slug !== "_top" || item.children.length > 0);
 const id = entry.id.replace(/\.(md|mdx)$/, "") || "index";
 const source = `/docs/${id}.md${import.meta.env.DEV ? "" : ".txt"}`;
+const isInternal = id === "internal" || id.startsWith("internal/");
 const workerPages = [
   "guides/component-workers",
   "guides/git-repositories",
@@ -14,20 +15,23 @@ const workerPages = [
   "guides/workers-runtime-compatibility",
 ];
 const wranglerPages = ["guides/cloudflare-workers", "guides/wrangler-configuration"];
-const section = wranglerPages.includes(id)
-  ? ["命令行工具", "Wrangler 使用指南"]
-  : id === "guides/krun-cli"
-    ? ["命令行工具"]
-    : workerPages.includes(id)
-      ? ["组件", "计算 · Workers", ...(id.endsWith("-integration") ? ["Git 仓库集成"] : [])]
-      : id === "guides/component-object-storage"
-        ? ["组件"]
-        : ["开始使用"];
+const section = isInternal
+  ? ["内部文档"]
+  : wranglerPages.includes(id)
+    ? ["命令行工具", "Wrangler 使用指南"]
+    : id === "guides/krun-cli"
+      ? ["命令行工具"]
+      : workerPages.includes(id)
+        ? ["组件", "计算 · Workers", ...(id.endsWith("-integration") ? ["Git 仓库集成"] : [])]
+        : id === "guides/component-object-storage"
+          ? ["组件"]
+          : ["开始使用"];
+const eyebrow = isInternal ? "● INTERNAL ONLY" : "● GETTING STARTED";
 ---
 <div class="krun-breadcrumb">文档 <span>/</span> {section.map((label) => <>{label} <span>/</span>{" "}</>)} {Astro.locals.starlightRoute.entry.data.title}</div>
 <div class="krun-title-row">
   <div>
-    <div class="krun-eyebrow">● GETTING STARTED</div>
+    <div class="krun-eyebrow">{eyebrow}</div>
     <DefaultPageTitle />
     <p class="krun-description">{Astro.locals.starlightRoute.entry.data.description}</p>
   </div>

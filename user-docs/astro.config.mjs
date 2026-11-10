@@ -2,6 +2,7 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import pageActions from "starlight-page-actions";
 import llmsTxt from "starlight-llms-txt";
+import internalDocs from "./plugins/internal-docs.mjs";
 
 export default defineConfig({
   site: "https://krun.invalid",
@@ -39,7 +40,8 @@ export default defineConfig({
             hooks: {
               postprocessRenderedLine({ codeBlock, line, lineIndex, renderData }) {
                 if (!["sh", "bash", "zsh"].includes(codeBlock.language)) return;
-                const previousLine = lineIndex > 0 ? codeBlock.getLine(lineIndex - 1)?.text.trimEnd() : undefined;
+                const previousLine =
+                  lineIndex > 0 ? codeBlock.getLine(lineIndex - 1)?.text.trimEnd() : undefined;
                 if (!/^[^\s#]/.test(line.text) || previousLine?.endsWith("\\")) return;
                 renderData.lineAst.properties.className.push("krun-shell-command");
               },
@@ -105,7 +107,7 @@ export default defineConfig({
         },
       ],
       head: [{ tag: "script", attrs: { src: "/docs/docs-enhance.js", defer: true } }],
-      plugins: [pageActions({ position: "page-title" }), llmsTxt()],
+      plugins: [pageActions({ position: "page-title" }), llmsTxt(), internalDocs()],
     }),
   ],
 });
