@@ -2,9 +2,11 @@ package storage
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/krun-dev/krun/internal/domain"
+	"github.com/krun-dev/krun/internal/storage/models"
 )
 
 // Runtime cold paths use indexed entity reads; they must not load IAM, build
@@ -60,13 +62,16 @@ func (s *Store) RuntimeArtifact(ctx context.Context, id, pool string) (domain.Wo
 
 // actorScope is shared by asynchronous re-authorization and request reads.
 func (s *Store) ActorScope(ctx context.Context, actor domain.WorkerActor, worker string) (context.Context, error) {
-	var org string
-	err := s.pool.QueryRow(ctx, `SELECT org_id FROM krun_resources WHERE resource_id=$1 AND kind='worker'`, worker).Scan(&org)
-	if err == pgx.ErrNoRows {
+	var resource models.Resource
+	err := s.orm.NewSelect().Model(&resource).
+		Column("org_id").
+		Where("resource_id = ? AND kind = 'worker'", worker).
+		Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
 		return ctx, domain.NotFound()
 	}
 	if err != nil {
 		return ctx, err
 	}
-	return WithReadScope(ctx, ReadScope{User: actor.User, Key: actor.Key, Organization: org, Worker: worker, Kind: "worker", Limit: 1}), nil
+	return WithReadScope(ctx, ReadScope{User: actor.User, Key: actor.Key, Organization: resource.OrgID, Worker: worker, Kind: "worker", Limit: 1}), nil
 }
