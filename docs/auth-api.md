@@ -141,6 +141,7 @@ Key 范围和撤权检查逐请求生效。`/orgs/:org/models` 和 CLI `krun mod
 | GET /orgs/:org/permissions | S K | 当前主体在该组织 global 环境下的实际权限，返回 organization_id/actions/revision；要求 organization.read，无权或不存在统一 404 |
 | PATCH /orgs/:org | S | organization.update；name、allowed_sources |
 | GET /system/users | S K | system.user.read |
+| GET /system/config | S | `system.config.read`，查看当前加载的 Workers 配置摘要和资源池，凭据、内部地址、服务名、标签及选择器原文均不返回。 |
 | GET /system/inventory/{workers,buckets,api-keys} | S | `system.inventory.read`，跨组织查看元数据，含组织归属。支持 `q`、`limit`（默认 100，最大 200）、`after`（取自 `next_after`）；API Key 支持 `status=all\|active\|expired\|revoked`。不返回凭据或哈希，组织详情及对象操作沿用组织授权。 |
 | PATCH /system/users/:user | S | system.user.update；仅 active/disabled，增加 auth_version；最后管理员保护 |
 | POST /system/invitations | S | system.user.update；准确 source_id/subject |

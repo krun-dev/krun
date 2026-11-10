@@ -18,6 +18,7 @@ func (s *Server) apiRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/v1/orgs/{org}", s.protected(false, s.orgDetail))
 	m.HandleFunc("GET /api/v1/orgs/{org}/permissions", s.protected(false, s.orgPermissions))
 	m.HandleFunc("PATCH /api/v1/orgs/{org}", s.protected(true, s.orgUpdate))
+	m.HandleFunc("GET /api/v1/system/config", s.protected(true, s.systemConfig))
 	m.HandleFunc("GET /api/v1/system/inventory/{kind}", s.protected(true, s.systemInventory))
 	m.HandleFunc("GET /api/v1/system/users", s.protected(false, s.users))
 	m.HandleFunc("PATCH /api/v1/system/users/{user}", s.protected(true, s.userUpdate))

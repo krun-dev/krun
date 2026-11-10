@@ -271,12 +271,13 @@ test("unauthorized direct URLs fall back without requesting protected page data"
   page,
 }) => {
   const { requests } = await fixture(page);
-  for (const section of ["users", "orgs", "members", "roles", "audit"]) {
+  for (const section of ["users", "orgs", "members", "roles", "audit", "system-config"]) {
     await page.goto(origin + `/?page=${section}&workspace=org-a&view=system`);
     await expect(page.getByRole("heading", { name: "组织概览" })).toBeVisible();
     await expect(page).not.toHaveURL(new RegExp(`page=${section}`));
   }
   expect(requests).not.toContain("/api/v1/system/users");
+  expect(requests).not.toContain("/api/v1/system/config");
   expect(requests).not.toContain("/api/v1/orgs/org-a/members");
   expect(requests).not.toContain("/api/v1/orgs/org-a/audit");
   expect(requests).not.toContain("/api/v1/orgs/org-a/buckets");
@@ -711,4 +712,52 @@ test("platform detail reuses Worker invocation and Bucket controls for the ownin
   await page.getByRole("button", { name: "返回桶列表" }).click();
   await expect(page.getByRole("heading", { name: "全平台 Bucket" })).toBeVisible();
   expect(calls).toEqual([workerBase + "/environments/production/invoke", bucketBase + bucket.name]);
+});
+
+test("system administrators can read runtime pool configuration without an organization", async ({
+  page,
+}) => {
+  await fixture(page, { systemAdmin: true, orgs: [] });
+  await page.route("**/api/v1/system/config", (route) =>
+    route.fulfill({
+      json: {
+        workers: {
+          builder_mode: "kubernetes",
+          runtime_api_override: true,
+          preview_limit: 32,
+          validator_pool: "private-b",
+          runtime_pools: [
+            {
+              id: "public-a",
+              default: true,
+              access: ["public"],
+              private_egress: "deny",
+              public_egress: "direct",
+              validator_configured: false,
+              network_profiles: ["standard"],
+            },
+            {
+              id: "private-b",
+              default: false,
+              access: ["private"],
+              private_egress: "direct",
+              public_egress: "deny",
+              validator_configured: true,
+              network_profiles: ["private-only"],
+            },
+          ],
+        },
+        deployment: { runtime_replicas: 3, validator_replicas: 2 },
+      },
+    }),
+  );
+  await page.goto(origin + "/?view=system&page=orgs");
+  await page.locator("aside nav").getByRole("button", { name: "系统配置" }).click();
+  await expect(page.getByRole("heading", { name: "系统配置" })).toBeVisible();
+  await expect(page.getByText("独立校验池 private-b", { exact: true })).toBeVisible();
+  await expect(page.getByText("自定义地址（已隐藏）", { exact: true })).toBeVisible();
+  await expect(page.getByRole("row", { name: /public-a.*默认池.*standard/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /private-b.*正在使用.*private-only/ })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "运行资源池" })).toBeVisible();
 });

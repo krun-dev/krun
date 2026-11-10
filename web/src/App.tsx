@@ -93,6 +93,7 @@ const BucketsPage = lazy(() =>
     default: module.BucketsPage,
   })),
 );
+const SystemConfigPage = lazy(() => import("@/components/system-config"));
 const ResourceInventoryPage = lazy(() => import("@/components/resource-inventory"));
 const RepositoryAuthorizations = lazy(() => import("@/components/repository-authorizations"));
 const KeysPage = lazy(() =>
@@ -123,6 +124,7 @@ const adminNavigation: { id: Section; name: string }[] = [
   { id: "workers", name: "全平台 Workers" },
   { id: "buckets", name: "全平台 Bucket" },
   { id: "keys", name: "全平台 API 密钥" },
+  { id: "system-config", name: "系统配置" },
 ];
 
 function repositoryCallbackNotice(): string {
@@ -167,6 +169,7 @@ export default function App() {
         "users",
         "workers",
         "buckets",
+        "system-config",
       ];
       return known.includes(page as Section) ? (page as Section) : "overview";
     }),
@@ -950,6 +953,8 @@ export default function App() {
                 setSection("overview");
               }}
             />
+          ) : section === "system-config" ? (
+            <SystemConfigPage refresh={refresh} />
           ) : section === "users" ? (
             <UsersPage
               notify={notify}
