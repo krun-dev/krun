@@ -45,7 +45,8 @@ db: ${KRUN_DATABASE_URL}
 ## 路由示例
 
 仓库中的 [`deploy/production/nginx.conf.example`](../deploy/production/nginx.conf.example)
-是同一契约的 Nginx 模板；替换证书路径、域名、上游和静态根目录，并按需配置新增的静态文件路径后再执行 `nginx -t`。
+是同一契约的 Nginx 模板。替换证书路径、域名和上游，将静态根目录指向完整的
+`dist/console/`，然后执行 `nginx -t`。模板服务控制台、文档和 CLI 下载；未知路径返回 404。
 使用云 CDN 时配置等价的两个 origin behavior：优先匹配
 `/api/*` 到 Go，其余请求到 OSS；OSS 对不存在的对象返回 404。
 

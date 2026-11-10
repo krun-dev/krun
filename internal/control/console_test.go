@@ -21,7 +21,7 @@ func TestAPIOnlyDoesNotServeFilesOrRedirectConsole(t *testing.T) {
 	if s.Config.StaticDir != "" {
 		t.Fatal("omitted static_dir should keep the backend API-only")
 	}
-	for _, path := range []string{"/", "/console/", "/console/assets/app.js", "/config/example.yaml", "/go.mod"} {
+	for _, path := range []string{"/", "/console/", "/console/assets/app.js", "/config/example.yaml", "/go.mod", "/api/v1/me"} {
 		w := request(s, http.MethodGet, path, "", "")
 		if w.Code != http.StatusNotFound || w.Header().Get("Location") != "" || !strings.Contains(w.Body.String(), "RESOURCE_NOT_FOUND") {
 			t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
@@ -120,7 +120,7 @@ func TestSeparatedFrontendProxyLogin(t *testing.T) {
 	if response.StatusCode != http.StatusNoContent {
 		t.Fatal("proxy logout failed", response.StatusCode)
 	}
-	response, err = client.Get(frontend.URL + "/api/v1/me")
+	response, err = client.Get(frontend.URL + "/api/auth/me")
 	if err != nil {
 		t.Fatal(err)
 	}

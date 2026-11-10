@@ -154,15 +154,13 @@ func repositoryTestArchive(t *testing.T, names map[string]string) []byte {
 
 func TestRepositoryArchiveBoundaries(t *testing.T) {
 	source := WorkerBuildRepository{WorkerRepositorySource: WorkerRepositorySource{RootDirectory: "worker"}}
-	entrypoint := "index.ts"
 	for _, files := range []map[string]string{
 		{"repo/../worker/index.ts": "unsafe"},
 		{"repo/worker/../index.ts": "unsafe"},
 		{"repo/worker/index.ts": strings.Repeat("x", workerartifact.WorkerRepositoryProjectFileMax+1)},
-		{"repo/worker/not-entry.ts": "missing entry"},
 		{"repo/worker/index.ts": string([]byte{0xff})},
 	} {
-		if _, _, err := workerartifact.ExtractRepositorySource(repositoryTestArchive(t, files), source.RootDirectory, entrypoint); err == nil {
+		if _, err := workerartifact.ExtractRepositorySource(repositoryTestArchive(t, files), source.RootDirectory); err == nil {
 			t.Fatal("invalid archive accepted")
 		}
 	}
@@ -172,7 +170,7 @@ func TestRepositoryArchiveBoundaries(t *testing.T) {
 	_ = archive.WriteHeader(&tar.Header{Name: "repo/worker/index.ts", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd"})
 	_ = archive.Close()
 	_ = zip.Close()
-	if _, _, err := workerartifact.ExtractRepositorySource(buf.Bytes(), source.RootDirectory, entrypoint); err == nil {
+	if _, err := workerartifact.ExtractRepositorySource(buf.Bytes(), source.RootDirectory); err == nil {
 		t.Fatal("symlink accepted")
 	}
 }
@@ -190,7 +188,7 @@ func TestRepositoryProjectKeepsWranglerInputsAndRejectsLocalSecrets(t *testing.T
 		"repo/worker/node_modules/pkg/index.js": "must not cross the build boundary",
 		"repo/worker/.wrangler/tmp/output.js":   "stale generated output",
 	})
-	files, _, err := workerartifact.ExtractRepositorySource(archive, "worker", "src/index.ts")
+	files, err := workerartifact.ExtractRepositorySource(archive, "worker")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +238,7 @@ func TestRepositoryProjectKeepsWranglerInputsAndRejectsLocalSecrets(t *testing.T
 			"repo/worker/index.ts":       "export default {}",
 			"repo/worker/" + secret:      "credential=should-not-enter-builder",
 		}
-		if _, _, err := workerartifact.ExtractRepositorySource(repositoryTestArchive(t, files), "worker", "index.ts"); err == nil {
+		if _, err := workerartifact.ExtractRepositorySource(repositoryTestArchive(t, files), "worker"); err == nil {
 			t.Fatalf("sensitive build input %s was accepted", secret)
 		}
 	}
@@ -249,7 +247,7 @@ func TestRepositoryProjectKeepsWranglerInputsAndRejectsLocalSecrets(t *testing.T
 		"repo/worker/index.ts":       "export default {}",
 		"repo/worker/.yarnrc.yml":    "npmAuthToken: secret-token",
 	}
-	if _, _, err := workerartifact.ExtractRepositorySource(repositoryTestArchive(t, authYarn), "worker", "index.ts"); err == nil {
+	if _, err := workerartifact.ExtractRepositorySource(repositoryTestArchive(t, authYarn), "worker"); err == nil {
 		t.Fatal("package-manager credentials were accepted")
 	}
 }
@@ -295,7 +293,7 @@ func TestRepositoryArchiveGitHubGlobalPAXHeader(t *testing.T) {
 	if err := zip.Close(); err != nil {
 		t.Fatal(err)
 	}
-	files, _, err := workerartifact.ExtractRepositorySource(buf.Bytes(), "src", "index.ts")
+	files, err := workerartifact.ExtractRepositorySource(buf.Bytes(), "src")
 	if err != nil || files["index.ts"] != code {
 		t.Fatal(files, err)
 	}

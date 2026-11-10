@@ -273,7 +273,7 @@ func TestDisabledLoginSources(t *testing.T) {
 	if w := browserRequest(disabled, "POST", "/api/auth/local/login", url.Values{}, nil); w.Code != 404 {
 		t.Fatal(w.Code)
 	}
-	if w := request(disabled, "GET", "/api/v1/me", "krun_cli_admin", ""); w.Code != 401 {
+	if w := request(disabled, "GET", "/api/auth/me", "krun_cli_admin", ""); w.Code != 401 {
 		t.Fatal("disabled source credential accepted", w.Code)
 	}
 	c = emailTestConfig()

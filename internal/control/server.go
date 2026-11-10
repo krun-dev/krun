@@ -336,7 +336,7 @@ func (s *Server) protectedPrincipal(st *State, c authCredentials, r *http.Reques
 	if err != nil {
 		return Principal{}, err
 	}
-	if c.session.OAuthGrant != "" && !strings.Contains(" "+c.session.OAuthScope+" ", " krun:control ") && !strings.HasPrefix(r.URL.Path, cfPrefix+"/") && r.URL.Path != "/api/auth/me" && r.URL.Path != "/api/v1/me" && r.URL.Path != "/api/auth/logout" {
+	if c.session.OAuthGrant != "" && !strings.Contains(" "+c.session.OAuthScope+" ", " krun:control ") && !strings.HasPrefix(r.URL.Path, cfPrefix+"/") && r.URL.Path != "/api/auth/me" && r.URL.Path != "/api/auth/logout" {
 		return Principal{}, forbidden()
 	}
 	if sessionOnly && principal.Kind == "api_key" {

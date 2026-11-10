@@ -70,7 +70,7 @@ func TestRepositoryWithRealWorldNoiseFiles(t *testing.T) {
 		"repo/worker/README.md":                 strings.Repeat("# docs\n", 5000),
 		"repo/worker/vitest.config.mts":         "export default {};",
 	})
-	files, _, err := workerartifact.ExtractRepositorySource(archive, "worker", "")
+	files, err := workerartifact.ExtractRepositorySource(archive, "worker")
 	if err != nil {
 		t.Fatalf("extraction rejected a realistic tree: %v", err)
 	}
@@ -98,9 +98,8 @@ func TestRepositoryWithRealWorldNoiseFiles(t *testing.T) {
 	if err := workerartifact.SourceEntryValid(entry, files); err != nil {
 		t.Fatalf("entrypoint: %v", err)
 	}
-	assetFiles, err := workerartifact.ExtractRepositoryAssets(archive, "worker", assets.Directory)
-	if err != nil || len(assetFiles) != 1 {
-		t.Fatalf("assets: %v %v", assetFiles, err)
+	if got := files[assets.Directory+"/index.html"]; got != "<!doctype html><title>ok</title>" {
+		t.Fatalf("asset missing from the build project: %q", got)
 	}
 }
 

@@ -86,13 +86,14 @@ workers:
       default: true
       static_domain: static.workers.test
     - id: external
-      domain: public.workers.test
+      # A sibling suffix keeps the private Gateway wildcard from matching public hosts.
+      domain: public-workers.test
       label: 公网
       access: public
       labels:
         exposure: external
       gateway: external
-      static_domain: static.public.workers.test
+      static_domain: static.public-workers.test
   network_profiles:
     - id: internal-service
       name: 内网服务

@@ -60,7 +60,7 @@ func TestUserWildcardKeysStayWithinCurrentPermissions(t *testing.T) {
 			if request(s, "GET", "/api/v1/orgs/org-a/workers/svc-a", issued.Key, "").Code != 404 {
 				t.Fatal("revoked role remained usable through wildcard")
 			}
-			if request(s, "DELETE", "/api/v1/api-keys/"+issued.ID, "krun_cli_viewer", "").Code != 204 || request(s, "GET", "/api/v1/me", issued.Key, "").Code != 401 {
+			if request(s, "DELETE", "/api/v1/api-keys/"+issued.ID, "krun_cli_viewer", "").Code != 204 || request(s, "GET", "/api/auth/me", issued.Key, "").Code != 401 {
 				t.Fatal("permanent key could not be revoked")
 			}
 		})
@@ -172,7 +172,7 @@ func TestKeyExpiryAndOwnerIsolation(t *testing.T) {
 		st.Keys[key.ID] = key
 		return nil
 	})
-	if request(s, "GET", "/api/v1/me", issued.Key, "").Code != 401 {
+	if request(s, "GET", "/api/auth/me", issued.Key, "").Code != 401 {
 		t.Fatal("expired key authenticated")
 	}
 	input := `{"name":"expired","expected_revision":1,"policy":{"schema_version":1,"statements":[{"effect":"allow","actions":["*"],"resource":{"kind":"*","all_in_system":true},"conditions":{}}]}}`

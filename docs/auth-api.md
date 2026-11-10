@@ -14,7 +14,7 @@
 | GET | /api/auth/:provider/callback | 一次性 state、浏览器绑定、generation、过期与配置指纹，锁外兑换 Token，再原子签发本地 Session |
 | POST | /api/auth/:provider/email/code | 仅 email 来源；JSON `{email,return_to}`，Origin + 浏览器 CSRF，发送邮箱验证码，返回 challenge_id / expires_in / retry_after |
 | POST | /api/auth/:provider/email/verify | JSON `{challenge_id,code}`，Origin + 浏览器 CSRF，原子消费验证码并建立浏览器 Session，返回 redirect_url |
-| GET | /api/auth/me | 当前主体、凭据类型、系统管理员状态及权限修订 |
+| GET | /api/auth/me | 支持浏览器 Session、CLI Session 和 API Key；返回当前主体、凭据类型、系统管理员状态及权限修订 |
 | POST | /api/auth/logout | 浏览器或 CLI Session 撤销；清浏览器 Cookie |
 | GET | /api/auth/oauth/authorize | 授权码流程；注册客户端、loopback 回调、state、PKCE S256 校验，转向静态授权页 |
 | POST | /api/auth/oauth/device/auth | OAuth 设备码流程；5 分钟有效，返回确认码和浏览器地址 |
@@ -132,7 +132,7 @@ Key 范围和撤权检查逐请求生效。模型执行相关动作仍是预留�
 
 | 方法与路径 | 凭据 | 行为 |
 | --- | --- | --- |
-| GET /me、/roles | S K | 当前主体；公开固定角色和动作目录 |
+| GET /roles | S K | 读取固定角色和动作目录 |
 | POST /authz/check | S K | 检查当前主体 action/resource_kind/resource_id/environment；不接受自定义 principal |
 | GET /orgs | S K | 过滤未授权组织 |
 | POST /orgs | S | 开启 organization_self_service 时所有已登录用户可创建组织，否则仅系统管理员；创建者获得该组织的组织管理员 |

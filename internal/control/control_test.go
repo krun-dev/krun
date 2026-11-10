@@ -119,7 +119,7 @@ func TestAPIKeyLifecycleAndImmediateUserRevocation(t *testing.T) {
 		t.Fatal("removed role remained active")
 	}
 	_ = store.Update(context.Background(), PartitionAll, func(st *State) error { k := st.Keys[issued.ID]; k.Revoked = true; st.Keys[k.ID] = k; return nil })
-	if request(s, "GET", "/api/v1/me", issued.Key, "").Code != 401 {
+	if request(s, "GET", "/api/auth/me", issued.Key, "").Code != 401 {
 		t.Fatal("revoked key remained valid")
 	}
 }
@@ -288,7 +288,7 @@ func TestLoginGenerationAndSessionExpiration(t *testing.T) {
 		st.Sessions[digest("krun_cli_viewer")] = session
 		return nil
 	})
-	if request(s, "GET", "/api/v1/me", "krun_cli_viewer", "").Code != 401 {
+	if request(s, "GET", "/api/auth/me", "krun_cli_viewer", "").Code != 401 {
 		t.Fatal("absolute timeout ignored")
 	}
 }
@@ -296,7 +296,7 @@ func TestLoginGenerationAndSessionExpiration(t *testing.T) {
 func TestRemovedSourceInvalidatesExistingCredentials(t *testing.T) {
 	s, _ := testServer(t)
 	delete(s.providers, "local")
-	if request(s, "GET", "/api/v1/me", "krun_cli_admin", "").Code != 401 {
+	if request(s, "GET", "/api/auth/me", "krun_cli_admin", "").Code != 401 {
 		t.Fatal("disabled source accepted")
 	}
 }

@@ -28,9 +28,11 @@ production 和 preview 使用相同的服务 placement。主机名由一套公�
 | 静态资产路由 | 每个 domain 一条 | 对象存储静态 Service 与对应 `pub/` 或 `int/` 前缀 |
 
 每个 domain 经 Network Profile 唯一选择一个运行池；配置拒绝多个池争用同一通配域名。
-同一池可以有多个副本。domain 显式绑定一个 Gateway 实例与 listener。不同访问边界使用独立 Gateway 实例，
-每个实例只接收自己的域名；跨实例伪造 Host 返回 404。静态域默认 `static.<domain>`，
-可通过 `static_domain` 显式配置。
+同一池可以有多个副本。domain 显式绑定一个 Gateway 实例与 listener。不同访问边界使用独立 Gateway，
+并为它们分配互不重叠的通配域名，例如 `*.internal.workers.example.com` 和
+`*.public.workers.example.com`。如果一个通配域名覆盖另一个入口的主机名，分开 Gateway
+也不能保证跨实例伪造 Host 返回 404。静态域默认 `static.<domain>`，可通过
+`static_domain` 显式配置。
 
 Runtime 以完整 Host 定向解析 route，再加载不可变 Version；HTTPRoute 不携带站点
 代码或 Version 版本。创建、发布和回滚不会创建站点专属 HTTPRoute，也不会重启 Runtime。

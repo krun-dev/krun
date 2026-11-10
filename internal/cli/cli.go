@@ -241,7 +241,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		if len(rest) != 0 {
 			return errors.New("whoami does not accept arguments")
 		}
-		return c.call(ctx, "GET", "/api/v1/me", nil)
+		return c.call(ctx, "GET", "/api/auth/me", nil)
 	case "logout":
 		if len(rest) != 0 {
 			return errors.New("logout does not accept arguments")
@@ -385,7 +385,7 @@ func (c *Client) login(ctx context.Context, args []string) error {
 		c.Profile.clearCredentials()
 		c.Profile.Token = token
 		var me any
-		if e = c.request(ctx, "GET", "/api/v1/me", nil, &me, false); e != nil {
+		if e = c.request(ctx, "GET", "/api/auth/me", nil, &me, false); e != nil {
 			return e
 		}
 		if e = c.save(); e != nil {

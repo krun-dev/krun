@@ -42,7 +42,7 @@ func TestBuildLogs(t *testing.T) {
 
 func TestTokenLoginPermissionsAndLogout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/me" || r.Header.Get("Authorization") != "Bearer krun_key_test" {
+		if r.URL.Path != "/api/auth/me" || r.Header.Get("Authorization") != "Bearer krun_key_test" {
 			w.WriteHeader(401)
 			return
 		}

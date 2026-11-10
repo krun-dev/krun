@@ -133,7 +133,7 @@ func TestEndpointPrecedenceDoesNotWriteProfile(t *testing.T) {
 				wantAuthorization = "Bearer saved-secret"
 			}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/api/v1/me" || r.Header.Get("Authorization") != wantAuthorization {
+				if r.URL.Path != "/api/auth/me" || r.Header.Get("Authorization") != wantAuthorization {
 					t.Error("endpoint override sent the wrong request or leaked saved credentials")
 				}
 				_, _ = w.Write([]byte("{}"))

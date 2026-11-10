@@ -8,7 +8,6 @@ import (
 
 func (s *Server) apiRoutes(m *http.ServeMux) {
 	s.organizationInvitationRoutes(m)
-	m.HandleFunc("GET /api/v1/me", s.protected(false, s.me))
 	m.HandleFunc("GET /api/v1/roles", s.protected(false, func(st *State, p Principal, r *http.Request) (any, int, error) {
 		roles, actions, environments := authorization.Catalog()
 		return map[string]any{"roles": roles, "actions": actions, "environments": environments}, 200, nil
