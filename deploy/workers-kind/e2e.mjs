@@ -1,5 +1,6 @@
 import http from 'node:http';
 import {execFileSync,spawn} from 'node:child_process';
+import {once} from 'node:events';
 import {mkdirSync,writeFileSync,openSync,closeSync,chmodSync,readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -15,23 +16,19 @@ const kubeconfig=process.env.KUBECONFIG;assert(kubeconfig,'KUBECONFIG must ident
 const kubectl=(...args)=>execFileSync('kubectl',['--kubeconfig',kubeconfig,...args],{encoding:'utf8',timeout:180000});
 const clusterName=process.env.KIND_CLUSTER_NAME;assert(clusterName,'KIND_CLUSTER_NAME must identify the intended kind cluster');
 const expectedContext='kind-'+clusterName;assert.equal(kubectl('config','current-context').trim(),expectedContext,'Verification requires the intended kind context');
-const podTransport=process.env.KRUN_E2E_TRANSPORT!=='port-forward';
 const bucket=process.env.KRUN_E2E_BUCKET||'krun-e2e';
 const storage='http://minio:9000/'+bucket;
-const origin=process.env.KRUN_E2E_ORIGIN||'http://127.0.0.1:4380';const cookies=new Map();let csrf='',key='';const evidence=[];const transportRetries=[];
+const configuredOrigin = process.env.KRUN_E2E_ORIGIN || 'http://127.0.0.1:4380';
+assert(/^http:\/\/127\.0\.0\.1(?::[1-9][0-9]{0,4})?\/?$/.test(configuredOrigin),
+ 'KRUN_E2E_ORIGIN must be a loopback HTTP origin at 127.0.0.1');
+const consoleURL = new URL(configuredOrigin);
+const origin = consoleURL.origin;
+const cookies=new Map();let csrf='',key='';const evidence=[];const transportRetries=[];
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function request(route,method='GET',input,options={}){return new Promise((resolve,reject)=>{
  const data=input===undefined?undefined:options.form?input:JSON.stringify(input);
  const headers={accept:'application/json',...(data?{'content-type':options.form?'application/x-www-form-urlencoded':'application/json','content-length':Buffer.byteLength(data)}:{}),...options.headers};
  if(options.session){headers.cookie=[...cookies].map(([k,v])=>k+'='+v).join('; ');headers.origin=origin;if(csrf)headers['x-csrf-token']=csrf;}else if(options.token!==null&&key){headers.authorization='Bearer '+(options.token||key);}
- if(podTransport){
-  try {
-   const script=`const http=require('http');let input='';process.stdin.on('data',x=>input+=x);process.stdin.on('end',()=>{const v=JSON.parse(input);const r=http.request('http://backend:9000'+v.route,{method:v.method,headers:v.headers,agent:false,signal:AbortSignal.timeout(12000)},res=>{let raw='';res.setEncoding('utf8');res.on('data',x=>raw+=x);res.on('end',()=>{let body;try{body=JSON.parse(raw)}catch{body=raw};console.log(JSON.stringify({status:res.statusCode,body,headers:res.headers}));});});r.on('error',e=>{console.error(e.message);process.exitCode=1});r.end(v.data);});`;
-   const raw=execFileSync('kubectl',['--kubeconfig',kubeconfig,'exec','-i','-n','workers-mvp','deploy/tester','--','node','-e',script],{input:JSON.stringify({route,method,headers,data}),encoding:'utf8',timeout:20000});
-   const response=JSON.parse(raw);for(const c of response.headers['set-cookie']||[]){const [name,value]=c.split(';')[0].split('=');cookies.set(name,value)}resolve(response);
-  }catch(e){reject(new Error(method+' '+route+': tester request failed',{cause:e}));}
-  return;
- }
  const r=http.request(origin+route,{method,headers,agent:false,signal:AbortSignal.timeout(12000)},res=>{for(const c of res.headers['set-cookie']||[]){const [name,value]=c.split(';')[0].split('=');cookies.set(name,value)}let raw='';res.setEncoding('utf8');res.on('data',x=>raw+=x);res.on('end',()=>{let body;try{body=JSON.parse(raw)}catch{body=raw}resolve({status:res.statusCode,body,headers:res.headers});});});r.on('error',e=>reject(new Error(method+' '+route+': '+e.message,{cause:e})));r.end(data);
 });}
 async function api(route,method='GET',body,expected=200,options={}){
@@ -60,17 +57,49 @@ async function poll(route,states,timeout=150000){const until=Date.now()+timeout;
 let forward;
 process.on('exit',()=>forward?.kill());
 async function startForward(){
- if(podTransport){for(let i=0;i<60;i++){try{await api('/api/healthz');return;}catch{await sleep(500);}}throw new Error('Backend did not become healthy');}
- forward?.kill();
- const log=openSync(evidencePath('port-forward.log'),'a');
- forward=spawn('kubectl',['--kubeconfig',kubeconfig,'-n','workers-mvp','port-forward','deployment/backend',new URL(origin).port+':9000','--address=127.0.0.1'],{stdio:['ignore',log,log],env:{...process.env,KUBECTL_PORT_FORWARD_WEBSOCKETS:'false'}});closeSync(log);forward.unref();
- for(let i=0;i<60;i++){try{await api('/api/healthz');return;}catch{await sleep(500);}}
- throw new Error('Backend port-forward did not become healthy');
+ if (forward && forward.exitCode === null && forward.signalCode === null) {
+  const stopped = once(forward, 'exit');
+  forward.ref();
+  forward.kill();
+  await stopped;
+ }
+ const log = openSync(evidencePath('port-forward.log'), 'w');
+ const port = consoleURL.port || '80';
+ forward = spawn('kubectl', [
+  '--kubeconfig', kubeconfig, '-n', 'workers-mvp', 'port-forward',
+  'deployment/backend', port + ':9000', '--address=127.0.0.1',
+ ], {
+  stdio: ['ignore', log, log],
+  env: { ...process.env, KUBECTL_PORT_FORWARD_WEBSOCKETS: 'false' },
+ });
+ closeSync(log);
+ forward.unref();
+ for (let attempt = 0; attempt < 60; attempt++) {
+  if (forward.exitCode !== null || forward.signalCode !== null) break;
+  if (readFileSync(evidencePath('port-forward.log'), 'utf8').includes('Forwarding from 127.0.0.1:' + port + ' -> 9000')) {
+   try {
+    if ((await request('/api/healthz')).status === 200) return;
+   } catch {}
+  }
+  await sleep(500);
+ }
+ throw new Error('Backend port-forward did not become healthy; see evidence/port-forward.log');
 }
 mkdirSync(evidenceDirectory,{recursive:true});
 mkdirSync(generatedDirectory,{recursive:true});
 writeFileSync(evidencePath('transport-retries.json'),'[]');
 await startForward();
+await check('kind keeps console login off the Runtime API Service', async () => {
+ const service = JSON.parse(kubectl('-n', 'workers-mvp', 'get', 'service', 'backend', '-o', 'json'));
+ const ports = service.spec.ports.map(port => port.port);
+ assert.deepEqual(ports, [9001]);
+
+ const runtimeStatus = route => kubectl('-n', 'workers-mvp', 'exec', 'deployment/backend', '-c', 'backend', '--',
+  'curl', '-sS', '--max-time', '5', '-o', '/dev/null', '-w', '%{http_code}', 'http://127.0.0.1:9001' + route);
+ assert.equal(runtimeStatus('/api/auth/providers'), '404');
+ assert.equal(runtimeStatus('/api/internal/workers/config/snapshot'), '403');
+ return {servicePorts: ports};
+});
 const auth=await api('/api/auth/csrf','POST',undefined,200,{session:true});csrf=auth.csrf_token;
 const login=await api('/api/auth/local/login','POST',new URLSearchParams({return_to:'/'}).toString(),200,{session:true,form:true});
 const callback=new URL(login.redirect_url,origin);await api(callback.pathname+callback.search,'GET',undefined,303,{session:true});

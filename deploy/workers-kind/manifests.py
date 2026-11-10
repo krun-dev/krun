@@ -35,8 +35,8 @@ def secure():return {'allowPrivilegeEscalation':False,'readOnlyRootFilesystem':T
 deployment('postgres',[{'name':'postgres','image':'postgres:18-alpine','imagePullPolicy':'Never','env':[env('POSTGRES_PASSWORD')],'volumeMounts':[{'name':'data','mountPath':'/var/lib/postgresql'}],'readinessProbe':{'exec':{'command':['pg_isready','-U','postgres']},'periodSeconds':2},'resources':limits('1Gi','256Mi')}],volumes=[{'name':'data','persistentVolumeClaim':{'claimName':'postgres-data'}}]);service('postgres',[5432])
 deployment('minio',[{'name':'minio','image':'krun-e2e-minio:20250907','imagePullPolicy':'Never','args':['server','/data','--console-address',':9001'],'env':[env('MINIO_ROOT_USER'),env('MINIO_ROOT_PASSWORD')],'volumeMounts':[{'name':'data','mountPath':'/data'}],'readinessProbe':{'httpGet':{'path':'/minio/health/ready','port':9000},'periodSeconds':2},'resources':limits('512Mi')}],volumes=[{'name':'data','persistentVolumeClaim':{'claimName':'minio-data'}}]);service('minio',[9000])
 deployment('git-mock',[{'name':'git-mock','image':f'krun-e2e-git-mock:{tag}','imagePullPolicy':'Never','securityContext':secure(),'volumeMounts':[{'name':'tls','mountPath':'/tls','readOnly':True}],'readinessProbe':{'httpGet':{'scheme':'HTTPS','path':'/healthz','port':8443},'periodSeconds':2},'resources':limits('256Mi')}],volumes=[{'name':'tls','secret':{'secretName':'git-mock-tls'}}]);items.append(resource('Service','git-mock',spec={'selector':{'app':'git-mock'},'ports':[{'name':'https','port':443,'targetPort':8443}]}))
-config='''listen: 0.0.0.0:9000
-internal_listen: 0.0.0.0:9001
+config='''listen: 127.0.0.1:9000
+internal_listen: 127.0.0.1:9002
 public_url: http://127.0.0.1:4380
 development: true
 static_dir: /app/dist
@@ -154,7 +154,12 @@ workers:
       base_url: https://gitlab.com
 '''
 config=config.replace('krun-artifacts',bucket)
-config=config.replace('public_url: http://127.0.0.1:4380','public_url: '+json.dumps(os.environ.get('KRUN_E2E_ORIGIN','http://127.0.0.1:4380')))
+console_origin = os.environ.get('KRUN_E2E_ORIGIN', 'http://127.0.0.1:4380').removesuffix('/')
+origin_match = re.fullmatch(r'http://127\.0\.0\.1(?::([1-9][0-9]{0,4}))?', console_origin)
+if not origin_match or int(origin_match[1] or '80') > 65535:
+ raise SystemExit('KRUN_E2E_ORIGIN must be a loopback HTTP origin at 127.0.0.1')
+console_origin = console_origin.removesuffix(':80')
+config=config.replace('public_url: http://127.0.0.1:4380', 'public_url: '+json.dumps(console_origin))
 
 items.append(resource('ConfigMap','control-config',data={'control.yaml':config}))
 items.append(resource('ServiceAccount','workers-control'))
@@ -162,7 +167,29 @@ items.append(resource('Role','workers-control',apiVersion='rbac.authorization.k8
 items.append(resource('RoleBinding','workers-control',apiVersion='rbac.authorization.k8s.io/v1',roleRef={'apiGroup':'rbac.authorization.k8s.io','kind':'Role','name':'workers-control'},subjects=[{'kind':'ServiceAccount','name':'workers-control','namespace':ns}]))
 items.append({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'Role','metadata':{'name':'workers-mvp-reader','namespace':'kgateway-system'},'rules':[{'apiGroups':['gateway.networking.k8s.io'],'resources':['gateways'],'resourceNames':['workers-mvp','workers-public'],'verbs':['get']}]})
 items.append({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'RoleBinding','metadata':{'name':'workers-mvp-reader','namespace':'kgateway-system'},'roleRef':{'apiGroup':'rbac.authorization.k8s.io','kind':'Role','name':'workers-mvp-reader'},'subjects':[{'kind':'ServiceAccount','name':'workers-control','namespace':ns}]})
-deployment('backend',[{'name':'backend','image':f'krun-workers-backend:{tag}','imagePullPolicy':'Never','env':[env(n) for n in ['KRUN_DATABASE_URL','KRUN_S3_ACCESS','KRUN_S3_SECRET','KRUN_RUNTIME_TOKEN','KRUN_MANAGEMENT_TOKEN','KRUN_WORKERS_SECRETS_KEY']],'securityContext':secure(),'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},{'name':'workdir','mountPath':'/workdir'}],'resources':limits('1Gi','128Mi'),'readinessProbe':{'httpGet':{'path':'/api/healthz','port':9000},'periodSeconds':5}}],serviceAccountName='workers-control',automountServiceAccountToken=True,volumes=[{'name':'config','configMap':{'name':'control-config'}},{'name':'workdir','emptyDir':{'sizeLimit':'1Gi'}}],terminationGracePeriodSeconds=10);service('backend',[9000,9001])
+backend_image = f'krun-workers-backend:{tag}'
+deployment('backend', [
+ {'name': 'backend', 'image': backend_image, 'imagePullPolicy': 'Never',
+  'env': [env(n) for n in ['KRUN_DATABASE_URL', 'KRUN_S3_ACCESS', 'KRUN_S3_SECRET',
+                          'KRUN_RUNTIME_TOKEN', 'KRUN_MANAGEMENT_TOKEN', 'KRUN_WORKERS_SECRETS_KEY']],
+  'securityContext': secure(),
+  'volumeMounts': [{'name': 'config', 'mountPath': '/config', 'readOnly': True},
+                   {'name': 'workdir', 'mountPath': '/workdir'}],
+  'resources': limits('1Gi', '128Mi'),
+  'readinessProbe': {'exec': {'command': ['curl', '-fsS', 'http://127.0.0.1:9000/api/healthz']},
+                     'periodSeconds': 5}},
+ # The control plane is reached through kubectl port-forward. Only the
+ # authenticated Runtime API is forwarded onto the Pod network.
+ {'name': 'runtime-api-forwarder', 'image': backend_image, 'imagePullPolicy': 'Never',
+  'command': ['socat', 'TCP4-LISTEN:9001,reuseaddr,fork', 'TCP4:127.0.0.1:9002'],
+  'securityContext': secure(),
+  'resources': limits('64Mi', '16Mi'),
+  'readinessProbe': {'tcpSocket': {'port': 9001}, 'periodSeconds': 5}},
+], serviceAccountName='workers-control', automountServiceAccountToken=True,
+ volumes=[{'name': 'config', 'configMap': {'name': 'control-config'}},
+          {'name': 'workdir', 'emptyDir': {}}],
+ terminationGracePeriodSeconds=10)
+service('backend', [9001])
 # The trusted runtime signs configuration reads against the fixture MinIO.
 # User Workers have no access to its storage bindings. workerd's network
 # allow-list takes CIDR blocks only (host:port is rejected at startup), so it
@@ -253,7 +280,7 @@ def tcp(port):return {'protocol':'TCP','port':port}
 def policy(name,labels,ingress=None,egress=None):items.append(resource('NetworkPolicy',name,apiVersion='networking.k8s.io/v1',spec={'podSelector':{'matchLabels':labels},'policyTypes':['Ingress','Egress'],'ingress':ingress or [],'egress':egress or []}))
 policy('deny',{})
 policy('dns',{},egress=[{'to':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kube-system'}},'podSelector':{'matchLabels':{'k8s-app':'kube-dns'}}}],'ports':[{'protocol':'UDP','port':53},tcp(53)]}])
-policy('backend',{'app':'backend'},ingress=[{'from':[selector('tester')],'ports':[tcp(9000)]},{'from':[{'podSelector':{'matchExpressions':[{'key':'role','operator':'In','values':['krun-runtime','krun-validator']}]}}],'ports':[tcp(9001)]}],egress=[{'to':[selector('postgres')],'ports':[tcp(5432)]},{'to':[selector('minio')],'ports':[tcp(9000)]},{'to':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}},'podSelector':{'matchLabels':{'gateway.networking.k8s.io/gateway-name':'workers-mvp'}}}],'ports':[tcp(8080)]},{'to':[{'podSelector':{'matchExpressions':[{'key':'role','operator':'In','values':['krun-runtime','krun-validator']}]}}],'ports':[tcp(8083)]},{'to':[{'ipBlock':{'cidr':ip+('/32' if ':' not in ip else '/128')}} for ip in api_ips],'ports':[tcp(443),tcp(6443)]}])
+policy('backend',{'app':'backend'},ingress=[{'from':[{'podSelector':{'matchExpressions':[{'key':'role','operator':'In','values':['krun-runtime','krun-validator']}]}}],'ports':[tcp(9001)]}],egress=[{'to':[selector('postgres')],'ports':[tcp(5432)]},{'to':[selector('minio')],'ports':[tcp(9000)]},{'to':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}},'podSelector':{'matchLabels':{'gateway.networking.k8s.io/gateway-name':'workers-mvp'}}}],'ports':[tcp(8080)]},{'to':[{'podSelector':{'matchExpressions':[{'key':'role','operator':'In','values':['krun-runtime','krun-validator']}]}}],'ports':[tcp(8083)]},{'to':[{'ipBlock':{'cidr':ip+('/32' if ':' not in ip else '/128')}} for ip in api_ips],'ports':[tcp(443),tcp(6443)]}])
 # Only the control plane fetches repositories. A builder with package-lock
 # dependencies may additionally reach the single configured npm registry.
 repository_ips=set()
@@ -282,7 +309,7 @@ policy('minio',{'app':'minio'},ingress=[{'from':[selector('backend'),selector('k
 policy('builder',{'app':'krun-builder'},egress=[{'to':[selector('minio')],'ports':[tcp(9000)]}])
 policy('runtime',{'role':'krun-runtime'},ingress=[{'from':gw_selector,'ports':[tcp(8081)]},{'from':[selector('backend')],'ports':[tcp(8083)]}],egress=[{'to':[selector('backend')],'ports':[tcp(9001)]},{'to':[selector('minio')],'ports':[tcp(9000)]}])
 policy('validator',{'role':'krun-validator'},ingress=[{'from':[selector('backend')],'ports':[tcp(8083)]}],egress=[{'to':[selector('backend')],'ports':[tcp(9001)]},{'to':[selector('minio')],'ports':[tcp(9000)]}])
-policy('tester',{'app':'tester'},egress=[{'to':[selector('backend')],'ports':[tcp(9000)]},{'to':[selector('minio')],'ports':[tcp(9000)]},{'to':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}}}],'ports':[tcp(8080)]}])
+policy('tester',{'app':'tester'},egress=[{'to':[selector('minio')],'ports':[tcp(9000)]},{'to':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}}}],'ports':[tcp(8080)]}])
 # Private instance: the only Gateway any private host may attach to.
 items.append({'apiVersion':'gateway.networking.k8s.io/v1','kind':'Gateway','metadata':{'name':'workers-mvp','namespace':'kgateway-system'},'spec':{'gatewayClassName':'kgateway','listeners':[{'name':'private','port':8080,'protocol':'HTTP','allowedRoutes':{'namespaces':{'from':'Selector','selector':{'matchLabels':{'lab':'krun-workers-mvp'}}}}}]}})
 # Public instance: a distinct proxy deployment. Isolation lives on this

@@ -85,7 +85,9 @@ make check-static-build
 # 先按 deploy/workers-kind/README.md 部署专用 kind 环境
 KUBECONFIG="$TEST_KUBECONFIG" KIND_CLUSTER_NAME="$TEST_CLUSTER" \
   node deploy/workers-kind/e2e.mjs
-# 将测试 Go 同源入口转发到本机；与 control-config 的 public_url 保持一致
+# 在单独终端转发同源入口，端口与 control-config 的 public_url 一致
+kubectl --kubeconfig "$TEST_KUBECONFIG" -n workers-mvp \
+  port-forward deployment/backend 4380:9000 --address=127.0.0.1
 KRUN_UI_ORIGIN=http://127.0.0.1:4380 npm run test:ui
 ```
 

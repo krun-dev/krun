@@ -305,7 +305,7 @@ func TestConfigurationGuardsAndSourceTombstones(t *testing.T) {
 	if c.Validate() == nil {
 		t.Fatal("development public_url must stay on loopback HTTP")
 	}
-	c = appconfig.Config{DB: "postgres://test-only/krun_test", Development: true, PublicURL: "http://127.0.0.1:8080", Listen: "0.0.0.0:9000", InternalListen: "0.0.0.0:9000"}
+	c = appconfig.Config{DB: "postgres://test-only/krun_test", Development: true, PublicURL: "http://127.0.0.1:8080", Listen: "127.0.0.1:9000", InternalListen: "127.0.0.1:9000"}
 	if c.Validate() == nil {
 		t.Fatal("internal_listen must differ from listen")
 	}

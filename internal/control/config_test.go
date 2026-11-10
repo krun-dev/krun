@@ -172,6 +172,7 @@ func TestYAMLServerExamples(t *testing.T) {
 	}
 	c.Development = true
 	c.Listen = "127.0.0.1:8080"
+	c.InternalListen = "127.0.0.1:8081"
 	c.PublicURL = "http://127.0.0.1:5173"
 	for i := range c.Providers {
 		c.Providers[i].Enabled = &enabled
