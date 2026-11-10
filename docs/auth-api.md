@@ -141,6 +141,7 @@ Key 范围和撤权检查逐请求生效。`/orgs/:org/models` 和 CLI `krun mod
 | GET /orgs/:org/permissions | S K | 当前主体在该组织 global 环境下的实际权限，返回 organization_id/actions/revision；要求 organization.read，无权或不存在统一 404 |
 | PATCH /orgs/:org | S | organization.update；name、allowed_sources |
 | GET /system/users | S K | system.user.read |
+| GET /system/inventory/{workers,buckets,api-keys} | S | `system.inventory.read`，跨组织查看元数据，含组织归属。支持 `q`、`limit`（默认 100，最大 200）、`after`（取自 `next_after`）；API Key 支持 `status=all\|active\|expired\|revoked`。不返回凭据或哈希，组织详情及对象操作沿用组织授权。 |
 | PATCH /system/users/:user | S | system.user.update；仅 active/disabled，增加 auth_version；最后管理员保护 |
 | POST /system/invitations | S | system.user.update；准确 source_id/subject |
 | GET /orgs/:org/members | S K | member.read |
@@ -168,7 +169,7 @@ Key 范围和撤权检查逐请求生效。`/orgs/:org/models` 和 CLI `krun mod
 
 JSON DTO 拒绝未知字段和重复键，正文上限 1 MiB。资源/组/Key/Assignment 的更新需要 expected_revision，不匹配 409。创建返回稳定随机 ID；删除后不会复用。名单、组织成员和组写入读取最新事实，禁止跨组织组/角色；错误的用户或资源不会被隐式创建。
 
-控制台依据组织权限接口显示菜单、概览快捷入口并限制页面访问；系统用户与全平台审计只在系统管理员的「平台管理」中显示。切换组织、完成修改或重新聚焦窗口时刷新权限，加载失败时关闭组织功能入口。页面权限仅用于界面显示，业务接口仍逐请求授权。
+控制台依据组织权限接口显示菜单、概览快捷入口并限制页面访问；「平台管理」仅对系统管理员开放，包含系统用户、全平台审计及跨组织的 Worker、Bucket 和 API Key 清单。管理员可以在平台管理中打开所属组织允许访问的 Worker 和 Bucket，详情和操作使用对应的组织接口。切换组织、完成修改或重新聚焦窗口时刷新权限，加载失败时关闭组织功能入口。页面权限仅用于界面显示，业务接口仍逐请求授权。
 
 主配置的 `organization_self_service` 控制自助创建，示例配置显式开启；省略或设为 `false` 时仅系统管理员可创建。API Key 不允许创建组织。创建者不会获得系统权限，也不会获得其他组织的权限。
 

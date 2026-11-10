@@ -67,18 +67,18 @@ import { EnvironmentSettings, Invocation } from "./workers/environment";
 
 export function WorkersPage({
   base,
-  system,
+  detail,
   canCreate,
   notify,
 }: {
   base: string;
-  system: boolean;
+  detail?: { id: string; back: () => void };
   canCreate: boolean;
   notify: (message: string) => void;
 }) {
   useTranslation();
   const [worker, setWorker] = useState(
-    () => new URLSearchParams(location.search).get("worker") || "",
+    () => detail?.id || new URLSearchParams(location.search).get("worker") || "",
   );
   const [detailError, setDetailError] = useState("");
   const [selected, setSelected] = useState<WorkerSummary | null>(null);
@@ -87,17 +87,13 @@ export function WorkersPage({
   const locator = useSuggestedShortName(name, 63);
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
-  const collection = useCollectionPage<WorkerSummary>(
-    base + "/workers",
-    !system && !worker,
-    revision,
-  );
+  const collection = useCollectionPage<WorkerSummary>(base + "/workers", !worker, revision);
   const workers = collection.items;
   const error = worker ? detailError : collection.error;
   const [networkProfiles, setNetworkProfiles] = useState<WorkerNetworkProfile[]>([]);
   const [networkProfile, setNetworkProfile] = useState("");
   useEffect(() => {
-    if (system || !canCreate) {
+    if (!canCreate) {
       return;
     }
     const c = new AbortController();
@@ -121,11 +117,11 @@ export function WorkersPage({
         setNetworkProfiles([]);
       });
     return () => c.abort();
-  }, [base, system, canCreate]);
+  }, [base, canCreate]);
   useEffect(() => {
     setSelected(null);
     setDetailError("");
-    if (system || !worker) {
+    if (!worker) {
       return;
     }
     const controller = new AbortController();
@@ -149,8 +145,9 @@ export function WorkersPage({
         }
       });
     return () => controller.abort();
-  }, [base, system, worker, revision]);
+  }, [base, worker, revision]);
   useEffect(() => {
+    if (detail) return;
     const onPopState = () => {
       const id = new URLSearchParams(location.search).get("worker") || "";
       setWorker(id);
@@ -158,8 +155,12 @@ export function WorkersPage({
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, []);
+  }, [detail]);
   function openWorker(id: string) {
+    if (detail && !id) {
+      detail.back();
+      return;
+    }
     const url = new URL(location.href);
     url.searchParams.set("page", "workers");
     url.searchParams.set("workspace", base.split("/").at(-1) || "");
@@ -171,13 +172,6 @@ export function WorkersPage({
     setWorker(id);
     if (!id) setRevision((v) => v + 1);
   }
-  if (system)
-    return (
-      <Empty
-        title={t("请切换到组织空间")}
-        description={t("选择组织后，创建 Worker 并构建发布。")}
-      />
-    );
   return (
     <>
       <PageHeader
@@ -185,7 +179,7 @@ export function WorkersPage({
         title={t("Workers")}
         description={t("构建代码，选择环境发布，并查看实际运行结果。")}
         action={
-          canCreate ? (
+          canCreate && !detail ? (
             <Button
               onClick={() => {
                 setNetworkProfile(

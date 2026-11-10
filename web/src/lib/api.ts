@@ -146,6 +146,8 @@ export type APIKey = {
   id: string;
   name: string;
   owner_user_id: string;
+  organization_id?: string;
+  organization_name?: string;
   prefix: string;
   revoked: boolean;
   expires_at: string | null;

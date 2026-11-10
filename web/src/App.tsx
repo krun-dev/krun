@@ -93,6 +93,7 @@ const BucketsPage = lazy(() =>
     default: module.BucketsPage,
   })),
 );
+const ResourceInventoryPage = lazy(() => import("@/components/resource-inventory"));
 const RepositoryAuthorizations = lazy(() => import("@/components/repository-authorizations"));
 const KeysPage = lazy(() =>
   import("@/components/keys").then((module) => ({ default: module.KeysPage })),
@@ -119,6 +120,8 @@ const adminNavigation: { id: Section; name: string }[] = [
   { id: "orgs", name: "组织目录" },
   { id: "users", name: "系统用户" },
   { id: "audit", name: "全平台审计" },
+  { id: "workers", name: "全平台 Workers" },
+  { id: "buckets", name: "全平台 Bucket" },
   { id: "keys", name: "全平台 API 密钥" },
 ];
 
@@ -177,6 +180,24 @@ export default function App() {
     () => new URLSearchParams(window.location.search).get("view") === "system",
   );
   const system = systemView && Boolean(me?.system_admin);
+  const [inventoryDetail, setInventoryDetail] = useState(() => {
+    const params = new URLSearchParams(location.search);
+    const section = params.get("page");
+    const organization = params.get("inventory_org");
+    const id = params.get("inventory_resource");
+    if (
+      params.get("view") === "system" &&
+      organization &&
+      id &&
+      (section === "workers" || section === "buckets")
+    ) {
+      return { section, organization, id };
+    }
+    return null;
+  });
+  const selection = system && inventoryDetail?.section === section ? inventoryDetail : null;
+  const inventoryOrg = orgs.find((organization) => organization.id === selection?.organization);
+  const closeInventoryDetail = useCallback(() => setInventoryDetail(null), []);
   const [permissions, setPermissions] = useState<OrganizationPermissions | null>(null);
   const [permissionsError, setPermissionsError] = useState("");
   const [orgCatalog, setOrgCatalog] = useState<Organization[]>([]);
@@ -187,6 +208,7 @@ export default function App() {
   const orgShortName = useSuggestedShortName(orgName, 32);
   const org = orgs.find((organization) => organization.id === scope);
   const orgReference = org?.short_name || scope;
+  const permissionOrg = system ? inventoryOrg : org;
   const oauthLogin =
     new URLSearchParams(window.location.search).has("oauth") ||
     new URLSearchParams(window.location.search).has("oauth_device");
@@ -206,6 +228,7 @@ export default function App() {
       setOrganizationsError("");
       setPermissions(null);
       setSystemView(false);
+      setInventoryDetail(null);
       setMenu(false);
       setOrgDialog(false);
       setSaving(false);
@@ -237,6 +260,19 @@ export default function App() {
     } else {
       url.searchParams.delete("view");
     }
+    if (!selection && url.searchParams.has("inventory_resource")) {
+      for (const parameter of [
+        "inventory_org",
+        "inventory_resource",
+        "environment",
+        "worker_tab",
+        "repository_pick",
+        "configuration",
+        "prefix",
+      ]) {
+        url.searchParams.delete(parameter);
+      }
+    }
     if (section === "overview") url.searchParams.delete("page");
     else url.searchParams.set("page", section);
     if (section !== "workers") {
@@ -252,7 +288,7 @@ export default function App() {
     if (scope) url.searchParams.set("workspace", orgReference);
     else url.searchParams.delete("workspace");
     if (url.toString() !== location.href) history.replaceState(null, "", url);
-  }, [section, orgReference, system, me, oauthLogin, joining]);
+  }, [section, orgReference, system, selection, me, oauthLogin, joining]);
   useEffect(() => {
     let active = true;
     Promise.all([
@@ -318,16 +354,16 @@ export default function App() {
   }, [reload]);
   useEffect(() => {
     setPermissionsError("");
-    if (!me || !org || system || oauthLogin) {
+    if (!me || !permissionOrg || oauthLogin) {
       setPermissions(null);
       return;
     }
     // Revalidate the same organization without unmounting its page and losing
     // unsaved forms. A different organization remains closed until its reply.
-    setPermissions((current) => (current?.organization_id === org.id ? current : null));
+    setPermissions((current) => (current?.organization_id === permissionOrg.id ? current : null));
     const controller = new AbortController();
     api<OrganizationPermissions>(
-      `/api/v1/orgs/${encodeURIComponent(org.short_name || org.id)}/permissions`,
+      `/api/v1/orgs/${encodeURIComponent(permissionOrg.short_name || permissionOrg.id)}/permissions`,
       "GET",
       undefined,
       controller.signal,
@@ -344,7 +380,15 @@ export default function App() {
         }
       });
     return () => controller.abort();
-  }, [me?.user.user_id, me?.revision, org?.id, org?.short_name, system, refresh, oauthLogin]);
+  }, [
+    me?.user.user_id,
+    me?.revision,
+    permissionOrg?.id,
+    permissionOrg?.short_name,
+    system,
+    refresh,
+    oauthLogin,
+  ]);
   const canOpen = (page: Section) =>
     (page !== "git-authorizations" || me?.workers_configured !== false) &&
     canOpenSection(
@@ -473,6 +517,13 @@ export default function App() {
       </Suspense>
     );
   const base = system ? "/api/v1/system" : `/api/v1/orgs/${encodeURIComponent(orgReference)}`;
+  const resourceBase = inventoryOrg
+    ? `/api/v1/orgs/${encodeURIComponent(inventoryOrg.short_name || inventoryOrg.id)}`
+    : base;
+  const detailNavigation = selection ? { id: selection.id, back: closeInventoryDetail } : undefined;
+  const canUseResource =
+    !selection ||
+    (inventoryOrg && canOpenSection(section, false, false, inventoryOrg.id, permissions));
   return (
     <div className="min-h-screen lg:pl-[232px]">
       <aside
@@ -491,6 +542,7 @@ export default function App() {
             onChange={(v) => {
               setScope(v);
               if (system) {
+                closeInventoryDetail();
                 setSystemView(false);
                 setSection("overview");
               }
@@ -508,6 +560,7 @@ export default function App() {
                 <button
                   key={n.id}
                   onClick={() => {
+                    closeInventoryDetail();
                     setSection(n.id);
                     setMenu(false);
                   }}
@@ -688,6 +741,7 @@ export default function App() {
               className="gap-1.5 px-2.5 text-[12px]"
               aria-label={system ? t("返回组织") : t("平台管理")}
               onClick={() => {
+                closeInventoryDetail();
                 setSystemView((v) => !v);
                 setSection(system ? "overview" : "orgs");
               }}
@@ -736,6 +790,11 @@ export default function App() {
             message={notice}
             close={() => setNotice("")}
           />
+        )}
+        {selection && inventoryOrg && (
+          <p className="mb-4 text-sm text-muted-foreground">
+            {t("所属组织")} · {inventoryOrg.name}
+          </p>
         )}
         <Suspense fallback={<Loading />}>
           {organizationsError || (permissionsError && !system) ? (
@@ -927,7 +986,8 @@ export default function App() {
             />
           ) : section === "keys" ? (
             <KeysPage
-              key={scope}
+              key={base}
+              organizations={orgs}
               base={base}
               scope={scope}
               system={system}
@@ -935,26 +995,62 @@ export default function App() {
               refresh={refresh}
               reload={reload}
             />
+          ) : system && !selection && (section === "workers" || section === "buckets") ? (
+            <ResourceInventoryPage
+              key={section}
+              section={section}
+              organizations={orgs}
+              workspace={orgReference}
+              refresh={refresh}
+            />
+          ) : selection &&
+            (!inventoryOrg ||
+              permissionsError ||
+              (permissions?.organization_id === inventoryOrg.id && !canUseResource)) ? (
+            <Empty
+              title={t("资源不存在或无权访问。")}
+              description={permissionsError || ""}
+              action={
+                <Button
+                  variant="outline"
+                  onClick={closeInventoryDetail}
+                >
+                  {t("返回全平台列表")}
+                </Button>
+              }
+            />
+          ) : selection && !canUseResource ? (
+            <Loading />
           ) : section === "workers" ? (
             me.workers_configured === false ? (
               <Empty
                 title={t("Workers 未配置")}
                 description={t("请在控制面配置 workers: 段并重启服务，然后刷新此页面。")}
+                action={
+                  selection && (
+                    <Button
+                      variant="outline"
+                      onClick={closeInventoryDetail}
+                    >
+                      {t("返回全平台列表")}
+                    </Button>
+                  )
+                }
               />
             ) : (
               <WorkersPage
-                key={`${scope}:${workersNavigation}`}
-                base={base}
-                system={system}
+                key={`${resourceBase}:${selection?.id || ""}:${workersNavigation}`}
+                base={resourceBase}
+                detail={detailNavigation}
                 canCreate={permissions?.actions["worker.create"] === true}
                 notify={notify}
               />
             )
           ) : section === "buckets" ? (
             <BucketsPage
-              key={scope}
-              base={base}
-              system={system}
+              key={`${resourceBase}:${selection?.id || ""}`}
+              base={resourceBase}
+              detail={detailNavigation}
               canCreate={permissions?.actions["storage.bucket.create"] === true}
               canUpdate={permissions?.actions["storage.bucket.update"] === true}
               canWrite={permissions?.actions["storage.object.write"] === true}

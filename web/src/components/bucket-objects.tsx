@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, Download, File, Folder, RefreshCw, Upload } from "lucide-react";
 import { api } from "@/lib/api";
 import { errorMessage, t } from "@/lib/i18n";
@@ -34,6 +34,7 @@ export function BucketObjects({
   bucket,
   canWrite,
   canDelete,
+  statusAction,
   back,
   notify,
 }: {
@@ -41,6 +42,7 @@ export function BucketObjects({
   bucket: WorkerBucket;
   canWrite: boolean;
   canDelete: boolean;
+  statusAction?: (transferring: boolean) => ReactNode;
   back: () => void;
   notify: (message: string) => void;
 }) {
@@ -210,15 +212,18 @@ export function BucketObjects({
         title={bucket.name}
         description={t("上传下载直连存储。引用文件时保存桶和对象 key，短期链接到期后需重新获取。")}
         action={
-          canWrite ? (
-            <Button
-              disabled={Boolean(transfer)}
-              onClick={() => input.current?.click()}
-            >
-              <Upload size={16} />
-              {t("上传文件")}
-            </Button>
-          ) : undefined
+          <div className="flex flex-wrap items-center gap-2">
+            {statusAction?.(Boolean(transfer))}
+            {canWrite && (
+              <Button
+                disabled={Boolean(transfer)}
+                onClick={() => input.current?.click()}
+              >
+                <Upload size={16} />
+                {t("上传文件")}
+              </Button>
+            )}
+          </div>
         }
       />
       <p className="mb-4 text-xs text-muted-foreground">

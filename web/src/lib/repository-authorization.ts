@@ -5,6 +5,7 @@ const returnKey = "krun.repository-return";
 type RepositoryReturn = {
   key: string;
   workspace: string;
+  platformWorkspace?: string;
   page: "workers" | "git-authorizations";
   worker: string;
   environment: string;
@@ -20,11 +21,17 @@ export async function connectRepository(organizationBase: string, provider: stri
     "POST",
   );
   const params = new URLSearchParams(location.search);
+  const inventoryOrg =
+    params.get("view") === "system" && params.get("page") === "workers"
+      ? params.get("inventory_org")
+      : null;
+  const workspace = params.get("workspace") || "";
   const target: RepositoryReturn = {
     key: result.resume_key,
-    workspace: params.get("workspace") || "",
+    workspace: inventoryOrg || workspace,
+    platformWorkspace: inventoryOrg ? workspace : undefined,
     page: params.get("page") === "git-authorizations" ? "git-authorizations" : "workers",
-    worker: params.get("worker") || "",
+    worker: params.get(inventoryOrg ? "inventory_resource" : "worker") || "",
     environment: params.get("environment") || "",
   };
   try {
@@ -52,7 +59,16 @@ export function restoreRepositoryReturn() {
         );
         if (target.workspace) url.searchParams.set("workspace", target.workspace);
         if (target.page === "workers" && target.worker) {
-          url.searchParams.set("worker", target.worker);
+          if (target.platformWorkspace !== undefined) {
+            if (target.platformWorkspace)
+              url.searchParams.set("workspace", target.platformWorkspace);
+            else url.searchParams.delete("workspace");
+            url.searchParams.set("view", "system");
+            url.searchParams.set("inventory_org", target.workspace);
+            url.searchParams.set("inventory_resource", target.worker);
+          } else {
+            url.searchParams.set("worker", target.worker);
+          }
           url.searchParams.set("worker_tab", "source");
           if (target.environment) url.searchParams.set("environment", target.environment);
           const provider = url.searchParams.get("repository_provider");

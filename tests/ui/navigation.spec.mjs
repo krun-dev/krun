@@ -490,3 +490,225 @@ test("focus revalidation preserves unsaved forms when permissions are unchanged"
   await refreshed;
   await expect(input).toHaveValue("unsaved-worker");
 });
+
+test("system administration lists Workers, buckets, and keys across organizations", async ({
+  page,
+}) => {
+  const { requests } = await fixture(page, {
+    systemAdmin: true,
+    orgs: [organization("org-a")],
+  });
+  const workerA = {
+    id: "worker-a",
+    name: "Worker A",
+    organization_id: "org-a",
+    organization_name: "Organization A",
+  };
+  const workerB = {
+    id: "worker-b",
+    name: "Worker B",
+    organization_id: "org-b",
+    organization_name: "Organization B",
+  };
+  await page.route("**/api/v1/system/inventory/workers?*", (route) => {
+    const query = new URL(route.request().url()).searchParams;
+    return route.fulfill({
+      json:
+        query.has("after") && query.get("after") !== ""
+          ? { items: [workerB] }
+          : { items: [workerA], next_after: workerA.id },
+    });
+  });
+  await page.route("**/api/v1/system/inventory/buckets?*", (route) =>
+    route.fulfill({
+      json: {
+        items: [
+          {
+            id: "bucket-b",
+            name: "backup",
+            organization_id: "org-b",
+            organization_name: "Organization B",
+            enabled: false,
+          },
+        ],
+      },
+    }),
+  );
+  await page.route("**/api/v1/system/inventory/api-keys?*", (route) =>
+    route.fulfill({
+      json: {
+        items: [
+          {
+            id: "key-b",
+            name: "Backup key",
+            owner_user_id: "owner-b",
+            organization_id: "org-b",
+            organization_name: "Organization B",
+            prefix: "krun_key_example",
+            revoked: false,
+            expires_at: null,
+            policy_revision: 1,
+            policy: { schema_version: 1, statements: [] },
+          },
+        ],
+      },
+    }),
+  );
+
+  await page.goto(origin + "/?view=system&page=workers");
+  await expect(page.getByRole("heading", { name: "全平台 Workers" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Worker A" })).toHaveAttribute(
+    "href",
+    "/?view=system&page=workers&inventory_org=org-a&inventory_resource=worker-a&workspace=org-a",
+  );
+  await page.getByRole("button", { name: "下一页" }).click();
+  await expect(page.getByRole("row", { name: /Worker B.*Organization B/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Worker B" })).toHaveCount(0);
+
+  const nav = page.locator("aside nav");
+  await nav.getByRole("button", { name: "全平台 Bucket" }).click();
+  await expect(page.getByRole("row", { name: /backup.*Organization B.*已停用/ })).toBeVisible();
+  await nav.getByRole("button", { name: "全平台 API 密钥" }).click();
+  await expect(page.getByRole("row", { name: /Backup key.*Organization B/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "撤销", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "查看权限" }).click();
+  await expect(page.getByRole("dialog").getByText("owner-b")).toBeVisible();
+  expect(requests).not.toContain("/api/v1/system/api-keys");
+  await page.goto(
+    origin + "/?view=system&page=workers&inventory_org=org-b&inventory_resource=worker-b",
+  );
+  await expect(page.getByText("资源不存在或无权访问。")).toBeVisible();
+  await page.getByRole("button", { name: "返回全平台列表" }).click();
+  await expect(page.getByRole("heading", { name: "全平台 Workers" })).toBeVisible();
+  expect(requests.some((path) => path.startsWith("/api/v1/orgs/org-b/"))).toBe(false);
+});
+
+test("platform detail reuses Worker invocation and Bucket controls for the owning organization", async ({
+  page,
+}) => {
+  await fixture(page, {
+    systemAdmin: true,
+    orgs: [organization("org-current"), organization("org-owner")],
+    actions: {
+      "org-owner": {
+        ...admin,
+        "storage.bucket.update": true,
+        "storage.object.write": true,
+      },
+    },
+  });
+  const resource = { organization_id: "org-owner", organization_name: "Owning organization" };
+  const worker = { ...resource, id: "worker-owned", name: "Owned Worker" };
+  const bucket = {
+    ...resource,
+    id: "bucket-owned",
+    name: "owned-bucket",
+    enabled: false,
+    revision: 1,
+    created_at: "2026-01-01T00:00:00Z",
+  };
+  const base = "/api/v1/orgs/org-owner";
+  const workerBase = base + "/workers/" + worker.id;
+  const bucketBase = base + "/buckets/";
+  const calls = [];
+  await page.route(
+    (url) => url.pathname.startsWith("/api/v1/system/inventory/"),
+    (route) => {
+      const path = new URL(route.request().url()).pathname;
+      return route.fulfill({ json: { items: path.endsWith("/workers") ? [worker] : [bucket] } });
+    },
+  );
+  await page.route(
+    (url) => url.pathname.startsWith(base + "/"),
+    async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      let json;
+      switch (url.pathname) {
+        case base + "/workers":
+          expect(url.searchParams.get("worker")).toBe(worker.id);
+          json = { items: [worker] };
+          break;
+        case workerBase + "/domains":
+          json = { catalog: [], network_profile: {} };
+          break;
+        case workerBase + "/repository":
+          json = { source: null, revision: 1 };
+          break;
+        case workerBase + "/overview":
+          json = {
+            builds: [],
+            operations: [],
+            versions: {},
+            environments: [
+              {
+                environment: {
+                  name: "production",
+                  enabled: true,
+                  version_id: "version-owned",
+                  confirmed_version_id: "version-owned",
+                  deployment_revision: 1,
+                },
+                history: [],
+              },
+            ],
+          };
+          break;
+        case workerBase + "/environments/production/invoke":
+          expect(request.method()).toBe("POST");
+          calls.push(url.pathname);
+          json = { status: 200, body: "worker-response", headers: {}, truncated: false };
+          break;
+        case bucketBase + bucket.id:
+          json = bucket;
+          break;
+        case bucketBase + bucket.name:
+          expect(request.method()).toBe("PATCH");
+          expect(request.postDataJSON()).toEqual({ enabled: true, revision: 1 });
+          calls.push(url.pathname);
+          bucket.enabled = true;
+          bucket.revision = 2;
+          json = bucket;
+          break;
+        case bucketBase + bucket.name + "/objects":
+          json = {
+            objects: [],
+            delimited_prefixes: [],
+            truncated: false,
+            delivery_available: false,
+          };
+          break;
+        default:
+          return route.fallback();
+      }
+      await route.fulfill({ json });
+    },
+  );
+
+  await page.goto(origin + "/?view=system&page=workers&workspace=org-current");
+  await page.getByRole("link", { name: worker.name }).click();
+  await expect(page).toHaveURL(/view=system.*inventory_org=org-owner.*workspace=org-current/);
+  await expect(page.getByRole("heading", { name: worker.name })).toBeVisible();
+  await page.getByRole("tab", { name: "调用测试" }).click();
+  await page.getByRole("button", { name: "发送请求" }).click();
+  await expect(page.getByText("worker-response")).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("tab", { name: "调用测试" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.getByRole("button", { name: "返回Worker列表" }).click();
+  await expect(page.getByRole("heading", { name: "全平台 Workers" })).toBeVisible();
+  await expect(page).not.toHaveURL(/inventory_resource|worker_tab|environment/);
+
+  await page.locator("aside nav").getByRole("button", { name: "全平台 Bucket" }).click();
+  await page.getByRole("link", { name: bucket.name }).click();
+  await expect(page).toHaveURL(/view=system.*inventory_org=org-owner/);
+  await page.getByRole("button", { name: "启用", exact: true }).click();
+  await page.getByRole("dialog", { name: "启用桶" }).getByRole("button", { name: "确认" }).click();
+  await expect(page.locator("button").filter({ hasText: "上传文件" })).toBeVisible();
+  await expect(page.getByText("目录为空")).toBeVisible();
+  await page.getByRole("button", { name: "返回桶列表" }).click();
+  await expect(page.getByRole("heading", { name: "全平台 Bucket" })).toBeVisible();
+  expect(calls).toEqual([workerBase + "/environments/production/invoke", bucketBase + bucket.name]);
+});

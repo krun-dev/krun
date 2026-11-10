@@ -1030,5 +1030,17 @@
   "私有": "Private",
   "公开": "Public",
   "加载更多": "Load more",
-  "当前绑定的仓库授权已失效。请由授权人重新授权，或使用你的授权重新绑定仓库。": "The bound repository authorization is no longer valid. Ask the account owner to reauthorize, or bind the repository using your own authorization."
+  "当前绑定的仓库授权已失效。请由授权人重新授权，或使用你的授权重新绑定仓库。": "The bound repository authorization is no longer valid. Ask the account owner to reauthorize, or bind the repository using your own authorization.",
+  "全平台 Workers": "Platform Workers",
+  "全平台 Bucket": "Platform buckets",
+  "查看所有组织的 Worker。": "Browse Workers across all organizations.",
+  "查看所有组织的对象存储桶。": "Browse object storage buckets across all organizations.",
+  "搜索名称、ID 或组织": "Search names, IDs, or organizations",
+  "搜索名称、前缀、ID 或组织": "Search names, prefixes, IDs, or organizations",
+  "没有匹配的 Worker": "No matching Workers",
+  "没有匹配的桶": "No matching buckets",
+  "所属组织": "Organization",
+  "未绑定组织": "No organization",
+  "资源不存在或无权访问。": "Resource not found or access denied.",
+  "返回全平台列表": "Back to platform inventory"
 }
