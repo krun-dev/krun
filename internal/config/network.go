@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	slices "slices"
 	"sort"
 
@@ -31,21 +32,29 @@ func NormalizeWorkerAccess(values []string) ([]string, error) {
 func NormalizeWorkerEgress(pool *WorkerRuntimePool) error {
 	if pool.PrivateEgress == "" {
 		pool.PrivateEgress = "deny"
-		if RuntimePoolHasAccess(*pool, "private") {
-			pool.PrivateEgress = "direct"
-		}
 	}
 	if pool.PublicEgress == "" {
 		pool.PublicEgress = "deny"
-		if RuntimePoolHasAccess(*pool, "public") {
-			pool.PublicEgress = "direct"
-		}
 	}
 	if pool.PrivateEgress != "deny" && pool.PrivateEgress != "direct" {
 		return fmt.Errorf("private_egress must be deny or direct")
 	}
 	if pool.PublicEgress != "deny" && pool.PublicEgress != "direct" && pool.PublicEgress != "connect-proxy" {
 		return fmt.Errorf("public_egress must be deny, direct or connect-proxy")
+	}
+	return nil
+}
+
+func (c *WorkersConfig) validateProtectedEgressCIDRs() error {
+	if len(c.ProtectedEgressCIDRs) > 64 {
+		return fmt.Errorf("Workers protected_egress_cidrs allows at most 64 entries")
+	}
+	for i, cidr := range c.ProtectedEgressCIDRs {
+		prefix, err := netip.ParsePrefix(cidr)
+		if err != nil || prefix.Addr().Is4In6() {
+			return fmt.Errorf("invalid Workers protected_egress_cidrs entry at index %d", i)
+		}
+		c.ProtectedEgressCIDRs[i] = prefix.Masked().String()
 	}
 	return nil
 }

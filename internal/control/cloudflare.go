@@ -257,6 +257,13 @@ func isProblem(err error, code string) bool {
 
 func (s *Server) cloudflareRoutes(m *http.ServeMux) {
 	base := cfPrefix + "/accounts/{account}"
+	hyperdrive := base + "/hyperdrive/configs"
+	for _, method := range []string{"GET", "POST"} {
+		m.HandleFunc(method+" "+hyperdrive, s.cfProtected(s.cfHyperdrive))
+	}
+	for _, method := range []string{"GET", "PATCH", "DELETE"} {
+		m.HandleFunc(method+" "+hyperdrive+"/{hyperdrive}", s.cfProtected(s.cfHyperdrive))
+	}
 	m.HandleFunc("GET "+base+"/r2/buckets", s.cfProtected(s.cfBucketList))
 	m.HandleFunc("POST "+base+"/r2/buckets", s.cfProtected(s.cfBucketCreate))
 	m.HandleFunc("GET "+base+"/r2/buckets/{bucket}", s.cfProtected(s.cfBucketList))

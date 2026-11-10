@@ -29,7 +29,7 @@ func TestCloudflareJSONAndMetadataBindings(t *testing.T) {
 		app := server.workerApplication(nil)
 		app.Require = func(*domain.State, Principal, string, Target) error { return nil }
 		ref := workerapp.WorkerRef{Organization: "org-a", Worker: "svc-a", Environment: "production"}
-		if e := app.StageBindings(st, p, ref, in); e != nil {
+		if e := app.StageBindings(t.Context(), st, p, ref, in); e != nil {
 			return e
 		}
 		env := st.Workers.Workers["svc-a"].Environments["production"]
@@ -145,7 +145,7 @@ func TestCloudflareKeepVariableTypes(t *testing.T) {
 				st.Workers.Workers["svc-a"] = service
 				app := server.workerApplication(nil)
 				app.Require = func(*domain.State, Principal, string, Target) error { return nil }
-				err := app.StageBindings(st, Principal{User: domain.User{ID: "admin", Source: "local", Status: "active"}, Kind: "cli_session"}, workerapp.WorkerRef{Organization: "org-a", Worker: "svc-a", Environment: "production"}, input)
+				err := app.StageBindings(t.Context(), st, Principal{User: domain.User{ID: "admin", Source: "local", Status: "active"}, Kind: "cli_session"}, workerapp.WorkerRef{Organization: "org-a", Worker: "svc-a", Environment: "production"}, input)
 				if err != nil {
 					return err
 				}

@@ -1,5 +1,5 @@
 ---
-title: R2 + Workers
+title: Workers + R2
 description: 部署拾光照片墙和拾物文件工作台，通过 Workers 的 R2 binding 读写对象存储。
 ---
 

@@ -93,6 +93,7 @@ const BucketsPage = lazy(() =>
     default: module.BucketsPage,
   })),
 );
+const HyperdrivePage = lazy(() => import("@/components/hyperdrive"));
 const SystemConfigPage = lazy(() => import("@/components/system-config"));
 const ResourceInventoryPage = lazy(() => import("@/components/resource-inventory"));
 const RepositoryAuthorizations = lazy(() => import("@/components/repository-authorizations"));
@@ -109,6 +110,7 @@ const navigation: {
   { id: "overview", name: "概览", icon: LayoutDashboard, group: "" },
   { id: "workers", name: "Workers", icon: Layers3, group: "计算服务" },
   { id: "buckets", name: "对象存储", icon: Database, group: "存储服务" },
+  { id: "hyperdrive", name: "Hyperdrive", icon: Database, group: "数据库" },
   { id: "members", name: "组织成员", icon: Users, group: "组织管理" },
   { id: "groups", name: "用户组", icon: UsersRound, group: "组织管理" },
   { id: "roles", name: "角色授权", icon: ShieldCheck, group: "组织管理" },
@@ -170,6 +172,7 @@ export default function App() {
         "workers",
         "buckets",
         "system-config",
+        "hyperdrive",
       ];
       return known.includes(page as Section) ? (page as Section) : "overview";
     }),
@@ -394,6 +397,7 @@ export default function App() {
   ]);
   const canOpen = (page: Section) =>
     (page !== "git-authorizations" || me?.workers_configured !== false) &&
+    (page !== "hyperdrive" || me?.hyperdrive_configured === true) &&
     canOpenSection(
       page,
       system,
@@ -593,6 +597,7 @@ export default function App() {
                 ...navigation.filter((n) => n.group === ""),
                 ...navigation.filter((n) => n.group === "计算服务"),
                 ...navigation.filter((n) => n.group === "存储服务"),
+                ...navigation.filter((n) => n.group === "数据库"),
                 ...navigation.filter((n) => n.group === "组织管理"),
                 ...navigation.filter((n) => n.group === "个人设置"),
               ]
@@ -1060,6 +1065,13 @@ export default function App() {
               canUpdate={permissions?.actions["storage.bucket.update"] === true}
               canWrite={permissions?.actions["storage.object.write"] === true}
               canDelete={permissions?.actions["storage.object.delete"] === true}
+              notify={notify}
+            />
+          ) : section === "hyperdrive" ? (
+            <HyperdrivePage
+              key={resourceBase}
+              base={resourceBase}
+              canManage={permissions?.actions["worker.create"] === true}
               notify={notify}
             />
           ) : section === "check" ? (

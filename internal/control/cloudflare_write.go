@@ -280,7 +280,7 @@ func (s *Server) cfPreviewBase(st *State, p Principal, r *http.Request) (any, in
 	if err != nil {
 		return nil, 0, err
 	}
-	if err = s.workerApplication(r).StageBindings(st, p, ref, input); err != nil {
+	if err = s.workerApplication(r).StageBindings(r.Context(), st, p, ref, input); err != nil {
 		return nil, 0, err
 	}
 	return s.cfScriptDetails(st, p, r)

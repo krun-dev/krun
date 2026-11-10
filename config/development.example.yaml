@@ -26,6 +26,13 @@ providers:
   # local-first 隧道脚本使用 validator_pool: default，与独立 validator 的隧道配套。
   # 本地构建在同一 workers: 段设置 builder_mode: local，仅用于可信仓库。
   # runtime_api_url: https://console.example.com # 可选；空值使用现有 Service/本地控制面地址。
+  # protected_egress_cidrs: [] # 禁止业务访问的部署侧地址段。
+  # hyperdrive:
+  #   listen: ${KRUN_HYPERDRIVE_LISTEN} # 代理专用 IP:port，与 HTTP 监听地址隔离。
+  #   address: ${KRUN_HYPERDRIVE_ADDRESS} # Worker 可解析的代理 DNS 名称:port。
+  #   tls_cert_file: ${KRUN_HYPERDRIVE_CERT_FILE}
+  #   tls_key_file: ${KRUN_HYPERDRIVE_KEY_FILE}
+  #   origin_ca_file: ${KRUN_HYPERDRIVE_ORIGIN_CA_FILE:-}
   # HTTPS origin 不带路径，由部署方维护 DNS、TLS 和 /api/internal/workers/* 路由。
   # 本地连接集群时在同一 workers: 段配置：
   # kubernetes_kubeconfig_file: /absolute/path/to/kubeconfig

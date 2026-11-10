@@ -75,11 +75,12 @@ type WorkerArtifact struct {
 }
 
 type WorkerEnvironment struct {
-	R2Bindings      map[string]WorkerR2Binding `json:"r2_buckets,omitempty"`
-	VersionMetadata string                     `json:"version_metadata,omitempty"`
-	AssetsBinding   string                     `json:"assets_binding,omitempty"`
-	Name            string                     `json:"name"`
-	Enabled         bool                       `json:"enabled"`
+	HyperdriveBindings map[string]string          `json:"hyperdrive_bindings,omitempty"`
+	R2Bindings         map[string]WorkerR2Binding `json:"r2_buckets,omitempty"`
+	VersionMetadata    string                     `json:"version_metadata,omitempty"`
+	AssetsBinding      string                     `json:"assets_binding,omitempty"`
+	Name               string                     `json:"name"`
+	Enabled            bool                       `json:"enabled"`
 	// Domains mirrors the worker-level selection, in catalog order. Routing
 	// decisions live on the worker; this copy keeps each environment row
 	// self-describing for projections and API responses.
@@ -143,6 +144,7 @@ type WorkerVersion struct {
 	Configuration      string                     `json:"configuration_id,omitempty"`
 	CreatedBy          string                     `json:"created_by"`
 	CreatedByName      string                     `json:"created_by_name"`
+	HyperdriveBindings map[string]string          `json:"hyperdrive_bindings,omitempty"`
 	R2Bindings         map[string]WorkerR2Binding `json:"r2_buckets,omitempty"`
 	VersionMetadata    string                     `json:"version_metadata,omitempty"`
 	AssetsBinding      string                     `json:"assets_binding,omitempty"`

@@ -11,7 +11,8 @@ export type Section =
   | "users"
   | "system-config"
   | "workers"
-  | "buckets";
+  | "buckets"
+  | "hyperdrive";
 
 export type OrganizationPermissions = {
   organization_id: string;
@@ -42,6 +43,7 @@ export function canOpenSection(
   switch (section) {
     case "git-authorizations":
     case "workers":
+    case "hyperdrive":
       return allowed("worker.list");
     case "buckets":
       return allowed("storage.object.read");

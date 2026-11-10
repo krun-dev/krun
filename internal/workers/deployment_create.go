@@ -91,6 +91,7 @@ func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, 
 		}
 		version = domain.WorkerVersion{
 			R2Bindings:         domain.CloneR2Bindings(current.R2Bindings),
+			HyperdriveBindings: cloneHyperdriveBindings(current.HyperdriveBindings),
 			VersionMetadata:    current.VersionMetadata,
 			AssetsBinding:      current.AssetsBinding,
 			Worker:             t.ID,

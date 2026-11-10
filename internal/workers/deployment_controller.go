@@ -126,6 +126,28 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 		if err != nil || status != 200 || !readyMatches || !readyUIDMatches {
 			return w.NoteOperation(ctx, op.ID, "Waiting for a runtime image supporting isolated validation")
 		}
+		if len(version.HyperdriveBindings) != 0 {
+			if w.ValidateHyperdrive == nil || (pool.PublicEgress != "direct" && pool.PrivateEgress != "direct") {
+				return w.FailOperation(ctx, op.ID, "Hyperdrive is unavailable in the serving pool")
+			}
+			if ready["hyperdrive_protocol"] != float64(1) {
+				return w.NoteOperation(ctx, op.ID, "Waiting for a runtime image supporting Hyperdrive")
+			}
+			for _, pod := range pods {
+				if role == "runtime" && pod.UID == candidate.UID {
+					continue
+				}
+				serving, status, err := w.Management(ctx, pool, pod, "", "/ready", nil)
+				if err != nil || status != 200 ||
+					serving["role"] != "runtime" || serving["pool"] != pool.ID ||
+					serving["pod_uid"] != pod.UID || serving["hyperdrive_protocol"] != float64(1) {
+					return w.NoteOperation(ctx, op.ID, "Waiting for all serving members to support Hyperdrive")
+				}
+			}
+			if w.ValidateHyperdrive(ctx, version, pool) != nil {
+				return w.FailOperation(ctx, op.ID, "Hyperdrive database is unavailable in the serving pool")
+			}
+		}
 		secrets, err := w.validationSecrets(ctx, version, pool.ID)
 		if err != nil {
 			return w.NoteOperation(ctx, op.ID, "Candidate secrets unavailable")
@@ -174,6 +196,15 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 		}
 		if WorkerMemberIDs(after) != WorkerMemberIDs(members) {
 			return w.NoteOperation(ctx, op.ID, "Validation membership changed; validating again")
+		}
+		if role == "validator" && len(version.HyperdriveBindings) != 0 {
+			serving, err := w.Kube.RuntimeMembers(ctx, pool.ID, pool.RuntimeService)
+			if err != nil {
+				return err
+			}
+			if WorkerMemberIDs(serving) != WorkerMemberIDs(pods) {
+				return w.NoteOperation(ctx, op.ID, "Serving membership changed; validating again")
+			}
 		}
 
 		actor := state.OperationPrivate[op.ID].Actor

@@ -80,6 +80,7 @@ export default defineConfig({
               ],
             },
             "guides/component-object-storage",
+            { label: "数据库", items: ["guides/workers-hyperdrive"] },
           ],
         },
         {
@@ -101,6 +102,7 @@ export default defineConfig({
           items: [
             "guides/worker-examples",
             "guides/examples-r2-workers",
+            "guides/examples-postgres-todo",
             "guides/examples-hono",
             "guides/examples-astro",
             "guides/examples-static-site",

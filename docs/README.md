@@ -55,6 +55,7 @@ KRUN_INTERNAL_DOCS_DIR=../docs-internal npm run docs:dev
 | Worker 构建、发布、回滚与内部 API | [后端](workers-backend.md) |
 | 控制台操作 | [控制台](workers-console.md) |
 | 资源池与 Network Profile | [资源池](workers-pools.md) |
+| 池级出网与 PostgreSQL 托管接入 | [Workers 出网](workers-egress.md) |
 | 域名、DNS/TLS 与共享路由 | [域名](workers-domains.md) |
 | 仓库连接与构建 | [仓库](workers-repositories.md) |
 | Cloudflare Workers API 与 Wrangler | [协议适配](cloudflare-api.md) |

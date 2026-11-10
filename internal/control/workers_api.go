@@ -29,6 +29,14 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	protect := func(sessionOnly bool, fn endpoint) http.HandlerFunc {
 		return protectWithBodyLimit(sessionOnly, apiJSONBodyMax, fn)
 	}
+	hyperdrive := "/api/v1/orgs/{org}/hyperdrive"
+	hyperdriveHandler := s.protectedWith(false, PartitionAll, 0, apiJSONBodyMax, s.workerHyperdrive)
+	for _, method := range []string{"GET", "POST"} {
+		m.HandleFunc(method+" "+hyperdrive, hyperdriveHandler)
+	}
+	for _, method := range []string{"GET", "PATCH", "DELETE"} {
+		m.HandleFunc(method+" "+hyperdrive+"/{hyperdrive}", hyperdriveHandler)
+	}
 	m.HandleFunc("GET /api/v1/orgs/{org}/buckets", protect(false, s.workerBucketList))
 	m.HandleFunc("GET /api/v1/orgs/{org}/buckets/{bucket}", protect(false, s.workerBucketGet))
 	m.HandleFunc("POST /api/v1/orgs/{org}/buckets", protect(false, s.workerBucketCreate))

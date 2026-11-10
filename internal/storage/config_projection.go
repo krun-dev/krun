@@ -130,7 +130,7 @@ func (s *Store) WorkerConfigState(ctx context.Context, ids []string) (*domain.St
 	rows, err = tx.Query(ctx, `SELECT rel.version_id, rel.org_id, rel.worker_id, rel.env_name,
 		rel.artifact_id, rel.profile, rel.archive_digest, rel.module_digest,
 		rel.compatibility_date, rel.compatibility_flags, rel.config_revision,
-		rel.variables, rel.secret_digest, rel.created_at, rel.version_metadata, rel.assets_binding, rel.tag, rel.message, rel.created_by, rel.created_by_name, rel.configuration_id
+		rel.variables, rel.secret_digest, rel.created_at, rel.version_metadata, rel.assets_binding, rel.tag, rel.message, rel.created_by, rel.created_by_name, rel.configuration_id, rel.hyperdrive_bindings
 		FROM krun_worker_versions rel
 		JOIN krun_worker_environments e ON (e.version_id=rel.version_id OR EXISTS(SELECT 1 FROM krun_worker_deployments d WHERE d.version_id=rel.version_id AND d.committed_at IS NOT NULL AND d.expires_at>now()))
 			AND e.worker_id=rel.worker_id AND e.env_name=rel.env_name

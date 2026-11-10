@@ -50,6 +50,7 @@ Runtime 配置分发和保留期。浏览器会话需要原有 CSRF 校验；CLI
 | 接口（相对于入口） | 行为 |
 | --- | --- |
 | `GET /accounts`、`GET /memberships`、`GET /user`、`GET /user/tokens/verify` | 可见组织、当前凭据状态 |
+| `GET/POST /accounts/{account}/hyperdrive/configs`、`GET/PATCH/DELETE .../configs/{id}` | PostgreSQL 托管配置管理 |
 | `GET /accounts/{account}/workers/subdomain` | Wrangler 所需的账户子域元数据 |
 | `GET /accounts/{account}/workers/scripts` | 已登记且有权读取的 Script |
 | `PUT /accounts/{account}/workers/scripts/{script}` | 上传已打包 ES modules，创建 Version 并部署 |
@@ -76,7 +77,7 @@ Version 固定代码、普通变量和 Secret 引用；只上传不会改变生�
 Previews Base 只在创建 Preview 时复制；不会覆盖已存在 Preview 或生产环境。
 固定部署地址沿用 krun 的 30 天保留期，删除目标环境或服务后失效。
 
-当前支持 `plain_text`、`json`、`secret_text`、`version_metadata`、`assets`，以及已打包 ESM、CommonJS 依赖、文本、数据、Wasm
+当前支持 `plain_text`、`json`、`secret_text`、`version_metadata`、`assets`、`hyperdrive`，以及已打包 ESM、CommonJS 依赖、文本、数据、Wasm
 和 source map 模块；主模块必须为 ESM。沿用 krun 的模块、变量、Secret、Preview 数量
 和请求大小限制。错误采用 Cloudflare envelope 和数字 code，底层仍执行 krun 权限。
 
@@ -143,3 +144,7 @@ Cloudflare 客户端读取版本仍得到标准 bindings 和 annotations，不�
 代码更新且绑定未变时保留已有命名配置的关联；Cloudflare 或原生 API 改变绑定后，
 下一版本不再沿用旧配置关联。Previews Base 仍只在创建 Preview 时复制，直接 Secrets
 API 的自动发布行为也保持不变。
+
+Hyperdrive 配置接口仅接受 PostgreSQL。原版 Wrangler 将 `--connection-string` 解析为
+源库字段后提交，响应只返回源库元数据。绑定使用配置 ID，部署后注入代理连接串。
+创建、绑定和密码轮换见 [PostgreSQL 托管接入](../user-docs/src/content/docs/guides/workers-hyperdrive.md)。

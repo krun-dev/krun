@@ -314,7 +314,26 @@ CREATE TABLE IF NOT EXISTS krun_worker_domains (
 	PRIMARY KEY (worker_id, domain_id)
 );
 
+CREATE TABLE IF NOT EXISTS krun_worker_hyperdrive_configs (
+ config_id text PRIMARY KEY,
+ org_id text NOT NULL,
+ name text NOT NULL,
+ host text NOT NULL,
+ port integer NOT NULL CHECK (port BETWEEN 1 AND 65535),
+ database_name text NOT NULL,
+ user_name text NOT NULL,
+ secret_id text NOT NULL,
+ key_version text NOT NULL,
+ value_digest text NOT NULL,
+ ciphertext bytea NOT NULL,
+ nonce bytea NOT NULL,
+ revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
+ created_at timestamptz NOT NULL,
+ UNIQUE(org_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS krun_worker_environments (
+ hyperdrive_bindings jsonb NOT NULL DEFAULT '{}'::jsonb,
  version_metadata text NOT NULL DEFAULT '',
  assets_binding text NOT NULL DEFAULT '',
 	worker_id           text NOT NULL,
@@ -455,6 +474,7 @@ CREATE TABLE IF NOT EXISTS krun_worker_configurations (
  name text NOT NULL CHECK (octet_length(name) BETWEEN 1 AND 100),
  message text NOT NULL DEFAULT '' CHECK (octet_length(message) <= 1000),
  variables jsonb NOT NULL DEFAULT '{}'::jsonb,
+ hyperdrive_bindings jsonb NOT NULL DEFAULT '{}'::jsonb,
  version_metadata text NOT NULL DEFAULT '',
  assets_binding text NOT NULL DEFAULT '',
  created_at timestamptz NOT NULL DEFAULT now()
@@ -481,6 +501,7 @@ CREATE TABLE IF NOT EXISTS krun_worker_versions (
  configuration_id text NOT NULL DEFAULT '',
  created_by text NOT NULL DEFAULT '',
  created_by_name text NOT NULL DEFAULT '',
+ hyperdrive_bindings jsonb NOT NULL DEFAULT '{}'::jsonb,
  version_metadata text NOT NULL DEFAULT '',
  assets_binding text NOT NULL DEFAULT '',
  tag text NOT NULL DEFAULT '',

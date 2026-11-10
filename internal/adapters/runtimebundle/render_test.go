@@ -65,12 +65,26 @@ func TestRenderedServingAndValidatorStartInRealWorkerd(t *testing.T) {
 			if validator {
 				cfg.RuntimeAPIURL = "https://runtime.example.test"
 			}
-			pool := config.WorkerRuntimePool{ID: "internal-a", Access: []string{"private"}}
+			cfg.ProtectedEgressCIDRs = []string{"192.0.2.0/24"}
+			cfg.Hyperdrive = &config.WorkerHyperdriveConfig{Listen: "127.0.0.2:6432"}
+			pool := config.WorkerRuntimePool{ID: "internal-a", Access: []string{"private"}, PublicEgress: "direct"}
 			text, err := Render(cfg, pool, strings.TrimPrefix(backend.URL, "http://"), []string{
 				"127.0.0.1/32",
 			}, validator)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if strings.Contains(text, `name = "PUBLIC_EGRESS"`) == validator {
+				t.Fatal("public egress must be available only in serving workerd")
+			}
+			if strings.Contains(text, `name = "HYPERDRIVE_EGRESS"`) == validator {
+				t.Fatal("database proxy egress must be available only in serving workerd")
+			}
+			if !validator && !strings.Contains(text, `allow = ["127.0.0.2/32","public"]`) {
+				t.Fatal("database proxy egress must allow only the dedicated proxy address and public destinations")
+			}
+			if !validator && !strings.Contains(text, `deny = ["192.0.2.0/24"]`) {
+				t.Fatal("public egress does not block deployment-owned addresses")
 			}
 			directory := t.TempDir()
 			for _, name := range []string{

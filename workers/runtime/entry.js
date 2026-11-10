@@ -1358,6 +1358,40 @@ for(const name of ${JSON.stringify(Object.keys(d.r2_buckets))}) {
         mainModule = "__krun_r2_entry__.mjs";
       }
 
+      const hyperdrive = Object.keys(d.hyperdrive_bindings || {});
+      if (hyperdrive.length) {
+        if (!validating && !env.HYPERDRIVE_EGRESS) {
+          throw new Error("Hyperdrive egress unavailable");
+        }
+        const connectionStrings = validating
+          ? {}
+          : await platform(env, "/versions/" + encodeURIComponent(d.id) + "/hyperdrive");
+        for (const name of hyperdrive) {
+          if (
+            !bindingName.test(name) ||
+            name.startsWith("KRUN_") ||
+            reservedBindings.has(name) ||
+            magicBindings.has(name) ||
+            Object.hasOwn(childEnv, name)
+          ) {
+            throw new Error("Hyperdrive binding name conflicts with environment");
+          }
+          const connectionString = validating
+            ? "postgresql://krun:validation@invalid.example:5432/krun?sslmode=verify-full"
+            : connectionStrings[name];
+          if (
+            typeof connectionString !== "string" ||
+            !connectionString.startsWith("postgresql://")
+          ) {
+            throw new Error("Hyperdrive binding unavailable");
+          }
+          Object.defineProperty(childEnv, name, {
+            value: { connectionString },
+            enumerable: true,
+          });
+        }
+      }
+
       if (d.version_metadata) {
         const name = d.version_metadata;
 
@@ -1410,7 +1444,11 @@ for(const name of ${JSON.stringify(Object.keys(d.r2_buckets))}) {
         mainModule,
         modules: loaded.modules,
         env: childEnv,
-        globalOutbound: null,
+        globalOutbound: validating
+          ? null
+          : hyperdrive.length
+            ? env.HYPERDRIVE_EGRESS
+            : (env.PUBLIC_EGRESS ?? null),
       };
     },
   );
@@ -1625,6 +1663,7 @@ export class Management extends WorkerEntrypoint {
           status: "ready",
           role: "validator",
           validation_protocol: 1,
+          hyperdrive_protocol: 1,
           pod_uid: this.env.POD_UID,
           pool: this.env.RUNTIME_POOL || "default",
         });
@@ -1638,6 +1677,7 @@ export class Management extends WorkerEntrypoint {
         status: "ready",
         role: "runtime",
         validation_protocol: 1,
+        hyperdrive_protocol: this.env.HYPERDRIVE_EGRESS ? 1 : 0,
         pod_uid: this.env.POD_UID,
         pool: this.env.RUNTIME_POOL || "default",
         revision: view.revision,

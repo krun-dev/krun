@@ -190,6 +190,14 @@ workers:
   # 可选 HTTPS origin；留空使用控制面内部 Service，不含 /api/internal/workers 路径。
   # 这是部署方配置，会接收 pool 凭据；不得开放给 Worker 用户编辑。
   runtime_api_url: ""
+  # 禁止业务访问的平台地址。公网可路由的管理地址也应显式列出。
+  protected_egress_cidrs: []
+  # hyperdrive:
+  #   listen: ${KRUN_HYPERDRIVE_LISTEN} # 代理专用 IP:port，与 HTTP 监听地址隔离。
+  #   address: ${KRUN_HYPERDRIVE_ADDRESS} # Worker 可解析的代理 DNS 名称:port。
+  #   tls_cert_file: ${KRUN_HYPERDRIVE_CERT_FILE}
+  #   tls_key_file: ${KRUN_HYPERDRIVE_KEY_FILE}
+  #   origin_ca_file: ${KRUN_HYPERDRIVE_ORIGIN_CA_FILE:-}
   validator_pool: ""
   runtime_pools:
     - id: public-a

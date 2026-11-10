@@ -1,0 +1,151 @@
+package storage
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/krun-dev/krun/internal/domain"
+	"github.com/krun-dev/krun/internal/storage/models"
+)
+
+func hyperdriveConfig(row models.HyperdriveConfig) domain.HyperdriveConfig {
+	return domain.HyperdriveConfig{
+		ID: row.ConfigID, Organization: row.OrgID, Name: row.Name, Host: row.Host,
+		Port: row.Port, Database: row.DatabaseName, User: row.UserName,
+		Revision: row.Revision, Created: row.CreatedAt,
+	}
+}
+
+func (s *Store) ListHyperdrive(ctx context.Context, org string) ([]domain.HyperdriveConfig, error) {
+	var rows []models.HyperdriveConfig
+	err := s.orm.NewSelect().Model(&rows).
+		Column("config_id", "org_id", "name", "host", "port", "database_name", "user_name", "revision", "created_at").
+		Where("org_id = ?", org).Order("name ASC").Scan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]domain.HyperdriveConfig, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, hyperdriveConfig(row))
+	}
+	return result, nil
+}
+
+func (s *Store) GetHyperdrive(ctx context.Context, org, id string) (domain.HyperdriveConfig, error) {
+	var row models.HyperdriveConfig
+	err := s.orm.NewSelect().Model(&row).
+		Column("config_id", "org_id", "name", "host", "port", "database_name", "user_name", "revision", "created_at").
+		Where("org_id = ? AND config_id = ?", org, id).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = domain.NotFound()
+	}
+	return hyperdriveConfig(row), err
+}
+
+func (s *Store) CreateHyperdrive(ctx context.Context, origin domain.HyperdriveOrigin) error {
+	secret := origin.Secret
+	row := models.HyperdriveConfig{
+		ConfigID: origin.ID, OrgID: origin.Organization, Name: origin.Name, Host: origin.Host,
+		Port: origin.Port, DatabaseName: origin.Database, UserName: origin.User,
+		SecretID: secret.Version.ID, ValueDigest: secret.Version.ValueDigest, KeyVersion: secret.Version.KeyVersion,
+		Ciphertext: secret.Ciphertext, Nonce: secret.Nonce, Revision: origin.Revision, CreatedAt: origin.Created,
+	}
+	_, err := s.orm.NewInsert().Model(&row).Returning("NULL").Exec(ctx)
+	return hyperdriveWriteError(err)
+}
+
+func (s *Store) UpdateHyperdrive(ctx context.Context, origin domain.HyperdriveOrigin) error {
+	secret := origin.Secret
+	var row models.HyperdriveConfig
+	query := s.orm.NewUpdate().Model(&row).Set("name = ?", origin.Name).
+		Set("revision = revision + 1").
+		Where("org_id = ? AND config_id = ? AND revision = ?", origin.Organization, origin.ID, origin.Revision)
+	if secret.Version.ID != "" {
+		query = query.Set("secret_id = ?", secret.Version.ID).
+			Set("key_version = ?", secret.Version.KeyVersion).
+			Set("value_digest = ?", secret.Version.ValueDigest).
+			Set("ciphertext = ?", secret.Ciphertext).
+			Set("nonce = ?", secret.Nonce)
+	}
+	result, err := query.Exec(ctx)
+	if err != nil {
+		return hyperdriveWriteError(err)
+	}
+	count, err := result.RowsAffected()
+	if err == nil && count != 1 {
+		err = domain.Problem(409, "REVISION_CONFLICT", "Hyperdrive configuration changed")
+	}
+	return err
+}
+
+func (s *Store) DeleteHyperdrive(ctx context.Context, org, id string) error {
+	var row models.HyperdriveConfig
+	result, err := s.orm.NewDelete().Model(&row).Where("org_id = ? AND config_id = ?", org, id).Exec(ctx)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err == nil && count != 1 {
+		err = domain.NotFound()
+	}
+	return err
+}
+
+func hyperdriveWriteError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return domain.Problem(409, "HYPERDRIVE_ALREADY_EXISTS", "Hyperdrive name already exists")
+	}
+	return err
+}
+
+// HyperdriveForSession checks the current placement, binding and deployed
+// version on every new session. A retained deployment URL can still serve
+// until its normal expiry, while deleting a configuration revokes all uses.
+func (s *Store) HyperdriveForSession(ctx context.Context, version, binding string) (domain.HyperdriveOrigin, string, error) {
+	var row models.HyperdriveConfig
+	var pool string
+	err := s.pool.QueryRow(ctx, `
+SELECT h.config_id,h.org_id,h.name,h.host,h.port,h.database_name,h.user_name,h.secret_id,h.key_version,h.value_digest,h.ciphertext,h.nonce,h.revision,h.created_at,p.pool_id
+FROM krun_worker_versions v
+JOIN krun_worker_hyperdrive_configs h ON h.config_id=v.hyperdrive_bindings->>$2 AND h.org_id=v.org_id
+JOIN krun_worker_placements p ON p.worker_id=v.worker_id AND p.org_id=v.org_id AND p.role='primary' AND p.state='active'
+JOIN krun_resources r ON r.resource_id=p.worker_id AND r.kind='worker' AND r.org_id=p.org_id
+JOIN krun_worker_environments e ON e.worker_id=v.worker_id AND e.env_name=v.env_name AND e.enabled
+WHERE v.version_id=$1 AND (e.version_id=v.version_id OR EXISTS (
+	SELECT 1 FROM krun_worker_deployments d WHERE d.version_id=v.version_id
+	AND d.worker_id=v.worker_id AND d.org_id=v.org_id AND d.env_name=v.env_name
+	AND d.committed_at IS NOT NULL AND d.expires_at>now()
+))`, version, binding).Scan(
+		&row.ConfigID, &row.OrgID, &row.Name, &row.Host, &row.Port, &row.DatabaseName, &row.UserName,
+		&row.SecretID, &row.KeyVersion, &row.ValueDigest, &row.Ciphertext, &row.Nonce, &row.Revision, &row.CreatedAt, &pool,
+	)
+	if err != nil {
+		return domain.HyperdriveOrigin{}, "", err
+	}
+	return encryptedHyperdriveOrigin(row), pool, nil
+}
+
+func (s *Store) GetHyperdriveOrigin(ctx context.Context, org, id string) (domain.HyperdriveOrigin, error) {
+	var row models.HyperdriveConfig
+	err := s.orm.NewSelect().Model(&row).Where("org_id = ? AND config_id = ?", org, id).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = domain.NotFound()
+	}
+	return encryptedHyperdriveOrigin(row), err
+}
+
+func encryptedHyperdriveOrigin(row models.HyperdriveConfig) domain.HyperdriveOrigin {
+	return domain.HyperdriveOrigin{
+		HyperdriveConfig: hyperdriveConfig(row),
+		Secret: domain.EncryptedWorkerSecret{
+			Version: domain.WorkerSecretVersion{
+				ID: row.SecretID, Organization: row.OrgID, Worker: row.ConfigID,
+				Environment: "hyperdrive", Name: "password", ValueDigest: row.ValueDigest, KeyVersion: row.KeyVersion,
+			},
+			Ciphertext: row.Ciphertext, Nonce: row.Nonce,
+		},
+	}
+}
