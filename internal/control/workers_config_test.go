@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -39,7 +40,7 @@ func workerProjectionConfig(domains []appconfig.WorkerDomain) *appconfig.Workers
 		if domains[i].Access == "" {
 			domains[i].Access = "public"
 		}
-		if !contains(access, domains[i].Access) {
+		if !slices.Contains(access, domains[i].Access) {
 			access = append(access, domains[i].Access)
 		}
 		if domains[i].Access == "private" {

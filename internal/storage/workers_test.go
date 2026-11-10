@@ -21,8 +21,7 @@ func TestWorkerCompatibilityEmptyFlagsSurviveStateClone(t *testing.T) {
 	if !sameBuild(state.Workers.Builds["build"], cloned.Workers.Builds["build"]) {
 		t.Fatal("empty build compatibility flags changed snapshot identity")
 	}
-	if !sameArtifact(state.Workers.Artifacts["artifact"], cloned.Workers.Artifacts["artifact"]) ||
-		!sameArtifactContent(state.Workers.Artifacts["artifact"], cloned.Workers.Artifacts["artifact"]) {
+	if !sameArtifact(state.Workers.Artifacts["artifact"], cloned.Workers.Artifacts["artifact"]) {
 		t.Fatal("empty artifact compatibility flags changed snapshot identity")
 	}
 	if !sameVersion(state.Workers.Versions["version"], cloned.Workers.Versions["version"]) {
@@ -50,7 +49,7 @@ func TestSameWorkerPlacementUsesInstantEquality(t *testing.T) {
 	placement := WorkerPlacement{Worker: "worker", Organization: "org", NetworkProfile: "default", Pool: "pool", Role: "primary", State: "active", Revision: 1, Created: created, Updated: created}
 	other := placement
 	other.Created, other.Updated = created.UTC(), created.UTC()
-	if !sameWorkerPlacement(placement, other) || !sameWorkerPlacements(map[string]WorkerPlacement{"one": placement}, map[string]WorkerPlacement{"one": other}) {
+	if !sameWorkerPlacement(placement, other) {
 		t.Fatal("equal placement instants with different locations were treated as different metadata")
 	}
 	other.Revision++

@@ -1080,3 +1080,7 @@ func TestDomainCatalogAPIExposesLabels(t *testing.T) {
 		t.Fatalf("infrastructure classification leaked: %s", r.Body.String())
 	}
 }
+
+func (s *Server) syncEnvironmentHosts(env *WorkerEnvironment, organization, service string, workerDomains []string) {
+	s.workerApplication(nil).SyncEnvironmentHosts(env, organization, service, workerDomains)
+}

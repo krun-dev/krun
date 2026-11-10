@@ -12,8 +12,6 @@ import (
 type auditCursor = auditlog.Cursor
 type auditPage = auditlog.Page
 
-func (s *Server) encodeAuditCursor(cursor auditCursor) string { return auditlog.EncodeCursor(cursor) }
-
 func (s *Server) auditTarget(st *State, p Principal, r *http.Request) (authorization.Target, error) {
 	t := systemTarget()
 	if r.PathValue("org") != "" {

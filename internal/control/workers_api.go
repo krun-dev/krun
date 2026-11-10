@@ -96,10 +96,6 @@ func (s *Server) workerTarget(st *State, r *http.Request, env, action string, p 
 	return s.workerApplication(r).WorkerTarget(st, workerRef(r), env, action, p)
 }
 
-func (s *Server) worker(st *State, t Target) Worker {
-	return s.workerApplication(nil).Worker(st, t)
-}
-
 func (s *Server) workerBuildCreate(st *State, p Principal, r *http.Request) (any, int, error) {
 	var in workerapp.WorkerBuildCreateInput
 	if e := bodyWithLimit(r, &in, workerBuildRequestBodyMax); e != nil {
@@ -272,10 +268,6 @@ func (s *Server) workerVersionHistory(st *State, p Principal, r *http.Request) (
 func (s *Server) workerArtifactGet(st *State, p Principal, r *http.Request) (any, int, error) {
 	out, outcome, err := s.workerApplication(r).WorkerArtifactGet(r.Context(), st, p, workerRef(r))
 	return out, workerHTTPStatus(outcome), err
-}
-
-func (s *Server) workerAuthorizeActor(st *State, a WorkerActor, service, env, action string) error {
-	return s.workerApplication(nil).WorkerAuthorizeActor(st, a, service, env, action)
 }
 
 func (s *Server) workerOperationList(st *State, p Principal, r *http.Request) (any, int, error) {

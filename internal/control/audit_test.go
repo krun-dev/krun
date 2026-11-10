@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	auditlog "github.com/krun-dev/krun/internal/audit"
 )
 
 func seedAuditPages(t *testing.T, store *Store) {
@@ -126,11 +128,11 @@ func TestAuditPaginationValidation(t *testing.T) {
 			t.Fatal(query, w.Code)
 		}
 	}
-	cursor := s.encodeAuditCursor(auditCursor{Scope: "system:system", AsOf: now().Add(-8 * 24 * time.Hour)})
+	cursor := auditlog.EncodeCursor(auditCursor{Scope: "system:system", AsOf: now().Add(-8 * 24 * time.Hour)})
 	if w := request(s, "GET", "/api/v1/system/audit?cursor="+url.QueryEscape(cursor), "krun_cli_admin", ""); w.Code != 409 {
 		t.Fatal("expired cursor accepted", w.Code)
 	}
-	future := s.encodeAuditCursor(auditCursor{Scope: "system:system", AsOf: now().Add(time.Hour)})
+	future := auditlog.EncodeCursor(auditCursor{Scope: "system:system", AsOf: now().Add(time.Hour)})
 	if w := request(s, "GET", "/api/v1/system/audit?cursor="+url.QueryEscape(future), "krun_cli_admin", ""); w.Code != 400 {
 		t.Fatal("future cursor accepted")
 	}
@@ -210,7 +212,7 @@ func getAuditCSV(t *testing.T, s *Server, path string) [][]string {
 func TestAuditCSVExportAuthorizationAndQuery(t *testing.T) {
 	s, _ := testServer(t)
 	const path = "/api/v1/orgs/org-a/audit/export"
-	other := s.encodeAuditCursor(auditCursor{Scope: "organization:org-b", AsOf: now()})
+	other := auditlog.EncodeCursor(auditCursor{Scope: "organization:org-b", AsOf: now()})
 	tests := []struct {
 		query  string
 		token  string

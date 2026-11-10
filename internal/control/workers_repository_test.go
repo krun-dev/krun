@@ -15,10 +15,12 @@ import (
 	"testing"
 	"time"
 
+	repooauth "github.com/krun-dev/krun/internal/adapters/repositoryoauth"
 	workerartifact "github.com/krun-dev/krun/internal/artifact"
 	appconfig "github.com/krun-dev/krun/internal/config"
 	repositories "github.com/krun-dev/krun/internal/repository"
 	workerapp "github.com/krun-dev/krun/internal/workers"
+	"golang.org/x/oauth2"
 )
 
 func repositoryTestProviders() []appconfig.WorkerRepositoryProvider {
@@ -727,4 +729,12 @@ func TestRepositoryCatalogUsesOwnGrantAndRefreshesOnlyOnDemand(t *testing.T) {
 	if build.Code != 409 || !strings.Contains(build.Body.String(), "WORKER_REPOSITORY_RECONNECT_REQUIRED") {
 		t.Fatalf("revoked binding must not fall back to shared credentials: %d %s", build.Code, build.Body)
 	}
+}
+
+func (s *Server) repositoryOAuthConfig(p appconfig.WorkerRepositoryProvider) *oauth2.Config {
+	return (&repooauth.Client{Config: &s.Config}).RepositoryOAuthConfig(p)
+}
+
+func (s *Server) repositoryOAuthContext(parent context.Context, provider appconfig.WorkerRepositoryProvider) (context.Context, context.CancelFunc, error) {
+	return (&repooauth.Client{Config: &s.Config}).RepositoryOAuthContext(parent, provider)
 }
