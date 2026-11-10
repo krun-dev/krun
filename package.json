@@ -26,7 +26,8 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-i18next": "^17.0.16",
-    "tailwind-merge": "^3.0.0"
+    "tailwind-merge": "^3.0.0",
+    "transliteration": "^2.7.0"
   },
   "devDependencies": {
     "@astrojs/starlight": "^0.42.9",
