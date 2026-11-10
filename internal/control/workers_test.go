@@ -552,3 +552,16 @@ func testWorkersConfig() *appconfig.WorkersConfig {
 		},
 	}
 }
+
+func (s *Server) worker(st *State, t Target) Worker {
+	return s.workerApplication(nil).Worker(st, t)
+}
+
+func (s *Server) workerAuthorizeActor(st *State, a WorkerActor, service, env, action string) error {
+	return s.workerApplication(nil).WorkerAuthorizeActor(st, a, service, env, action)
+}
+
+func (s *Server) workerRuntimeAllowed(r *http.Request) bool {
+	_, ok := s.workerRuntimePool(r)
+	return ok
+}

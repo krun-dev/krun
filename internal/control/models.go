@@ -109,12 +109,3 @@ var problem = domain.Problem
 var notFound = domain.NotFound
 
 var forbidden = domain.Forbidden
-
-func contains(xs []string, x string) bool {
-	for _, value := range xs {
-		if value == x {
-			return true
-		}
-	}
-	return false
-}

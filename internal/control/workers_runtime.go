@@ -26,11 +26,6 @@ func (s *Server) workerRuntimePool(r *http.Request) (appconfig.WorkerRuntimePool
 	return pool, true
 }
 
-func (s *Server) workerRuntimeAllowed(r *http.Request) bool {
-	_, ok := s.workerRuntimePool(r)
-	return ok
-}
-
 // workerRuntimeConfigSnapshot is the bootstrap fallback. Runtimes normally read
 // the immutable snapshot from object storage; this endpoint keeps a new Pod
 // bootstrappable when object storage is unreachable but the control plane is up.

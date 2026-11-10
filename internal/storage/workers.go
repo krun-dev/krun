@@ -303,19 +303,6 @@ func writePlacements(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState)
 	return nil
 }
 
-func sameWorkerPlacements(a, b map[string]domain.WorkerPlacement) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for key, placement := range a {
-		other, ok := b[key]
-		if !ok || !sameWorkerPlacement(placement, other) {
-			return false
-		}
-	}
-	return true
-}
-
 func sameWorkerPlacement(a, b domain.WorkerPlacement) bool {
 	return a.Worker == b.Worker && a.Organization == b.Organization &&
 		a.NetworkProfile == b.NetworkProfile && a.Pool == b.Pool && a.Role == b.Role &&
@@ -589,14 +576,6 @@ func sameArtifact(a, b domain.WorkerArtifact) bool {
 		a.CompatibilityDate == b.CompatibilityDate && sameStrings(a.CompatibilityFlags, b.CompatibilityFlags) &&
 		a.Size == b.Size && a.ObjectKey == b.ObjectKey && a.StorageLocation == b.StorageLocation &&
 		a.Bucket == b.Bucket && a.Created.Equal(b.Created) && a.UseRevision == b.UseRevision
-}
-
-func sameArtifactContent(a, b domain.WorkerArtifact) bool {
-	return a.ID == b.ID && a.Organization == b.Organization && a.Profile == b.Profile &&
-		a.ArchiveDigest == b.ArchiveDigest && a.ManifestDigest == b.ManifestDigest &&
-		a.ModuleDigest == b.ModuleDigest && a.CompatibilityDate == b.CompatibilityDate &&
-		sameStrings(a.CompatibilityFlags, b.CompatibilityFlags) && a.Size == b.Size &&
-		a.ObjectKey == b.ObjectKey && a.StorageLocation == b.StorageLocation && a.Bucket == b.Bucket
 }
 
 func sameVersion(a, b domain.WorkerVersion) bool {

@@ -6,20 +6,9 @@ import (
 	"net/http"
 	"net/url"
 
-	repooauth "github.com/krun-dev/krun/internal/adapters/repositoryoauth"
-	appconfig "github.com/krun-dev/krun/internal/config"
 	repositories "github.com/krun-dev/krun/internal/repository"
 	"github.com/krun-dev/krun/internal/securetoken"
-	"golang.org/x/oauth2"
 )
-
-func (s *Server) repositoryOAuthConfig(p appconfig.WorkerRepositoryProvider) *oauth2.Config {
-	return (&repooauth.Client{Config: &s.Config}).RepositoryOAuthConfig(p)
-}
-
-func (s *Server) repositoryOAuthContext(parent context.Context, provider appconfig.WorkerRepositoryProvider) (context.Context, context.CancelFunc, error) {
-	return (&repooauth.Client{Config: &s.Config}).RepositoryOAuthContext(parent, provider)
-}
 
 // workerRepositoryConnect starts a connection: returns the provider's
 // authorization URL with CSRF state bound to this user and browser.

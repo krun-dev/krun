@@ -47,14 +47,6 @@ func ActiveWorkerPlacement(state *WorkerState, worker string) (WorkerPlacement, 
 	return WorkerPlacement{}, false
 }
 
-func WorkerAvailableInPool(state *WorkerState, worker, pool string) bool {
-	if state == nil {
-		return false
-	}
-	placement, ok := state.Placements[WorkerPlacementKey(worker, pool)]
-	return ok && (placement.State == "preparing" || placement.State == "ready" || placement.State == "active")
-}
-
 func NewWorkerState() *WorkerState {
 	return &WorkerState{
 		Configurations:   map[string]WorkerConfiguration{},
