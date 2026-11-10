@@ -525,6 +525,7 @@ Organizations and access
   krun keys show | revoke --id ID
   krun keys update --id ID --name NAME --policy FILE --revision N
   krun models list | create | get | update | delete --org ID [options]
+    Model catalog metadata only. Model execution is reserved.
 
 Diagnostics
   krun check --action ACTION --kind KIND --id ID [--env global]

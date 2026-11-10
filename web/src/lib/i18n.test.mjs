@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { t, locale, savedLanguage, setLanguage, roleLabel } from "./i18n.ts";
-import { actionLabel, buildPolicy, initialSelections } from "./permissions.ts";
+import { actionLabel, buildPolicy, initialSelections, resourceKinds } from "./permissions.ts";
 
 test("Chinese is the default, including unavailable or invalid storage", () => {
   assert.equal(locale(), "zh-CN");
@@ -66,6 +66,10 @@ test("language switches persist, interpolate data safely, and preserve policy id
   assert.equal(t("{{count}} 个密钥", { count: 2 }), "2 keys");
   assert.equal(t("通过 {{name}} 登录", { name: "团队 <script>" }), "Sign in with 团队 <script>");
   assert.equal(actionLabel("worker.version.read"), "Read Worker Version");
+  assert.equal(actionLabel("model.read"), "Read Model");
+  const model = resourceKinds.find(({ kind }) => kind === "model");
+  assert.equal(t(model.label), "Model catalog");
+  assert.match(t(model.description), /reserved/);
   assert.equal(t("Permission denied"), "Permission denied");
   const selections = initialSelections();
   selections.worker.actions = ["worker.read"];

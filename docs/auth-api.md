@@ -124,7 +124,7 @@ Worker、模型与桶还返回完整的 `resource_path`。
 
 上表为整个组织、全部环境授权。`member` / `viewer` 也可限定到指定 Worker 或模型及环境；
 `org_admin` 必须是整组织范围且不能附加环境条件。成员关系、账号状态、身份来源约束、
-Key 范围和撤权检查逐请求生效。模型执行相关动作仍是预留目录，不代表存在执行接口。
+Key 范围和撤权检查逐请求生效。`/orgs/:org/models` 和 CLI `krun models` 只读写通用资源目录中的模型元数据。模型执行相关动作仍是预留目录，不代表存在执行接口。
 
 ### 接口目录
 
@@ -158,8 +158,10 @@ Key 范围和撤权检查逐请求生效。模型执行相关动作仍是预留�
 | POST /orgs/:org/api-keys、/system/api-keys | S | 当前用户所有；所有用户支持组织 / 跨工作空间 Key，始终受当前用户权限约束 |
 | GET /orgs/:org/api-keys、/system/api-keys | S K | 逐 Key apiKey.read 后过滤 |
 | GET/PATCH/DELETE /api-keys/:key | GET/DELETE S K，PATCH S | 读取、策略更新、撤销；更新验证选择器、动作兼容性与 Owner 状态，运行时取权限交集 |
-| GET/POST /orgs/:org/workers、/models | S K | list/create，对列表逐资源 read 检查 |
-| GET/PATCH/DELETE /orgs/:org/workers/:resource、/models/:resource | S K | read/update/delete；路径组织与实际归属一致 |
+| GET/POST /orgs/:org/workers | S K | list/create，对列表逐资源 read 检查 |
+| GET/PATCH/DELETE /orgs/:org/workers/:resource | S K | read/update/delete；路径组织与实际归属一致 |
+| GET/POST /orgs/:org/models | S K | 模型目录元数据 list/create，对列表逐资源 read 检查 |
+| GET/PATCH/DELETE /orgs/:org/models/:resource | S K | 模型目录元数据 read/update/delete；路径组织与实际归属一致 |
 | GET /system/audit、/orgs/:org/audit | S K | audit.read，游标分页，仅最近 7 天；limit 默认 50、最大 500 |
 | GET /system/audit/export、/orgs/:org/audit/export | S K | audit.read，下载当前范围的 CSV，默认脱敏 |
 
