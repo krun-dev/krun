@@ -57,7 +57,7 @@ export default defineConfig({
         Footer: "./src/components/Footer.astro",
       },
       sidebar: [
-        { label: "开始使用", items: ["index", "guides/concepts"] },
+        { label: "开始使用", items: ["index", "guides/concepts", "guides/organizations"] },
         {
           label: "组件",
           items: [
