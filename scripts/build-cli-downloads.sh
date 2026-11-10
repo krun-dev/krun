@@ -10,13 +10,22 @@ published_at=""
 if [[ -n "$(git -C "$root" status --porcelain)" ]]; then
   version+=".dirty"
 else
-  tag=$(git -C "$root" tag --points-at HEAD --list 'cli-v*')
+  tag=$(git -C "$root" tag --points-at HEAD --list 'cli-[0-9]*')
   if [[ -n "$tag" ]]; then
-    if [[ ! "$tag" =~ ^cli-v[1-9][0-9]{3}\.([1-9]|1[0-2])\.[1-9][0-9]{0,8}$ ]]; then
-      echo "Expected exactly one CLI release tag in the form cli-vYYYY.M.N" >&2
-      exit 1
-    fi
-    version="${tag#cli-v}"
+    python3 - "$tag" <<'PY'
+import re
+import sys
+from datetime import date
+
+tag = re.fullmatch(r"cli-([1-9][0-9]{3}-[0-9]{2}-[0-9]{2})(?:\.([1-9][0-9]{0,8}))?", sys.argv[1])
+try:
+    if tag is None or tag[2] == "1":
+        raise ValueError
+    date.fromisoformat(tag[1])
+except ValueError:
+    sys.exit("Expected exactly one CLI release tag with a valid date (cli-YYYY-MM-DD or cli-YYYY-MM-DD.N, N >= 2)")
+PY
+    version="${tag#cli-}"
     published_at=$(git -C "$root" for-each-ref --format='%(creatordate:iso-strict)' "refs/tags/$tag")
   fi
 fi

@@ -24,20 +24,23 @@ func terminalStream(stream any) bool {
 	return ok && term.IsTerminal(int(file.Fd()))
 }
 
-func calendarVersion(value string) ([3]int, bool) {
-	var version [3]int
-	parts := strings.Split(value, ".")
-	if len(parts) != len(version) || len(parts[0]) != 4 || len(parts[2]) > 9 {
+func calendarVersion(value string) ([4]int, bool) {
+	var version [4]int
+	day, suffix, hasSuffix := strings.Cut(value, ".")
+	date, err := time.Parse(time.DateOnly, day)
+	if err != nil || len(day) != len(time.DateOnly) || date.Year() < 1000 {
 		return version, false
 	}
-	for i, part := range parts {
-		number, err := strconv.Atoi(part)
-		if err != nil || number < 1 || strconv.Itoa(number) != part {
+
+	sequence := 1
+	if hasSuffix {
+		sequence, err = strconv.Atoi(suffix)
+		if err != nil || len(suffix) > 9 || sequence < 2 || strconv.Itoa(sequence) != suffix {
 			return version, false
 		}
-		version[i] = number
 	}
-	return version, version[1] <= 12
+	year, month, dayOfMonth := date.Date()
+	return [4]int{year, int(month), dayOfMonth, sequence}, true
 }
 
 // Claim the check before sending the request. The lock is released on close,

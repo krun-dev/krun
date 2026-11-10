@@ -16,15 +16,16 @@ import (
 )
 
 func TestCalendarVersion(t *testing.T) {
-	for _, value := range []string{"2026.1.1", "2026.11.12", "2027.12.999999999"} {
+	for _, value := range []string{"2026-01-01", "2026-11-12.2", "2028-02-29.999999999"} {
 		if _, valid := calendarVersion(value); !valid {
 			t.Errorf("rejected calendar version %q", value)
 		}
 	}
 	for _, value := range []string{
-		"dev", "dev+abcdef", "1.2.3", "v2026.11.2", "2026.11", "2026.11.2.1",
-		"2026.01.1", "2026.13.1", "2026.0.1", "2026.11.0", "2026.11.01",
-		"2026.11.+1", "2026.11.1000000000",
+		"dev", "dev+abcdef", "2026.11.2", "v2026-11-02", "0999-11-02",
+		"2026-1-01", "2026-11-2", "2026-13-01", "2026-11-00", "2026-11-31", "2026-02-29",
+		"2026-11-02.", "2026-11-02.0", "2026-11-02.1", "2026-11-02.02",
+		"2026-11-02.+2", "2026-11-02.2.1", "2026-11-02.1000000000",
 	} {
 		if _, valid := calendarVersion(value); valid {
 			t.Errorf("accepted non-release version %q", value)
@@ -34,7 +35,7 @@ func TestCalendarVersion(t *testing.T) {
 
 func TestCLIUpdateNotification(t *testing.T) {
 	original := Version
-	Version = "2026.11.9"
+	Version = "2026-11-09.9"
 	t.Cleanup(func() { Version = original })
 	name, err := cliDownloadName()
 	if err != nil {
@@ -47,10 +48,12 @@ func TestCLIUpdateNotification(t *testing.T) {
 		status  int
 		notify  bool
 	}{
-		{name: "newer sequence", version: "2026.11.10", notify: true},
-		{name: "newer month", version: "2026.12.1", notify: true},
-		{name: "same version", version: "2026.11.9"},
-		{name: "older version", version: "2026.11.8"},
+		{name: "newer sequence", version: "2026-11-09.10", notify: true},
+		{name: "newer date", version: "2026-11-10", notify: true},
+		{name: "newer month", version: "2026-12-01", notify: true},
+		{name: "same version", version: "2026-11-09.9"},
+		{name: "first release on same date", version: "2026-11-09"},
+		{name: "older date", version: "2026-11-08.10"},
 		{name: "development build", version: "dev+12345678"},
 		{name: "unavailable manifest", status: http.StatusServiceUnavailable},
 	} {
@@ -130,7 +133,7 @@ func TestCLIUpdateCacheIsScopedAndExclusive(t *testing.T) {
 
 func TestCLIUpdateSkipsNonInteractiveCommands(t *testing.T) {
 	original := Version
-	Version = "2026.11.1"
+	Version = "2026-11-01"
 	t.Cleanup(func() { Version = original })
 	t.Setenv("CI", "")
 	t.Setenv("KRUN_TOKEN", "")

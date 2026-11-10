@@ -18,7 +18,7 @@ Gateway 预检和显式 apply 脚本。它与下面的静态控制台同源契�
 document 设为 `index.html` 即可。只有 bucket 域名、没有同域 `/api/*` 转发能力的
 静态托管不能运行本控制台。
 
-CLI 的正式版本来自当前干净提交上的唯一 `cli-vYYYY.M.N` Git 标签。月和当月发布序号从 1 开始，不补零。发布者按 UTC 月份分配序号，建议在发布提交上创建注解标签，例如 `cli-v2026.11.3`，再从该标签构建控制台。同一标签重建时继续使用同一版本号。未打标签的构建使用 `dev+<提交号>`，有本地改动时再加 `.dirty`。
+CLI 的正式版本使用 UTC 发布日期 `YYYY-MM-DD`。在干净的发布提交上创建唯一的 CLI Git 标签，例如 `cli-2026-11-10`，再从该标签构建控制台。同一天的后续发布在日期后加从 2 开始的序号，例如 `cli-2026-11-10.2`。同一标签重建时继续使用同一版本号。未打标签的构建使用 `dev+<提交号>`，有本地改动时再加 `.dirty`。
 
 下载清单的版本号与打包进二进制的版本号一致，并记录提交、发布时间和各平台文件的 SHA-256。控制台用户的自动检查只读取当前同源入口的 `/downloads/manifest.json`。上传时先上传二进制，最后更新下载清单。
 
@@ -65,7 +65,7 @@ Set-Cookie；`/api/*` 不得缓存。每一层代理都应把自己的直接下�
 
 Starlight 的页面、搜索索引、Markdown 原文和客户端资源均随构建输出到 `/docs/`，无需登录。文档入口为 `/docs/`，静态托管需将目录默认文档设为 `index.html`；CLI 下载文件也需随静态产物一起上传。
 
-CLI 的 `krun upgrade` 从同源 `/downloads/manifest.json` 读取版本和各平台文件的 SHA-256，再下载对应二进制。构建脚本将 Git tag/commit（工作区有修改时带 `-dirty`）同时写入二进制版本和 manifest。部署时先上传二进制、最后上传 manifest，并让 `/downloads/*` 每次重新验证缓存（不要 immutable）；发布期间文件与 manifest 不一致时，CLI 会拒绝替换并提示重试。上述文件均为公开静态资源，不需要新后端路由或运行期代理。
+CLI 的 `krun upgrade` 从同源 `/downloads/manifest.json` 读取版本和各平台文件的 SHA-256，再下载对应二进制。让 `/downloads/*` 每次重新验证缓存（不要 immutable）；发布期间文件与 manifest 不一致时，CLI 会拒绝替换并提示重试。上述文件均为公开静态资源，不需要新后端路由或运行期代理。
 
 `index.html` 和 `/docs/` 必须 `no-store`（或至少每次重新验证），带内容哈希的 `/assets/*` 才能
 长期 immutable 缓存。静态入口还应下发 CSP、`nosniff`、点击劫持和 Referrer-Policy
