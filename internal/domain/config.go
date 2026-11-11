@@ -7,7 +7,7 @@ import (
 // Edge configuration is intentionally small: routes and the immutable version
 // descriptors they reference. Build logs, operations and IAM state never enter
 // this stream.
-type WorkerConfigRoute struct {
+type EdgeConfigRoute struct {
 	Expires *time.Time `json:"expires_at,omitempty"`
 	Worker  string     `json:"worker_id,omitempty"`
 	Host    string     `json:"host"`
@@ -17,20 +17,20 @@ type WorkerConfigRoute struct {
 	Pool    string     `json:"pool"`
 }
 
-type WorkerConfigProjection struct {
-	Routes   []WorkerConfigRoute      `json:"routes"`
+type EdgeConfigProjection struct {
+	Routes   []EdgeConfigRoute        `json:"routes"`
 	Versions map[string]WorkerVersion `json:"versions"`
 }
 
-type WorkerConfigOp struct {
-	Type    string             `json:"type"`
-	Pool    string             `json:"pool"`
-	Host    string             `json:"host,omitempty"`
-	Route   *WorkerConfigRoute `json:"route,omitempty"`
-	Version *WorkerVersion     `json:"version,omitempty"`
+type EdgeConfigOp struct {
+	Type    string           `json:"type"`
+	Pool    string           `json:"pool"`
+	Host    string           `json:"host,omitempty"`
+	Route   *EdgeConfigRoute `json:"route,omitempty"`
+	Version *WorkerVersion   `json:"version,omitempty"`
 }
 
-type WorkerConfigRevision struct {
+type EdgeConfigRevision struct {
 	Revision int64
 	Digest   string
 	Ops      []byte

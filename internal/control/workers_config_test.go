@@ -69,7 +69,7 @@ func workerProjectionConfig(domains []appconfig.WorkerDomain) *appconfig.Workers
 func TestWorkerConfigProjection(t *testing.T) {
 	st := workerConfigFixture()
 	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}})
-	p := workerapp.WorkerConfigFromState(st, config)
+	p := workerapp.EdgeConfigFromState(st, config)
 	if len(p.Routes) != 3 {
 		t.Fatalf("routes: %+v", p.Routes)
 	}
@@ -94,7 +94,7 @@ func TestWorkerConfigProjection(t *testing.T) {
 
 func TestWorkerConfigDiffOrdering(t *testing.T) {
 	st := workerConfigFixture()
-	first := workerapp.WorkerConfigFromState(st, workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}}))
+	first := workerapp.EdgeConfigFromState(st, workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}}))
 	ops := workerapp.DiffWorkerConfig(nil, first)
 	seenRoute := false
 	for _, op := range ops {
@@ -143,7 +143,7 @@ func appendTestConfigDelta(t *testing.T, store *Store, previous int64, ops ...wo
 func TestConfigRevisionStoreAndAcks(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := t.Context()
-	head := int64(storage.WorkerConfigOpsRetain) + 1
+	head := int64(storage.EdgeConfigOpsRetain) + 1
 	pool := postgresTestPool(store)
 	if _, err := pool.Exec(ctx, "INSERT INTO worker_config_revisions (config_revision,digest) SELECT n,'fixture' FROM generate_series(1,$1::bigint) AS n", head); err != nil {
 		t.Fatal(err)
@@ -152,8 +152,8 @@ func TestConfigRevisionStoreAndAcks(t *testing.T) {
 		t.Fatal(err)
 	}
 	appendTestConfigDelta(t, store, head, workerConfigOp{Type: "route_delete", Host: "stale.workers.test", Pool: "default"})
-	items, floor, latest, err := store.ConfigRevisionsSince(ctx, 1, storage.WorkerConfigOpsRetain)
-	if err != nil || latest != head+1 || floor != 3 || len(items) != storage.WorkerConfigOpsRetain || items[0].Revision != 3 || items[len(items)-1].Revision != latest {
+	items, floor, latest, err := store.ConfigRevisionsSince(ctx, 1, storage.EdgeConfigOpsRetain)
+	if err != nil || latest != head+1 || floor != 3 || len(items) != storage.EdgeConfigOpsRetain || items[0].Revision != 3 || items[len(items)-1].Revision != latest {
 		t.Fatalf("revisions=%d floor=%d latest=%d err=%v", len(items), floor, latest, err)
 	}
 	for _, revision := range []int64{latest, latest - 1} {

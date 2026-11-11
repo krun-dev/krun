@@ -15,10 +15,10 @@ import (
 	domain "github.com/krun-dev/krun/internal/domain"
 )
 
-type WorkerConfigSnapshot struct {
+type EdgeConfigSnapshot struct {
 	ConfigRevision int64                           `json:"config_revision"`
 	Pool           string                          `json:"pool"`
-	Routes         []domain.WorkerConfigRoute      `json:"routes"`
+	Routes         []domain.EdgeConfigRoute        `json:"routes"`
 	Versions       map[string]domain.WorkerVersion `json:"versions"`
 }
 
@@ -39,8 +39,8 @@ func WorkerPoolConfigLatestKey(pool string) string {
 // Hosts are not stored, so they are derived here from the configured domain
 // catalog and the worker's selection. This is the same derivation the
 // HTTPRoute reconciler and the API use, which keeps the three from drifting.
-func WorkerConfigFromState(st *domain.State, config *appconfig.WorkersConfig) domain.WorkerConfigProjection {
-	out := domain.WorkerConfigProjection{Routes: []domain.WorkerConfigRoute{}, Versions: map[string]domain.WorkerVersion{}}
+func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) domain.EdgeConfigProjection {
+	out := domain.EdgeConfigProjection{Routes: []domain.EdgeConfigRoute{}, Versions: map[string]domain.WorkerVersion{}}
 	if st == nil || st.Workers == nil {
 		return out
 	}
@@ -75,7 +75,7 @@ func WorkerConfigFromState(st *domain.State, config *appconfig.WorkersConfig) do
 			// the Gateway instance already decided which entry a request used.
 			for _, host := range hosts {
 				if expanded := EnvHostName(host, name); expanded != "" {
-					out.Routes = append(out.Routes, domain.WorkerConfigRoute{Worker: id, Host: expanded, Path: "/", Enabled: env.Enabled, Version: env.Version, Pool: pool})
+					out.Routes = append(out.Routes, domain.EdgeConfigRoute{Worker: id, Host: expanded, Path: "/", Enabled: env.Enabled, Version: env.Version, Pool: pool})
 				}
 			}
 			if env.Version == "" {
@@ -108,7 +108,7 @@ func WorkerConfigFromState(st *domain.State, config *appconfig.WorkersConfig) do
 			continue
 		}
 		for _, host := range DeploymentHosts(config, worker, deployment.ID) {
-			out.Routes = append(out.Routes, domain.WorkerConfigRoute{Worker: worker.Worker, Host: host, Path: "/", Expires: &deployment.Expires, Enabled: env.Enabled, Version: version.ID, Pool: placement.Pool})
+			out.Routes = append(out.Routes, domain.EdgeConfigRoute{Worker: worker.Worker, Host: host, Path: "/", Expires: &deployment.Expires, Enabled: env.Enabled, Version: version.ID, Pool: placement.Pool})
 		}
 		out.Versions[version.ID] = version
 	}
@@ -116,8 +116,8 @@ func WorkerConfigFromState(st *domain.State, config *appconfig.WorkersConfig) do
 	return out
 }
 
-func WorkerConfigOpsForPool(in []domain.WorkerConfigOp, pool string) []domain.WorkerConfigOp {
-	out := make([]domain.WorkerConfigOp, 0, len(in))
+func EdgeConfigOpsForPool(in []domain.EdgeConfigOp, pool string) []domain.EdgeConfigOp {
+	out := make([]domain.EdgeConfigOp, 0, len(in))
 	for _, op := range in {
 		if op.Pool == pool {
 			out = append(out, op)
@@ -165,13 +165,13 @@ func EnvHostName(pattern, env string) string {
 	return ""
 }
 
-func SameWorkerConfigRoute(a, b domain.WorkerConfigRoute) bool { return a == b }
+func SameWorkerConfigRoute(a, b domain.EdgeConfigRoute) bool { return a == b }
 
 // diffWorkerConfig emits the ops needed to move a runtime from prev to next.
 // Version descriptors referenced by changed routes are always included, so a
 // runtime that pruned an unreferenced version can still apply a rollback.
-func DiffWorkerConfig(prev *domain.WorkerConfigProjection, next domain.WorkerConfigProjection) []domain.WorkerConfigOp {
-	prevRoutes := map[string]domain.WorkerConfigRoute{}
+func DiffWorkerConfig(prev *domain.EdgeConfigProjection, next domain.EdgeConfigProjection) []domain.EdgeConfigOp {
+	prevRoutes := map[string]domain.EdgeConfigRoute{}
 	prevVersions := map[string]domain.WorkerVersion{}
 	if prev != nil {
 		for _, route := range prev.Routes {
@@ -181,11 +181,11 @@ func DiffWorkerConfig(prev *domain.WorkerConfigProjection, next domain.WorkerCon
 			prevVersions[id] = version
 		}
 	}
-	nextRoutes := map[string]domain.WorkerConfigRoute{}
+	nextRoutes := map[string]domain.EdgeConfigRoute{}
 	for _, route := range next.Routes {
 		nextRoutes[route.Host] = route
 	}
-	changedRoutes := []domain.WorkerConfigRoute{}
+	changedRoutes := []domain.EdgeConfigRoute{}
 	type PooledVersion struct {
 		pool    string
 		version domain.WorkerVersion
@@ -228,24 +228,24 @@ func DiffWorkerConfig(prev *domain.WorkerConfigProjection, next domain.WorkerCon
 	}
 	sort.Strings(versionKeys)
 	sort.Slice(changedRoutes, func(i, j int) bool { return changedRoutes[i].Host < changedRoutes[j].Host })
-	ops := make([]domain.WorkerConfigOp, 0, len(versionKeys)+len(changedRoutes)+len(deleted))
+	ops := make([]domain.EdgeConfigOp, 0, len(versionKeys)+len(changedRoutes)+len(deleted))
 	for _, key := range versionKeys {
 		item := neededVersions[key]
 		version := item.version
-		ops = append(ops, domain.WorkerConfigOp{Type: "version_put", Pool: item.pool, Version: &version})
+		ops = append(ops, domain.EdgeConfigOp{Type: "version_put", Pool: item.pool, Version: &version})
 	}
 	for i := range changedRoutes {
 		route := changedRoutes[i]
-		ops = append(ops, domain.WorkerConfigOp{Type: "route_upsert", Pool: route.Pool, Host: route.Host, Route: &route})
+		ops = append(ops, domain.EdgeConfigOp{Type: "route_upsert", Pool: route.Pool, Host: route.Host, Route: &route})
 	}
 	for _, host := range deleted {
-		ops = append(ops, domain.WorkerConfigOp{Type: "route_delete", Pool: prevRoutes[host].Pool, Host: host})
+		ops = append(ops, domain.EdgeConfigOp{Type: "route_delete", Pool: prevRoutes[host].Pool, Host: host})
 	}
 	return ops
 }
 
-func EncodeWorkerConfigSnapshot(pool string, revision int64, p domain.WorkerConfigProjection) ([]byte, error) {
-	snapshot := WorkerConfigSnapshot{ConfigRevision: revision, Pool: pool, Routes: p.Routes, Versions: p.Versions}
+func EncodeWorkerConfigSnapshot(pool string, revision int64, p domain.EdgeConfigProjection) ([]byte, error) {
+	snapshot := EdgeConfigSnapshot{ConfigRevision: revision, Pool: pool, Routes: p.Routes, Versions: p.Versions}
 	raw, err := json.Marshal(snapshot)
 	if err != nil {
 		return nil, err
@@ -261,7 +261,7 @@ func EncodeWorkerConfigSnapshot(pool string, revision int64, p domain.WorkerConf
 	return buf.Bytes(), nil
 }
 
-type WorkerConfigLatest struct {
+type EdgeConfigLatest struct {
 	LazyRoutes     bool   `json:"lazy_routes,omitempty"`
 	ConfigRevision int64  `json:"config_revision"`
 	Snapshot       string `json:"snapshot"`
@@ -277,7 +277,7 @@ func (w *Controller) PublishConfig(ctx context.Context) (int64, error) {
 	return w.PublishConfigDelta(ctx)
 }
 
-func (w *Controller) WriteConfigLatest(ctx context.Context, key string, next WorkerConfigLatest) error {
+func (w *Controller) WriteConfigLatest(ctx context.Context, key string, next EdgeConfigLatest) error {
 	raw, err := json.Marshal(next)
 	if err != nil {
 		return err
@@ -296,7 +296,7 @@ func (w *Controller) WriteConfigLatest(ctx context.Context, key string, next Wor
 			if readErr != nil {
 				return readErr
 			}
-			var current WorkerConfigLatest
+			var current EdgeConfigLatest
 			if json.Unmarshal(currentRaw, &current) == nil {
 				if current.ConfigRevision > next.ConfigRevision {
 					return nil

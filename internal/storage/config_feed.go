@@ -9,7 +9,7 @@ import (
 
 // ConfigRevisionsSince returns the contiguous batch after since and the oldest
 // retained and latest revisions. Cursors outside that window must resync.
-func (s *Store) ConfigRevisionsSince(ctx context.Context, since int64, limit int) ([]domain.WorkerConfigRevision, int64, int64, error) {
+func (s *Store) ConfigRevisionsSince(ctx context.Context, since int64, limit int) ([]domain.EdgeConfigRevision, int64, int64, error) {
 	if limit < 1 {
 		limit = 1
 	}
@@ -28,9 +28,9 @@ func (s *Store) ConfigRevisionsSince(ctx context.Context, since int64, limit int
 		return nil, 0, 0, err
 	}
 	defer rows.Close()
-	out := []domain.WorkerConfigRevision{}
+	out := []domain.EdgeConfigRevision{}
 	for rows.Next() {
-		var item domain.WorkerConfigRevision
+		var item domain.EdgeConfigRevision
 		var ops []byte
 		if err := rows.Scan(&item.Revision, &item.Digest, &ops, &item.Created); err != nil {
 			return nil, 0, 0, err

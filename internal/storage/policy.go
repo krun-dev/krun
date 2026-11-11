@@ -8,7 +8,7 @@ import (
 
 const AuditRetention = 7 * 24 * time.Hour
 const WorkerUploadRetain = 24 * time.Hour
-const WorkerConfigOpsRetain = 512
+const EdgeConfigOpsRetain = 512
 
 func now() time.Time                { return time.Now().UTC() }
 func digest(value string) string    { return bytesDigest([]byte(value)) }

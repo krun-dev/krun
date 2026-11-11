@@ -69,7 +69,7 @@ func (w *Controller) WritePendingCheckpoints(ctx context.Context, head int64) er
 		return err
 	}
 	for _, p := range pending {
-		projection, snapshotRevision, e := w.Service.Store.WorkerConfigShard(ctx, p.Pool, p.Shard)
+		projection, snapshotRevision, e := w.Service.Store.EdgeConfigShard(ctx, p.Pool, p.Shard)
 		if e != nil {
 			return e
 		}
@@ -88,7 +88,7 @@ func (w *Controller) WritePendingCheckpoints(ctx context.Context, head int64) er
 		if e != nil {
 			return e
 		}
-		latest := WorkerConfigLatest{ConfigRevision: p.Revision, Snapshot: relative, SHA256: workerartifact.BytesDigest(raw)}
+		latest := EdgeConfigLatest{ConfigRevision: p.Revision, Snapshot: relative, SHA256: workerartifact.BytesDigest(raw)}
 		if e = w.WriteConfigLatest(ctx, WorkerPoolConfigPrefix(p.Pool)+"shards/"+p.Shard+"/latest.json", latest); e != nil {
 			return e
 		}
@@ -99,7 +99,7 @@ func (w *Controller) WritePendingCheckpoints(ctx context.Context, head int64) er
 	pools := append([]appconfig.WorkerRuntimePool(nil), w.Config.ConfiguredRuntimePools()...)
 	sort.Slice(pools, func(i, j int) bool { return pools[i].ID < pools[j].ID })
 	for _, p := range pools {
-		if err = w.WriteConfigLatest(ctx, WorkerPoolConfigLatestKey(p.ID), WorkerConfigLatest{LazyRoutes: true, ConfigRevision: head, OpsFloor: max(1, head-storage.WorkerConfigOpsRetain+1)}); err != nil {
+		if err = w.WriteConfigLatest(ctx, WorkerPoolConfigLatestKey(p.ID), EdgeConfigLatest{LazyRoutes: true, ConfigRevision: head, OpsFloor: max(1, head-storage.EdgeConfigOpsRetain+1)}); err != nil {
 			return err
 		}
 	}

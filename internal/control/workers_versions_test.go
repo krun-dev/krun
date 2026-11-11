@@ -229,7 +229,7 @@ func TestPinnedDeploymentRoutesKeepTheirVersion(t *testing.T) {
 		env.Version = newVersion.ID
 		service.Environments["production"] = env
 		st.Workers.Workers["svc-a"] = service
-		projection := workerapp.WorkerConfigFromState(st, server.Config.Workers)
+		projection := workerapp.EdgeConfigFromState(st, server.Config.Workers)
 		for _, route := range projection.Routes {
 			if strings.Contains(route.Host, workerapp.DeploymentEnvironment(old.ID)) {
 				oldHost = route.Host
@@ -243,7 +243,7 @@ func TestPinnedDeploymentRoutesKeepTheirVersion(t *testing.T) {
 		}
 		delete(service.Environments, "production")
 		st.Workers.Workers["svc-a"] = service
-		projection = workerapp.WorkerConfigFromState(st, server.Config.Workers)
+		projection = workerapp.EdgeConfigFromState(st, server.Config.Workers)
 		for _, route := range projection.Routes {
 			if route.Host == oldHost {
 				t.Fatal("deleted target still routable")

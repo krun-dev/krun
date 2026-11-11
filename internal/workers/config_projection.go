@@ -10,12 +10,12 @@ import (
 	storage "github.com/krun-dev/krun/internal/storage"
 )
 
-func LoadWorkerConfigProjection(ctx context.Context, store *storage.Store, ids []string, config *appconfig.WorkersConfig) (domain.WorkerConfigProjection, error) {
-	state, err := store.WorkerConfigState(ctx, ids)
+func LoadWorkerConfigProjection(ctx context.Context, store *storage.Store, ids []string, config *appconfig.WorkersConfig) (domain.EdgeConfigProjection, error) {
+	state, err := store.EdgeConfigState(ctx, ids)
 	if err != nil {
-		return domain.WorkerConfigProjection{}, err
+		return domain.EdgeConfigProjection{}, err
 	}
-	return WorkerConfigFromState(state, config), nil
+	return EdgeConfigFromState(state, config), nil
 }
 
 func EnsureWorkerConfigCatalogue(ctx context.Context, store *storage.Store, config *appconfig.WorkersConfig) error {

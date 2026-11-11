@@ -31,7 +31,7 @@ func TestPostgresConfigDeltaStoresNormalizedEntitiesAndShards(t *testing.T) {
 	if err = postgresTestPool(store).QueryRow(ctx, `SELECT (SELECT count(*) FROM worker_config_routes),(SELECT count(*) FROM worker_config_ops)`).Scan(&routes, &ops); err != nil || routes != 4 || ops != 4 {
 		t.Fatalf("routes=%d ops=%d err=%v", routes, ops, err)
 	}
-	var latest workerapp.WorkerConfigLatest
+	var latest workerapp.EdgeConfigLatest
 	if err = json.Unmarshal(objects[workerapp.WorkerPoolConfigLatestKey("default")], &latest); err != nil || !latest.LazyRoutes || latest.Snapshot != "" {
 		t.Fatalf("compact head=%+v err=%v", latest, err)
 	}
