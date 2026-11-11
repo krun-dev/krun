@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/krun-dev/krun/internal/adapters/cfcompat"
 	appconfig "github.com/krun-dev/krun/internal/config"
 )
 
@@ -82,7 +83,7 @@ func TestHyperdriveControlAndRuntimeBindings(t *testing.T) {
 		t.Fatalf("Previews Base with Hyperdrive binding: %d %s", preview.Code, preview.Body.String())
 	}
 
-	input, err := cfBindingInput(cfUploadMetadata{Bindings: []cfBinding{{Type: "hyperdrive", Name: "DB", ID: id}}}, false)
+	input, err := cfcompat.BindingInput(cfcompat.UploadMetadata{Bindings: []cfcompat.Binding{{Type: "hyperdrive", Name: "DB", ID: id}}}, false)
 	if err != nil || input.HyperdriveBindings == nil || (*input.HyperdriveBindings)["DB"] != id {
 		t.Fatalf("Wrangler binding metadata was not parsed: %v", err)
 	}
