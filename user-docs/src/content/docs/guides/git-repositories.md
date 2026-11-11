@@ -18,7 +18,7 @@ description: 连接 Git 平台并从仓库构建 Worker。
 
 [![1 打开代码源，2 选择已授权仓库，3 保存仓库配置](/docs/screenshots/git-repositories/worker-source.png)](/docs/screenshots/git-repositories/worker-source.png)
 
-绑定后，点 Worker 页右上角的 **构建新版本**，填写分支、Tag 或 Commit，再点 **开始构建**。留空或使用 `HEAD` 会构建默认分支。
+绑定后，进入 **构建与发布 → 部署项目 → Git 仓库**，点击 **从仓库构建**，填写分支、Tag 或 Commit，再点击 **开始构建**。留空时使用绑定中的 Git ref。填写 `HEAD` 时使用仓库默认分支。构建成功后，在构建记录中点击 **发布** 并确认目标环境。[验证发布](/docs/guides/deploy-project.html#验证发布)
 
 ## 授权失效
 

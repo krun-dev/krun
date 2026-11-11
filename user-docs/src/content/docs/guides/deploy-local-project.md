@@ -31,7 +31,7 @@ krun 优先检查 Wrangler 配置，其次识别静态产物。ZIP 可以直接�
 
 上传和构建需要目标环境的构建权限，确认发布需要发布权限。
 
-「部署项目」也提供 **Git 仓库** 入口，适合在 GitHub 或 GitLab 持续维护的项目，可以按分支、Tag 或提交构建。同一个 Worker 可同时使用 Git 仓库和本地上传。[Git 仓库集成](/docs/guides/git-repositories.html)
+持续在 GitHub 或 GitLab 维护的项目也可以从仓库构建。[两种部署方式与验证步骤](/docs/guides/deploy-project.html)
 
 ## 使用 krun CLI 上传并部署
 

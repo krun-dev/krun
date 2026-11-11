@@ -86,7 +86,7 @@ krun login --endpoint {{KRUN_ORIGIN}} --device --browser=false
 
 ## 接下来
 
-手上已有本地站点或 Worker 项目时，可以直接上传目录或 ZIP。[部署本地项目](/docs/guides/deploy-local-project.html)
+要发布 Worker，可以从 Git 仓库构建，也可以上传本地项目目录或 ZIP。[部署项目](/docs/guides/deploy-project.html)
 
 不熟悉 Workers、Wrangler 或 krun CLI？先阅读[基础概念](/docs/guides/concepts.html)，了解工具的作用和发布路径。
 

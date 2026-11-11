@@ -39,9 +39,7 @@ export default {
 
 ## 构建和发布
 
-支持 Wrangler 配置、JavaScript/TypeScript 模块、静态资产和已配置的自定义构建。可以在控制台上传目录或 ZIP，也可以用 krun CLI 或 Wrangler 发布本地项目。[部署本地项目](/docs/guides/deploy-local-project.html)
-
-需要从分支或提交构建时，可以在控制台连接仓库。[Git 仓库集成](/docs/guides/git-repositories.html)
+支持 Wrangler 配置、JavaScript/TypeScript 模块、静态资产和已配置的自定义构建。在 **构建与发布 → 部署项目** 选择 **Git 仓库** 或 **上传部署**。指南包含适用场景、控制台与 CLI 步骤，以及验证发布的方法。[部署项目](/docs/guides/deploy-project.html)
 
 如需限定编码 Agent 的使用范围，参照 [Workers 代码兼容范围](/docs/guides/workers-runtime-compatibility.html)。
 
