@@ -182,11 +182,10 @@ function storageResponse(request, response) {
   return new Response(stream, response);
 }
 
-// Edge configuration is an immutable in-memory view. There is no local DB:
-// bootstrap reads one snapshot, then a long-poll applies incremental ops.
+// Bootstrap reads the configuration revision. Routes load on demand, and a
+// long-poll applies incremental updates to the cached routes.
 let view = { revision: 0, routes: new Map(), versions: new Map() };
-let versionRefs = new Map();
-let lazyRoutes = false;
+const versionRefs = new Map();
 const routeDescriptors = new WeakMap();
 const routeVersions = new Map();
 const routeFlights = new Map();
@@ -554,43 +553,27 @@ async function gunzip(raw) {
   );
 }
 
-function applySnapshot(snapshot, pool = "default") {
-  if (snapshot.pool && snapshot.pool !== pool) {
+function applyConfigHead(head, pool) {
+  if (head?.lazy_routes !== true) {
+    throw new Error("unsupported config head");
+  }
+
+  if (pool && head.pool && head.pool !== pool) {
     throw new Error("snapshot pool mismatch");
   }
 
-  const routes = new Map();
-
-  for (const route of snapshot.routes || []) {
-    if (route.host) {
-      routes.set(String(route.host).toLowerCase(), route);
-    }
-  }
-
-  const versions = new Map();
-
-  for (const [id, version] of Object.entries(snapshot.versions || {})) {
-    versions.set(id, version);
-  }
-
-  versionRefs = new Map();
-
-  for (const route of routes.values()) {
-    if (route.version) {
-      versionRefs.set(route.version, (versionRefs.get(route.version) || 0) + 1);
-    }
-  }
-
-  for (const route of routes.values()) {
-    routeDescriptors.set(route, versions.get(route.version));
-  }
-
-  view = { revision: Number(snapshot.config_revision || 0), routes, versions };
-  lazyRoutes = snapshot.lazy_routes === true;
+  view = {
+    revision: Number(head.config_revision || 0),
+    routes: new Map(),
+    versions: new Map(),
+  };
+  versionRefs.clear();
   routeVersions.clear();
   routeMisses.clear();
   viewLoaded = true;
   lastSync = Date.now();
+
+  return view;
 }
 
 // Bootstrap prefers object storage so a new Pod starts even while the control
@@ -600,14 +583,8 @@ async function bootstrap(env) {
     try {
       const latest = await requestJSON(env, env.CONFIG_BASE + "/latest.json", 5000);
 
-      if (latest?.lazy_routes !== true) {
-        throw new Error("unsupported config head");
-      }
-
-      const pool = env.RUNTIME_POOL || "default";
-      applySnapshot({ ...latest, pool, routes: [], versions: {} }, pool);
-
-      return view;
+      // CONFIG_BASE already identifies the pool.
+      return applyConfigHead(latest);
     } catch (e) {
       console.error("config bootstrap from storage failed", e.message);
     }
@@ -619,13 +596,7 @@ async function bootstrap(env) {
 async function bootstrapFromControl(env) {
   const head = await platform(env, "/config/snapshot");
 
-  if (head?.lazy_routes !== true) {
-    throw new Error("unsupported config head");
-  }
-
-  applySnapshot(head, env.RUNTIME_POOL || "default");
-
-  return view;
+  return applyConfigHead(head, env.RUNTIME_POOL || "default");
 }
 
 function ensureBootstrap(env) {
@@ -670,6 +641,7 @@ function applyBatch(batch) {
   // before yielding; updating the indexes cannot change an in-flight version.
   const prune = new Set();
   const needed = new Set();
+  const revision = Number(batch.to);
 
   for (const op of ops) {
     if (
@@ -682,16 +654,10 @@ function applyBatch(batch) {
   }
 
   for (const op of ops) {
-    if (
-      op.type === "version_put" &&
-      lazyRoutes &&
-      !needed.has(op.version.id) &&
-      !versionRefs.has(op.version.id)
-    ) {
-      continue;
-    }
-
     if (op.type === "version_put") {
+      if (!needed.has(op.version.id) && !versionRefs.has(op.version.id)) {
+        continue;
+      }
       view.versions.set(op.version.id, op.version);
       prune.add(op.version.id);
       continue;
@@ -701,13 +667,13 @@ function applyBatch(batch) {
     const old = view.routes.get(host);
     routeMisses.delete(host);
 
-    if (lazyRoutes && (!old || (routeVersions.get(host) || 0) > Number(batch.to))) {
+    if (!old || (routeVersions.get(host) || 0) > revision) {
       continue;
     }
 
-    routeVersions.set(host, Number(batch.to));
+    routeVersions.set(host, revision);
 
-    if (old?.version) {
+    if (old.version) {
       const n = (versionRefs.get(old.version) || 0) - 1;
 
       if (n > 0) {
@@ -738,7 +704,7 @@ function applyBatch(batch) {
     }
   }
 
-  view.revision = Number(batch.to);
+  view.revision = revision;
   lastSync = Date.now();
 
   return true;
@@ -769,10 +735,6 @@ async function resolveRoute(env, host) {
     view.routes.set(host, cached);
 
     return cached;
-  }
-
-  if (!lazyRoutes) {
-    return null;
   }
 
   if ((routeMisses.get(host) || 0) > Date.now()) {
