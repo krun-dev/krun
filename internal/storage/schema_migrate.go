@@ -1,0 +1,115 @@
+package storage
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+)
+
+type schemaMigration struct {
+	from string
+	to   string
+	sql  string
+}
+
+// Each step records the exact schema.sql digests from the two releases.
+// Keep applied steps immutable and append new steps in release order.
+var schemaMigrations = []schemaMigration{
+	{
+		from: "8f802b41ccf74f398f6c4c8ede9c480ad29b7e29ae95d7febda6046baa3842ef",
+		to:   "791bb9ebf10e4652f69918635175574492833a5b55b53db9806f0a604b333a30",
+		sql:  `ALTER TABLE krun_worker_build_private ADD COLUMN config_path text NOT NULL DEFAULT ''`,
+	},
+}
+
+// MigrateSchema upgrades an existing database while the control plane is
+// stopped. It reports whether this call applied changes.
+func MigrateSchema(ctx context.Context, dsn string) (bool, error) {
+	pool, err := openPostgresPool(ctx, dsn)
+	if err != nil {
+		return false, err
+	}
+	defer pool.Close()
+
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '5s'`); err != nil {
+		return false, err
+	}
+
+	var schema string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(current_schema(), '')`).Scan(&schema); err != nil {
+		return false, err
+	}
+	if schema == "" {
+		return false, errors.New("PostgreSQL search_path has no existing schema")
+	}
+	// Do not fall through to another schema if a migration table is missing.
+	if _, err := tx.Exec(ctx, `SELECT set_config('search_path', quote_ident($1) || ', pg_temp', true)`, schema); err != nil {
+		return false, err
+	}
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT to_regclass(format('%I.krun_meta', $1::text)) IS NOT NULL`, schema).Scan(&exists); err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, errors.New("schema upgrade requires an existing krun database")
+	}
+
+	// The baseline row serializes explicit upgrades in this schema. An upgrade
+	// waiting here sees the preceding transaction's committed fingerprint.
+	var current string
+	err = tx.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='schema_baseline' FOR UPDATE`).Scan(&current)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, errors.New("schema upgrade requires an existing schema fingerprint")
+	}
+	if err != nil {
+		return false, fmt.Errorf("lock schema fingerprint: %w", err)
+	}
+
+	target := bytesDigest([]byte(schemaSQL))
+	if current == target {
+		return false, tx.Commit(ctx)
+	}
+	steps, err := planSchemaMigration(current, target)
+	if err != nil {
+		return false, err
+	}
+	for _, step := range steps {
+		if _, err := tx.Exec(ctx, step.sql); err != nil {
+			return false, fmt.Errorf("apply schema upgrade %s to %s: %w", step.from, step.to, err)
+		}
+	}
+	tag, err := tx.Exec(ctx, `UPDATE krun_meta SET value=$1 WHERE key='schema_baseline' AND value=$2`, target, current)
+	if err != nil {
+		return false, fmt.Errorf("record schema fingerprint: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return false, errors.New("schema fingerprint did not advance")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit schema upgrade: %w", err)
+	}
+	return true, nil
+}
+
+func planSchemaMigration(current, target string) ([]schemaMigration, error) {
+	var steps []schemaMigration
+	next := current
+	for _, step := range schemaMigrations {
+		if step.from != next {
+			continue
+		}
+		steps = append(steps, step)
+		next = step.to
+		if next == target {
+			return steps, nil
+		}
+	}
+	return nil, fmt.Errorf("no supported schema upgrade from %q to %q", current, target)
+}
