@@ -99,12 +99,6 @@ func (c *WorkersConfig) Validate() error {
 	if c.S3BucketMode != "managed" && c.S3BucketMode != "external" {
 		return fmt.Errorf("invalid Workers S3 bucket mode")
 	}
-	if c.S3AccessMode == "" {
-		c.S3AccessMode = "signed"
-	}
-	if c.S3AccessMode != "signed" {
-		return fmt.Errorf("Workers s3_access_mode must be signed; direct reads expose private artifacts")
-	}
 	if c.S3Prefix != "" {
 		hasUnsafeCharacters := strings.ContainsAny(c.S3Prefix, "\\?#%*[]") ||
 			strings.IndexFunc(c.S3Prefix, func(r rune) bool {
@@ -186,15 +180,6 @@ func (c *WorkersConfig) Validate() error {
 	}
 	if c.PreviewLimit < 1 || c.PreviewLimit > 128 {
 		return fmt.Errorf("preview_limit must be between 1 and 128")
-	}
-	if c.StaticService == "" {
-		c.StaticService = "static-assets"
-	}
-	if c.StaticServicePort == 0 {
-		c.StaticServicePort = 9000
-	}
-	if !dns.MatchString(c.StaticService) {
-		return fmt.Errorf("invalid Workers static service")
 	}
 	if c.CloneDirectory != "" && !path.IsAbs(c.CloneDirectory) {
 		return fmt.Errorf("clone_directory must be an absolute path")

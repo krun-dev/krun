@@ -102,9 +102,6 @@ func Render(workers *config.WorkersConfig, pool config.WorkerRuntimePool, contro
 }
 
 func storageBindings(workers *config.WorkersConfig, pool config.WorkerRuntimePool) string {
-	if !workers.S3UsesSignedAccess() {
-		return ""
-	}
 	domains := map[string]string{}
 	for _, domain := range workers.Domains {
 		owner, err := workers.DomainRuntimePool(domain.ID)

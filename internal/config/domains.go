@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	workerartifact "github.com/krun-dev/krun/internal/artifact"
-	domain "github.com/krun-dev/krun/internal/domain"
 	securetoken "github.com/krun-dev/krun/internal/securetoken"
 )
 
@@ -244,14 +243,4 @@ func WorkerVariablesValid(vars map[string]any) bool {
 		size += len(k) + len(raw)
 	}
 	return size <= 16<<10
-}
-
-func (c *WorkersConfig) WorkerPool(state *domain.WorkerState, service domain.Worker) string {
-	if p, ok := domain.ActiveWorkerPlacement(state, service.Worker); ok && p.NetworkProfile == service.NetworkProfile {
-		return p.Pool
-	}
-	if p, ok := c.SelectPoolForWorker(service.NetworkProfile, service.Worker); ok {
-		return p.ID
-	}
-	return ""
 }

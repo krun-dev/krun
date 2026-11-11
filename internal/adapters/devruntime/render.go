@@ -24,7 +24,6 @@ type renderOptions struct {
 	controlPort string
 	storageHost string
 	storagePort string
-	signed      bool
 }
 
 func Render(c config.Config, controlHost, outputDirectory string) error {
@@ -75,9 +74,6 @@ func Render(c config.Config, controlHost, outputDirectory string) error {
 		return err
 	}
 
-	if !options.signed {
-		return renderTemplate(outputDirectory, "static-assets.yaml", replacements)
-	}
 	return nil
 }
 
@@ -85,7 +81,6 @@ func newRenderOptions(c config.Config, controlHost string) (renderOptions, error
 	options := renderOptions{
 		workers:     c.Workers,
 		controlHost: controlHost,
-		signed:      c.Workers.S3UsesSignedAccess(),
 	}
 
 	for _, candidate := range c.Workers.RuntimePools {
@@ -118,9 +113,6 @@ func newRenderOptions(c config.Config, controlHost string) (renderOptions, error
 	}
 
 	storageIP := net.ParseIP(options.storageHost)
-	if !options.signed && (storageIP == nil || storageIP.To4() == nil || storage.Scheme != "http") {
-		return options, errors.New("local-first direct storage requires an HTTP IPv4 endpoint; use s3_access_mode: signed for HTTPS or DNS endpoints")
-	}
 	if storage.Scheme == "http" && storageIP == nil {
 		return options, errors.New("local-first HTTP storage requires a cluster-reachable IP endpoint")
 	}
@@ -149,15 +141,6 @@ func (o renderOptions) templateReplacements() *strings.Replacer {
 		"__STORAGE_ALLOW__", allowedNetworks,
 		"__CONFIG_BASE__", quote(o.workers.ConfigBaseURL+"/pools/default"),
 	)
-}
-
-func renderTemplate(outputDirectory, name string, replacements *strings.Replacer) error {
-	templatePath := filepath.Join("deploy", "workers-dev", name+".tmpl")
-	raw, err := os.ReadFile(templatePath)
-	if err != nil {
-		return err
-	}
-	return writeResource(outputDirectory, name, replacements.Replace(string(raw)))
 }
 
 func writeResource(outputDirectory, name string, value any) error {

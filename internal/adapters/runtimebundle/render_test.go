@@ -43,7 +43,6 @@ func TestRenderedServingAndValidatorStartInRealWorkerd(t *testing.T) {
 			defer backend.Close()
 			cfg := &config.WorkersConfig{
 				S3Region:      "us-east-1",
-				S3AccessMode:  "signed",
 				ConfigBaseURL: backend.URL + "/config",
 				ObjectStorage: &config.WorkerObjectStorageConfig{
 					Stores: []config.WorkerObjectStore{

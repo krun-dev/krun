@@ -293,14 +293,13 @@ func TestExternalObjectStoreConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Workers.S3Region != "cn-beijing" || cfg.Workers.S3Prefix != "dev/run" || cfg.Workers.S3BucketMode != "external" || cfg.Workers.S3AccessMode != "signed" || cfg.Workers.ConfigBaseURL != "https://krun-artifacts.s3.runtime.internal.example.com/dev/run/config" {
+	if cfg.Workers.S3Region != "cn-beijing" || cfg.Workers.S3Prefix != "dev/run" || cfg.Workers.S3BucketMode != "external" || cfg.Workers.ConfigBaseURL != "https://krun-artifacts.s3.runtime.internal.example.com/dev/run/config" {
 		t.Fatalf("object storage config not loaded correctly")
 	}
 	for _, test := range []struct{ from, to string }{
 		{"s3_region: cn-beijing", "s3_region: invalid/region"},
 		{"s3_addressing_style: virtual", "s3_addressing_style: invalid"},
 		{"s3_bucket_mode: external", "s3_bucket_mode: invalid"},
-		{"s3_access_mode: signed", "s3_access_mode: invalid"},
 		{"s3_prefix: dev/run", "s3_prefix: ../other"},
 		{"s3_prefix: dev/run", "s3_prefix: .."},
 		{"s3_prefix: dev/run", "s3_prefix: /dev/run"},
@@ -308,49 +307,6 @@ func TestExternalObjectStoreConfiguration(t *testing.T) {
 		os.WriteFile(file, []byte(strings.Replace(base, test.from, test.to, 1)), 0600)
 		if _, err = appconfig.LoadConfig(file); err == nil {
 			t.Fatalf("accepted invalid %s", test.to)
-		}
-	}
-}
-
-func TestS3AccessRequiresSignedReads(t *testing.T) {
-	setExampleCredentials(t)
-	t.Setenv("KRUN_DATABASE_URL", "postgres://test-only/krun_test")
-	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "example.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, bucketMode := range []string{"managed", "external"} {
-		for _, accessMode := range []string{"", "direct", "signed"} {
-			t.Run(bucketMode+"/"+accessMode, func(t *testing.T) {
-				text := strings.Replace(string(raw), "s3_bucket_mode: managed", "s3_bucket_mode: "+bucketMode, 1)
-				replacement := "s3_access_mode: " + accessMode
-				if accessMode == "" {
-					replacement = "s3_access_mode: \"\""
-				}
-				text = strings.Replace(text, "s3_access_mode: signed", replacement, 1)
-				file := filepath.Join(t.TempDir(), "config.yaml")
-				if err := os.WriteFile(file, []byte(text), 0600); err != nil {
-					t.Fatal(err)
-				}
-
-				cfg, err := appconfig.LoadConfig(file)
-				if accessMode == "direct" {
-					if err == nil || !strings.Contains(err.Error(), "s3_access_mode") {
-						t.Fatalf("expected direct access rejection, got %v", err)
-					}
-					return
-				}
-				if err != nil {
-					t.Fatal(err)
-				}
-				if cfg.Workers.S3BucketMode != bucketMode || cfg.Workers.S3AccessMode != "signed" {
-					t.Fatal("S3 bucket management and access mode were not loaded independently")
-				}
-				if !cfg.Workers.S3UsesSignedAccess() {
-					t.Fatal("runtime access unexpectedly depends on bucket management")
-				}
-			})
 		}
 	}
 }

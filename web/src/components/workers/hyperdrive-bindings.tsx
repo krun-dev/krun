@@ -18,7 +18,7 @@ export function HyperdriveBindingsEditor({
   organizationBase: string;
   rows: HyperdriveBindingRow[];
   onChange: (rows: HyperdriveBindingRow[]) => void;
-  onSave: () => void;
+  onSave?: () => void;
   disabled: boolean;
 }) {
   const [configs, setConfigs] = useState<HyperdriveConfig[] | null>(null);
@@ -102,12 +102,14 @@ export function HyperdriveBindingsEditor({
         >
           {t("添加 Hyperdrive 绑定")}
         </Button>
-        <Button
-          disabled={disabled || !valid}
-          onClick={onSave}
-        >
-          {t("保存 Hyperdrive 绑定")}
-        </Button>
+        {onSave ? (
+          <Button
+            disabled={disabled || !valid}
+            onClick={onSave}
+          >
+            {t("保存 Hyperdrive 绑定")}
+          </Button>
+        ) : null}
       </div>
     </section>
   );

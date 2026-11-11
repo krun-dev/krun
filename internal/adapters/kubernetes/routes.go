@@ -223,10 +223,10 @@ func (k *Client) EnsureRoute(ctx context.Context, name, runtimeService string, g
 }
 
 // One shared static route per (domain, Gateway) serves every service. Requests
-// use either a direct object origin or the trusted runtime for signed reads.
-// Gateway API needs no per-service rules. Assets are copied into one prefix per
-// domain; the route for a domain only exists on that domain's Gateway instance.
-func (k *Client) EnsureStaticRoute(ctx context.Context, c *appconfig.WorkersConfig, domainID string, prefix string) error {
+// are always served by the trusted runtime with signed reads. Gateway API needs
+// no per-service rules. Assets are copied into one prefix per domain; the route
+// for a domain only exists on that domain's Gateway instance.
+func (k *Client) EnsureStaticRoute(ctx context.Context, c *appconfig.WorkersConfig, domainID string) error {
 	d, ok := c.Domain(domainID)
 	if !ok || d.StaticDomain == "" {
 		return nil
@@ -236,14 +236,11 @@ func (k *Client) EnsureStaticRoute(ctx context.Context, c *appconfig.WorkersConf
 		return nil
 	}
 	host := d.StaticDomain
-	backend, port := c.StaticService, c.StaticServicePort
-	if c.S3UsesSignedAccess() {
-		pool, err := c.DomainRuntimePool(d.ID)
-		if err != nil {
-			return err
-		}
-		backend, port = pool.RuntimeService, 8081
+	pool, err := c.DomainRuntimePool(d.ID)
+	if err != nil {
+		return err
 	}
+	backend, port := pool.RuntimeService, 8081
 	// One route per domain: they carry different hostnames and may sit on
 	// different Gateway instances.
 	name := "workers-static-" + domainID
@@ -262,15 +259,6 @@ func (k *Client) EnsureStaticRoute(ctx context.Context, c *appconfig.WorkersConf
 			map[string]any{
 				"matches": []any{map[string]any{"path": map[string]string{"type": "PathPrefix", "value": "/"}}},
 				"filters": []any{
-					map[string]any{
-						"type": "URLRewrite",
-						"urlRewrite": map[string]any{
-							"path": map[string]string{
-								"type":               "ReplacePrefixMatch",
-								"replacePrefixMatch": c.StaticRoutePrefix(prefix),
-							},
-						},
-					},
 					map[string]any{
 						"type": "ResponseHeaderModifier",
 						"responseHeaderModifier": map[string]any{
@@ -319,11 +307,7 @@ func (k *Client) EnsureStaticRoute(ctx context.Context, c *appconfig.WorkersConf
 				Port int    `json:"port"`
 			} `json:"backendRefs"`
 			Filters []struct {
-				URLRewrite *struct {
-					Path struct {
-						ReplacePrefixMatch string `json:"replacePrefixMatch"`
-					} `json:"path"`
-				} `json:"urlRewrite"`
+				Type string `json:"type"`
 			} `json:"filters"`
 		} `json:"rules"`
 	}
@@ -332,22 +316,16 @@ func (k *Client) EnsureStaticRoute(ctx context.Context, c *appconfig.WorkersConf
 	// to another Gateway instance must not keep serving from the old one.
 	parentDrift := len(old.Parent) != 1 || old.Parent[0].Name != gatewayName ||
 		old.Parent[0].Namespace != gatewayNamespace || old.Parent[0].Section != section
-	// The object prefix is part of the desired state too; changing which prefix
-	// a domain serves must rewrite the route, not just the hostname.
-	want := c.StaticRoutePrefix(prefix)
-	rewriteDrift := true
-	if len(old.Rules) == 1 {
-		for _, f := range old.Rules[0].Filters {
-			if f.URLRewrite != nil && f.URLRewrite.Path.ReplacePrefixMatch == want {
-				rewriteDrift = false
-			}
-		}
-	}
+	// The route must carry exactly the managed response-header filter; an old
+	// direct-origin URL rewrite is removed rather than preserved.
+	filterDrift := len(old.Rules) != 1 ||
+		len(old.Rules[0].Filters) != 1 ||
+		old.Rules[0].Filters[0].Type != "ResponseHeaderModifier"
 	backendDrift := len(old.Rules) != 1 ||
 		len(old.Rules[0].BackendRefs) != 1 ||
 		old.Rules[0].BackendRefs[0].Name != backend ||
 		old.Rules[0].BackendRefs[0].Port != port
-	if parentDrift || rewriteDrift || backendDrift || len(old.Hosts) != 1 || old.Hosts[0] != host {
+	if parentDrift || filterDrift || backendDrift || len(old.Hosts) != 1 || old.Hosts[0] != host {
 		return k.Call(ctx, "PATCH", base+"/"+name, map[string]any{"spec": spec}, nil)
 	}
 	return nil

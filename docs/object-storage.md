@@ -31,16 +31,12 @@ region 对应的区域 endpoint，SDK 不隐式开启 dual-stack；需要时在 
 
 ## 桶管理和读取方式
 
-两项配置互相独立：
-
 | 配置 | 行为 |
 | --- | --- |
 | `s3_bucket_mode: managed` | 控制面创建专用桶并清除桶策略，保持私有 |
 | `s3_bucket_mode: external` | 部署方提供已有的私有桶并维护权限 |
-| `s3_access_mode: signed` | 配置使用 SigV4，制品和资产使用短期预签名 URL，静态域名转到 Runtime |
 
-省略 `s3_access_mode` 时默认 `signed`。已有 `direct` 配置需切换至 `signed`，
-并重新生成 Runtime 配置。外部桶由部署方撤销此前授予的匿名读取权限。
+读取固定使用 SigV4：制品和资产使用短期预签名 URL，静态域名转到 Runtime。
 业务 Worker 不接收存储凭据，也不获得可信 entry worker 的出站网络能力。
 
 ```yaml
@@ -51,7 +47,6 @@ s3_region: us-east-1
 s3_addressing_style: path
 s3_bucket: replace-me
 s3_bucket_mode: external
-s3_access_mode: signed
 s3_prefix: dev/run
 s3_location_id: primary
 s3_access_key: ${KRUN_S3_ACCESS}

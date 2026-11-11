@@ -100,16 +100,14 @@ func TestRenderStorageModes(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		endpoint   string
-		accessMode string
 		bucketMode string
 		wantCIDR   string
 		wantPort   int
 	}{
-		{"local managed direct", "http://192.0.2.20:9000", "direct", "managed", "192.0.2.20/32", 9000},
-		{"private existing signed", "http://192.0.2.20:9000", "signed", "external", "192.0.2.20/32", 9000},
-		{"private TLS signed", "https://192.0.2.20:9443", "signed", "external", "192.0.2.20/32", 9443},
-		{"public managed signed", "https://storage.example.com:9443", "signed", "managed", "0.0.0.0/0", 9443},
-		{"public existing signed", "https://storage.example.com", "signed", "external", "0.0.0.0/0", 443},
+		{"private existing", "http://192.0.2.20:9000", "external", "192.0.2.20/32", 9000},
+		{"private TLS", "https://192.0.2.20:9443", "external", "192.0.2.20/32", 9443},
+		{"public managed", "https://storage.example.com:9443", "managed", "0.0.0.0/0", 9443},
+		{"public existing", "https://storage.example.com", "external", "0.0.0.0/0", 443},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			out := t.TempDir()
@@ -118,7 +116,6 @@ func TestRenderStorageModes(t *testing.T) {
 				Workers: &config.WorkersConfig{
 					ValidatorPool:     "default",
 					S3RuntimeEndpoint: test.endpoint,
-					S3AccessMode:      test.accessMode,
 					S3BucketMode:      test.bucketMode,
 					S3Region:          "us-east-1",
 					ConfigBaseURL:     test.endpoint + "/bucket/config",
@@ -135,13 +132,11 @@ func TestRenderStorageModes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			signed := test.accessMode == "signed"
-			if strings.Contains(string(runtime), "STORAGE_SECRET_KEY") != signed {
-				t.Fatal("runtime storage credentials do not match access mode")
+			if !strings.Contains(string(runtime), "STORAGE_SECRET_KEY") {
+				t.Fatal("runtime storage credentials are required")
 			}
-			_, staticErr := os.Stat(filepath.Join(out, "static-assets.yaml"))
-			if signed != os.IsNotExist(staticErr) {
-				t.Fatal("static origin does not match access mode")
+			if _, staticErr := os.Stat(filepath.Join(out, "static-assets.yaml")); !os.IsNotExist(staticErr) {
+				t.Fatal("signed runtime reads must not render a direct object origin")
 			}
 
 			raw, err := os.ReadFile(filepath.Join(out, "networkpolicy.json"))

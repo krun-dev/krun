@@ -47,20 +47,3 @@ func (c *WorkersConfig) S3UsesVirtualHost(endpoint url.URL, bucket string) bool 
 	return strings.HasSuffix(host, ".amazonaws.com") ||
 		strings.HasSuffix(host, ".amazonaws.com.cn")
 }
-
-// S3UsesSignedAccess controls runtime reads independently of bucket ownership.
-func (c *WorkersConfig) S3UsesSignedAccess() bool {
-	if c.S3AccessMode != "" {
-		return c.S3AccessMode == "signed"
-	}
-	return true
-}
-
-// StaticRoutePrefix keeps direct origins and signed runtime reads on the same
-// public URL shape. Signed assets are served through workerd.
-func (c *WorkersConfig) StaticRoutePrefix(prefix string) string {
-	if c.S3UsesSignedAccess() {
-		return "/"
-	}
-	return "/" + c.S3Bucket + "/" + strings.TrimSuffix(c.S3Key(prefix), "/") + "/"
-}

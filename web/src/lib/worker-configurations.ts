@@ -2,7 +2,12 @@ import type { Environment, Version } from "./workers";
 
 export type WorkerConfiguration = Pick<
   Environment,
-  "variables" | "r2_buckets" | "version_metadata" | "assets_binding" | "secret_names"
+  | "variables"
+  | "r2_buckets"
+  | "hyperdrive_bindings"
+  | "version_metadata"
+  | "assets_binding"
+  | "secret_names"
 > & {
   id: string;
   worker_id: string;
@@ -15,7 +20,7 @@ export type WorkerConfiguration = Pick<
 
 export type ConfigurationValues = Pick<
   Environment,
-  "variables" | "r2_buckets" | "version_metadata" | "assets_binding"
+  "variables" | "r2_buckets" | "hyperdrive_bindings" | "version_metadata" | "assets_binding"
 > & { secret_names?: string[]; secret_digest?: string };
 
 function stableValue(value: unknown): string {
@@ -62,6 +67,18 @@ export function configurationDifferences(
       name + " · R2",
       current?.r2_buckets?.[name]?.bucket_name || "—",
       selected.r2_buckets?.[name]?.bucket_name || "—",
+    );
+  }
+  for (const name of [
+    ...new Set([
+      ...Object.keys(current?.hyperdrive_bindings || {}),
+      ...Object.keys(selected.hyperdrive_bindings || {}),
+    ]),
+  ].sort()) {
+    add(
+      name + " · Hyperdrive",
+      current?.hyperdrive_bindings?.[name] || "—",
+      selected.hyperdrive_bindings?.[name] || "—",
     );
   }
   add("version_metadata", current?.version_metadata || "—", selected.version_metadata || "—");

@@ -261,11 +261,7 @@ func (w *Controller) ReconcileRoutes(ctx context.Context) (map[string]bool, erro
 	desiredStatic := map[string]bool{}
 	for _, d := range w.Config.Domains {
 		desiredStatic["workers-static-"+d.ID] = true
-		prefix := "int"
-		if d.Access == "public" {
-			prefix = "pub"
-		}
-		if e := w.Kube.EnsureStaticRoute(ctx, w.Config, d.ID, prefix); e != nil {
+		if e := w.Kube.EnsureStaticRoute(ctx, w.Config, d.ID); e != nil {
 			failures = append(failures, e)
 		}
 	}

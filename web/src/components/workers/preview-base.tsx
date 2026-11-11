@@ -4,6 +4,7 @@ import { t, errorMessage } from "@/lib/i18n";
 import type { Environment } from "@/lib/workers";
 import { Button } from "@/components/ui/button";
 import { R2BindingsEditor } from "./r2-bindings";
+import { HyperdriveBindingsEditor, type HyperdriveBindingRow } from "./hyperdrive-bindings";
 import { bindingRows, bindingInput } from "@/lib/object-storage";
 import { variableRows, variableInput } from "@/lib/worker-variables";
 import { VariablesEditor, VersionMetadataField } from "./variables";
@@ -30,6 +31,7 @@ export function PreviewBasePanel({
   const [variables, setVariables] = useState(() => variableRows());
   const [versionMetadata, setVersionMetadata] = useState("");
   const [r2Bindings, setR2Bindings] = useState(() => bindingRows());
+  const [hyperdriveBindings, setHyperdriveBindings] = useState<HyperdriveBindingRow[]>([]);
   const [busy, setBusy] = useState(false);
 
   function reset(value: Environment) {
@@ -37,6 +39,9 @@ export function PreviewBasePanel({
     setVariables(variableRows(value.variables));
     setVersionMetadata(value.version_metadata || "");
     setR2Bindings(bindingRows(value.r2_buckets));
+    setHyperdriveBindings(
+      Object.entries(value.hyperdrive_bindings || {}).map(([name, id]) => ({ name, id })),
+    );
   }
 
   useEffect(() => {
@@ -61,21 +66,29 @@ export function PreviewBasePanel({
     }
   }
 
-  async function save(section: "variables" | "r2") {
+  async function save(section: "variables" | "r2" | "hyperdrive") {
     if (!config) return;
     setBusy(true);
     try {
       const input =
         section === "variables"
           ? { variables: variableInput(variables), version_metadata: versionMetadata }
-          : {
-              r2_buckets: bindingInput(
-                r2Bindings,
-                config.variables,
-                config.secret_names || [],
-                config.version_metadata || "",
-              ),
-            };
+          : section === "r2"
+            ? {
+                r2_buckets: bindingInput(
+                  r2Bindings,
+                  config.variables,
+                  config.secret_names || [],
+                  config.version_metadata || "",
+                ),
+              }
+            : {
+                hyperdrive_bindings: Object.fromEntries(
+                  hyperdriveBindings
+                    .filter((row) => row.name.trim() && row.id)
+                    .map((row) => [row.name.trim(), row.id]),
+                ),
+              };
       const result = await api<Environment>(base + "/previews-base", "PATCH", {
         ...input,
         expected_revision: config.configuration_revision,
@@ -84,8 +97,15 @@ export function PreviewBasePanel({
       if (section === "variables") {
         setVariables(variableRows(result.variables));
         setVersionMetadata(result.version_metadata || "");
-      } else {
+      } else if (section === "r2") {
         setR2Bindings(bindingRows(result.r2_buckets));
+      } else {
+        setHyperdriveBindings(
+          Object.entries(result.hyperdrive_bindings || {}).map(([name, id]) => ({
+            name,
+            id,
+          })),
+        );
       }
       report(t("新建预览默认配置已保存，仅影响之后新建的预览。"));
     } catch (error) {
@@ -174,6 +194,13 @@ export function PreviewBasePanel({
           </Button>
         </div>
       </R2BindingsEditor>
+      <HyperdriveBindingsEditor
+        organizationBase={organizationBase}
+        rows={hyperdriveBindings}
+        onChange={setHyperdriveBindings}
+        disabled={busy || !config}
+        onSave={() => void save("hyperdrive")}
+      />
       <SecretsEditor
         names={config?.secret_names || []}
         disabled={busy || !config}
