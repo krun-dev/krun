@@ -4,11 +4,13 @@ import { t, errorMessage } from "@/lib/i18n";
 import type { Environment } from "@/lib/workers";
 import { Button } from "@/components/ui/button";
 import { R2BindingsEditor } from "./r2-bindings";
-import { HyperdriveBindingsEditor, type HyperdriveBindingRow } from "./hyperdrive-bindings";
+import { HyperdriveBindingsEditor } from "./hyperdrive-bindings";
 import { bindingRows, bindingInput } from "@/lib/object-storage";
 import { variableRows, variableInput } from "@/lib/worker-variables";
 import { VariablesEditor, VersionMetadataField } from "./variables";
 import { SecretsEditor } from "./secrets";
+import { hyperdriveInput, hyperdriveRows } from "@/lib/worker-config-draft";
+import { useConfigDraft } from "@/lib/use-config-draft";
 
 export function PreviewBasePanel({
   base,
@@ -28,20 +30,28 @@ export function PreviewBasePanel({
     },
     [notify],
   );
-  const [variables, setVariables] = useState(() => variableRows());
-  const [versionMetadata, setVersionMetadata] = useState("");
-  const [r2Bindings, setR2Bindings] = useState(() => bindingRows());
-  const [hyperdriveBindings, setHyperdriveBindings] = useState<HyperdriveBindingRow[]>([]);
+  const draft = useConfigDraft({
+    variables: {},
+    r2_buckets: {},
+    hyperdrive_bindings: {},
+    version_metadata: "",
+    secret_names: [],
+  });
+  const {
+    variables,
+    setVariables,
+    versionMetadata,
+    setVersionMetadata,
+    r2Bindings,
+    setR2Bindings,
+    hyperdriveBindings,
+    setHyperdriveBindings,
+  } = draft;
   const [busy, setBusy] = useState(false);
 
   function reset(value: Environment) {
     setConfig(value);
-    setVariables(variableRows(value.variables));
-    setVersionMetadata(value.version_metadata || "");
-    setR2Bindings(bindingRows(value.r2_buckets));
-    setHyperdriveBindings(
-      Object.entries(value.hyperdrive_bindings || {}).map(([name, id]) => ({ name, id })),
-    );
+    draft.reset(value);
   }
 
   useEffect(() => {
@@ -83,11 +93,7 @@ export function PreviewBasePanel({
                 ),
               }
             : {
-                hyperdrive_bindings: Object.fromEntries(
-                  hyperdriveBindings
-                    .filter((row) => row.name.trim() && row.id)
-                    .map((row) => [row.name.trim(), row.id]),
-                ),
+                hyperdrive_bindings: hyperdriveInput(hyperdriveBindings),
               };
       const result = await api<Environment>(base + "/previews-base", "PATCH", {
         ...input,
@@ -100,12 +106,7 @@ export function PreviewBasePanel({
       } else if (section === "r2") {
         setR2Bindings(bindingRows(result.r2_buckets));
       } else {
-        setHyperdriveBindings(
-          Object.entries(result.hyperdrive_bindings || {}).map(([name, id]) => ({
-            name,
-            id,
-          })),
-        );
+        setHyperdriveBindings(hyperdriveRows(result.hyperdrive_bindings));
       }
       report(t("新建预览默认配置已保存，仅影响之后新建的预览。"));
     } catch (error) {
