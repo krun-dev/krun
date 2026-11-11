@@ -32,3 +32,16 @@ description: 按 Workers + R2、PostgreSQL、Hono、Astro 和静态页面选择�
 每个分类页都列出源码、项目配置、资源要求与验证步骤。发布后使用目标环境显示的 Worker 地址，按照对应分类页验证页面、API 或文件读写。
 
 如果控制台内调用不可用，可以在有权访问 Worker 的网络中直接打开环境地址；若地址也不可访问，请检查发布状态、域名绑定和网络访问范围。
+
+## 无浏览器自动化部署（Agent / CI）
+
+控制台仓库构建需要 GitHub 授权等浏览器交互；无人值守环境改用 krun CLI 管理资源、原版 Wrangler 发布代码，全程不需要浏览器：
+
+1. 安装 [krun CLI](/docs/guides/krun-cli.html)，用 `krun login --token-stdin`（读入 API Key）或环境变量 `KRUN_ENDPOINT` + `KRUN_TOKEN` 完成非交互登录；`krun config set org ORG_ID` 选定组织。
+2. 每个示例先 `krun workers create --name NAME` 创建 Worker 资源。
+3. 按 [Wrangler 部署指南](/docs/guides/cloudflare-workers.html#创建可部署的-api-key) 创建策略覆盖部署动作的 API Key，配置 `CLOUDFLARE_API_BASE_URL`、`CLOUDFLARE_ACCOUNT_ID`、`CLOUDFLARE_API_TOKEN` 三个环境变量。
+4. 克隆示例仓库，进入示例目录执行 `npm ci && npx wrangler@4.155.0 deploy`。
+5. R2 示例部署前：`krun r2 bucket create BUCKET` 建桶，`krun workers environments update --worker NAME --env production --r2-bindings-file bindings.yaml` 绑定（文件格式为 `绑定名: 桶名` 的映射），并把该示例 `wrangler.jsonc` 里的 `bucket_name` 改成实际桶名——配置里的桶名若与平台桶不一致，Wrangler 会尝试自动建桶并失败。
+6. Workers + PG 示例：把 `wrangler.jsonc` 中 `hyperdrive[0].id` 的全零占位值替换为实际配置 ID（保留占位值直接部署会上传无效绑定）。创建 Hyperdrive 配置可以用 `npx wrangler@4.155.0 hyperdrive create NAME --connection-string "$ORIGIN_DSN"`。
+
+每篇示例与指南页都可以直接抓取 Markdown 原文：在页面 URL 后加 `.md.txt`。给编码 Agent 的完整入口清单见 [Workers 代码兼容范围](/docs/guides/workers-runtime-compatibility.html#给编码-agent-的列表)。

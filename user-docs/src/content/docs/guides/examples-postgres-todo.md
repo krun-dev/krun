@@ -52,6 +52,24 @@ psql "$ORIGIN_DSN" -v ON_ERROR_STOP=1 -c 'SELECT count(*) FROM todos;'
 第一条 `psql` 命令创建 `todos` 表。第二条能查出行数，就可以继续配置和部署。
 直接使用 Neon 提供的 TLS 连接串，无需修改其中的查询参数。
 
+没有安装 `psql` 时，可以用示例自带的 Node 依赖建表（在示例目录内执行，密码不回显）：
+
+~~~sh
+npm ci
+ORIGIN_DSN="$ORIGIN_DSN" node -e '
+const fs = require("fs");
+const { Client } = require("pg");
+(async () => {
+  const db = new Client({ connectionString: process.env.ORIGIN_DSN });
+  await db.connect();
+  await db.query(fs.readFileSync("schema.sql", "utf8"));
+  const { rows } = await db.query("SELECT count(*) FROM todos;");
+  console.log("todos rows:", rows[0].count);
+  await db.end();
+})().catch((e) => { console.error(e.message); process.exit(1); });
+'
+~~~
+
 ## 3. 绑定并发布
 
 控制台与 Wrangler 任选一种。Neon 是公网源库，目标 Worker 所在的运行池需要允许公网出网。
@@ -91,6 +109,8 @@ unset ORIGIN_DSN
 ~~~
 
 使用 CLI 输出的 Worker 地址验收。项目配置中只保存绑定名和配置 ID。
+
+发布前务必替换 `wrangler.jsonc` 中 `hyperdrive[0].id` 的全零占位值——保留占位值直接 `deploy` 会把无效配置 ID 上传为绑定，运行时 `env.DB.connectionString` 为空，页面能打开但所有 `/api/todos` 请求返回 503「数据库尚未绑定」。
 
 ## 4. 验证读写
 

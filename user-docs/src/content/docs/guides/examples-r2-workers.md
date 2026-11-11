@@ -27,6 +27,8 @@ description: 部署拾光照片墙和拾物文件工作台，通过 Workers 的 
 
 保存绑定后再构建并发布。控制台仓库构建不会自动根据 `wrangler.jsonc` 创建桶或导入环境绑定。支持的方法及限制见[对象存储](/docs/guides/component-object-storage.html)。
 
+用原版 Wrangler 直接部署时，先把示例 `wrangler.jsonc` 里的 `r2_buckets[0].bucket_name` 改成自己创建的桶名。配置中的桶名与平台桶不一致时，Wrangler 会尝试按该名字自动创建桶，并在 krun 兼容接口上报错（`code 10021`）；krun 不会按仓库配置自动建桶，桶始终先在平台创建。
+
 ## 验证部署
 
 - **Photo Wall**：打开环境地址，上传一张支持格式的图片，确认可打开原图；刷新页面，照片仍应可见。
