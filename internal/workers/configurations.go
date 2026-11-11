@@ -140,23 +140,11 @@ func (s *Service) WorkerConfigurationCreate(ctx context.Context, st *domain.Stat
 	if !appconfig.WorkerVariablesValid(config.Variables) {
 		return nil, Read, domain.Invalid("WORKER_VARIABLES_INVALID", "Invalid variable names or size")
 	}
-	if in.VersionMetadata != nil {
-		config.VersionMetadata = *in.VersionMetadata
+	if in.R2Buckets != nil && len(*in.R2Buckets) > 0 && !s.r2BindingStorageConfigured() {
+		return nil, Read, domain.Unavailable("OBJECT_STORAGE_NOT_CONFIGURED", "R2 storage must be configured")
 	}
-	if in.R2Buckets != nil {
-		if len(*in.R2Buckets) > 0 && (s.Config.Workers.ObjectStorage == nil || s.Config.Workers.ObjectStorage.CursorKey == "") {
-			return nil, Read, domain.Unavailable("OBJECT_STORAGE_NOT_CONFIGURED", "R2 storage must be configured")
-		}
-		config.R2Bindings, err = resolveR2Bindings(st, ref.Organization, *in.R2Buckets)
-		if err != nil {
-			return nil, Read, err
-		}
-	}
-	if in.HyperdriveBindings != nil {
-		if err := s.validateHyperdriveBindings(ctx, ref.Organization, *in.HyperdriveBindings); err != nil {
-			return nil, Read, err
-		}
-		config.HyperdriveBindings = cloneHyperdriveBindings(*in.HyperdriveBindings)
+	if err := s.applyBindingPatch(ctx, st, ref.Organization, &config, in.R2Buckets, in.HyperdriveBindings, in.VersionMetadata); err != nil {
+		return nil, Read, err
 	}
 
 	if len(in.Secrets) > WorkerSecretMaxCount {
@@ -168,23 +156,18 @@ func (s *Service) WorkerConfigurationCreate(ctx context.Context, st *domain.Stat
 		}
 		config.SecretVersions = domain.CloneStringsMap(config.SecretVersions)
 		for name, value := range in.Secrets {
-			if !WorkerSecretNameValid(name) || strings.HasPrefix(name, "KRUN_") || value != nil && len(*value) > WorkerSecretMaxBytes {
+			if !workerSecretInputValid(name, value) {
 				return nil, Read, domain.Invalid("WORKER_SECRET_INVALID", "Invalid secret name or size")
 			}
 			if value == nil {
 				delete(config.SecretVersions, name)
 				continue
 			}
-			encrypted, err := EncryptWorkerSecret(s.Config.Workers, ref.Organization, ref.Worker, ref.Environment, name, p.User.ID, *value)
+			id, err := s.stageWorkerSecret(st, target, ref.Environment, name, p.User.ID, *value)
 			if err != nil {
-				return nil, Read, domain.Unavailable("WORKER_SECRETS_NOT_CONFIGURED", "Worker secret encryption is not configured")
+				return nil, Read, err
 			}
-			st.Workers.SecretVersions[encrypted.Version.ID] = encrypted.Version
-			if st.PendingWorkerSecrets == nil {
-				st.PendingWorkerSecrets = map[string]domain.EncryptedWorkerSecret{}
-			}
-			st.PendingWorkerSecrets[encrypted.Version.ID] = encrypted
-			config.SecretVersions[name] = encrypted.Version.ID
+			config.SecretVersions[name] = id
 		}
 	}
 	if len(config.SecretVersions) > WorkerSecretMaxCount {
