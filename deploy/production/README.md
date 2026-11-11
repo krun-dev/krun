@@ -180,6 +180,15 @@ FQDN 白名单。需要更严的目的域限制时，使用公司 CNI 的 FQDN �
 
 ## 更新与恢复
 
+### 控制面断连
+
+Serving Pod 保留最后已确认的路由和已加载的 Worker。控制面或控制面 PostgreSQL 断连时，
+已加载且依赖可用的版本继续处理请求。`/ready` 可返回 200，最后一次有效配置同步满 60 秒后
+`config_fresh` 为 `false`。发布、配置变更、冷加载和存储凭据续签仍依赖控制面。
+生产可在主配置设置 `deployment.control_replicas` 和 `deployment.runtime_replicas` 至少为 2，
+并为 PostgreSQL 使用可故障切换的连接入口。断连期间保留已就绪的 serving 副本。
+需要在控制面不可用时紧急停止流量，可在 Gateway 关闭对应业务入口。备份恢复时按下文停止旧 serving 并轮换代次。
+
 ### 停写升级
 
 在对正式数据库执行下列步骤前，先用备份和对象存储副本完成一次隔离的升级及恢复演练。

@@ -182,9 +182,13 @@ serving Pod 在本地按 Version 记录最近一次转发业务请求的时间�
 
 对象存储的 checkpoint 放在 `config/pools/<pool>/epochs/<epoch>/` 下。后台清理保留当前代次引用的快照，其他代次及旧路径对象满 24 小时后进入清理。恢复 PostgreSQL 后，按[生产恢复步骤](../deploy/production/README.md#失败回滚与备份恢复)轮换配置代次。
 
-短暂断连时，热路由可在最后一次控制面确认后的 60 秒内继续服务。尚未缓存的代码、资产或 Secret 仍需各自的读取授权。超过 60 秒后，新请求和 serving readiness 返回 503。新 Pod 在控制面确认代次后开始服务。
+已确认代次的 serving Pod 在控制面断连时继续使用最后已加载的配置和版本。60 秒是配置新鲜度的观测阈值，
+超过后 `/ready` 仍可返回 200，且报告 `config_fresh: false`。断连时暂停主动回收已加载的 Worker。
+尚未缓存的代码、资产清单或 Secret 仍需控制面，存储操作仍受凭据租约和过期时间限制。
+新 Pod 在控制面确认代次后开始服务。配置流报告需要重新同步、代次不匹配或控制面明确拒绝认证时，
+Runtime 使旧视图失效并等待重新启动配置。
 
-controller 默认对业务 pool 的 Ready serving Pod 调用 `/validate`，配置 `validator_pool` 后改用独立 validator。该接口总是在校验专用的 WorkerLoader 实例中加载并运行 `KrunValidation`；commit 后由配置流传播，controller 通过 `worker_runtime_acks` 观察收敛，`available` 表示当前 serving 成员都已上报该 revision。Serving readiness 要求配置视图已加载且处于有效期，Version 在首次请求时懒加载。Validator readiness 不启动配置跟随或 ACK，也没有业务 socket。业务域名的实际可达性由独立 HTTPS 探测记录，见[运行指标](../deploy/observability/README.md#配置收敛与业务入口)。
+controller 默认对业务 pool 的 Ready serving Pod 调用 `/validate`，配置 `validator_pool` 后改用独立 validator。该接口总是在校验专用的 WorkerLoader 实例中加载并运行 `KrunValidation`；commit 后由配置流传播，controller 通过 `worker_runtime_acks` 观察收敛，`available` 表示当前 serving 成员都已上报该 revision。Serving readiness 要求已加载可用的配置视图，Version 在首次请求时懒加载。Validator readiness 不启动配置跟随或 ACK，也没有业务 socket。业务域名的实际可达性由独立 HTTPS 探测记录，见[运行指标](../deploy/observability/README.md#配置收敛与业务入口)。
 
 资源池和 Network Profile 来自主 YAML，使用有效 placement 限定路由和内部数据访问；
 当前模型见 [资源池配置](workers-pools.md)。Secret binding 已支持，Service/DB binding 不在当前范围。

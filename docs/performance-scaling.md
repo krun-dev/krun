@@ -11,7 +11,7 @@
 | 网关协调 | 共享路由按 pool × domain 建通配 HTTPRoute；不加载全站点拓扑；命名空间清单一次分页读取并复用；已就绪路由每 30 秒修复，未就绪时每秒重试 | 共享路由是唯一入口模型 |
 | 发布 | 数据库触发器将变更合并成一条 Worker dirty 行；每批最多 256 站点；仅对变化路由/Version 写增量；有界批次在 CAS 事务内按顺序写入，无网络调用；操作优先发布自己的站点 | catalogue 变化会一次性入队重建，按有界批次推进；revision 仍是全局单调游标 |
 | Runtime 配置 | 紧凑 head 启动；冷 host 定向查询；仅缓存最多 4096 条 route 和其 Version；增量原地同步提交、按引用计数回收，不遍历全表；对象存储有 256 个 host hash shard | 每个 shard 的大小随所属站点数增长；百万条路由均匀分布时约 3906 条/shard；不要求每 Pod 下载全池 |
-| 资产 | finalize 独立保存有 digest 的 manifest；控制面用 single-flight + LRU；Runtime manifest 使用 LRU、合并并发回源、预建路径索引；资产字节缓存维持有界 LRU | 冷请求仍会依赖控制面授权与对象存储；同一资产目录在授权租约内由 workerd 本地签名，无逐文件控制面调用；独立静态域可直达对象存储/CDN |
+| 资产 | finalize 独立保存有 digest 的 manifest；控制面用 single-flight + LRU；Runtime manifest 使用 LRU、合并并发回源、预建路径索引，已加载的 Worker 在其生命周期内保留该 manifest；资产字节缓存维持有界 LRU | 冷请求仍会依赖控制面授权与对象存储；同一资产目录在授权租约内由 workerd 本地签名，无逐文件控制面调用；独立静态域可直达对象存储/CDN |
 | 队列 | 可认领状态/租约筛选，`reconcile_after` 轮转；有界并行协调；`started_at` 区分执行时间与排队时间；认领后才做候选归档 I/O | 不引入额外消息队列；操作行仍是持久化工作队列 |
 | 清理 | dirty Worker retention scope；历史排名仅针对发生变化的站点；过期删除每批最多 1000 行；孤儿 input 有持久游标；资产对象归属索引 + S3 multi-delete；对象扫描有游标和批量上限；GC 独立于发布循环 | 对象 GC 每 10 秒最多执行 8 秒，数据库 retention 每分钟最多执行 20 秒；积压跨批次推进 |
 
@@ -58,7 +58,8 @@ Profile、domain 选择、placement 和 Runtime pool 认证仍共同约束可访
 
 Shard 在 repeatable-read 视图中读取，并用该视图的真实 head 命名；因此并发发布者不会
 给同一个不可变对象键写入不同内容。Pointer 使用 ETag CAS，旧 revision 不能覆盖新 revision。
-短暂断连时，已确认代次的 Runtime 可从同代次且 revision 足够新的 shard 恢复冷路由。未缓存代码、资产和 Secret 的加载仍需各自的读取授权。控制面确认超过 60 秒未刷新时，Runtime 对新请求返回 503。
+控制面断连时，已确认代次的 Runtime 可从同代次且 revision 足够新的 shard 恢复冷路由，
+已加载版本继续处理请求。未缓存的代码、资产和 Secret 仍需各自的读取授权。60 秒未同步时配置新鲜度指标转为 0。
 
 ## 复现与测量范围
 

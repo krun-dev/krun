@@ -612,16 +612,29 @@ await check("configuration metrics distinguish applied revision from accepted AC
   assert.match(awaitingACK, /^krun_runtime_config_ack_current 0$/m);
   assert.match(awaitingACK, /^krun_runtime_config_converged 0$/m);
 });
-await check("cached traffic fails closed 60 seconds after control-plane loss", async () => {
+await check("warm traffic survives a prolonged outage while config metrics go stale", async () => {
   const env = makeEnv(null, []);
   const original = env.PLATFORM.fetch;
   let connected = true;
-  env.PLATFORM.fetch = async (request) =>
-    connected ? original(request) : new Response("unavailable", { status: 503 });
+  const binding = { version_id: version.id, binding: "BUCKET", bucket_id: "bucket-test" };
+  const grant = { ...fixtureRead("http://assets.test/index.html").storage, ...binding };
+  env.PLATFORM.fetch = async (request) => {
+    if (!connected) {
+      return new Response("unavailable", { status: 503 });
+    }
+    if (new URL(request.url).pathname.endsWith("/bindings/BUCKET/credentials")) {
+      return Response.json(grant);
+    }
+    return original(request);
+  };
 
   const mod = await freshEntry();
   const handler = new mod.Private(env, {});
   assert.equal((await call(handler, "/")).status, 200);
+  const signer = new mod.VersionStorage(env, {
+    props: { ...binding, config_epoch: fixtureConfigEpoch },
+  });
+  assert.equal((await signer.sign("head", "fixture.txt")).method, "HEAD");
   connected = false;
   await new Promise((resolve) => setTimeout(resolve, 5));
   const originalNow = performance.now;
@@ -629,15 +642,42 @@ await check("cached traffic fails closed 60 seconds after control-plane loss", a
   try {
     performance.now = () => disconnectedAt + 59000;
     assert.equal((await call(handler, "/")).status, 200);
-    performance.now = () => disconnectedAt + 61000;
-    assert.equal((await call(handler, "/")).status, 503);
-    assert.equal((await call(new mod.Management(env, {}), "/ready")).status, 503);
+    performance.now = () => disconnectedAt + 3_600_000;
+    assert.equal((await call(handler, "/")).status, 200);
+    const ready = await call(new mod.Management(env, {}), "/ready");
+    assert.equal(ready.status, 200);
+    assert.equal((await ready.json()).config_fresh, false);
+    assert.equal((await signer.sign("head", "fixture.txt")).method, "HEAD");
+    const previousEpochSigner = new mod.VersionStorage(env, {
+      props: { ...binding, config_epoch: "c".repeat(32) },
+    });
+    await assert.rejects(
+      previousEpochSigner.sign("head", "fixture.txt"),
+      /configuration epoch changed/,
+    );
+    const wallClock = Date.now;
+    try {
+      Date.now = () => Date.parse(grant.lease_until) + 1000;
+      await assert.rejects(signer.sign("head", "fixture.txt"), /platform 503/);
+    } finally {
+      Date.now = wallClock;
+    }
     const metrics = await (await call(new mod.Metrics(env, {}), "/metrics")).text();
     assert.match(metrics, /^krun_runtime_config_fresh 0$/m);
     assert.match(metrics, /^krun_runtime_config_converged 0$/m);
   } finally {
     performance.now = originalNow;
   }
+});
+await check("a definitive control-plane denial fences warm routes", async () => {
+  const env = makeEnv(null, []);
+  const mod = await freshEntry();
+  const handler = new mod.Private(env, {});
+  assert.equal((await call(handler, "/")).status, 200);
+  env.PLATFORM.fetch = async () => new Response("forbidden", { status: 403 });
+  assert.equal((await handler.fetch(new Request("http://uncached.workers.test/"))).status, 503);
+  assert.equal((await call(handler, "/")).status, 503);
+  assert.equal((await call(new mod.Management(env, {}), "/ready")).status, 503);
 });
 await check("a route miss in a new epoch fences pending traffic and static grants", async () => {
   const env = makeEnv(null, []);
