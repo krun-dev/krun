@@ -13,6 +13,22 @@ sidebar:
 
 Worker 是运行应用代码的服务。可以在控制台中上传源码或连接仓库，完成构建后发布到目标环境。
 
+krun 使用开源的 Cloudflare Workers 运行时 workerd 执行代码，并提供组织、权限、构建、发布和资源管理。Worker 代码通过 binding（绑定）使用获准的资源，例如用 `env.FILES` 访问配置好的对象存储桶。具体可用的 API 和 binding 见 [Workers 代码兼容范围](/docs/guides/workers-runtime-compatibility.html)。
+
+## Wrangler 和 krun CLI
+
+[Wrangler](https://developers.cloudflare.com/workers/wrangler/) 是 Cloudflare 提供的命令行工具，用于开发、构建和部署 Workers。它读取项目中的 `wrangler.jsonc`、`wrangler.json` 或 `wrangler.toml`，了解代码入口、兼容日期等配置。通过配置 krun 的兼容 API 地址和 krun API Key，也可以使用已支持的 Wrangler 命令将项目发布到 krun；无需将代码发布到 Cloudflare。步骤见 [使用 Wrangler 部署 Workers](/docs/guides/cloudflare-workers.html)。
+
+krun CLI 是操作 krun 自身的命令行工具，用于登录、管理组织和对象存储，以及构建、发布和调用 Worker。它使用 krun 控制台地址和登录凭据或 API Key；它不是执行 Worker 代码的运行时。用法见 [krun CLI 使用指南](/docs/guides/krun-cli.html)。
+
+| 需要做什么 | 使用方式 |
+| --- | --- |
+| 在项目目录构建并直接发布已有 Wrangler 项目 | 配置 krun 兼容 API 地址和凭据后使用 `wrangler deploy`；支持范围见 [Wrangler 配置兼容范围](/docs/guides/wrangler-configuration.html) |
+| 从已绑定的 Git 仓库构建并发布到 krun 环境 | 使用 `krun deploy --worker WORKER_ID --env production`，也可在控制台操作 |
+| 管理组织、对象存储和 krun 环境 | 使用 krun 控制台或 krun CLI |
+
+两条发布路径都可以使用 Wrangler 项目配置，但处理方式不同：直接部署由本地 Wrangler 构建并上传；仓库构建由 krun 构建器读取配置并构建，变量和资源绑定需要在目标 krun 环境配置。两者的环境模型也不同：Wrangler 的 `--env` 不会映射到同一 Worker 的 krun 环境。Cloudflare 的产品和 API 不会因为使用 Wrangler 而自动在 krun 可用，具体边界见[配置兼容范围](/docs/guides/wrangler-configuration.html)。
+
 ## 构建、环境与版本
 
 构建把源码转换为可发布的产物。环境用于组织不同的运行目标。版本固定代码产物及创建时的环境变量、Secret 版本引用和存储绑定；部署将指定版本应用到环境。

@@ -5,6 +5,8 @@ description: krun 支持的 Wrangler 配置文件、构建字段、静态资产�
 
 krun 支持项目中的 `wrangler.jsonc`、`wrangler.json` 和 `wrangler.toml`，但只对本页列出的能力提供支持。配置能被 Wrangler 读取、项目能构建成功，都不代表其中的 Cloudflare 产品配置会在 krun 生效。当前构建器和部署验证使用 Wrangler **4.155.0**。
 
+Wrangler 是 Cloudflare 的 Workers 开发和部署工具；krun CLI 是管理 krun 的独立工具。两者及其发布路径的区别见[基础概念](/docs/guides/concepts.html#wrangler-和-krun-cli)。
+
 ## 配置文件与项目目录
 
 仓库构建在控制台选择的「项目目录」根部查找配置，顺序为 `wrangler.jsonc` → `wrangler.json` → `wrangler.toml`，只使用第一个找到的文件，不合并。建议只保留一份配置。JSONC 支持注释和尾逗号，TOML 支持相应表与数组写法。

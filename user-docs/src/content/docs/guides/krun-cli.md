@@ -5,6 +5,8 @@ description: 安装 krun CLI，管理身份、构建和发布 Workers，并操�
 
 krun CLI 用于登录控制面、构建和发布 Worker，以及管理组织权限与对象存储。下面的地址会使用当前控制台地址。
 
+它与 Cloudflare 的 Wrangler 是两个不同的工具：krun CLI 管理 krun 的组织、环境和资源，`krun deploy` 可从已绑定的 Git 仓库构建发布；Wrangler 则读取本地项目配置，可以通过 krun 的兼容接口直接构建并部署。两者的凭据、发布方式和环境语义不同。先读[基础概念中的对比](/docs/guides/concepts.html#wrangler-和-krun-cli)，再根据项目选择入口。
+
 ## 安装
 
 在装有 curl 和 Python 3 的 macOS 或 Linux 终端运行：
