@@ -51,7 +51,7 @@ func TestPostgresR2BindingsAndRuntimeAuthorization(t *testing.T) {
 	if _, err := s.RuntimeBucket(ctx, "version-r2", "FORGED", "default"); err == nil {
 		t.Fatal("forged binding allowed")
 	}
-	projection, err := s.WorkerConfigState(ctx, []string{"svc-r2"})
+	projection, err := s.EdgeConfigState(ctx, []string{"svc-r2"})
 	if err != nil {
 		t.Fatal(err)
 	}

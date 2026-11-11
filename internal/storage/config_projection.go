@@ -7,10 +7,10 @@ import (
 	"github.com/krun-dev/krun/internal/domain"
 )
 
-// WorkerConfigProjection reads only the normalized entities required by edge
+// EdgeConfigProjection reads only the normalized entities required by edge
 // routing. It deliberately does not load users, builds, artifacts, operations,
 // history or idempotency rows. A repeatable-read transaction keeps its rows consistent.
-func (s *Store) WorkerConfigState(ctx context.Context, ids []string) (*domain.State, error) {
+func (s *Store) EdgeConfigState(ctx context.Context, ids []string) (*domain.State, error) {
 
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {

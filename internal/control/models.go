@@ -82,11 +82,11 @@ type WorkerBuildRepository = domain.WorkerBuildRepository
 
 type encryptedWorkerSecret = domain.EncryptedWorkerSecret
 
-type workerConfigRoute = domain.WorkerConfigRoute
+type workerConfigRoute = domain.EdgeConfigRoute
 
-type workerConfigProjection = domain.WorkerConfigProjection
+type workerConfigProjection = domain.EdgeConfigProjection
 
-type workerConfigOp = domain.WorkerConfigOp
+type workerConfigOp = domain.EdgeConfigOp
 
 type APIError = domain.APIError
 

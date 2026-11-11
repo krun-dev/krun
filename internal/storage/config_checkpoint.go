@@ -46,10 +46,10 @@ func (s *Store) MarkConfigCheckpointPublished(ctx context.Context, pool, shard s
 	return err
 }
 
-func (s *Store) RuntimeConfigRoute(ctx context.Context, host, pool string) (domain.WorkerConfigProjection, int64, error) {
-	out := domain.WorkerConfigProjection{Versions: map[string]domain.WorkerVersion{}}
+func (s *Store) RuntimeConfigRoute(ctx context.Context, host, pool string) (domain.EdgeConfigProjection, int64, error) {
+	out := domain.EdgeConfigProjection{Versions: map[string]domain.WorkerVersion{}}
 
-	var route domain.WorkerConfigRoute
+	var route domain.EdgeConfigRoute
 	var payload []byte
 	var revision int64
 	err := s.pool.QueryRow(ctx, `
@@ -65,7 +65,7 @@ func (s *Store) RuntimeConfigRoute(ctx context.Context, host, pool string) (doma
 	if err != nil {
 		return out, 0, err
 	}
-	out.Routes = []domain.WorkerConfigRoute{route}
+	out.Routes = []domain.EdgeConfigRoute{route}
 	if len(payload) > 0 {
 		var version domain.WorkerVersion
 		if err := json.Unmarshal(payload, &version); err != nil {

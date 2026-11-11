@@ -35,14 +35,14 @@ func (s *Store) DirtyWorkers(ctx context.Context) ([]DirtyWorker, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) PublishedWorkers(ctx context.Context, ids []string) (domain.WorkerConfigProjection, error) {
-	out := domain.WorkerConfigProjection{Routes: []domain.WorkerConfigRoute{}, Versions: map[string]domain.WorkerVersion{}}
+func (s *Store) PublishedWorkers(ctx context.Context, ids []string) (domain.EdgeConfigProjection, error) {
+	out := domain.EdgeConfigProjection{Routes: []domain.EdgeConfigRoute{}, Versions: map[string]domain.WorkerVersion{}}
 	rows, err := s.pool.Query(ctx, `SELECT worker_id,host,pool,path,enabled,version_id,expires_at FROM worker_config_routes WHERE worker_id=ANY($1) ORDER BY host`, ids)
 	if err != nil {
 		return out, err
 	}
 	for rows.Next() {
-		var r domain.WorkerConfigRoute
+		var r domain.EdgeConfigRoute
 		if err = rows.Scan(&r.Worker, &r.Host, &r.Pool, &r.Path, &r.Enabled, &r.Version, &r.Expires); err != nil {
 			rows.Close()
 			return out, err
@@ -74,7 +74,7 @@ func (s *Store) PublishedWorkers(ctx context.Context, ids []string) (domain.Work
 	return out, rows.Err()
 }
 
-func (s *Store) AppendConfigDelta(ctx context.Context, expected int64, dirty []DirtyWorker, ops []domain.WorkerConfigOp) (int64, bool, error) {
+func (s *Store) AppendConfigDelta(ctx context.Context, expected int64, dirty []DirtyWorker, ops []domain.EdgeConfigOp) (int64, bool, error) {
 	ids := make([]string, 0, len(dirty))
 	generations := make([]int64, 0, len(dirty))
 	for _, d := range dirty {
@@ -151,8 +151,8 @@ func (s *Store) AppendConfigDelta(ctx context.Context, expected int64, dirty []D
 	return revision, true, nil
 }
 
-func (s *Store) WorkerConfigShard(ctx context.Context, pool, shard string) (domain.WorkerConfigProjection, int64, error) {
-	out := domain.WorkerConfigProjection{Routes: []domain.WorkerConfigRoute{}, Versions: map[string]domain.WorkerVersion{}}
+func (s *Store) EdgeConfigShard(ctx context.Context, pool, shard string) (domain.EdgeConfigProjection, int64, error) {
+	out := domain.EdgeConfigProjection{Routes: []domain.EdgeConfigRoute{}, Versions: map[string]domain.WorkerVersion{}}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return out, 0, err
@@ -168,7 +168,7 @@ func (s *Store) WorkerConfigShard(ctx context.Context, pool, shard string) (doma
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var r domain.WorkerConfigRoute
+		var r domain.EdgeConfigRoute
 		var raw []byte
 		if err = rows.Scan(&r.Worker, &r.Host, &r.Pool, &r.Path, &r.Enabled, &r.Version, &r.Expires, &raw); err != nil {
 			return out, 0, err

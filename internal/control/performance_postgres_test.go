@@ -145,7 +145,7 @@ func TestPostgresDeltaPublisherOnlyWritesChangedSite(t *testing.T) {
 	if response.Code != 200 {
 		t.Fatalf("resolve=%d %s", response.Code, response.Body.String())
 	}
-	var snap workerapp.WorkerConfigSnapshot
+	var snap workerapp.EdgeConfigSnapshot
 	if err = json.Unmarshal(response.Body.Bytes(), &snap); err != nil || len(snap.Routes) != 1 || snap.Routes[0].Enabled {
 		t.Fatalf("resolved stale route: %+v %v", snap, err)
 	}

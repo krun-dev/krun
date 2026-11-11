@@ -15,7 +15,7 @@ type workerConfigShardKey struct {
 	shard string
 }
 
-func affectedWorkerConfig(ctx context.Context, tx pgx.Tx, ops []domain.WorkerConfigOp) ([]workerConfigShardKey, []string, error) {
+func affectedWorkerConfig(ctx context.Context, tx pgx.Tx, ops []domain.EdgeConfigOp) ([]workerConfigShardKey, []string, error) {
 	hosts := []string{}
 	shards := map[workerConfigShardKey]bool{}
 	versions := map[string]bool{}
@@ -72,7 +72,7 @@ func affectedWorkerConfig(ctx context.Context, tx pgx.Tx, ops []domain.WorkerCon
 
 // Batch saves round trips; these are ordinary statements executed in order
 // inside the caller's transaction. An error still rolls back the entire delta.
-func applyWorkerConfigOps(ctx context.Context, tx pgx.Tx, revision int64, ops []domain.WorkerConfigOp) error {
+func applyWorkerConfigOps(ctx context.Context, tx pgx.Tx, revision int64, ops []domain.EdgeConfigOp) error {
 	batch := &pgx.Batch{}
 	for ordinal, op := range ops {
 		var versionID string
@@ -156,7 +156,7 @@ func pruneWorkerConfig(ctx context.Context, tx pgx.Tx, revision int64, versions 
 		)`, versions); err != nil {
 		return fmt.Errorf("prune unreferenced config versions: %w", err)
 	}
-	floor := revision - WorkerConfigOpsRetain + 1
+	floor := revision - EdgeConfigOpsRetain + 1
 	if _, err := tx.Exec(ctx, `DELETE FROM worker_config_ops WHERE config_revision<$1`, floor); err != nil {
 		return fmt.Errorf("prune config operations: %w", err)
 	}

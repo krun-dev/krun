@@ -28,9 +28,9 @@ func (s *Service) Head(ctx context.Context) (int64, error) {
 }
 
 type ChangeBatch struct {
-	From int64                   `json:"from"`
-	To   int64                   `json:"to"`
-	Ops  []domain.WorkerConfigOp `json:"ops"`
+	From int64                 `json:"from"`
+	To   int64                 `json:"to"`
+	Ops  []domain.EdgeConfigOp `json:"ops"`
 }
 type Changes struct {
 	Resync bool
@@ -51,13 +51,13 @@ func (s *Service) ReadChanges(ctx context.Context, pool string, since int64) (Ch
 	if since == 0 || revisions[0].Revision != since+1 {
 		return Changes{Resync: true}, nil
 	}
-	ops := []domain.WorkerConfigOp{}
+	ops := []domain.EdgeConfigOp{}
 	for _, revision := range revisions {
-		batch := []domain.WorkerConfigOp{}
+		batch := []domain.EdgeConfigOp{}
 		if err := json.Unmarshal(revision.Ops, &batch); err != nil {
 			return Changes{}, err
 		}
-		ops = append(ops, workerapp.WorkerConfigOpsForPool(batch, pool)...)
+		ops = append(ops, workerapp.EdgeConfigOpsForPool(batch, pool)...)
 	}
 	if len(ops) > 2000 {
 		return Changes{Resync: true}, nil
@@ -165,16 +165,16 @@ func (s *Service) AssetCredentials(ctx context.Context, version, poolID string) 
 	return s.Controller.ReadGrant(ctx, rel.Organization, artifact.ID, key)
 }
 
-func (s *Service) Route(ctx context.Context, host, pool string) (workerapp.WorkerConfigSnapshot, error) {
+func (s *Service) Route(ctx context.Context, host, pool string) (workerapp.EdgeConfigSnapshot, error) {
 	host = strings.ToLower(host)
 	if len(host) > 253 || strings.ContainsAny(host, "/\\: ") {
-		return workerapp.WorkerConfigSnapshot{}, domain.NotFound()
+		return workerapp.EdgeConfigSnapshot{}, domain.NotFound()
 	}
 	projection, revision, err := s.Store.RuntimeConfigRoute(ctx, host, pool)
 	if err != nil {
-		return workerapp.WorkerConfigSnapshot{}, err
+		return workerapp.EdgeConfigSnapshot{}, err
 	}
-	return workerapp.WorkerConfigSnapshot{Pool: pool, ConfigRevision: revision, Routes: projection.Routes, Versions: projection.Versions}, nil
+	return workerapp.EdgeConfigSnapshot{Pool: pool, ConfigRevision: revision, Routes: projection.Routes, Versions: projection.Versions}, nil
 }
 
 // StaticAssetCredentials authorizes the same pub/int visibility as the static

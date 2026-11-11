@@ -635,7 +635,7 @@ func TestWorkerConfigProjectionCoversEveryDomain(t *testing.T) {
 	ws := st.Workers.Workers["svc-a"]
 	ws.Domains = []string{"internal", "external"}
 	st.Workers.Workers["svc-a"] = ws
-	p := workerapp.WorkerConfigFromState(st, workerProjectionConfig([]appconfig.WorkerDomain{
+	p := workerapp.EdgeConfigFromState(st, workerProjectionConfig([]appconfig.WorkerDomain{
 		{ID: "internal", Domain: "workers.test", Access: "private"},
 		{ID: "external", Domain: "workers-out.example.test", Access: "public"},
 	}))
@@ -671,7 +671,7 @@ func TestWorkerConfigProjectionRequiresDurablePlacement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	projection := workerapp.WorkerConfigFromState(st, config)
+	projection := workerapp.EdgeConfigFromState(st, config)
 	if len(projection.Routes) != 0 || len(projection.Versions) != 0 {
 		t.Fatalf("service without placement entered runtime projection: %+v", projection)
 	}
