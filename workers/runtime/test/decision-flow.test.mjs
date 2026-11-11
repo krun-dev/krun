@@ -406,6 +406,27 @@ await check("services without assets forward everything to the worker", async ()
   assert.equal(r.status, 200);
   assert.equal((await r.json()).worker, true);
 });
+await check(
+  "runtime metrics count only dispatched requests and report loader failures",
+  async () => {
+    const metricsEntry = await freshEntry();
+    const metricsEnv = makeEnv(config, fileList, "rel_metrics", { exerciseLoader: true });
+    const serving = new metricsEntry.Private(metricsEnv, {});
+    assert.equal((await call(serving, "/about")).status, 200);
+    assert.equal((await call(serving, "/api/load")).status, 503);
+
+    const metrics = new metricsEntry.Metrics(metricsEnv, {});
+    const scrape = await call(metrics, "/metrics");
+    assert.equal(scrape.status, 200);
+    assert.match(scrape.headers.get("content-type"), /^text\/plain; version=0\.0\.4/);
+    const samples = await scrape.text();
+    assert.match(samples, /^krun_worker_requests_total\{status_class="2xx"\} 0$/m);
+    assert.match(samples, /^krun_worker_requests_total\{status_class="5xx"\} 1$/m);
+    assert.match(samples, /^krun_worker_request_duration_seconds_bucket\{le="\+Inf"\} 1$/m);
+    assert.match(samples, /^krun_worker_bundle_load_duration_seconds_count\{outcome="error"\} 1$/m);
+    assert.equal((await call(metrics, "/validate")).status, 404);
+  },
+);
 await check("non-navigation miss without SPA config goes to the worker", async () => {
   const noSpaEnv = makeEnv({ ...config, not_found_handling: "none" }, fileList, "rel_nospa");
   const noSpaEntry = await freshEntry();
@@ -660,6 +681,12 @@ await check(
     const v2 = new v2Entry.Private(v2Env, ctx);
     const response = await call(v2, "/api/load");
     assert.equal(response.status, 200);
+    assert.equal((await call(v2, "/api/load")).status, 200);
+    const scrape = await call(new v2Entry.Metrics(v2Env, {}), "/metrics");
+    assert.match(
+      await scrape.text(),
+      /^krun_worker_bundle_load_duration_seconds_count\{outcome="success"\} 1$/m,
+    );
     const loaded = await v2Env.__loaderConfig;
     assert.ok(v2Env.__loaderKey.startsWith("org/svc/production/rel_v2/"));
     assert.match(v2Env.__loaderKey, /workerd-bundle-v2\/\d+$/);

@@ -114,8 +114,15 @@ func TestRenderedServingAndValidatorStartInRealWorkerd(t *testing.T) {
 			address := listener.Addr().String()
 			listener.Close()
 			args := []string{"serve", filename, "-I", "/", "--experimental", "-s", "management=" + address}
+			var metricsAddress string
 			if !validator {
-				args = append(args, "-s", "private=127.0.0.1:0")
+				listener, err := net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				metricsAddress = listener.Addr().String()
+				listener.Close()
+				args = append(args, "-s", "private=127.0.0.1:0", "-s", "metrics="+metricsAddress)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
@@ -145,6 +152,17 @@ func TestRenderedServingAndValidatorStartInRealWorkerd(t *testing.T) {
 						}
 						if validator && (status.Role != "validator" || requests.Load() != 0) {
 							t.Fatal("isolated validator bootstrapped serving configuration")
+						}
+						if !validator {
+							response, err := client.Get("http://" + metricsAddress + "/metrics")
+							if err != nil {
+								t.Fatal(err)
+							}
+							body, err := io.ReadAll(response.Body)
+							response.Body.Close()
+							if err != nil || response.StatusCode != 200 || !strings.Contains(string(body), `krun_worker_requests_total{status_class="2xx"} 0`) {
+								t.Fatalf("unexpected metrics response: HTTP %d, %v, %s", response.StatusCode, err, body)
+							}
 						}
 						return
 					}

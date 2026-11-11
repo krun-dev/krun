@@ -1,14 +1,16 @@
 # krun 运行指标
 
-在 krun runtime 所在的 Kubernetes 集群按需安装这套监控。vmagent 直接抓取各节点
-kubelet 的 `/metrics/cadvisor`，只保留 `workerd` 容器的 CPU 和内存指标，并写入
-单节点 VictoriaMetrics。Grafana 预置数据源和 **krun Workers Runtime** 看板。
+在 krun runtime 所在的 Kubernetes 集群按需安装这套监控。vmagent 从各节点
+kubelet 的 `/metrics/cadvisor` 采集 `workerd` 容器的 CPU 和内存指标，并从
+serving Pod 的 `:8084/metrics` 采集业务请求及制品加载指标。数据写入单节点
+VictoriaMetrics。Grafana 预置数据源和 **krun Workers Runtime** 看板。
 VictoriaMetrics 单节点版同时提供写入、存储和查询，集群版的 `vmstorage` 则需要搭配
 `vminsert` 和 `vmselect`。
 
-看板按 namespace 和 Pod 展示 CPU 核数、CPU 限流比例、内存 working set、内存占 limit
-的比例及采集状态。采集范围包括 serving runtime 和 validator。粒度是整个
-`workerd` 容器，多个 Worker 共用该容器的资源。
+看板按 namespace 和资源池展示业务 QPS、5xx 比例、响应延迟及冷加载的成功率趋势和耗时，
+并按 Pod 展示 CPU、内存及采集状态。业务指标只统计转发给业务 Worker 的 HTTP 调用，
+延迟量到拿到响应，包含调用期间发生的冷加载。冷加载指标量到制品下载、校验和准备完成。
+容器 CPU 和内存覆盖 serving runtime 和 validator，多个 Worker 共用该容器的资源。
 
 ## 安装
 
@@ -20,6 +22,8 @@ VictoriaMetrics 单节点版同时提供写入、存储和查询，集群版的 
   ServiceAccount 的 CA 验证 kubelet 证书，节点地址必须匹配证书 SAN。
   如果 kubelet 使用独立 CA，请在自己的 Kustomize overlay 中挂载该 CA，并替换
   `scrape.yaml` 中的 `tls_config.ca_file`。
+- 业务指标需要同时更新 serving workerd 镜像和 runtime 配置。部署清单声明名为
+  `metrics` 的 8084 端口，并允许 `krun-observability` 中的 vmagent Pod 访问该端口。
 
 在仓库根目录执行。将 `<context>` 换成目标集群的 kubectl context。只在首次安装时创建
 Grafana 管理员 Secret。
@@ -53,6 +57,7 @@ kubectl --context "$CONTEXT" -n krun-observability get secret grafana-admin \
 | kubelet target 为 `0`，vmagent 日志有 `x509: certificate signed by unknown authority` 或证书 SAN 不匹配 | 检查 kubelet serving 证书、签发 CA 和节点地址。kubeadm / kind 默认使用自签证书时，配置受信任的 [kubelet serving 证书](https://kubernetes.io/docs/tasks/administer-cluster/kubeadm/kubeadm-certs/#enabling-signed-kubelet-serving-certificates)。 |
 | vmagent 日志出现 kubelet `401` 或 `403` | 检查 kubelet Webhook 认证与授权。确认 ClusterRoleBinding 生效且 `kubectl --context "$CONTEXT" auth can-i get nodes --subresource=metrics --as=system:serviceaccount:krun-observability:vmagent` 返回 `yes`。 |
 | kubelet target 为 `1`，看板没有容器曲线 | 确认目标 Pod 正在运行，容器名是 `workerd`，并查看看板的 Namespace、Pod 筛选项。 |
+| Runtime scrape health 为空或为 `0` | 确认 serving Pod 标签为 `role=krun-runtime`，容器已声明 `metrics:8084`，并检查 NetworkPolicy 是否允许 vmagent 访问。 |
 | PVC 一直 `Pending` | 检查默认 StorageClass 和集群存储供给。 |
 
 卸载用 `kubectl --context "$CONTEXT" delete -k deploy/observability`。这会删除监控

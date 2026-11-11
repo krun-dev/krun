@@ -133,7 +133,7 @@ func TestProductionResourcesPreserveConfigAndIsolateCredentials(t *testing.T) {
 			}
 		}
 	}
-	if counts["Deployment"] != 3 || counts["HTTPRoute"] != 1 || counts["NetworkPolicy"] != 6 {
+	if counts["Deployment"] != 3 || counts["HTTPRoute"] != 1 || counts["NetworkPolicy"] != 7 {
 		t.Fatalf("unexpected topology: %+v", counts)
 	}
 	path := filepath.Join(t.TempDir(), "control.yaml")

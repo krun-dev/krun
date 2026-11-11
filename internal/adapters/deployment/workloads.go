@@ -250,7 +250,7 @@ func (r *renderer) runtimeDeployment(text string, validator bool) {
 	}
 	r.add("v1", "Secret", name, map[string]any{"type": "Opaque", "data": secretData(secret)})
 	r.add("v1", "ConfigMap", name, map[string]any{"data": map[string]string{"runtime.capnp": text}})
-	r.deployment(name, role, replicas, map[string]any{
+	container := map[string]any{
 		"name":            "workerd",
 		"image":           r.cfg.Deployment.RuntimeImage,
 		"imagePullPolicy": "IfNotPresent",
@@ -263,7 +263,11 @@ func (r *renderer) runtimeDeployment(text string, validator bool) {
 		},
 		"volumeMounts": mounts,
 		"resources":    resources("250m", "256Mi", "2", "1Gi"),
-	}, volumes, map[string]string{
+	}
+	if !validator {
+		container["ports"] = []any{map[string]any{"name": "metrics", "containerPort": 8084}}
+	}
+	r.deployment(name, role, replicas, container, volumes, map[string]string{
 		"krun.dev/config-hash": hash(text),
 		"krun.dev/secret-hash": hash(secret),
 	}, false)

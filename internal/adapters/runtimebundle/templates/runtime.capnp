@@ -66,6 +66,12 @@ __PUBLIC_EGRESS_SERVICE__
       address = "*:8083",
       http = (),
       service = (name = "entry", entrypoint = "Management")
+    ),
+    (
+      name = "metrics",
+      address = "*:8084",
+      http = (),
+      service = (name = "entry", entrypoint = "Metrics")
     )
   ]
 );
