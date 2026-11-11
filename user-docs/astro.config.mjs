@@ -72,7 +72,14 @@ export default defineConfig({
                   label: "项目部署",
                   items: [
                     { label: "概览", slug: "guides/deploy-project" },
-                    "guides/git-repositories",
+                    {
+                      label: "Git 仓库",
+                      items: [
+                        { label: "连接与构建", slug: "guides/git-repositories" },
+                        "guides/gitlab-integration",
+                        "guides/github-integration",
+                      ],
+                    },
                     "guides/deploy-local-project",
                   ],
                 },
