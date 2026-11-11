@@ -4,16 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"net/url"
-	"os"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	appconfig "github.com/krun-dev/krun/internal/config"
+	"github.com/krun-dev/krun/internal/testpgx"
 )
 
 var testPools sync.Map
@@ -27,38 +24,11 @@ func postgresTestStore(t *testing.T) *Store {
 // multiple replicas without sharing tables with any other test.
 func postgresTestOpener(t *testing.T) func() *Store {
 	t.Helper()
-	dsn := os.Getenv("KRUN_TEST_POSTGRES_URL")
-	if dsn == "" {
-		t.Skip("set KRUN_TEST_POSTGRES_URL for PostgreSQL integration")
-	}
+	schema := testpgx.NewSchema(t, "krun_control")
 	ctx := context.Background()
-	admin, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(admin.Close)
-
-	name := "krun_control_" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	schema := pgx.Identifier{name}.Sanitize()
-	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if _, err := admin.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE"); err != nil {
-			t.Error(err)
-		}
-	})
-
-	parsed, err := url.Parse(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	query := parsed.Query()
-	query.Set("search_path", name)
-	parsed.RawQuery = query.Encode()
 	return func() *Store {
 		t.Helper()
-		store, err := openStoreForTest(t, ctx, parsed.String())
+		store, err := openStoreForTest(t, ctx, schema.DSN)
 		if err != nil {
 			t.Fatal(err)
 		}

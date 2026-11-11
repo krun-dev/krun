@@ -3,16 +3,14 @@ package control
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"sort"
 	"strconv"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	appconfig "github.com/krun-dev/krun/internal/config"
+	"github.com/krun-dev/krun/internal/testpgx"
 )
 
 // Opt-in capacity regression: an isolated schema avoids long, trigger-heavy
@@ -27,30 +25,9 @@ func TestPostgresMillionSiteReadBound(t *testing.T) {
 	if err != nil || n < 1000 || n > 1000000 {
 		t.Fatal("KRUN_SCALE_SITES must be between 1000 and 1000000")
 	}
-	dsn := os.Getenv("KRUN_TEST_POSTGRES_URL")
-	if dsn == "" {
-		t.Fatal("isolated PostgreSQL test database required")
-	}
+	schema := testpgx.NewSchema(t, "krun_scale")
 	ctx := context.Background()
-	admin, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
-	name := "krun_scale_" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	identifier := pgx.Identifier{name}.Sanitize()
-	if _, err = admin.Exec(ctx, `CREATE SCHEMA `+identifier); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _, _ = admin.Exec(context.Background(), `DROP SCHEMA `+identifier+` CASCADE`) }()
-	parsed, err := url.Parse(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	q := parsed.Query()
-	q.Set("search_path", name)
-	parsed.RawQuery = q.Encode()
-	store, err := openStoreForTest(t, ctx, parsed.String())
+	store, err := openStoreForTest(t, ctx, schema.DSN)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +56,7 @@ func TestPostgresMillionSiteReadBound(t *testing.T) {
 		t.Fatalf("organization navigation loaded unrelated state: resources=%d users=%d orgs=%d", len(orgState.Resources), len(orgState.Users), len(orgState.Organizations))
 	}
 	started = time.Now()
-	config := appconfig.Config{DB: parsed.String(), Development: true, PublicURL: "http://127.0.0.1:4381", Providers: []appconfig.ProviderConfig{{ID: "local", Type: "dev", Source: "local", Name: "Development", Registration: "jit"}}}
+	config := appconfig.Config{DB: schema.DSN, Development: true, PublicURL: "http://127.0.0.1:4381", Providers: []appconfig.ProviderConfig{{ID: "local", Type: "dev", Source: "local", Name: "Development", Registration: "jit"}}}
 	if _, err = NewServer(ctx, config, store); err != nil {
 		t.Fatal(err)
 	}
