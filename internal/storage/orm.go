@@ -74,7 +74,7 @@ func ormCAS(ctx context.Context, message string, query ormMutation) error {
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return domain.Problem(409, "REVISION_CONFLICT", message)
+			return domain.Conflict("REVISION_CONFLICT", message)
 		}
 		return err
 	}
@@ -83,7 +83,7 @@ func ormCAS(ctx context.Context, message string, query ormMutation) error {
 		return err
 	}
 	if count != 1 {
-		return domain.Problem(409, "REVISION_CONFLICT", message)
+		return domain.Conflict("REVISION_CONFLICT", message)
 	}
 	return nil
 }

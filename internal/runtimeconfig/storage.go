@@ -27,7 +27,7 @@ func (s *Service) StorageCredentials(ctx context.Context, version, binding, pool
 		s.Config == nil ||
 		s.Config.ObjectStorage == nil ||
 		s.Config.ObjectStorage.CursorKey == "" {
-		return StorageGrant{}, domain.Problem(503, "OBJECT_STORAGE_NOT_CONFIGURED", "Object storage is not configured")
+		return StorageGrant{}, domain.Unavailable("OBJECT_STORAGE_NOT_CONFIGURED", "Object storage is not configured")
 	}
 	bucket, err := s.Store.RuntimeBucket(ctx, version, binding, pool)
 	if err != nil {
@@ -48,7 +48,7 @@ func (s *Service) StorageCredentials(ctx context.Context, version, binding, pool
 		}
 		credentials, err := s.Credentials.Credentials(ctx, scope, 2*time.Minute)
 		if err != nil {
-			return StorageGrant{}, domain.Problem(503, "STORAGE_CREDENTIALS_UNAVAILABLE", "Storage credentials are unavailable")
+			return StorageGrant{}, domain.Unavailable("STORAGE_CREDENTIALS_UNAVAILABLE", "Storage credentials are unavailable")
 		}
 		return StorageGrant{
 			BucketID:                   bucket.ID,
@@ -65,5 +65,5 @@ func (s *Service) StorageCredentials(ctx context.Context, version, binding, pool
 			Credentials:                credentials,
 		}, nil
 	}
-	return StorageGrant{}, domain.Problem(503, "STORAGE_UNAVAILABLE", "Bucket storage is unavailable")
+	return StorageGrant{}, domain.Unavailable("STORAGE_UNAVAILABLE", "Bucket storage is unavailable")
 }

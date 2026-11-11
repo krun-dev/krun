@@ -18,7 +18,7 @@ func (s *Service) ResolveInvocation(st *domain.State, principal authorization.Pr
 	worker := st.Workers.Workers[target.ID]
 	current := worker.Environments[env]
 	if !current.Enabled || current.Version == "" {
-		return "", "", domain.Problem(409, "WORKER_NOT_PUBLISHED", "Publish this enabled environment first")
+		return "", "", domain.Conflict("WORKER_NOT_PUBLISHED", "Publish this enabled environment first")
 	}
 	// Invoke through the first selected domain of the worker. The domain's
 	// Gateway decides which instance to address. Hosts are derived, not
@@ -33,5 +33,5 @@ func (s *Service) ResolveInvocation(st *domain.State, principal authorization.Pr
 			return candidate, d.Gateway, nil
 		}
 	}
-	return "", "", domain.Problem(409, "WORKER_NOT_PUBLISHED", "Environment has no routable domain")
+	return "", "", domain.Conflict("WORKER_NOT_PUBLISHED", "Environment has no routable domain")
 }

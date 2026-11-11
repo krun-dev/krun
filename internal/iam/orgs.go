@@ -28,18 +28,18 @@ func (s Service) Organizations(st *domain.State, p authorization.Principal) ([]d
 
 func (s Service) CreateOrganization(st *domain.State, p authorization.Principal, in OrganizationCreateInput) (domain.Organization, error) {
 	if !nameValid(in.Name) {
-		return domain.Organization{}, domain.Problem(422, "INVALID_REQUEST", "Name required (max 128 bytes)")
+		return domain.Organization{}, domain.Invalid("INVALID_REQUEST", "Name required (max 128 bytes)")
 	}
 	shortName, err := resourcename.Make(firstName(in.ShortName, in.Name), 1, resourcename.OrganizationMax)
 	if err != nil {
 		return domain.Organization{}, err
 	}
 	if securetoken.IsID(shortName, "org") {
-		return domain.Organization{}, domain.Problem(422, "LOCATOR_INVALID", "Choose a different organization short name")
+		return domain.Organization{}, domain.Invalid("LOCATOR_INVALID", "Choose a different organization short name")
 	}
 	for _, existing := range st.Organizations {
 		if existing.ShortName == shortName {
-			return domain.Organization{}, domain.Problem(409, "LOCATOR_CONFLICT", "Organization short name already exists")
+			return domain.Organization{}, domain.Conflict("LOCATOR_CONFLICT", "Organization short name already exists")
 		}
 	}
 	org := domain.Organization{ShortName: shortName, ID: securetoken.NewID("org"), Name: in.Name, Sources: []string{}, Revision: 1}
@@ -53,16 +53,16 @@ func (s Service) CreateOrganization(st *domain.State, p authorization.Principal,
 
 func (s Service) UpdateOrganization(st *domain.State, t authorization.Target, in OrganizationInput) (domain.Organization, error) {
 	if !nameValid(in.Name) {
-		return domain.Organization{}, domain.Problem(422, "INVALID_REQUEST", "Name required")
+		return domain.Organization{}, domain.Invalid("INVALID_REQUEST", "Name required")
 	}
 	for _, src := range in.Sources {
 		if !s.sourceEnabled(src) {
-			return domain.Organization{}, domain.Problem(422, "INVALID_REQUEST", "Unknown or disabled source")
+			return domain.Organization{}, domain.Invalid("INVALID_REQUEST", "Unknown or disabled source")
 		}
 	}
 	org := st.Organizations[t.ID]
 	if in.Revision != org.Revision {
-		return domain.Organization{}, domain.Problem(409, "REVISION_CONFLICT", "Organization changed")
+		return domain.Organization{}, domain.Conflict("REVISION_CONFLICT", "Organization changed")
 	}
 	hadAdmin := !slices.Equal(org.Sources, in.Sources) && s.hasOrganizationAdmin(st, t.ID)
 	org.Name = in.Name
@@ -114,7 +114,7 @@ func (s Service) isActiveOrganizationAdminGrant(st *domain.State, org string, as
 
 func (s Service) finishOrganizationAdminChange(st *domain.State, org string, hadAdmin bool) error {
 	if hadAdmin && !s.hasOrganizationAdmin(st, org) {
-		return domain.Problem(409, "LAST_ORG_ADMIN", "Grant another active member the organization administrator role first.")
+		return domain.Conflict("LAST_ORG_ADMIN", "Grant another active member the organization administrator role first.")
 	}
 
 	// The organization revision is the shared CAS for changes to its admin

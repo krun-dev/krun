@@ -35,10 +35,10 @@ const WorkerBuildRequestBodyMax = 16 << 20
 
 func (s *Service) WorkerBuildCreate(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, in WorkerBuildCreateInput) (any, Outcome, error) {
 	if in.Environment == "" {
-		return nil, Read, domain.Problem(422, "WORKER_BUILD_INVALID", "environment is required (production or a preview slug)")
+		return nil, Read, domain.Invalid("WORKER_BUILD_INVALID", "environment is required (production or a preview slug)")
 	}
 	if !appconfig.WorkerEnvValid(in.Environment) || in.Key == "" || len(in.Key) > 128 {
-		return nil, Read, domain.Problem(422, "WORKER_BUILD_INVALID", "Valid environment and idempotency_key required")
+		return nil, Read, domain.Invalid("WORKER_BUILD_INVALID", "Valid environment and idempotency_key required")
 	}
 	if e := workerartifact.ValidateWorkerAssets(in.Assets); e != nil {
 		return nil, Read, e
@@ -53,7 +53,7 @@ func (s *Service) WorkerBuildCreate(ctx context.Context, st *domain.State, p aut
 		return nil, Read, domain.NotFound()
 	}
 	if !current.Enabled {
-		return nil, Read, domain.Problem(409, "ENVIRONMENT_DISABLED", "Target environment is disabled")
+		return nil, Read, domain.Conflict("ENVIRONMENT_DISABLED", "Target environment is disabled")
 	}
 	key := WorkerIdempotencyKey(t, p, "build", in.Environment, in.Key)
 	id, e := WorkerIdempotent(st, key, in)
@@ -69,22 +69,22 @@ func (s *Service) WorkerBuildCreate(ctx context.Context, st *domain.State, p aut
 	switch in.SourceType {
 	case "repository":
 		if in.Assets != nil {
-			return nil, Read, domain.Problem(422, "WORKER_BUILD_INVALID", "Repository assets are read from the Wrangler configuration")
+			return nil, Read, domain.Invalid("WORKER_BUILD_INVALID", "Repository assets are read from the Wrangler configuration")
 		}
 		if compatibilityDate == "" && len(compatibilityFlags) > 0 {
-			return nil, Read, domain.Problem(422, "WORKER_COMPATIBILITY_INVALID", "compatibility_flags require an explicit compatibility_date for repository builds")
+			return nil, Read, domain.Invalid("WORKER_COMPATIBILITY_INVALID", "compatibility_flags require an explicit compatibility_date for repository builds")
 		}
 		if compatibilityDate != "" {
 			compatibilityDate, compatibilityFlags, e = workerartifact.NormalizeWorkerCompatibility(compatibilityDate, compatibilityFlags)
 			if e != nil {
-				return nil, Read, domain.Problem(422, "WORKER_COMPATIBILITY_INVALID", e.Error())
+				return nil, Read, domain.Invalid("WORKER_COMPATIBILITY_INVALID", e.Error())
 			}
 		}
 		if in.RepositoryRevision == nil || *in.RepositoryRevision != ws.RepositoryRevision {
-			return nil, Read, domain.Problem(409, "REVISION_CONFLICT", "Repository configuration changed")
+			return nil, Read, domain.Conflict("REVISION_CONFLICT", "Repository configuration changed")
 		}
 		if ws.Repository == nil || len(in.Files) != 0 || in.Entrypoint != "" || in.SourceUpload != "" {
-			return nil, Read, domain.Problem(422, "WORKER_REPOSITORY_INVALID", "Connect a repository before starting a repository build")
+			return nil, Read, domain.Invalid("WORKER_REPOSITORY_INVALID", "Connect a repository before starting a repository build")
 		}
 		source := *ws.Repository
 		if in.Ref != "" {
@@ -102,20 +102,20 @@ func (s *Service) WorkerBuildCreate(ctx context.Context, st *domain.State, p aut
 		repository = &domain.WorkerBuildRepository{WorkerRepositorySource: source}
 	case "", "upload":
 		if in.Ref != "" {
-			return nil, Read, domain.Problem(422, "WORKER_BUILD_INVALID", "A ref is only supported for repository builds")
+			return nil, Read, domain.Invalid("WORKER_BUILD_INVALID", "A ref is only supported for repository builds")
 		}
 		if in.SourceUpload != "" {
 			// Assets (up to 20 MiB) cannot travel through the JSON request body,
 			// so clients upload one source bundle and reference it here.
 			if !ValidWorkerSourceUpload(t.Organization, in.SourceUpload) {
-				return nil, Read, domain.Problem(422, "WORKER_BUILD_INVALID", "source_upload must reference an uploaded source bundle")
+				return nil, Read, domain.Invalid("WORKER_BUILD_INVALID", "source_upload must reference an uploaded source bundle")
 			}
 			if len(in.Files) != 0 || in.Entrypoint == "" {
-				return nil, Read, domain.Problem(422, "WORKER_BUILD_INVALID", "source_upload requires entrypoint and no inline files")
+				return nil, Read, domain.Invalid("WORKER_BUILD_INVALID", "source_upload requires entrypoint and no inline files")
 			}
 		} else {
 			if in.Assets != nil {
-				return nil, Read, domain.Problem(422, "WORKER_BUILD_INVALID", "assets require a source bundle; upload it first and pass source_upload")
+				return nil, Read, domain.Invalid("WORKER_BUILD_INVALID", "assets require a source bundle; upload it first and pass source_upload")
 			}
 			if err := workerartifact.SourceValid(in.Entrypoint, in.Files); err != nil {
 				return nil, Read, err
@@ -123,10 +123,10 @@ func (s *Service) WorkerBuildCreate(ctx context.Context, st *domain.State, p aut
 		}
 		compatibilityDate, compatibilityFlags, e = workerartifact.NormalizeWorkerCompatibility(compatibilityDate, compatibilityFlags)
 		if e != nil {
-			return nil, Read, domain.Problem(422, "WORKER_COMPATIBILITY_INVALID", e.Error())
+			return nil, Read, domain.Invalid("WORKER_COMPATIBILITY_INVALID", e.Error())
 		}
 	default:
-		return nil, Read, domain.Problem(422, "WORKER_BUILD_INVALID", "Use repository or upload as source_type")
+		return nil, Read, domain.Invalid("WORKER_BUILD_INVALID", "Use repository or upload as source_type")
 	}
 	count := 0
 	for _, b := range st.Workers.Builds {
@@ -135,7 +135,7 @@ func (s *Service) WorkerBuildCreate(ctx context.Context, st *domain.State, p aut
 		}
 	}
 	if count >= storage.WorkerActiveBuildLimit {
-		return nil, Read, domain.Problem(409, "BUILD_LIMIT", "At most 100 builds may be active per worker")
+		return nil, Read, domain.Conflict("BUILD_LIMIT", "At most 100 builds may be active per worker")
 	}
 	raw, _ := json.Marshal(in.Files)
 	id = securetoken.NewID("bld")
@@ -165,7 +165,7 @@ func (s *Service) WorkerSourceUploadCreate(ctx context.Context, st *domain.State
 	}
 	key, url, e := s.Controller.SourceUploadURL(ctx, t.Organization)
 	if e != nil {
-		return nil, Read, domain.Problem(503, "SOURCE_UPLOAD_UNAVAILABLE", "Source storage unavailable")
+		return nil, Read, domain.Unavailable("SOURCE_UPLOAD_UNAVAILABLE", "Source storage unavailable")
 	}
 	return map[string]any{"source_upload": key, "upload_url": url, "expires_in": 900}, Created, nil
 
@@ -254,7 +254,7 @@ func (s *Service) ReadWorkerBuildLog(ctx context.Context, in WorkerBuildLogRead,
 		out.DownloadURL, err = s.Controller.BuildLogURL(ctx, in.Key)
 	}
 	if err != nil {
-		return WorkerBuildLogsResult{}, domain.Problem(503, "LOG_UNAVAILABLE", "Log storage unavailable")
+		return WorkerBuildLogsResult{}, domain.Unavailable("LOG_UNAVAILABLE", "Log storage unavailable")
 	}
 	return out, nil
 }
@@ -274,7 +274,7 @@ func (s *Service) WorkerBuildSource(ctx context.Context, st *domain.State, p aut
 	if private.SourceKey != "" {
 		url, e := s.Controller.SourceBundleURL(ctx, private.SourceKey)
 		if e != nil {
-			return nil, Read, domain.Problem(503, "SOURCE_UNAVAILABLE", "Source storage unavailable")
+			return nil, Read, domain.Unavailable("SOURCE_UNAVAILABLE", "Source storage unavailable")
 		}
 		return map[string]any{"entrypoint": b.Entrypoint, "download_url": url}, Read, nil
 	}

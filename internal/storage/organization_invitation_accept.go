@@ -41,7 +41,7 @@ func (s *Store) RedeemOrganizationInvitation(ctx context.Context, in domain.Orga
 		return false, err
 	}
 	if count == 0 {
-		return false, domain.Problem(409, "INVITATION_ALREADY_USED", "A new invitation is required after membership removal")
+		return false, domain.Conflict("INVITATION_ALREADY_USED", "A new invitation is required after membership removal")
 	}
 	member := models.Member{OrgID: in.Organization, UserID: user.ID}
 	result, err = tx.orm.NewInsert().Model(&member).On("CONFLICT DO NOTHING").Returning("NULL").Exec(ctx)

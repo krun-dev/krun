@@ -28,13 +28,13 @@ func versionPage[T any](items []T, options []VersionPageOptions, describe func(T
 	}
 	option := options[0]
 	if option.Limit < 1 || option.Limit > 200 {
-		return nil, Read, domain.Problem(422, "PAGE_INVALID", "limit must be between 1 and 200")
+		return nil, Read, domain.Invalid("PAGE_INVALID", "limit must be between 1 and 200")
 	}
 	var after versionPageCursor
 	if option.After != "" {
 		raw, err := base64.RawURLEncoding.DecodeString(option.After)
 		if err != nil || json.Unmarshal(raw, &after) != nil || after.ID == "" || after.Created.IsZero() {
-			return nil, Read, domain.Problem(422, "PAGE_INVALID", "Invalid page cursor")
+			return nil, Read, domain.Invalid("PAGE_INVALID", "Invalid page cursor")
 		}
 	}
 	search := strings.ToLower(strings.TrimSpace(option.Search))

@@ -20,7 +20,7 @@ func storageMutation(ctx context.Context, tx pgx.Tx, query workerStorageMutation
 		return err
 	}
 	if requireOne && tag.RowsAffected() != 1 {
-		return domain.Problem(409, "REVISION_CONFLICT", "Storage configuration changed")
+		return domain.Conflict("REVISION_CONFLICT", "Storage configuration changed")
 	}
 	return nil
 }
@@ -133,7 +133,7 @@ func checkR2Bucket(ctx context.Context, tx pgx.Tx, bucket, organization string) 
 		return err
 	}
 	if !exists {
-		return domain.Problem(409, "STORAGE_BUCKET_UNAVAILABLE", "Bucket is unavailable")
+		return domain.Conflict("STORAGE_BUCKET_UNAVAILABLE", "Bucket is unavailable")
 	}
 	return nil
 }

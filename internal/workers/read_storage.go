@@ -17,7 +17,7 @@ type ReadCredentialSource interface {
 // artifact or static origin. The issuer restricts reads to this exact directory.
 func (w *Controller) ReadGrant(ctx context.Context, organization, resource, prefix string) (domain.StorageReadGrant, error) {
 	if w.ReadCredentials == nil {
-		return domain.StorageReadGrant{}, domain.Problem(503, "STORAGE_CREDENTIALS_UNAVAILABLE", "Runtime storage credentials unavailable")
+		return domain.StorageReadGrant{}, domain.Unavailable("STORAGE_CREDENTIALS_UNAVAILABLE", "Runtime storage credentials unavailable")
 	}
 	credentials, err := w.ReadCredentials.Credentials(ctx, domain.StorageCredentialScope{
 		Organization:          organization,
@@ -29,11 +29,11 @@ func (w *Controller) ReadGrant(ctx context.Context, organization, resource, pref
 		AuthorizationRevision: 1,
 	}, 2*time.Minute)
 	if err != nil {
-		return domain.StorageReadGrant{}, domain.Problem(503, "STORAGE_CREDENTIALS_UNAVAILABLE", "Runtime storage credentials unavailable")
+		return domain.StorageReadGrant{}, domain.Unavailable("STORAGE_CREDENTIALS_UNAVAILABLE", "Runtime storage credentials unavailable")
 	}
 	endpoint, err := url.Parse(w.Config.S3RuntimeEndpoint)
 	if err != nil {
-		return domain.StorageReadGrant{}, domain.Problem(503, "STORAGE_UNAVAILABLE", "Runtime storage unavailable")
+		return domain.StorageReadGrant{}, domain.Unavailable("STORAGE_UNAVAILABLE", "Runtime storage unavailable")
 	}
 	style := "path"
 	if w.Config.S3UsesVirtualHost(*endpoint, w.Config.S3Bucket) {

@@ -44,7 +44,7 @@ func (s *Service) BoundRepositoryCredential(ctx context.Context, provider appcon
 }
 
 func reconnectRequired() error {
-	return domain.Problem(409, "WORKER_REPOSITORY_RECONNECT_REQUIRED", "Repository authorization expired or was removed; reconnect the account")
+	return domain.Conflict("WORKER_REPOSITORY_RECONNECT_REQUIRED", "Repository authorization expired or was removed; reconnect the account")
 }
 
 func (s *Service) userRepositoryGrant(ctx context.Context, provider appconfig.WorkerRepositoryProvider, userID string) (domain.WorkerRepositoryConnection, bool, error) {
@@ -69,7 +69,7 @@ func (s *Service) userRepositoryGrant(ctx context.Context, provider appconfig.Wo
 		return grant, ok, err
 	}
 	if !ok || grant.AccessToken != token || grant.ReconnectRequired {
-		return grant, true, domain.Problem(409, "WORKER_REPOSITORY_AUTHORIZATION_CHANGED", "Repository authorization changed; retry the request")
+		return grant, true, domain.Conflict("WORKER_REPOSITORY_AUTHORIZATION_CHANGED", "Repository authorization changed; retry the request")
 	}
 	return grant, true, nil
 }

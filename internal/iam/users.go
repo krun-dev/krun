@@ -16,7 +16,7 @@ func (s Service) ensureAdmin(st *domain.State) error {
 			return nil
 		}
 	}
-	return domain.Problem(409, "LAST_ADMIN", "At least one active system administrator must remain")
+	return domain.Conflict("LAST_ADMIN", "At least one active system administrator must remain")
 }
 
 func (s Service) Users(st *domain.State) ([]domain.User, error) {
@@ -34,7 +34,7 @@ func (s Service) UpdateUser(st *domain.State, id string, in UserInput) (domain.U
 		return domain.User{}, err
 	}
 	if in.Status != "active" && in.Status != "disabled" {
-		return domain.User{}, domain.Problem(422, "INVALID_REQUEST", "Status must be active or disabled")
+		return domain.User{}, domain.Invalid("INVALID_REQUEST", "Status must be active or disabled")
 	}
 	u.Status = in.Status
 	u.AuthVersion++
@@ -48,7 +48,7 @@ func (s Service) UpdateUser(st *domain.State, id string, in UserInput) (domain.U
 
 func (s Service) Invite(st *domain.State, in InvitationInput) error {
 	if !s.sourceEnabled(in.Source) || in.Subject == "" || len(in.Subject) > 512 {
-		return domain.Problem(422, "INVALID_REQUEST", "Enabled source and stable subject required")
+		return domain.Invalid("INVALID_REQUEST", "Enabled source and stable subject required")
 	}
 	return AddInvitation(st, in.Source, in.Subject)
 }

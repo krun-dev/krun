@@ -9,48 +9,48 @@ import (
 func validateAssignment(st *domain.State, t authorization.Target, in AssignmentInput) error {
 	if t.Kind == "system" {
 		if in.Role != "system_admin" || in.ScopeKind != "system" || in.ScopeID != "system" || len(in.Conditions.Environments) > 0 {
-			return domain.Problem(422, "POLICY_INVALID", "System scope permits only system_admin")
+			return domain.Invalid("POLICY_INVALID", "System scope permits only system_admin")
 		}
 	} else {
 		if !authorization.OrganizationRoleValid(in.Role) {
-			return domain.Problem(422, "POLICY_INVALID", "Unknown organization role")
+			return domain.Invalid("POLICY_INVALID", "Unknown organization role")
 		}
 		if in.ScopeKind == "organization" {
 			if in.ScopeID != t.ID {
-				return domain.Problem(422, "POLICY_INVALID", "Wrong organization scope")
+				return domain.Invalid("POLICY_INVALID", "Wrong organization scope")
 			}
 		} else {
 			res, ok := st.Resources[in.ScopeID]
 			if !ok || res.Organization != t.ID || res.Kind != in.ScopeKind || in.Role == "org_admin" {
-				return domain.Problem(422, "POLICY_INVALID", "Invalid resource scope")
+				return domain.Invalid("POLICY_INVALID", "Invalid resource scope")
 			}
 		}
 		if in.Role == "org_admin" && len(in.Conditions.Environments) > 0 {
-			return domain.Problem(422, "POLICY_INVALID", "Administrator roles cannot have environment conditions")
+			return domain.Invalid("POLICY_INVALID", "Administrator roles cannot have environment conditions")
 		}
 	}
 	for _, env := range in.Conditions.Environments {
 		if !authorization.ReservedEnvironmentValid(env) {
-			return domain.Problem(422, "POLICY_INVALID", "Unknown environment")
+			return domain.Invalid("POLICY_INVALID", "Unknown environment")
 		}
 	}
 	if in.SubjectKind == "user" {
 		u, ok := st.Users[in.SubjectID]
 		if !ok || u.Status != "active" {
-			return domain.Problem(422, "POLICY_INVALID", "Active user required")
+			return domain.Invalid("POLICY_INVALID", "Active user required")
 		}
 		if t.Kind == "organization" {
 			if _, ok := st.Members[domain.MemberKey(t.ID, u.ID)]; !ok {
-				return domain.Problem(422, "POLICY_INVALID", "Organization membership required")
+				return domain.Invalid("POLICY_INVALID", "Organization membership required")
 			}
 		}
 	} else if in.SubjectKind == "group" {
 		g, ok := st.Groups[in.SubjectID]
 		if !ok || !sameScope(g, t) {
-			return domain.Problem(422, "POLICY_INVALID", "Group must belong to this scope")
+			return domain.Invalid("POLICY_INVALID", "Group must belong to this scope")
 		}
 	} else {
-		return domain.Problem(422, "POLICY_INVALID", "Subject must be user or group")
+		return domain.Invalid("POLICY_INVALID", "Subject must be user or group")
 	}
 	return nil
 }
@@ -104,7 +104,7 @@ func (s Service) WriteAssignment(st *domain.State, t authorization.Target, assig
 			return domain.Assignment{}, domain.NotFound()
 		}
 		if in.Revision != old.Revision {
-			return domain.Assignment{}, domain.Problem(409, "REVISION_CONFLICT", "Assignment changed")
+			return domain.Assignment{}, domain.Conflict("REVISION_CONFLICT", "Assignment changed")
 		}
 		rev = old.Revision + 1
 		changesAdmin = changesAdmin || (t.Kind == "organization" && old.Role == "org_admin")

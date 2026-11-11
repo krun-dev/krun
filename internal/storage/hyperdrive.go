@@ -75,7 +75,7 @@ func (s *Store) UpdateHyperdrive(ctx context.Context, origin domain.HyperdriveOr
 	}
 	count, err := result.RowsAffected()
 	if err == nil && count != 1 {
-		err = domain.Problem(409, "REVISION_CONFLICT", "Hyperdrive configuration changed")
+		err = domain.Conflict("REVISION_CONFLICT", "Hyperdrive configuration changed")
 	}
 	return err
 }
@@ -96,7 +96,7 @@ func (s *Store) DeleteHyperdrive(ctx context.Context, org, id string) error {
 func hyperdriveWriteError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		return domain.Problem(409, "HYPERDRIVE_ALREADY_EXISTS", "Hyperdrive name already exists")
+		return domain.Conflict("HYPERDRIVE_ALREADY_EXISTS", "Hyperdrive name already exists")
 	}
 	return err
 }

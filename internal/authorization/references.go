@@ -52,14 +52,14 @@ func ResolvePolicyReferences(st *domain.State, policy *domain.Policy) error {
 		if selector.Organization != "" {
 			org, err := ResolveReference(st, "organization", selector.Organization, "global")
 			if err != nil {
-				return domain.Problem(422, "POLICY_INVALID", "Unknown organization")
+				return domain.Invalid("POLICY_INVALID", "Unknown organization")
 			}
 			selector.Organization = org.ID
 		}
 		for j, ref := range selector.IDs {
 			target, err := ResolveReference(st, selector.Kind, ref, "global")
 			if err != nil {
-				return domain.Problem(422, "POLICY_INVALID", "Invalid resource ownership")
+				return domain.Invalid("POLICY_INVALID", "Invalid resource ownership")
 			}
 			selector.IDs[j] = target.ID
 		}

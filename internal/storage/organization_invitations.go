@@ -69,11 +69,11 @@ func (s *Store) ListOrganizationInvitations(ctx context.Context, organization, a
 }
 
 func invitationLimitError() error {
-	return domain.Problem(409, "INVITATION_LIMIT_REACHED", "Revoke unused invitation links before creating another")
+	return domain.Conflict("INVITATION_LIMIT_REACHED", "Revoke unused invitation links before creating another")
 }
 
 func invitationConflict() error {
-	return domain.Problem(409, "REVISION_CONFLICT", "Invitation changed")
+	return domain.Conflict("REVISION_CONFLICT", "Invitation changed")
 }
 
 func (s *Store) CreateOrganizationInvitation(ctx context.Context, in domain.OrganizationInvitation, orgRevision int, audit domain.Audit) error {

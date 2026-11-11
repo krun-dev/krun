@@ -67,10 +67,10 @@ func (s *Service) BucketCreate(st *domain.State, p authorization.Principal, orga
 		return domain.WorkerBucket{}, err
 	}
 	if s.Config.Workers == nil || s.Config.Workers.ObjectStorage == nil {
-		return domain.WorkerBucket{}, domain.Problem(503, "OBJECT_STORAGE_NOT_CONFIGURED", "Object storage is not configured")
+		return domain.WorkerBucket{}, domain.Unavailable("OBJECT_STORAGE_NOT_CONFIGURED", "Object storage is not configured")
 	}
 	if !bucketNamePattern.MatchString(name) {
-		return domain.WorkerBucket{}, domain.Problem(422, "BUCKET_NAME_INVALID", "Invalid bucket name")
+		return domain.WorkerBucket{}, domain.Invalid("BUCKET_NAME_INVALID", "Invalid bucket name")
 	}
 	count := 0
 	for _, bucket := range st.Workers.Buckets {
@@ -79,11 +79,11 @@ func (s *Service) BucketCreate(st *domain.State, p authorization.Principal, orga
 		}
 		count++
 		if bucket.Name == name {
-			return domain.WorkerBucket{}, domain.Problem(409, "BUCKET_ALREADY_EXISTS", "Bucket already exists")
+			return domain.WorkerBucket{}, domain.Conflict("BUCKET_ALREADY_EXISTS", "Bucket already exists")
 		}
 	}
 	if count >= 1000 {
-		return domain.WorkerBucket{}, domain.Problem(409, "BUCKET_LIMIT_REACHED", "Organization bucket limit reached")
+		return domain.WorkerBucket{}, domain.Conflict("BUCKET_LIMIT_REACHED", "Organization bucket limit reached")
 	}
 	bucket := domain.WorkerBucket{
 		ID:           securetoken.NewID("bkt"),
@@ -112,7 +112,7 @@ func (s *Service) BucketSetEnabled(st *domain.State, p authorization.Principal, 
 		return domain.WorkerBucket{}, domain.NotFound()
 	}
 	if bucket.Revision != revision {
-		return domain.WorkerBucket{}, domain.Problem(409, "REVISION_CONFLICT", "Bucket changed")
+		return domain.WorkerBucket{}, domain.Conflict("REVISION_CONFLICT", "Bucket changed")
 	}
 	bucket.Enabled = enabled
 	bucket.Revision++
@@ -123,7 +123,7 @@ func (s *Service) BucketSetEnabled(st *domain.State, p authorization.Principal, 
 
 func resolveR2Bindings(st *domain.State, organization string, requested map[string]string) (map[string]domain.WorkerR2Binding, error) {
 	if len(requested) > 100 {
-		return nil, domain.Problem(422, "WORKER_BINDINGS_INVALID", "At most 100 R2 bindings")
+		return nil, domain.Invalid("WORKER_BINDINGS_INVALID", "At most 100 R2 bindings")
 	}
 	out := make(map[string]domain.WorkerR2Binding, len(requested))
 	for name, bucketName := range requested {
@@ -136,7 +136,7 @@ func resolveR2Bindings(st *domain.State, organization string, requested map[stri
 			}
 		}
 		if !found {
-			return nil, domain.Problem(422, "STORAGE_BUCKET_UNAVAILABLE", "R2 bucket does not exist or is disabled in this organization")
+			return nil, domain.Invalid("STORAGE_BUCKET_UNAVAILABLE", "R2 bucket does not exist or is disabled in this organization")
 		}
 	}
 	return out, nil

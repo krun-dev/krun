@@ -33,9 +33,9 @@ func (s *Service) Catalog(ctx context.Context, provider appconfig.WorkerReposito
 		}
 		return CatalogPage{}, reconnectRequired()
 	case errors.Is(err, repooauth.ErrCatalogForbidden):
-		return CatalogPage{}, domain.Problem(403, "WORKER_REPOSITORY_LIST_DENIED", "Repository listing was denied; check the Git provider permissions or reconnect")
+		return CatalogPage{}, domain.ForbiddenCode("WORKER_REPOSITORY_LIST_DENIED", "Repository listing was denied; check the Git provider permissions or reconnect")
 	case err != nil:
-		return CatalogPage{}, domain.Problem(503, "WORKER_REPOSITORY_LIST_UNAVAILABLE", "Repository listing is temporarily unavailable; retry")
+		return CatalogPage{}, domain.Unavailable("WORKER_REPOSITORY_LIST_UNAVAILABLE", "Repository listing is temporarily unavailable; retry")
 	}
 	if len(provider.AllowedRepositories) > 0 {
 		items = slices.DeleteFunc(items, func(item repooauth.Repository) bool {

@@ -40,27 +40,27 @@ func (s Service) CreateWorkerScript(st *domain.State, t authorization.Target, na
 	// Native routes accept internal IDs as well. Keep that namespace
 	// disjoint from user-supplied script names.
 	if strings.HasPrefix(name, "worker_") && len(name) == len("worker_")+16 {
-		return domain.Resource{}, domain.Problem(422, "LOCATOR_INVALID", "Choose a different Worker locator")
+		return domain.Resource{}, domain.Invalid("LOCATOR_INVALID", "Choose a different Worker locator")
 	}
 	return s.createResource(st, t, "worker", name, name)
 }
 
 func (s Service) createResource(st *domain.State, t authorization.Target, kind, name, locator string) (domain.Resource, error) {
 	if !nameValid(name) {
-		return domain.Resource{}, domain.Problem(422, "INVALID_REQUEST", "Name required (max 128 bytes)")
+		return domain.Resource{}, domain.Invalid("INVALID_REQUEST", "Name required (max 128 bytes)")
 	}
 	if securetoken.IsID(locator, kind) {
-		return domain.Resource{}, domain.Problem(422, "LOCATOR_INVALID", "Choose a different resource locator")
+		return domain.Resource{}, domain.Invalid("LOCATOR_INVALID", "Choose a different resource locator")
 	}
 	if kind == "worker" {
 		switch locator {
 		case "domains", "network-profiles", "repository-providers":
-			return domain.Resource{}, domain.Problem(422, "LOCATOR_INVALID", "Choose a different Worker locator")
+			return domain.Resource{}, domain.Invalid("LOCATOR_INVALID", "Choose a different Worker locator")
 		}
 	}
 	for _, existing := range st.Resources {
 		if existing.Organization == t.ID && existing.Kind == kind && existing.Locator == locator {
-			return domain.Resource{}, domain.Problem(409, "LOCATOR_CONFLICT", "Resource locator already exists")
+			return domain.Resource{}, domain.Conflict("LOCATOR_CONFLICT", "Resource locator already exists")
 		}
 	}
 	res := domain.Resource{
@@ -80,10 +80,10 @@ func (s Service) createResource(st *domain.State, t authorization.Target, kind, 
 func (s Service) UpdateResource(st *domain.State, t authorization.Target, in RevisionNameInput) (domain.Resource, error) {
 	res := st.Resources[t.ID]
 	if in.Revision != res.Revision {
-		return domain.Resource{}, domain.Problem(409, "REVISION_CONFLICT", "Resource changed")
+		return domain.Resource{}, domain.Conflict("REVISION_CONFLICT", "Resource changed")
 	}
 	if !nameValid(in.Name) {
-		return domain.Resource{}, domain.Problem(422, "INVALID_REQUEST", "Name required")
+		return domain.Resource{}, domain.Invalid("INVALID_REQUEST", "Name required")
 	}
 	res.Name = in.Name
 	res.Revision++

@@ -27,30 +27,30 @@ func (s Service) NewOrganizationInvitation(st *domain.State, org, creator string
 		in.Role = "member"
 	}
 	if in.Role != "member" && in.Role != "viewer" {
-		return domain.OrganizationInvitation{}, "", domain.Problem(422, "INVALID_REQUEST", "Invitation role must be member or viewer")
+		return domain.OrganizationInvitation{}, "", domain.Invalid("INVALID_REQUEST", "Invitation role must be member or viewer")
 	}
 	maxUses := 1
 	if in.MaxUses != nil {
 		maxUses = *in.MaxUses
 	}
 	if maxUses < 1 || maxUses > 100 {
-		return domain.OrganizationInvitation{}, "", domain.Problem(422, "INVALID_REQUEST", "Invitation limit must be between 1 and 100")
+		return domain.OrganizationInvitation{}, "", domain.Invalid("INVALID_REQUEST", "Invitation limit must be between 1 and 100")
 	}
 	in.TargetUser = strings.TrimSpace(in.TargetUser)
 	in.TargetEmail = strings.ToLower(strings.TrimSpace(in.TargetEmail))
 	if in.TargetUser != "" && in.TargetEmail != "" {
-		return domain.OrganizationInvitation{}, "", domain.Problem(422, "INVALID_REQUEST", "Choose one invitation recipient")
+		return domain.OrganizationInvitation{}, "", domain.Invalid("INVALID_REQUEST", "Choose one invitation recipient")
 	}
 	if in.TargetUser != "" {
 		user, ok := st.Users[in.TargetUser]
 		if !ok || user.Status != "active" {
-			return domain.OrganizationInvitation{}, "", domain.Problem(422, "INVALID_REQUEST", "Existing active invitation recipient required")
+			return domain.OrganizationInvitation{}, "", domain.Invalid("INVALID_REQUEST", "Existing active invitation recipient required")
 		}
 	}
 	if in.TargetEmail != "" {
 		address, err := mail.ParseAddress(in.TargetEmail)
 		if err != nil || address.Address != in.TargetEmail || len(in.TargetEmail) > 254 {
-			return domain.OrganizationInvitation{}, "", domain.Problem(422, "INVALID_REQUEST", "Valid invitation email required")
+			return domain.OrganizationInvitation{}, "", domain.Invalid("INVALID_REQUEST", "Valid invitation email required")
 		}
 	}
 	token := "krun_invite_" + securetoken.Random()
@@ -121,10 +121,10 @@ func (s Service) AcceptOrganizationInvitation(st *domain.State, in domain.Organi
 		return result, domain.Assignment{}, err
 	}
 	if !authorization.SourceAllowed(st, p.User, in.Organization) {
-		return result, domain.Assignment{}, domain.Problem(403, "INVITATION_SOURCE_DENIED", "Account identity source is not allowed by this organization")
+		return result, domain.Assignment{}, domain.ForbiddenCode("INVITATION_SOURCE_DENIED", "Account identity source is not allowed by this organization")
 	}
 	if in.TargetUser != "" && in.TargetUser != p.User.ID || in.TargetEmail != "" && (!p.User.EmailVerified || !strings.EqualFold(strings.TrimSpace(p.User.Email), in.TargetEmail)) {
-		return result, domain.Assignment{}, domain.Problem(403, "INVITATION_RECIPIENT_MISMATCH", "Current account is not the invitation recipient")
+		return result, domain.Assignment{}, domain.ForbiddenCode("INVITATION_RECIPIENT_MISMATCH", "Current account is not the invitation recipient")
 	}
 	if _, exists := st.Members[domain.MemberKey(in.Organization, p.User.ID)]; exists {
 		result.Status = "already_member"
@@ -134,7 +134,7 @@ func (s Service) AcceptOrganizationInvitation(st *domain.State, in domain.Organi
 		return result, domain.Assignment{}, err
 	}
 	if redeemed {
-		return result, domain.Assignment{}, domain.Problem(409, "INVITATION_ALREADY_USED", "A new invitation is required after membership removal")
+		return result, domain.Assignment{}, domain.Conflict("INVITATION_ALREADY_USED", "A new invitation is required after membership removal")
 	}
 	if in.UseCount >= in.MaxUses {
 		return result, domain.Assignment{}, InvitationUnavailable()

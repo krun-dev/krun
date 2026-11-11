@@ -69,13 +69,9 @@ func NewWorkerState() *WorkerState {
 
 func (e *APIError) Error() string { return e.Code }
 
-func Problem(status int, code, message string) error {
-	return &APIError{Status: status, Code: code, Message: message}
-}
+func Forbidden() error { return ForbiddenCode("PERMISSION_DENIED", "Permission denied") }
 
-func Forbidden() error { return Problem(403, "PERMISSION_DENIED", "Permission denied") }
-
-func NotFound() error { return Problem(404, "RESOURCE_NOT_FOUND", "Resource not found") }
+func NotFound() error { return NotFoundCode("RESOURCE_NOT_FOUND", "Resource not found") }
 
 func CloneStringsMap(source map[string]string) map[string]string {
 	if source == nil {

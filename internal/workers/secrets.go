@@ -58,13 +58,13 @@ func DecryptWorkerSecrets(config *appconfig.WorkersConfig, digest string, encryp
 	for _, item := range encrypted {
 		value, err := DecryptWorkerSecret(config, item)
 		if err != nil {
-			return nil, domain.Problem(503, "WORKER_SECRET_UNAVAILABLE", "Worker secret unavailable")
+			return nil, domain.Unavailable("WORKER_SECRET_UNAVAILABLE", "Worker secret unavailable")
 		}
 		values[item.Version.Name] = value
 		versions[item.Version.Name] = item.Version.ID
 	}
 	if WorkerSecretsDigest(versions) != digest {
-		return nil, domain.Problem(503, "WORKER_SECRET_UNAVAILABLE", "Worker secret binding mismatch")
+		return nil, domain.Unavailable("WORKER_SECRET_UNAVAILABLE", "Worker secret binding mismatch")
 	}
 	return values, nil
 }
@@ -182,7 +182,7 @@ type WorkerSecretBatchInput struct {
 
 func (s *Service) WorkerSecretBatch(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, target authorization.Target, environment string, in WorkerSecretBatchInput) (any, Outcome, error) {
 	if in.Key == "" || len(in.Key) > 128 || in.Revision < 0 || len(in.Secrets) == 0 || len(in.Secrets) > WorkerSecretMaxCount {
-		return nil, Read, domain.Problem(422, "WORKER_SECRET_INVALID", "A bounded secret batch, expected_revision and idempotency_key are required")
+		return nil, Read, domain.Invalid("WORKER_SECRET_INVALID", "A bounded secret batch, expected_revision and idempotency_key are required")
 	}
 	key := WorkerIdempotencyKey(target, p, "secret-batch", environment, in.Key)
 	if id, err := WorkerIdempotent(st, key, in); err != nil {
@@ -210,18 +210,18 @@ func (s *Service) WorkerSecretBatch(ctx context.Context, st *domain.State, p aut
 		return nil, Read, domain.NotFound()
 	}
 	if !current.Enabled {
-		return nil, Read, domain.Problem(409, "ENVIRONMENT_DISABLED", "Target environment is disabled")
+		return nil, Read, domain.Conflict("ENVIRONMENT_DISABLED", "Target environment is disabled")
 	}
 	if current.Revision != in.Revision {
-		return nil, Read, domain.Problem(409, "REVISION_CONFLICT", "Environment deployment changed")
+		return nil, Read, domain.Conflict("REVISION_CONFLICT", "Environment deployment changed")
 	}
 	if !base && WorkerBusy(st, target.ID, environment) {
-		return nil, Read, domain.Problem(409, "DEPLOYMENT_BUSY", "Wait for the active deployment")
+		return nil, Read, domain.Conflict("DEPLOYMENT_BUSY", "Wait for the active deployment")
 	}
 	versions := domain.CloneStringsMap(current.SecretVersions)
 	for name, value := range in.Secrets {
 		if !WorkerSecretNameValid(name) || value != nil && len(*value) > WorkerSecretMaxBytes {
-			return nil, Read, domain.Problem(422, "WORKER_SECRET_INVALID", "Invalid secret name or value size")
+			return nil, Read, domain.Invalid("WORKER_SECRET_INVALID", "Invalid secret name or value size")
 		}
 		if value == nil {
 			if _, ok := versions[name]; !ok {
@@ -231,11 +231,11 @@ func (s *Service) WorkerSecretBatch(ctx context.Context, st *domain.State, p aut
 			continue
 		}
 		if _, collision := current.Variables[name]; collision {
-			return nil, Read, domain.Problem(409, "WORKER_BINDING_CONFLICT", "A plain variable already uses this binding name")
+			return nil, Read, domain.Conflict("WORKER_BINDING_CONFLICT", "A plain variable already uses this binding name")
 		}
 		encrypted, err := EncryptWorkerSecret(s.Config.Workers, target.Organization, target.ID, environment, name, p.User.ID, *value)
 		if err != nil {
-			return nil, Read, domain.Problem(503, "WORKER_SECRETS_NOT_CONFIGURED", "Worker secret encryption is not configured")
+			return nil, Read, domain.Unavailable("WORKER_SECRETS_NOT_CONFIGURED", "Worker secret encryption is not configured")
 		}
 		st.Workers.SecretVersions[encrypted.Version.ID] = encrypted.Version
 		if st.PendingWorkerSecrets == nil {
@@ -245,7 +245,7 @@ func (s *Service) WorkerSecretBatch(ctx context.Context, st *domain.State, p aut
 		versions[name] = encrypted.Version.ID
 	}
 	if len(versions) > WorkerSecretMaxCount {
-		return nil, Read, domain.Problem(422, "WORKER_SECRET_INVALID", "At most 100 secrets are supported per environment")
+		return nil, Read, domain.Invalid("WORKER_SECRET_INVALID", "At most 100 secrets are supported per environment")
 	}
 	current.SecretVersions = versions
 	if err := ValidateWorkerBindings(current); err != nil {
@@ -268,7 +268,7 @@ func (s *Service) WorkerSecretBatch(ctx context.Context, st *domain.State, p aut
 	}
 	artifact, ok := st.Workers.Artifacts[active.Artifact]
 	if !ok {
-		return nil, Read, domain.Problem(409, "ARTIFACT_UNAVAILABLE", "Artifact unavailable")
+		return nil, Read, domain.Conflict("ARTIFACT_UNAVAILABLE", "Artifact unavailable")
 	}
 	version := SnapshotVersion(target.Organization, target.ID, environment, artifact, current)
 	version.CreatedBy = p.User.ID

@@ -32,7 +32,7 @@ func (s *Store) writeWorkerConfigurations(ctx context.Context, tx pgx.Tx, before
 			return err
 		}
 		if tag.RowsAffected() != 1 {
-			return domain.Problem(409, "REVISION_CONFLICT", "Environment configuration changed")
+			return domain.Conflict("REVISION_CONFLICT", "Environment configuration changed")
 		}
 		variables, err := json.Marshal(c.Variables)
 		if err != nil {
@@ -65,7 +65,7 @@ func (s *Store) writeWorkerConfigurations(ctx context.Context, tx pgx.Tx, before
 				return err
 			}
 			if tag.RowsAffected() != 1 {
-				return domain.Problem(409, "WORKER_SECRET_UNAVAILABLE", "Configuration secret is unavailable")
+				return domain.Conflict("WORKER_SECRET_UNAVAILABLE", "Configuration secret is unavailable")
 			}
 		}
 		for name, binding := range c.R2Bindings {

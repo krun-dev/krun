@@ -31,7 +31,7 @@ func (s Service) Groups(st *domain.State, t authorization.Target) ([]domain.Grou
 
 func (s Service) CreateGroup(st *domain.State, t authorization.Target, in NameInput) (domain.Group, error) {
 	if !nameValid(in.Name) {
-		return domain.Group{}, domain.Problem(422, "INVALID_REQUEST", "Name required")
+		return domain.Group{}, domain.Invalid("INVALID_REQUEST", "Name required")
 	}
 	g := domain.Group{ID: securetoken.NewID("grp"), ScopeKind: t.Kind, ScopeID: t.ID, Name: in.Name, Members: []string{}, Revision: 1}
 	st.Groups[g.ID] = g
@@ -45,10 +45,10 @@ func (s Service) UpdateGroup(st *domain.State, t authorization.Target, id string
 		return domain.Group{}, err
 	}
 	if in.Revision != g.Revision {
-		return domain.Group{}, domain.Problem(409, "REVISION_CONFLICT", "Group changed")
+		return domain.Group{}, domain.Conflict("REVISION_CONFLICT", "Group changed")
 	}
 	if !nameValid(in.Name) {
-		return domain.Group{}, domain.Problem(422, "INVALID_REQUEST", "Name required")
+		return domain.Group{}, domain.Invalid("INVALID_REQUEST", "Name required")
 	}
 	g.Name = in.Name
 	g.Revision++
@@ -88,11 +88,11 @@ func (s Service) SetGroupMember(st *domain.State, t authorization.Target, id, us
 	}
 	u, ok := st.Users[user]
 	if !ok || (add && u.Status != "active") {
-		return domain.Group{}, domain.Problem(422, "INVALID_REQUEST", "Active user required")
+		return domain.Group{}, domain.Invalid("INVALID_REQUEST", "Active user required")
 	}
 	if t.Kind == "organization" {
 		if _, ok := st.Members[domain.MemberKey(t.ID, user)]; !ok {
-			return domain.Group{}, domain.Problem(422, "INVALID_REQUEST", "Organization membership required")
+			return domain.Group{}, domain.Invalid("INVALID_REQUEST", "Organization membership required")
 		}
 	}
 	changesAdmin := t.Kind == "organization" && !add

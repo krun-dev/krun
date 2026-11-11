@@ -62,7 +62,7 @@ func (s *Service) WorkerEnvironments(ctx context.Context, st *domain.State, p au
 
 func (s *Service) WorkerEnvironmentCreate(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, in WorkerEnvironmentCreateInput) (any, Outcome, error) {
 	if !appconfig.WorkerPreviewValid(in.Name) {
-		return nil, Read, domain.Problem(422, "ENVIRONMENT_INVALID", "Preview name must be a slug and cannot be production")
+		return nil, Read, domain.Invalid("ENVIRONMENT_INVALID", "Preview name must be a slug and cannot be production")
 	}
 	t, e := s.WorkerTarget(st, ref, in.Name, "worker.update", p)
 	if e != nil {
@@ -70,7 +70,7 @@ func (s *Service) WorkerEnvironmentCreate(ctx context.Context, st *domain.State,
 	}
 	ws := s.Worker(st, t)
 	if _, exists := ws.Environments[in.Name]; exists {
-		return nil, Read, domain.Problem(409, "ENVIRONMENT_EXISTS", "Preview environment already exists")
+		return nil, Read, domain.Conflict("ENVIRONMENT_EXISTS", "Preview environment already exists")
 	}
 	previews := 0
 	for name := range ws.Environments {
@@ -83,7 +83,7 @@ func (s *Service) WorkerEnvironmentCreate(ctx context.Context, st *domain.State,
 		limit = 32
 	}
 	if previews >= limit {
-		return nil, Read, domain.Problem(409, "ENVIRONMENT_LIMIT", "Too many preview environments")
+		return nil, Read, domain.Conflict("ENVIRONMENT_LIMIT", "Too many preview environments")
 	}
 	env := domain.WorkerEnvironment{Name: in.Name, Enabled: true, ConfigRevision: 1, Variables: map[string]any{}, SecretVersions: map[string]string{}}
 	if ws.PreviewBase != nil && !in.IgnoreBase {
@@ -117,7 +117,7 @@ func (s *Service) WorkerEnvironmentDelete(ctx context.Context, st *domain.State,
 		return nil, Read, domain.NotFound()
 	}
 	if WorkerBusy(st, t.ID, env) {
-		return nil, Read, domain.Problem(409, "DEPLOYMENT_BUSY", "Wait for the active version operation")
+		return nil, Read, domain.Conflict("DEPLOYMENT_BUSY", "Wait for the active version operation")
 	}
 	for id, configuration := range st.Workers.Configurations {
 		if configuration.Worker == t.ID && configuration.Environment == env {
@@ -139,24 +139,24 @@ func (s *Service) WorkerEnvironmentUpdate(ctx context.Context, st *domain.State,
 		return nil, Read, domain.NotFound()
 	}
 	if current.ConfigRevision != in.Revision {
-		return nil, Read, domain.Problem(409, "REVISION_CONFLICT", "Environment configuration changed")
+		return nil, Read, domain.Conflict("REVISION_CONFLICT", "Environment configuration changed")
 	}
 	if WorkerBusy(st, t.ID, env) {
-		return nil, Read, domain.Problem(409, "DEPLOYMENT_BUSY", "Wait for the active version operation")
+		return nil, Read, domain.Conflict("DEPLOYMENT_BUSY", "Wait for the active version operation")
 	}
 	if in.Variables != nil && !appconfig.WorkerVariablesValid(in.Variables) {
-		return nil, Read, domain.Problem(422, "WORKER_VARIABLES_INVALID", "Use up to 32 non-reserved uppercase variables, at most 16 KiB")
+		return nil, Read, domain.Invalid("WORKER_VARIABLES_INVALID", "Use up to 32 non-reserved uppercase variables, at most 16 KiB")
 	}
 	if in.Variables != nil {
 		for name := range in.Variables {
 			if _, exists := current.SecretVersions[name]; exists {
-				return nil, Read, domain.Problem(409, "WORKER_BINDING_CONFLICT", "A Secret already uses this binding name")
+				return nil, Read, domain.Conflict("WORKER_BINDING_CONFLICT", "A Secret already uses this binding name")
 			}
 		}
 	}
 	if in.Enabled != nil {
 		if env == appconfig.WorkerBaseline && !*in.Enabled {
-			return nil, Read, domain.Problem(422, "ENVIRONMENT_INVALID", "The baseline environment cannot be disabled")
+			return nil, Read, domain.Invalid("ENVIRONMENT_INVALID", "The baseline environment cannot be disabled")
 		}
 		current.Enabled = *in.Enabled
 	}
@@ -169,7 +169,7 @@ func (s *Service) WorkerEnvironmentUpdate(ctx context.Context, st *domain.State,
 	}
 	if in.R2Buckets != nil {
 		if s.Config.Workers == nil || s.Config.Workers.ObjectStorage == nil || s.Config.Workers.ObjectStorage.CursorKey == "" {
-			return nil, Read, domain.Problem(503, "OBJECT_STORAGE_NOT_CONFIGURED", "R2 storage must be configured")
+			return nil, Read, domain.Unavailable("OBJECT_STORAGE_NOT_CONFIGURED", "R2 storage must be configured")
 		}
 		resolved, err := resolveR2Bindings(st, t.Organization, *in.R2Buckets)
 		if err != nil {
