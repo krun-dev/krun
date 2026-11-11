@@ -43,6 +43,8 @@ export default {
 
 如需限定编码 Agent 的使用范围，参照 [Workers 代码兼容范围](/docs/guides/workers-runtime-compatibility.html)。
 
+发布后可以从 Worker 详情的「指标」页查看请求数、HTTP 5xx 比例和响应延迟，并比较不同环境及版本。操作步骤见 [Workers 观测](/docs/guides/workers-observability.html)。
+
 ## 命名配置版本
 
 在 Worker 中选择环境并进入「配置版本」，可以从环境草稿或当前生效配置保存一份带名称、

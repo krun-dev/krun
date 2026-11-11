@@ -29,5 +29,11 @@ func (s *Server) consoleContentSecurityPolicy() string {
 			}
 		}
 	}
-	return "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src " + strings.Join(sources, " ") + "; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+	frame := ""
+	if config := s.Config.WorkerMetrics; config != nil {
+		if u, err := url.Parse(config.GrafanaURL); err == nil && u.Host != "" {
+			frame = "frame-src 'self' " + u.Scheme + "://" + u.Host + "; "
+		}
+	}
+	return "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src " + strings.Join(sources, " ") + "; " + frame + "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 }

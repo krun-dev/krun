@@ -12,6 +12,48 @@ VictoriaMetrics 单节点版同时提供写入、存储和查询，集群版的 
 延迟量到拿到响应，包含调用期间发生的冷加载。冷加载指标量到制品下载、校验和准备完成。
 容器 CPU 和内存覆盖 serving runtime 和 validator，多个 Worker 共用该容器的资源。
 
+**krun Worker Metrics** 看板按组织和 Worker 查询请求数、HTTP 5xx 比例以及 P50、P95、P99
+响应延迟。环境和版本均可多选，每组环境和版本分别画线。版本取实际执行请求的版本。数据从
+升级 serving runtime 后开始积累，制品或域名变化不影响 Worker ID。资源池看板仍使用原有聚合指标。
+
+选择环境、比较版本和解读面板的步骤见 [Workers 观测](../../user-docs/src/content/docs/guides/workers-observability.md)。
+
+## 在控制台嵌入 Worker 指标
+
+在 krun 主配置启用以下设置，并滚动重启控制面以加载配置。将 `https://grafana.example.com`
+替换为浏览器可访问的 Grafana 地址，支持子路径。`dashboard_uid` 可省略，默认使用预置看板
+`krun-worker-metrics`。
+
+```yaml
+worker_metrics:
+  grafana_url: https://grafana.example.com
+  dashboard_uid: krun-worker-metrics
+```
+
+在 Grafana 的网关响应 CSP 中配置 `frame-ancestors https://console.example.com`，将示例来源
+替换为控制台的实际 origin。控制面托管静态文件时从配置生成 `frame-src`。通过 OSS 或独立
+代理托管控制台时，在静态站点响应的 CSP 中加入 Grafana origin，例如
+`frame-src 'self' https://grafana.example.com`。
+
+在部署配置中设置 `GF_SERVER_ROOT_URL` 和 `GF_SECURITY_ALLOW_EMBEDDING=true`。如果已安装
+Grafana，可以用 `kubectl` 更新当前 Deployment。将 `CONTEXT` 和 `GRAFANA_URL` 替换为
+实际的 kubectl context 和 Grafana 公开地址，并把同样的环境变量保存到部署 overlay，供后续重部署使用。
+
+```bash
+CONTEXT='replace-context'
+GRAFANA_URL='https://grafana.example.com'
+kubectl --context "$CONTEXT" -n krun-observability set env deployment/grafana \
+  "GF_SERVER_ROOT_URL=${GRAFANA_URL%/}/" GF_SECURITY_ALLOW_EMBEDDING=true
+kubectl --context "$CONTEXT" -n krun-observability rollout status deployment/grafana --timeout=180s
+```
+
+更换 Grafana 地址时同步更新控制面、Grafana 和控制台静态站点的 CSP 配置，控制台产物无需重新构建。
+
+嵌入使用 Grafana 自己的登录和数据源授权。可以通过「在 Grafana 中打开」完成顶层登录后再
+回到控制台；使用同站点域名可让 iframe 使用已有的 Grafana 会话。看板 URL 中的 Worker
+是展示筛选条件。内置 VictoriaMetrics 数据源可查看整个采集范围，只向有权查看该范围的人
+授予 Grafana 数据源访问权限。按组织或 Worker 开放时，需为 Grafana 配置相应隔离的数据源。
+
 ## 安装
 
 - 本地需要 `kubectl` 和 `openssl`。终端验证还需要 `curl` 和 `jq`。
@@ -65,11 +107,12 @@ namespace 和 PVC，底层卷是否保留取决于 StorageClass 的回收策略�
 
 ## 验证
 
-保持 Grafana 的端口转发运行。在另一个终端设置同一个 `CONTEXT` 后执行以下命令。
-第一个查询检查预置看板标题，第二个查询检查至少发现一个 kubelet，且每个目标的
-`up` 都为 `1`。两条命令应返回 `true`。
+保持 Grafana 的端口转发运行。需要 `kubectl`、`curl` 和 `jq`。在另一个终端将
+`CONTEXT` 替换为安装时使用的 kubectl context。以下两条检查应返回 `true`，分别确认
+预置的资源池看板和 Worker 详情看板。
 
 ```bash
+CONTEXT='replace-context'
 GRAFANA_PASSWORD=$(kubectl --context "$CONTEXT" -n krun-observability get secret grafana-admin \
   -o go-template='{{index .data "admin-password" | base64decode}}')
 
@@ -78,13 +121,19 @@ printf 'user = "admin:%s"\n' "$GRAFANA_PASSWORD" |
   jq -e '.dashboard.title == "krun Workers Runtime"'
 
 printf 'user = "admin:%s"\n' "$GRAFANA_PASSWORD" |
-  curl -fsS --config - -G \
-    --data-urlencode 'query=up{job="krun-kubelet-cadvisor"}' \
-    http://127.0.0.1:3000/api/datasources/proxy/uid/victoria-metrics/api/v1/query |
-  jq -e '.status == "success" and (.data.result | length > 0 and all(.value[1] == "1"))'
+  curl -fsS --config - http://127.0.0.1:3000/api/dashboards/uid/krun-worker-metrics |
+  jq -e '.dashboard.title == "krun Worker Metrics"'
 
 unset GRAFANA_PASSWORD
 ```
 
-有运行中的 workerd Pod 时，看板应显示内存 working set。采集周期为 30 秒，CPU 曲线
-需要多个样本。
+打开 **krun Workers Runtime** 看板，确认 kubelet 和 serving runtime 的采集状态为 `1`。
+有运行中的 workerd Pod 时，内存面板应显示 working set。采集周期为 30 秒，CPU 曲线需要多个样本。
+
+在浏览器访问目标 Worker 已发布的 HTTP 路径，选择实际执行 Worker 的路径。等待两个采集周期后，
+在 Worker 详情打开「指标」，选择对应环境和时段。确认看板出现 `Requests`、`HTTP 5xx ratio`
+和 `Response latency` 三个面板，图例包含实际处理请求的版本 ID。如果显示 `No data`，检查
+「Runtime scrape health」是否为 `1`，再核对 serving runtime 镜像与配置，以及选中的环境和时间范围。
+
+直开 Grafana 成功而嵌入区域显示拒绝连接时，检查 Grafana 响应的 `X-Frame-Options` 和
+`frame-ancestors`，以及控制台响应的 `frame-src`。

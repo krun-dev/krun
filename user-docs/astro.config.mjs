@@ -84,6 +84,7 @@ export default defineConfig({
                   ],
                 },
                 "guides/workers-runtime-compatibility",
+                "guides/workers-observability",
               ],
             },
             "guides/component-object-storage",

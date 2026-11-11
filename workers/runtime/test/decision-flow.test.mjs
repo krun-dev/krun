@@ -423,6 +423,16 @@ await check(
     assert.match(samples, /^krun_worker_requests_total\{status_class="2xx"\} 0$/m);
     assert.match(samples, /^krun_worker_requests_total\{status_class="5xx"\} 1$/m);
     assert.match(samples, /^krun_worker_request_duration_seconds_bucket\{le="\+Inf"\} 1$/m);
+    assert.ok(
+      samples.includes(
+        'krun_worker_version_requests_total{organization_id="org",worker_id="svc",environment="production",version_id="rel_metrics",outcome="5xx"} 1',
+      ),
+    );
+    assert.ok(
+      samples.includes(
+        'krun_worker_version_request_duration_seconds_count{organization_id="org",worker_id="svc",environment="production",version_id="rel_metrics"} 1',
+      ),
+    );
     assert.match(samples, /^krun_worker_bundle_load_duration_seconds_count\{outcome="error"\} 1$/m);
     assert.equal((await call(metrics, "/validate")).status, 404);
   },
@@ -465,6 +475,15 @@ await check("incremental op switches the route without a snapshot refetch", asyn
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.ok(switched, "route never switched to rel_plain");
+  const samples = await (await call(new incEntry.Metrics(incEnv, {}), "/metrics")).text();
+  assert.match(
+    samples,
+    /^krun_worker_version_requests_total\{[^}]*version_id="rel_test",outcome="non_5xx"\} [1-9][0-9]*$/m,
+  );
+  assert.match(
+    samples,
+    /^krun_worker_version_requests_total\{[^}]*version_id="rel_plain",outcome="non_5xx"\} 1$/m,
+  );
 });
 await check(
   "bootstrap reads a compact head without downloading a whole-pool snapshot",

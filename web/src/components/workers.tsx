@@ -6,6 +6,7 @@ import { LocalUpload } from "./workers/local-upload";
 import { ConfigurationsPanel } from "./workers/configurations";
 import { PreviewBasePanel } from "./workers/preview-base";
 import { VersionsPanel } from "./workers/versions";
+import { WorkerMetrics } from "./workers/metrics";
 import { BuildVersionMenu, CreateVersionDialog } from "./workers/version-create";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -611,7 +612,15 @@ function WorkerDetail({
   );
   const [tab, setTab] = useState(() => {
     const value = new URLSearchParams(location.search).get("worker_tab") || "delivery";
-    const tabs = ["delivery", "versions", "source", "routing", "configurations", "invoke"];
+    const tabs = [
+      "delivery",
+      "versions",
+      "source",
+      "routing",
+      "configurations",
+      "invoke",
+      "metrics",
+    ];
     return tabs.includes(value) ? value : "delivery";
   });
   const [versionDraft, setVersionDraft] = useState<{
@@ -955,6 +964,7 @@ function WorkerDetail({
               <TabsTrigger value="source">{t("代码源")}</TabsTrigger>
               <TabsTrigger value="routing">{t("路由与域名")}</TabsTrigger>
               <TabsTrigger value="configurations">{t("配置版本")}</TabsTrigger>
+              <TabsTrigger value="metrics">{t("指标")}</TabsTrigger>
               <TabsTrigger value="invoke">{t("调用测试")}</TabsTrigger>
             </TabsList>
           </div>
@@ -1257,6 +1267,16 @@ function WorkerDetail({
                 />
               </div>
             </details>
+          </TabsContent>
+          <TabsContent
+            value="metrics"
+            className="mt-5"
+          >
+            <WorkerMetrics
+              key={base}
+              base={base}
+              environment={env.name}
+            />
           </TabsContent>
           <TabsContent
             value="invoke"

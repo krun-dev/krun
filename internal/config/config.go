@@ -85,6 +85,8 @@ type Config struct {
 	// OrganizationSelfService lets any signed-in user create an organization.
 	// Off by default: organization.create remains system-admin only.
 	OrganizationSelfService bool `json:"organization_self_service"`
+	// WorkerMetrics enables the Grafana dashboard in the Worker detail page.
+	WorkerMetrics *WorkerMetricsConfig `json:"worker_metrics,omitempty"`
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -105,6 +107,9 @@ func LoadConfig(path string) (Config, error) {
 var Slug = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
 func (c *Config) Validate() error {
+	if err := c.WorkerMetrics.validate(c.Development); err != nil {
+		return err
+	}
 	if c.Workers != nil && c.Workers.BuilderMode == "local" && !c.Development {
 		return errors.New("workers.builder_mode: local requires development: true")
 	}
