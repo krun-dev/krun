@@ -165,6 +165,8 @@ URI 路径、query、method、body 保留；网关和入口清除客户端伪造
 
 每个 Pod 只有一个 workerd 进程，可动态加载多个业务 Worker。入口通过固定 `PLATFORM` service binding 请求受限内部 API；内部制品接口校验资源权限后返回元数据及限定到不可变制品目录的只读存储授权，runtime 本地计算 S3 SigV4，直连对象存储下载并校验归档与模块 hash。静态资产同样使用目录级授权，不逐文件获取签名 URL。配置 `s3_runtime_credentials` 可复用 STS 适配器签发临时凭据；省略时使用主配置的静态 S3 凭据，供本地兼容存储使用。凭据只进入可信入口内存，候选验证通过管理请求获得制品只读授权，不允许独立 validator 调用 serving 凭据接口。配置快照仍使用既有的配置读取签名。当 Version 含 Secret 时，入口再按精确 Version ID 从内部接口取值，核对绑定摘要后仅在 Loader 创建业务 isolate 时注入内存；Secret 不进入对象存储快照、公开 Version JSON 或业务日志。平台的对象存储凭据只由可信入口持有。入口 Worker 的出网白名单使用 workerd 的 `network=(allow=[...])`，**只接受 CIDR**（`host:port` 会在启动时报 `invalid CIDR`），需覆盖对象存储 Service 的 ClusterIP 网段；Pod 级 NetworkPolicy 仍把实际目标钉在对象存储 Pod 的 :9000。Loader key 包含组织、Worker、环境、Version、runtime 版本和构建 profile，使用不可变模块及显式变量。业务 `globalOutbound` 根据 serving 池选择公网出口或关闭，候选始终关闭全局出网。
 
+serving Pod 在本地按 Version 记录最近一次转发业务请求的时间、当前分钟调用次数和在途调用数。workerd 的本地流式 Tail 事件跟踪调用生命周期，覆盖流式响应、WebSocket、同 isolate 内的入口调用和 `waitUntil()`。管理探针异步触发回收，每轮最多检查 32 个缓存项、尝试回收 4 个。距上次转发满 1 小时且没有在途工作时，入口通过动态 Worker 的内部入口移除 Loader 缓存项，无需查询控制面。路由继续有效，下次请求到该 Pod 时按需冷加载。workerd 不为名为 `test` 的入口发送 Tail 事件，导出该名称的版本跳过平台主动回收。
+
 ### 边缘配置分发
 
 入口 Worker 使用紧凑 head、不可变 shard checkpoint、增量 ops 和有界内存视图：

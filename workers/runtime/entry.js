@@ -196,6 +196,48 @@ let booting = null;
 let started = false;
 let lastSync = 0;
 let lastLoop = 0;
+const servingWorkers = new Map();
+const loadedWorkers = new Map();
+let nextWorkerInstance = 0;
+let nextRetirementCheck = 0;
+let retirementCheckStarted = 0;
+const RETIRE_IDLE_MS = 60 * 60 * 1000;
+const RETIRE_CHECK_MS = 5_000;
+const RETIRE_CHECK_TIMEOUT_MS = 30_000;
+const RETIRE_SCAN_LIMIT = 32;
+const RETIRE_BATCH_LIMIT = 4;
+const RETIRE_MODULE = "__krun_retirement__.mjs";
+const RETIRE_WRAPPER = "__krun_serving_entry__.mjs";
+const RETIRE_MARKER = "krun isolate abort requested";
+function retirementSource(entry) {
+  return `
+import { WorkerEntrypoint, abortIsolate } from "cloudflare:workers";
+const log = console.log.bind(console);
+const RuntimeResponse = Response;
+let observable = true;
+export function disableRetirement() {
+  observable = false;
+}
+export class ${entry.retirementEntrypoint} extends WorkerEntrypoint {
+  fetch(request) {
+    if (this.ctx.props.token !== ${JSON.stringify(entry.retirementToken)}) {
+      return new RuntimeResponse(null, { status: 403 });
+    }
+    if (!observable) {
+      return new RuntimeResponse(null, { status: 409 });
+    }
+    if (request.method === "HEAD") {
+      return new RuntimeResponse(null, { status: 204 });
+    }
+    try {
+      log(${JSON.stringify(RETIRE_MARKER)});
+    } finally {
+      abortIsolate("krun isolate retirement");
+    }
+  }
+}
+`;
+}
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const strictDecoder = new TextDecoder("utf-8", { fatal: true });
@@ -1180,12 +1222,243 @@ const reservedBindings = new Set([
 ]);
 const magicBindings = new Set(["__proto__", "prototype", "constructor"]);
 
-async function worker(env, ctx, d, artifact, validation) {
+function workerKey(version, mode) {
+  return `${version.organization_id}/${version.worker_id}/${version.environment}/${version.id}/${mode}/workerd-20260928/workerd-bundle-v2`;
+}
+
+function recordWorkerRequest(version, ctx) {
+  const now = Date.now();
+  let entry = servingWorkers.get(version.id);
+  if (!entry) {
+    const suffix = crypto.randomUUID().replaceAll("-", "");
+    entry = {
+      version: version.id,
+      key: `${workerKey(version, "serving")}/${++nextWorkerInstance}`,
+      retirementEntrypoint: "KrunRetirement" + suffix,
+      retirementToken: crypto.randomUUID(),
+      observeCompletion: Boolean(ctx?.exports?.IsolateActivity),
+      forwarding: 0,
+      inFlight: 0,
+      sourceFailed: false,
+      minute: 0,
+      calls: 0,
+      lastAccessedAt: now,
+      retryAt: 0,
+      retirementAllowed: null,
+      retirementInspectionRetryAt: 0,
+      retirementPending: false,
+      retirementError: "",
+    };
+    servingWorkers.set(version.id, entry);
+    loadedWorkers.set(entry.key, entry);
+  }
+
+  const minute = Math.floor(now / 60_000);
+  if (entry.minute !== minute) {
+    entry.minute = minute;
+    entry.calls = 0;
+  }
+  entry.calls++;
+  entry.forwarding++;
+  entry.lastAccessedAt = now;
+
+  return entry;
+}
+
+// Track workerd invocations, including loopback entrypoints that can
+// continue in waitUntil after their calling invocation has completed.
+export class IsolateActivity extends WorkerEntrypoint {
+  tailStream(onset) {
+    const entry = loadedWorkers.get(this.ctx.props.key);
+    if (!entry) {
+      return;
+    }
+
+    if (onset.event.entrypoint === entry.retirementEntrypoint) {
+      let abortRequested = false;
+      return ({ event }) => {
+        if (event.type === "log" && event.message?.[0] === RETIRE_MARKER) {
+          abortRequested = true;
+        }
+        // Terminating the isolate emits an exception after the marker and
+        // can end this stream before its final outcome event.
+        if (event.type === "exception" && abortRequested) {
+          loadedWorkers.delete(entry.key);
+          const now = Date.now();
+          console.log("krun isolate retired", {
+            version_id: entry.version,
+            calls_this_minute: entry.minute === Math.floor(now / 60_000) ? entry.calls : 0,
+            idle_ms: now - entry.lastAccessedAt,
+          });
+        }
+      };
+    }
+
+    entry.inFlight++;
+    return ({ event }) => {
+      if (event.type === "outcome") {
+        entry.inFlight--;
+      }
+    };
+  }
+}
+
+function canRetireWorker(entry, now) {
+  return (
+    entry.observeCompletion &&
+    (entry.retirementAllowed || entry.sourceFailed) &&
+    entry.forwarding === 0 &&
+    entry.inFlight === 0 &&
+    now - entry.lastAccessedAt >= RETIRE_IDLE_MS &&
+    now >= entry.retryAt
+  );
+}
+
+function retirementEntrypoint(stub, entry) {
+  return stub.getEntrypoint(entry.retirementEntrypoint, {
+    props: { token: entry.retirementToken },
+  });
+}
+
+function inspectWorkerRetirement(ctx, stub, entry) {
+  if (
+    !entry.observeCompletion ||
+    entry.retirementAllowed !== null ||
+    typeof ctx?.waitUntil !== "function"
+  ) {
+    return;
+  }
+
+  const now = Date.now();
+  if (now < entry.retirementInspectionRetryAt) {
+    return;
+  }
+
+  // Inspect the serving stub in its own request context after the first fetch.
+  // workerd omits Tail events for invocations of the named "test" entrypoint.
+  entry.retirementInspectionRetryAt = now + RETIRE_CHECK_TIMEOUT_MS;
+  ctx.waitUntil(
+    (async () => {
+      const check = await retirementEntrypoint(stub, entry).fetch("http://retirement/", {
+        method: "HEAD",
+        signal: AbortSignal.timeout(2_000),
+      });
+      if (check.status === 204 || check.status === 409) {
+        entry.retirementAllowed = check.status === 204;
+      } else {
+        throw new Error("retirement preflight returned HTTP " + check.status);
+      }
+    })().catch((error) =>
+      console.warn("krun isolate retirement preflight failed", entry.version, error.message),
+    ),
+  );
+}
+
+function scheduleWorkerRetirement(env, ctx) {
+  const now = Date.now();
+  if (
+    typeof ctx?.waitUntil !== "function" ||
+    loadedWorkers.size === 0 ||
+    now < nextRetirementCheck ||
+    (retirementCheckStarted && now - retirementCheckStarted < RETIRE_CHECK_TIMEOUT_MS)
+  ) {
+    return;
+  }
+
+  nextRetirementCheck = now + RETIRE_CHECK_MS;
+  // A canceled probe context can leave its JS finally unrun. The deadline
+  // lets a later probe replace that sweep without reviving any old Loader key.
+  retirementCheckStarted = now;
+  ctx.waitUntil(
+    retireIdleWorkers(env, ctx, now)
+      .catch((error) => console.warn("krun isolate retirement check failed", error.message))
+      .finally(() => {
+        if (retirementCheckStarted === now) {
+          retirementCheckStarted = 0;
+        }
+      }),
+  );
+}
+
+async function retireIdleWorkers(env, ctx, startedAt) {
+  const candidates = [];
+  const scans = Math.min(loadedWorkers.size, RETIRE_SCAN_LIMIT);
+
+  for (let i = 0; i < scans; i++) {
+    const entry = loadedWorkers.values().next().value;
+    loadedWorkers.delete(entry.key);
+    loadedWorkers.set(entry.key, entry);
+    if (canRetireWorker(entry, startedAt)) {
+      candidates.push(entry);
+    }
+  }
+
+  candidates.sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
+  let attempts = 0;
+  for (const entry of candidates) {
+    if (retirementCheckStarted !== startedAt || attempts >= RETIRE_BATCH_LIMIT) {
+      break;
+    }
+    const now = Date.now();
+    if (loadedWorkers.get(entry.key) !== entry || !canRetireWorker(entry, now)) {
+      continue;
+    }
+
+    // Detach before awaiting retirement so new traffic uses a separate Loader key.
+    if (servingWorkers.get(entry.version) === entry) {
+      servingWorkers.delete(entry.version);
+    }
+    if (entry.sourceFailed) {
+      // The Loader rejected before it received code for this key.
+      loadedWorkers.delete(entry.key);
+      continue;
+    }
+    if (entry.retirementPending) {
+      console.warn("krun isolate retirement unconfirmed", entry.version, entry.retirementError);
+    }
+    entry.retirementPending = true;
+    entry.retryAt = now + 60_000;
+    attempts++;
+    try {
+      // A key may have disappeared on its own. In that case, load only the
+      // retirement entrypoint so the check never downloads or runs user code.
+      const stub = env.LOADER.get(entry.key, () => ({
+        compatibilityDate: "2026-09-28",
+        mainModule: RETIRE_MODULE,
+        modules: { [RETIRE_MODULE]: { js: retirementSource(entry) } },
+        allowExperimental: true,
+        streamingTails: [ctx.exports.IsolateActivity({ props: { key: entry.key } })],
+        globalOutbound: null,
+      }));
+      const response = await retirementEntrypoint(stub, entry).fetch("http://retirement/", {
+        signal: AbortSignal.timeout(2_000),
+      });
+      entry.retirementError = "retirement returned HTTP " + response.status;
+    } catch (error) {
+      // abortIsolate terminates this invocation. Only its local tail can
+      // distinguish a completed abort from a delivery failure.
+      entry.retirementError = error.message;
+    }
+  }
+}
+
+function trackWorkerSource(entry, prepare) {
+  if (!entry) {
+    return prepare;
+  }
+  return () =>
+    prepare().catch((error) => {
+      entry.sourceFailed = true;
+      throw error;
+    });
+}
+
+async function worker(env, ctx, d, { artifact, validation, entry } = {}) {
   const validating = validation !== undefined;
-  const mode = validating ? "validation" : "serving";
   return env.LOADER.get(
-    `${d.organization_id}/${d.worker_id}/${d.environment}/${d.id}/${mode}/workerd-20260928/workerd-bundle-v2`,
-    async () => {
+    // Validation and serving must have distinct keys even on the same Pod.
+    entry?.key ?? workerKey(d, "validation"),
+    trackWorkerSource(entry, async () => {
       // Authorized storage metadata and a scoped read grant are delivered once;
       // both serving and validation sign their own direct S3 download.
       const a =
@@ -1404,24 +1677,69 @@ for(const name of ${JSON.stringify(Object.keys(d.r2_buckets))}) {
         });
       }
 
+      if (!validating) {
+        let suffix = 0;
+        let retirementModule = RETIRE_MODULE;
+        let wrapper = RETIRE_WRAPPER;
+        while (
+          Object.hasOwn(loaded.modules, retirementModule) ||
+          Object.hasOwn(loaded.modules, wrapper)
+        ) {
+          suffix++;
+          retirementModule = `__krun_retirement__${suffix}.mjs`;
+          wrapper = `__krun_serving_entry__${suffix}.mjs`;
+        }
+        const main = JSON.stringify("./" + mainModule);
+        loaded.modules[retirementModule] = { js: retirementSource(entry) };
+        loaded.modules[wrapper] = {
+          js: `
+import { disableRetirement } from "./${retirementModule}";
+import * as app from ${main};
+if ("test" in app) {
+  disableRetirement();
+}
+export {${entry.retirementEntrypoint}} from "./${retirementModule}";
+export {default} from ${main};
+export * from ${main};
+`,
+        };
+        mainModule = wrapper;
+      }
+
+      if (entry?.observeCompletion && manifest.compatibility_flags.length) {
+        // Streaming tails require allowExperimental. Validate the requested
+        // flags first through workerd with experimental flags disabled.
+        env.LOADER.load({
+          compatibilityDate: manifest.compatibility_date,
+          compatibilityFlags: manifest.compatibility_flags,
+          mainModule: "compatibility.js",
+          modules: { "compatibility.js": { js: "export default {};" } },
+          globalOutbound: null,
+        });
+      }
+
       return {
         compatibilityDate: manifest.compatibility_date,
         compatibilityFlags: manifest.compatibility_flags,
         mainModule,
         modules: loaded.modules,
         env: childEnv,
+        allowExperimental: entry?.observeCompletion,
+        streamingTails: entry?.observeCompletion
+          ? [ctx.exports.IsolateActivity({ props: { key: entry.key } })]
+          : undefined,
         globalOutbound: validating
           ? null
           : hyperdrive.length
             ? env.HYPERDRIVE_DIRECT_EGRESS
             : (env.PUBLIC_EGRESS ?? null),
       };
-    },
+    }),
   );
 }
 
 async function validate(env, ctx, d, artifact, secrets) {
-  const stub = await worker(env, ctx, d, artifact, { secrets });
+  const stub = await worker(env, ctx, d, { artifact, validation: { secrets } });
   await stub.getEntrypoint("KrunValidation").ping();
 }
 
@@ -1550,11 +1868,27 @@ export class Private extends WorkerEntrypoint {
       }
 
       const forward = async () => {
-        const stub = await worker(this.env, this.ctx, d);
-
-        return await stub
-          .getEntrypoint()
-          .fetch(new Request(request, { headers, signal: request.signal }));
+        const forwarded = new Request(request, { headers, signal: request.signal });
+        const entry = recordWorkerRequest(d, this.ctx);
+        let finished = false;
+        const finish = () => {
+          if (!finished) {
+            finished = true;
+            entry.forwarding--;
+          }
+        };
+        request.signal.addEventListener("abort", finish, { once: true });
+        let stub;
+        try {
+          stub = await worker(this.env, this.ctx, d, { entry });
+          return await stub.getEntrypoint().fetch(forwarded);
+        } finally {
+          request.signal.removeEventListener("abort", finish);
+          finish();
+          if (stub) {
+            inspectWorkerRetirement(this.ctx, stub, entry);
+          }
+        }
       };
       let response;
       const manifest = await assetManifest(this.env, d);
@@ -1635,6 +1969,7 @@ export class Management extends WorkerEntrypoint {
       // Readiness means the config view is loaded; versions are lazy-loaded on
       // first request so Pod start does not scale with the number of services.
       await ensureBootstrap(this.env);
+      scheduleWorkerRetirement(this.env, this.ctx);
 
       return json({
         status: "ready",
