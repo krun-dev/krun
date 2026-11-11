@@ -44,6 +44,7 @@ KRUN_INTERNAL_DOCS_DIR=../docs-internal npm run docs:dev
 | 开发拓扑与启动 | [local-first](local-dev.md) |
 | 静态控制台、同源 API 与部署 | [部署](deployment.md) |
 | 公司 Kubernetes / kgateway 部署包 | [公司内网部署](../deploy/production/README.md) |
+| workerd CPU、内存与采集状态 | [运行指标](../deploy/observability/README.md) |
 | 认证、授权与 CLI | [认证 API](auth-api.md) |
 | 组织定向邀请与链接人数限制 | [组织邀请](org-invitation-links.md) |
 | 身份提供商本地联调 | [SSO](sso-local-testing.md) |
