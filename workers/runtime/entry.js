@@ -1072,6 +1072,16 @@ function cachePut(env, key, value) {
   }
 }
 
+async function readVerifiedAsset(response, metadata, mismatchMessage) {
+  const bytes = new Uint8Array(await response.arrayBuffer());
+
+  if (bytes.length !== metadata.size_bytes || (await sha256(bytes)) !== metadata.sha256) {
+    throw new Error(mismatchMessage);
+  }
+
+  return { bytes, content_type: metadata.content_type, digest: metadata.sha256 };
+}
+
 async function assetBytes(env, version, path, manifest) {
   const key = version.id + "\0" + path;
   const hit = cacheGet(key);
@@ -1097,13 +1107,7 @@ async function assetBytes(env, version, path, manifest) {
       throw new Error("asset download failed (" + response.status + ")");
     }
 
-    const bytes = new Uint8Array(await response.arrayBuffer());
-
-    if (bytes.length !== meta.size_bytes || (await sha256(bytes)) !== meta.sha256) {
-      throw new Error("asset mismatch");
-    }
-
-    const value = { bytes, content_type: meta.content_type, digest: meta.sha256 };
+    const value = await readVerifiedAsset(response, meta, "asset mismatch");
     cachePut(env, key, value);
 
     return value;
@@ -1485,16 +1489,13 @@ async function staticDomainResponse(env, request, prefix) {
       ) {
         throw new Error("static asset metadata mismatch");
       }
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.length !== size || (await sha256(bytes)) !== hash) {
-        throw new Error("static asset integrity mismatch");
-      }
       const meta = {
+        size_bytes: size,
         sha256: hash,
         content_type: response.headers.get("content-type") || "application/octet-stream",
       };
 
-      const loaded = { bytes, digest: meta.sha256, content_type: meta.content_type };
+      const loaded = await readVerifiedAsset(response, meta, "static asset integrity mismatch");
       cachePut(env, key, loaded);
 
       return loaded;

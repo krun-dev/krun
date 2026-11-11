@@ -113,13 +113,13 @@ func hyperdriveOriginValue(value string, limit int) bool {
 
 // HyperdriveConnectionStrings issues source credentials only for bindings on
 // a version currently served by the authenticated pool.
-func (s *Service) HyperdriveConnectionStrings(ctx context.Context, version domain.WorkerVersion, poolID string) (map[string]string, error) {
-	result := make(map[string]string, len(version.HyperdriveBindings))
-	for binding := range version.HyperdriveBindings {
-		origin, err := s.Store.RuntimeHyperdriveOrigin(ctx, version.ID, binding, poolID)
-		if err != nil {
-			return nil, err
-		}
+func (s *Service) HyperdriveConnectionStrings(ctx context.Context, versionID, poolID string) (map[string]string, error) {
+	origins, err := s.Store.RuntimeHyperdriveOrigins(ctx, versionID, poolID)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]string, len(origins))
+	for binding, origin := range origins {
 		password, err := DecryptWorkerSecret(s.Config.Workers, origin.Secret)
 		if err != nil {
 			return nil, err

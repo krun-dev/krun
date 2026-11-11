@@ -101,29 +101,70 @@ func hyperdriveWriteError(err error) error {
 	return err
 }
 
-// RuntimeHyperdriveOrigin scopes credential reads to the serving pool and an
-// enabled environment's deployed version or unexpired deployment URL.
-func (s *Store) RuntimeHyperdriveOrigin(ctx context.Context, version, binding, pool string) (domain.HyperdriveOrigin, error) {
-	var row models.HyperdriveConfig
-	err := s.pool.QueryRow(ctx, `
-SELECT h.config_id,h.org_id,h.name,h.host,h.port,h.database_name,h.user_name,h.secret_id,h.key_version,h.value_digest,h.ciphertext,h.nonce,h.revision,h.created_at
+// RuntimeHyperdriveOrigins reads the encrypted bindings of a version in one
+// statement. A version with bindings must be served by the active primary pool.
+func (s *Store) RuntimeHyperdriveOrigins(ctx context.Context, version, pool string) (map[string]domain.HyperdriveOrigin, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT binding.name, h.config_id, h.org_id, h.name, h.host, h.port, h.database_name,
+	h.user_name, h.secret_id, h.key_version, h.value_digest, h.ciphertext, h.nonce,
+	h.revision, h.created_at
 FROM krun_worker_versions v
-JOIN krun_worker_hyperdrive_configs h ON h.config_id=v.hyperdrive_bindings->>$2 AND h.org_id=v.org_id
-JOIN krun_worker_placements p ON p.worker_id=v.worker_id AND p.org_id=v.org_id AND p.role='primary' AND p.state='active'
+JOIN krun_worker_artifacts a ON a.artifact_id=v.artifact_id AND a.state='finalized'
+JOIN krun_worker_placements p ON p.worker_id=v.worker_id AND p.org_id=v.org_id
+	AND p.pool_id=$2 AND p.state IN ('preparing','ready','active')
 JOIN krun_resources r ON r.resource_id=p.worker_id AND r.kind='worker' AND r.org_id=p.org_id
-JOIN krun_worker_environments e ON e.worker_id=v.worker_id AND e.env_name=v.env_name AND e.enabled
-WHERE v.version_id=$1 AND p.pool_id=$3 AND (e.version_id=v.version_id OR EXISTS (
-	SELECT 1 FROM krun_worker_deployments d WHERE d.version_id=v.version_id
-	AND d.worker_id=v.worker_id AND d.org_id=v.org_id AND d.env_name=v.env_name
-	AND d.committed_at IS NOT NULL AND d.expires_at>now()
-))`, version, binding, pool).Scan(
-		&row.ConfigID, &row.OrgID, &row.Name, &row.Host, &row.Port, &row.DatabaseName, &row.UserName,
-		&row.SecretID, &row.KeyVersion, &row.ValueDigest, &row.Ciphertext, &row.Nonce, &row.Revision, &row.CreatedAt,
+LEFT JOIN LATERAL jsonb_each_text(NULLIF(v.hyperdrive_bindings, 'null'::jsonb)) binding(name, config_id) ON true
+LEFT JOIN krun_worker_hyperdrive_configs h ON h.config_id=binding.config_id AND h.org_id=v.org_id
+WHERE v.version_id=$1 AND (
+	binding.name IS NULL OR (
+		p.role='primary' AND p.state='active' AND EXISTS (
+			SELECT 1 FROM krun_worker_environments e
+			WHERE e.worker_id=v.worker_id AND e.env_name=v.env_name AND e.enabled
+			AND (e.version_id=v.version_id OR EXISTS (
+				SELECT 1 FROM krun_worker_deployments d
+				WHERE d.version_id=v.version_id AND d.worker_id=v.worker_id
+				AND d.org_id=v.org_id AND d.env_name=v.env_name
+				AND d.committed_at IS NOT NULL AND d.expires_at>now()
+			))
+		)
 	)
-	if errors.Is(err, sql.ErrNoRows) {
-		err = domain.NotFound()
+)`, version, pool)
+	if err != nil {
+		return nil, err
 	}
-	return encryptedHyperdriveOrigin(row), err
+	defer rows.Close()
+
+	origins := make(map[string]domain.HyperdriveOrigin)
+	found := false
+	for rows.Next() {
+		found = true
+		// The left joins distinguish a version with no bindings (NULL binding
+		// name) from a binding whose configuration is missing (NULL config ID).
+		values := rows.RawValues()
+		if values[0] == nil {
+			continue
+		}
+		if values[1] == nil {
+			return nil, domain.NotFound()
+		}
+		var binding string
+		var row models.HyperdriveConfig
+		if err := rows.Scan(
+			&binding, &row.ConfigID, &row.OrgID, &row.Name, &row.Host, &row.Port, &row.DatabaseName,
+			&row.UserName, &row.SecretID, &row.KeyVersion, &row.ValueDigest, &row.Ciphertext, &row.Nonce,
+			&row.Revision, &row.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		origins[binding] = encryptedHyperdriveOrigin(row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, domain.NotFound()
+	}
+	return origins, nil
 }
 
 func encryptedHyperdriveOrigin(row models.HyperdriveConfig) domain.HyperdriveOrigin {

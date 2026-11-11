@@ -6,7 +6,7 @@ import { ConfigurationsPanel } from "./workers/configurations";
 import { PreviewBasePanel } from "./workers/preview-base";
 import { VersionsPanel } from "./workers/versions";
 import { BuildVersionMenu, CreateVersionDialog } from "./workers/version-create";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ArrowLeft,
@@ -19,7 +19,7 @@ import {
   Plus,
   RefreshCw,
 } from "lucide-react";
-import { api, type List, type Resource } from "@/lib/api";
+import { api, APIError, type List, type Resource } from "@/lib/api";
 import { errorMessage, t } from "@/lib/i18n";
 import { useSuggestedShortName } from "@/lib/suggested-short-name";
 import {
@@ -65,6 +65,14 @@ import { OperationPanel, VersionSummary } from "./workers/version";
 import { WorkerDomains } from "./workers/domains";
 import { EnvironmentSettings, Invocation } from "./workers/environment";
 
+function initialNetworkProfile(profiles: WorkerNetworkProfile[]) {
+  return (
+    profiles.find((profile) => profile.default && !profile.approval_required)?.id ||
+    profiles.find((profile) => !profile.approval_required)?.id ||
+    ""
+  );
+}
+
 export function WorkersPage({
   base,
   detail,
@@ -83,6 +91,13 @@ export function WorkersPage({
   const [detailError, setDetailError] = useState("");
   const [selected, setSelected] = useState<WorkerSummary | null>(null);
   const [create, setCreate] = useState(false);
+  const [createError, setCreateError] = useState("");
+  const [createdWorker, setCreatedWorker] = useState<{
+    id: string;
+    reference: string;
+    revision: number;
+  } | null>(null);
+  const createRequest = useRef<AbortController | null>(null);
   const [name, setName] = useState("");
   const locator = useSuggestedShortName(name, 63);
   const [busy, setBusy] = useState(false);
@@ -92,6 +107,10 @@ export function WorkersPage({
   const error = worker ? detailError : collection.error;
   const [networkProfiles, setNetworkProfiles] = useState<WorkerNetworkProfile[]>([]);
   const [networkProfile, setNetworkProfile] = useState("");
+  const selectedProfile = networkProfiles.find(
+    (profile) => profile.id === networkProfile && !profile.approval_required,
+  );
+  useEffect(() => () => createRequest.current?.abort(), []);
   useEffect(() => {
     if (!canCreate) {
       return;
@@ -105,12 +124,10 @@ export function WorkersPage({
     )
       .then((result) => {
         setNetworkProfiles(result.items);
-        setNetworkProfile(
-          (current) =>
-            current ||
-            result.items.find((profile) => profile.default)?.id ||
-            result.items[0]?.id ||
-            "",
+        setNetworkProfile((current) =>
+          result.items.some((profile) => profile.id === current && !profile.approval_required)
+            ? current
+            : initialNetworkProfile(result.items),
         );
       })
       .catch(() => {
@@ -172,6 +189,92 @@ export function WorkersPage({
     setWorker(id);
     if (!id) setRevision((v) => v + 1);
   }
+
+  function resetCreatedWorker() {
+    setCreatedWorker(null);
+    setName("");
+    locator.reset();
+    setRevision((value) => value + 1);
+  }
+
+  function openCreatedWorker(reference: string) {
+    setCreate(false);
+    setCreateError("");
+    resetCreatedWorker();
+    openWorker(reference);
+  }
+
+  async function createWorker() {
+    if (createRequest.current || !selectedProfile || (!canCreate && !createdWorker)) {
+      return;
+    }
+
+    const controller = new AbortController();
+    createRequest.current = controller;
+    setBusy(true);
+    setCreateError("");
+    try {
+      let target = createdWorker;
+      if (!target) {
+        const resource = await api<Resource>(
+          base + "/workers",
+          "POST",
+          { name, locator: locator.value },
+          controller.signal,
+        );
+        if (controller.signal.aborted) {
+          return;
+        }
+        target = { id: resource.id, reference: resource.locator || resource.id, revision: 0 };
+        setCreatedWorker(target);
+      }
+
+      const workerPath = base + "/workers/" + encodeURIComponent(target.id);
+      try {
+        await api(
+          workerPath + "/network-profile",
+          "PUT",
+          { network_profile: selectedProfile.id, expected_revision: target.revision },
+          controller.signal,
+        );
+      } catch (cause) {
+        if (!(cause instanceof APIError) || cause.code !== "REVISION_CONFLICT") {
+          throw cause;
+        }
+
+        const current = await api<WorkerRouting>(
+          workerPath + "/domains",
+          "GET",
+          undefined,
+          controller.signal,
+        );
+        if (controller.signal.aborted) {
+          return;
+        }
+        // The previous PUT may have succeeded before its response was lost.
+        if (current.network_profile.id !== selectedProfile.id) {
+          setCreatedWorker({ ...target, revision: current.revision });
+          throw cause;
+        }
+      }
+
+      if (controller.signal.aborted) {
+        return;
+      }
+      openCreatedWorker(target.reference);
+      notify(t("Worker 已创建。"));
+    } catch (cause) {
+      if (!controller.signal.aborted) {
+        setCreateError(errorMessage(cause));
+      }
+    } finally {
+      createRequest.current = null;
+      if (!controller.signal.aborted) {
+        setBusy(false);
+      }
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -182,11 +285,7 @@ export function WorkersPage({
           canCreate && !detail ? (
             <Button
               onClick={() => {
-                setNetworkProfile(
-                  networkProfiles.find((profile) => profile.default)?.id ||
-                    networkProfiles[0]?.id ||
-                    "",
-                );
+                setNetworkProfile(initialNetworkProfile(networkProfiles));
                 setCreate(true);
               }}
             >
@@ -363,9 +462,18 @@ export function WorkersPage({
       {!worker ? <CollectionPagination page={collection} /> : null}
       <Dialog
         open={create}
-        onOpenChange={setCreate}
+        onOpenChange={(open) => {
+          if (open || busy) {
+            return;
+          }
+          setCreate(false);
+          setCreateError("");
+          if (createdWorker) {
+            resetCreatedWorker();
+          }
+        }}
       >
-        <DialogContent>
+        <DialogContent showCloseButton={!busy}>
           <DialogHeader>
             <DialogTitle>{t("创建 Worker")}</DialogTitle>
             <DialogDescription>
@@ -374,34 +482,9 @@ export function WorkersPage({
           </DialogHeader>
           <form
             className="grid gap-4"
-            onSubmit={async (e) => {
+            onSubmit={(e) => {
               e.preventDefault();
-              setBusy(true);
-              try {
-                const r = await api<Resource>(base + "/workers", "POST", {
-                  name,
-                  locator: locator.value,
-                });
-                const reference = r.locator || r.id;
-                setCreate(false);
-                setName("");
-                locator.reset();
-                openWorker(reference);
-                await api(
-                  base + "/workers/" + encodeURIComponent(reference) + "/network-profile",
-                  "PUT",
-                  {
-                    network_profile: networkProfile,
-                    expected_revision: 0,
-                  },
-                );
-                setRevision((v) => v + 1);
-                notify(t("Worker 已创建。"));
-              } catch (e) {
-                notify(errorMessage(e));
-              } finally {
-                setBusy(false);
-              }
+              void createWorker();
             }}
           >
             <Field label={t("Worker 名称")}>
@@ -410,6 +493,7 @@ export function WorkersPage({
                 onChange={(e) => setName(e.target.value)}
                 required
                 maxLength={128}
+                disabled={busy || !!createdWorker}
               />
             </Field>
             <Field
@@ -421,6 +505,7 @@ export function WorkersPage({
                 onChange={(e) => locator.edit(e.target.value)}
                 placeholder="image-resize"
                 maxLength={63}
+                disabled={busy || !!createdWorker}
               />
             </Field>
             {networkProfiles.length > 1 ? (
@@ -430,7 +515,7 @@ export function WorkersPage({
                     <button
                       key={profile.id}
                       type="button"
-                      disabled={profile.approval_required}
+                      disabled={busy || profile.approval_required}
                       aria-pressed={networkProfile === profile.id}
                       onClick={() => setNetworkProfile(profile.id)}
                       className={cn(
@@ -457,12 +542,33 @@ export function WorkersPage({
                 </div>
               </Field>
             ) : null}
-            <Button
-              type="submit"
-              disabled={busy || !networkProfile}
-            >
-              {t("创建 Worker")}
-            </Button>
+            {createError ? (
+              <div
+                role="alert"
+                className="grid gap-1 text-sm text-destructive"
+              >
+                {createdWorker ? <p>{t("Worker 已创建，网络配置尚未确认。")}</p> : null}
+                <p>{createError}</p>
+              </div>
+            ) : null}
+            <div className="grid gap-2">
+              <Button
+                type="submit"
+                disabled={busy || !selectedProfile || (!canCreate && !createdWorker)}
+              >
+                {t(createdWorker ? "重试网络配置" : "创建 Worker")}
+              </Button>
+              {createdWorker ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => openCreatedWorker(createdWorker.reference)}
+                >
+                  {t("查看Worker")}
+                </Button>
+              ) : null}
+            </div>
           </form>
         </DialogContent>
       </Dialog>

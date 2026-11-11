@@ -50,12 +50,7 @@ func (s *Server) workerRuntimeHyperdrive(w http.ResponseWriter, r *http.Request)
 		s.writeError(w, r, forbidden())
 		return
 	}
-	version, _, err := s.Store.RuntimeVersion(r.Context(), r.PathValue("version"), pool.ID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	bindings, err := s.workerApplication(nil).HyperdriveConnectionStrings(r.Context(), version, pool.ID)
+	bindings, err := s.workerApplication(nil).HyperdriveConnectionStrings(r.Context(), r.PathValue("version"), pool.ID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return

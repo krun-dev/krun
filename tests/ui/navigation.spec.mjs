@@ -199,6 +199,76 @@ test("Worker creation sends the suggested locator shown in the form", async ({ p
   await expect(dialog).toBeHidden();
 });
 
+for (const lostResponse of [false, true]) {
+  test(`Worker creation retries network configuration after ${lostResponse ? "a lost response" : "a failed update"}`, async ({
+    page,
+  }) => {
+    await fixture(page, { actions: { "org-a": admin } });
+    if (lostResponse) {
+      await page.addInitScript(() => localStorage.setItem("krun.theme", "dark"));
+    }
+    const worker = { id: "worker-new", locator: "image-resize", name: "Image Resize" };
+    const profile = { id: "office", name: "Office" };
+    let creates = 0;
+    const updates = [];
+    await page.route("**/api/v1/orgs/org-a/workers/network-profiles", (route) =>
+      route.fulfill({ json: { items: [{ id: "test", name: "Test", default: true }, profile] } }),
+    );
+    await page.route("**/api/v1/orgs/org-a/workers", (route) => {
+      if (route.request().method() !== "POST") {
+        return route.fallback();
+      }
+      creates++;
+      return route.fulfill({ status: 201, json: worker });
+    });
+    await page.route("**/workers/" + worker.id + "/network-profile", (route) => {
+      updates.push(route.request().postDataJSON());
+      if (updates.length === 1) {
+        if (lostResponse) {
+          return route.abort("failed");
+        }
+        return route.fulfill({
+          status: 503,
+          json: { error: { code: "NETWORK_PROFILE_UNAVAILABLE", message: "Profile unavailable" } },
+        });
+      }
+      if (lostResponse) {
+        return route.fulfill({
+          status: 409,
+          json: { error: { code: "REVISION_CONFLICT", message: "Network configuration changed" } },
+        });
+      }
+      return route.fulfill({ json: { revision: 1, network_profile: profile } });
+    });
+    await page.route("**/workers/" + worker.id + "/domains", (route) => {
+      return route.fulfill({ json: { revision: 1, network_profile: profile } });
+    });
+
+    await page.goto(origin + "/?page=workers&workspace=org-a");
+    await page.getByRole("button", { name: "创建 Worker", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    const name = dialog.getByRole("textbox", { name: "Worker 名称", exact: true });
+    await name.fill(worker.name);
+    await dialog.getByRole("button", { name: "Office", exact: true }).click();
+    await dialog.getByRole("button", { name: "创建 Worker", exact: true }).click();
+    await expect(dialog.getByRole("alert")).toContainText(
+      lostResponse ? "网络连接失败" : "Profile unavailable",
+      { timeout: 3000 },
+    );
+    await expect(name).toBeDisabled();
+    await expect(page).not.toHaveURL(/worker=image-resize/);
+
+    await dialog.getByRole("button", { name: "重试网络配置", exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page).toHaveURL(/worker=image-resize/);
+    expect(creates).toBe(1);
+    expect(updates).toEqual([
+      { network_profile: profile.id, expected_revision: 0 },
+      { network_profile: profile.id, expected_revision: 0 },
+    ]);
+  });
+}
+
 test("viewer deep links retain allowed pages and hide administration and Worker creation", async ({
   page,
 }) => {
@@ -209,6 +279,7 @@ test("viewer deep links retain allowed pages and hide administration and Worker 
     "概览",
     "Workers",
     "对象存储",
+    "Hyperdrive",
     "权限检查",
     "API 密钥",
     "Git 仓库授权",
@@ -399,7 +470,7 @@ test("switching organizations closes old management pages until new permissions 
   });
   await page.goto(origin + "/?page=members&workspace=org-a");
   await expect(page.getByRole("heading", { name: "组织成员", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "切换组织：org-a", exact: true }).click();
+  await page.getByRole("button", { name: "切换组织: org-a", exact: true }).click();
   await expect(page.getByRole("menuitemradio", { name: "org-a" })).toBeChecked();
   await page.getByRole("menuitemradio", { name: "org-b" }).click();
   await expect(page.getByRole("heading", { name: "组织成员", exact: true })).toHaveCount(0);
@@ -409,7 +480,7 @@ test("switching organizations closes old management pages until new permissions 
   release();
   await expect(page.getByRole("heading", { name: "组织概览" })).toBeVisible();
   await expect(page).toHaveURL(/workspace=org-b/);
-  await expect(page.getByRole("button", { name: "切换组织：org-b", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "切换组织: org-b", exact: true })).toBeVisible();
   await expect(page.getByRole("menu")).toHaveCount(0);
 });
 
@@ -419,7 +490,7 @@ test("organization switcher supports keyboard selection and escape", async ({ pa
     actions: { "org-a": viewer, "org-b": viewer },
   });
   await page.goto(origin + "/?workspace=org-a");
-  const trigger = page.getByRole("button", { name: "切换组织：org-a", exact: true });
+  const trigger = page.getByRole("button", { name: "切换组织: org-a", exact: true });
   await trigger.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("menuitemradio", { name: "org-a" })).toBeFocused();
@@ -432,7 +503,7 @@ test("organization switcher supports keyboard selection and escape", async ({ pa
   await expect(page.getByRole("menuitemradio", { name: "org-b" })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/workspace=org-b/);
-  await expect(page.getByRole("button", { name: "切换组织：org-b", exact: true })).toBeFocused();
+  await expect(page.getByRole("button", { name: "切换组织: org-b", exact: true })).toBeFocused();
 });
 
 test("selecting the current organization exits platform management on mobile", async ({ page }) => {
@@ -441,7 +512,7 @@ test("selecting the current organization exits platform management on mobile", a
   await page.goto(origin + "/?workspace=org-a&view=system");
   await expect(page.getByRole("heading", { name: "组织目录" })).toBeVisible();
   await page.getByRole("button", { name: "打开导航", exact: true }).click();
-  await page.getByRole("button", { name: "切换组织：org-a", exact: true }).click();
+  await page.getByRole("button", { name: "切换组织: org-a", exact: true }).click();
   await page.getByRole("menuitemradio", { name: "org-a" }).click();
   await expect(page.getByRole("heading", { name: "组织概览" })).toBeVisible();
   await expect(page).not.toHaveURL(/view=system/);

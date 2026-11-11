@@ -163,22 +163,18 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 	versionIDs := map[string]bool{}
 	for _, name := range names {
 		target := authorization.Target{Kind: "worker", ID: t.ID, Organization: t.Organization, Environment: name}
-		read, authErr := authorization.Authorize(st, p, "worker.read", target)
+		read, versions, authErr := workerEnvironmentReadAccess(st, p, target)
 		if authErr != nil {
 			return nil, Read, authErr
 		}
-		if !read.Allowed {
+		if !read {
 			continue
 		}
 		env := ws.Environments[name]
 		s.SyncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains)
 		entry := WorkerOverviewEnvironment{Environment: env, History: []domain.WorkerHistory{}}
-		versions, authErr := authorization.Authorize(st, p, "worker.version.read", target)
-		if authErr != nil {
-			return nil, Read, authErr
-		}
-		if versions.Allowed {
-			versionVisible[name] = true
+		versionVisible[name] = versions
+		if versions {
 			entry.History = append(entry.History, st.Workers.Histories[t.ID+"/"+name]...)
 			for _, history := range entry.History {
 				versionIDs[history.Version] = true
@@ -211,6 +207,10 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 			operations = append(operations, operation)
 		}
 	}
+	activity, err := summarizeWorkerActivity(versionVisible, builds, operations)
+	if err != nil {
+		return nil, Read, err
+	}
 	sort.Slice(operations, func(i, j int) bool { return operations[i].Created.After(operations[j].Created) })
 	if len(operations) > 100 {
 		operations = operations[:100]
@@ -228,7 +228,7 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 	}
 	return map[string]any{
 		"builds": builds, "environments": environments, "operations": operations, "versions": versions,
-		"domains_revision": ws.DomainsRevision,
+		"domains_revision": ws.DomainsRevision, "activity": activity,
 	}, Read, nil
 
 }

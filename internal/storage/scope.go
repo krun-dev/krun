@@ -16,6 +16,7 @@ type ReadScope struct {
 	Summary                                      bool
 	ActorOnly, AllOrganizations                  bool
 	OrganizationWide                             bool
+	WorkerActivityOnly                           bool
 }
 
 type ReadScopeKey struct{}

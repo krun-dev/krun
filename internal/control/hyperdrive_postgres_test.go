@@ -93,8 +93,11 @@ func TestHyperdriveControlAndRuntimeBindings(t *testing.T) {
 	version := WorkerVersion{
 		ID: "rel-hyperdrive", Organization: "org-a", Worker: "svc-a", Environment: "production",
 		Artifact: "art-hyperdrive", ArchiveDigest: "archive", ModuleDigest: "module",
-		Created: now(), HyperdriveBindings: map[string]string{"DB": id},
+		Created: now(), HyperdriveBindings: map[string]string{"DB": id, "DB_ALIAS": id},
 	}
+	unbound := version
+	unbound.ID = "rel-without-hyperdrive"
+	unbound.HyperdriveBindings = map[string]string{}
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		worker := st.Workers.Workers[version.Worker]
 		env := worker.Environments[version.Environment]
@@ -108,6 +111,7 @@ func TestHyperdriveControlAndRuntimeBindings(t *testing.T) {
 			ArchiveDigest: version.ArchiveDigest, ModuleDigest: version.ModuleDigest, Created: now(),
 		}
 		st.Workers.Versions[version.ID] = version
+		st.Workers.Versions[unbound.ID] = unbound
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -151,6 +155,9 @@ func TestHyperdriveControlAndRuntimeBindings(t *testing.T) {
 		if err := json.Unmarshal(out.Body.Bytes(), &dsns); err != nil {
 			t.Fatal("invalid credential response")
 		}
+		if len(dsns) != 2 || dsns["DB_ALIAS"] != dsns["DB"] {
+			t.Fatal("credential response must preserve both binding names")
+		}
 		dsn, err := url.Parse(dsns["DB"])
 		if err != nil || dsn.User == nil {
 			t.Fatal("invalid PostgreSQL connection string")
@@ -163,6 +170,49 @@ func TestHyperdriveControlAndRuntimeBindings(t *testing.T) {
 		}
 	}
 	checkDSN("fixture-origin-password")
+
+	// Cold Hyperdrive resolution reads only the version and database bindings.
+	// Make the unrelated R2 table unavailable in this test's isolated schema.
+	db := postgresTestPool(store)
+	execSQL := func(query string, args ...any) {
+		t.Helper()
+		if _, err := db.Exec(ctx, query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	execSQL("ALTER TABLE krun_worker_version_r2 RENAME TO unavailable_worker_version_r2")
+	checkDSN("fixture-origin-password")
+	execSQL("ALTER TABLE unavailable_worker_version_r2 RENAME TO krun_worker_version_r2")
+
+	unboundPath := strings.Replace(path, version.ID, unbound.ID, 1)
+	if out := call(unboundPath, pool.RuntimeToken, pool.ID); out.Code != http.StatusOK || strings.TrimSpace(out.Body.String()) != "{}" {
+		t.Fatalf("an unbound version should return an empty object, status %d", out.Code)
+	}
+	execSQL("UPDATE krun_worker_artifacts SET state='pending' WHERE artifact_id=$1", version.Artifact)
+	if out := call(path, pool.RuntimeToken, pool.ID); out.Code != http.StatusNotFound {
+		t.Fatalf("an unfinalized artifact must not issue credentials, status %d", out.Code)
+	}
+	execSQL("UPDATE krun_worker_artifacts SET state='finalized' WHERE artifact_id=$1", version.Artifact)
+	setAlias := "UPDATE krun_worker_versions SET hyperdrive_bindings=jsonb_set(hyperdrive_bindings, '{DB_ALIAS}', to_jsonb($2::text)) WHERE version_id=$1"
+	execSQL(setAlias, version.ID, "missing-config")
+	if out := call(path, pool.RuntimeToken, pool.ID); out.Code != http.StatusNotFound {
+		t.Fatalf("a missing binding must fail the whole request, status %d", out.Code)
+	}
+	execSQL(setAlias, version.ID, id)
+
+	setCurrent := "UPDATE krun_worker_environments SET version_id=$3 WHERE worker_id=$1 AND env_name=$2"
+	execSQL(setCurrent, version.Worker, version.Environment, unbound.ID)
+	execSQL(`INSERT INTO krun_worker_deployments
+		(deployment_id, org_id, worker_id, env_name, version_id, operation_id, created_at, expires_at, committed_at)
+		VALUES ('hyperdrive-deployment', $1, $2, $3, $4, 'hyperdrive-operation',
+			now()-interval '2 hours', now()+interval '1 hour', now())`,
+		version.Organization, version.Worker, version.Environment, version.ID)
+	checkDSN("fixture-origin-password")
+	execSQL("UPDATE krun_worker_deployments SET expires_at=now()-interval '1 hour' WHERE deployment_id='hyperdrive-deployment'")
+	if out := call(path, pool.RuntimeToken, pool.ID); out.Code != http.StatusNotFound {
+		t.Fatalf("an expired deployment must not issue credentials, status %d", out.Code)
+	}
+	execSQL(setCurrent, version.Worker, version.Environment, version.ID)
 
 	updated := request(s, http.MethodPatch, configs+"/"+id, "krun_cli_admin", `{"origin":{"password":"fixture-new-password"}}`)
 	if updated.Code != 200 || strings.Contains(updated.Body.String(), "fixture-new-password") {

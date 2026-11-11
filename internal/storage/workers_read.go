@@ -15,6 +15,10 @@ func (s *Store) loadWorkers(ctx context.Context, st *domain.State) error {
 	if st.Workers == nil {
 		st.Workers = domain.NewWorkerState()
 	}
+	scope, ok := ctx.Value(ReadScopeKey{}).(ReadScope)
+	if ok && scope.WorkerActivityOnly {
+		return s.loadWorkerActivity(ctx, st, scope.Organization, scope.Worker)
+	}
 	batch := &pgx.Batch{}
 	queueStateRead(ctx, batch, "krun_worker_buckets", `SELECT bucket_id, org_id, name, store_id, enabled, revision, created_at FROM krun_worker_buckets`)
 	queueStateRead(ctx, batch, "krun_workers", `SELECT worker_id, org_id, network_profile, repository, repository_revision, domains_revision, preview_revision FROM krun_workers`)
