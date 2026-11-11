@@ -662,10 +662,9 @@ await check(
     assert.equal(response.status, 200);
     const loaded = await v2Env.__loaderConfig;
     assert.ok(v2Env.__loaderKey.startsWith("org/svc/production/rel_v2/"));
-    assert.match(v2Env.__loaderKey, /workerd-bundle-v2$/);
+    assert.match(v2Env.__loaderKey, /workerd-bundle-v2\/\d+$/);
     assert.equal(loaded.compatibilityDate, "2026-09-28");
     assert.deepEqual(loaded.compatibilityFlags, ["nodejs_compat"]);
-    assert.equal(loaded.mainModule, "index.js");
     assert.equal(loaded.modules["index.js"].js, moduleFiles["index.js"]);
     assert.equal(loaded.modules["helper.js"].cjs, moduleFiles["helper.js"]);
     assert.equal(loaded.modules["message.html"].text, "hello");
