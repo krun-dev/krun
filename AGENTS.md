@@ -210,3 +210,8 @@ fingerprint；已有库与基线不一致时拒绝启动，由开发者显式重
 - PR 标题和描述必须使用中文。
 - Git commit message 的标题和正文必须使用中文，包括合并或 squash 时生成的提交信息。
 - 代码标识符、文件路径、命令及必要的技术专有名词可保留原文；若使用 Conventional Commits，类型和作用域可保留英文，说明部分必须使用中文，例如 `docs: 明确 PR 与提交信息使用中文`。
+
+## 14. 中英文 README 同步维护
+
+- 根目录的 [README.md](README.md) 为简体中文版，[README.en.md](README.en.md) 为英文版。每次修改任一版本的内容，都在同一个 PR 中同步更新另一版，保持功能、兼容范围、限制和文档入口一致。
+- 调整 Workers binding 的支持范围时，同步更新两版 README 的概览与[兼容测试表](docs/verification.md#workers-bindings-兼容测试)中对应的覆盖范围。
