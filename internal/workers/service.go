@@ -1,8 +1,6 @@
 package workers
 
 import (
-	"context"
-
 	"github.com/krun-dev/krun/internal/authorization"
 	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/domain"
@@ -68,5 +66,3 @@ func (s *Service) sourceEnabled(source string) bool {
 }
 
 func collection(items any) (any, Outcome, error) { return map[string]any{"items": items}, Read, nil }
-
-var _ context.Context

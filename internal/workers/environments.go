@@ -2,7 +2,6 @@ package workers
 
 import (
 	context "context"
-	"sort"
 
 	authorization "github.com/krun-dev/krun/internal/authorization"
 	appconfig "github.com/krun-dev/krun/internal/config"
@@ -29,31 +28,14 @@ func (s *Service) WorkerEnvironments(ctx context.Context, st *domain.State, p au
 		return nil, Read, e
 	}
 	ws := s.WorkerView(st, t)
-	names := make([]string, 0, len(ws.Environments))
-	for name := range ws.Environments {
-		names = append(names, name)
-	}
-	sort.Slice(names, func(i, j int) bool {
-		if names[i] == appconfig.WorkerBaseline {
-			return true
-		}
-		if names[j] == appconfig.WorkerBaseline {
-			return false
-		}
-		return names[i] < names[j]
-	})
 	out := []domain.WorkerEnvironment{}
-	for _, name := range names {
+	for _, name := range workerEnvironmentNames(ws.Environments) {
 		d, e := authorization.Authorize(st, p, "worker.read", authorization.Target{Kind: "worker", ID: t.ID, Organization: t.Organization, Environment: name})
 		if e != nil {
 			return nil, Read, e
 		}
 		if d.Allowed {
-			env := ws.Environments[name]
-			// Recompute rather than trusting persisted hosts: the configured
-			// domain catalog may have changed since the row was written.
-			s.SyncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains)
-			out = append(out, env)
+			out = append(out, ws.Environments[name])
 		}
 	}
 	return collection(out)
