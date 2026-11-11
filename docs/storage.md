@@ -124,6 +124,8 @@ CF 资产临时对象在写入前登记 `krun_worker_source_uploads`，由现有
 指纹 `791bb9ebf10e4652f69918635175574492833a5b55b53db9806f0a604b333a30`
 已包含该列，从此步继续为发布 Operation 增加 `claim_generation` 和 `edge_pool`。已有 `validating` 行在下一次认领时采用新租约。
 仍指向当前部署的 `committed` 行重新确认边缘 revision，失去部署目标的行标记为 `superseded`。
+指纹 `f5ddb02a599235f4f87c218e94dcac41afa1212d8f8634f025254e9ab3f80877`
+从发布认领基线继续升级，为配置流初始化代次。旧 ACK 被清除，仍在收敛的部署和 checkpoint 重新发布。
 新增迁移时，在 `schema_migrate.go` 按发布顺序追加增量 SQL 和准确的源、目标文件 SHA-256，
 并更新建库 DDL。维护窗、备份与恢复步骤见[生产部署](../deploy/production/README.md#更新与恢复)。
 

@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 
+export const fixtureConfigEpoch = "a".repeat(32);
+
 // Node tests execute the shipped runtime with a small WorkerEntrypoint stand-in.
 // Match import syntax rather than depending on a particular formatter's spacing.
 export function loadRuntimeSource() {

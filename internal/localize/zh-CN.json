@@ -162,7 +162,7 @@
   "unique provider IDs and source IDs required": "提供商 ID 和身份来源 ID 必须唯一",
   "unknown action or incompatible resource kind": "动作未知或与资源类型不兼容",
   "unknown command %q; use krun --help": "未知命令 %q；请运行 krun --help",
-  "unknown command %q; use serve, bootstrap, invite or migrate": "未知命令 %q，请使用 serve、bootstrap、invite 或 migrate",
+  "unknown command %q; use serve, bootstrap, invite, migrate or rotate-runtime-config-epoch": "未知命令 %q，请使用 serve、bootstrap、invite、migrate 或 rotate-runtime-config-epoch",
   "unknown environment": "未知环境",
   "unknown groups operation": "未知的用户组操作",
   "unknown keys operation": "未知的密钥操作",

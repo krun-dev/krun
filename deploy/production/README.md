@@ -184,7 +184,8 @@ FQDN 白名单。需要更严的目的域限制时，使用公司 CNI 的 FQDN �
 
 在对正式数据库执行下列步骤前，先用备份和对象存储副本完成一次隔离的升级及恢复演练。
 
-1. 进入维护窗，停止所有控制面副本和后台写入。记录上一版镜像 digest、私有配置清单、
+1. 进入维护窗，关闭业务入口和写流量，停止所有控制面副本、serving、validator 和后台写入。首次升级到
+   配置代次协议时，旧 serving 不兼容新的配置流。记录上一版镜像 digest、私有配置清单、
    Worker 加密 key ring 版本、PostgreSQL 备份恢复点和对应的对象存储备份。保留历史版本
    引用的制品、静态资产和对应时点的 Runtime 配置对象。
 2. 用目标版本的二进制和主配置执行升级。以下命令需要 PostgreSQL 客户端工具（版本至少与服务器
@@ -202,9 +203,9 @@ FQDN 白名单。需要更严的目的域限制时，使用公司 CNI 的 FQDN �
    ```
 
 3. 命令成功后部署目标版本的完整清单。重复执行应返回 `Database schema is already current`。
-   控制面启动即恢复协调和后台清理。继续拦截外部写流量，核对 `/api/healthz` 返回 200、
-   历史版本可查询，并通过真实入口调用指定版本，验证制品、静态资产和需要历史 Secret 的
-   业务行为。通过后恢复外部写流量。
+   控制面启动即恢复协调和后台清理。核对 `/api/healthz` 和 serving 管理端 `/ready` 均返回 200，
+   `/ready` 含有 `config_epoch`，历史版本可查询。开放验证流量，通过真实入口调用指定版本，
+   检查制品、静态资产和需要历史 Secret 的业务行为。通过后恢复业务流量。
 
 已支持的来源见[存储说明](../../docs/storage.md#schema-基线)。`no supported schema upgrade`
 表示来源 fingerprint 与目标版本之间缺少已发布的升级路径，应使用支持该路径的版本或恢复匹配的备份。
@@ -226,10 +227,21 @@ FQDN 白名单。需要更严的目的域限制时，使用公司 CNI 的 FQDN �
     --single-transaction "$KRUN_BACKUP_FILE"
   ```
 
-- 用上一版镜像、私有配置和 key ring 指向恢复库。隔离验收时使用对象存储副本，保留备份时的
-  `storage_location_id`、对象键及对应的 Runtime 配置指针。替换 Runtime Pod 后再检查业务，
-  避免旧 Pod 的内存状态影响结果。验证 `/api/healthz`、历史版本调用和资产读取后再切流，
-  并记录实测恢复耗时和恢复点。
+- 用与备份兼容的镜像、私有配置和 key ring 指向恢复库。隔离验收时使用对象存储副本，
+  保留备份时的 `storage_location_id` 和不可变制品对象键。保持业务入口关闭，停止所有旧控制面、
+  serving 和 validator。升级到支持配置代次的版本时，先执行 `migrate`，再用目标版本轮换恢复库的代次。
+  对支持配置代次的数据库，每次恢复都执行轮换。
+
+  ```sh
+  krun-server rotate-runtime-config-epoch --config /config/control.yaml
+  ```
+
+  命令输出新的配置代次，并清除恢复库中的 Runtime ACK 和旧 checkpoint 发布进度。
+  `runtime recovery requires the current schema baseline and configuration epoch` 表示恢复库
+  与所用二进制不匹配，先核对主配置指向的库和 schema，再执行受支持的显式升级。
+  部署相匹配的控制面和 Runtime 镜像，验证 `/api/healthz` 返回 200，serving 管理端的
+  `/ready` 返回 200 且 `config_epoch` 等于命令输出。通过真实入口检查历史版本和资产后再切流，
+  并记录恢复耗时和恢复点。
 
 ## 三入口集群测试配置
 

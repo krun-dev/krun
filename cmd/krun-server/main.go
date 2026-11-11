@@ -39,8 +39,8 @@ func run() (result error) {
 	if e := flags.Parse(args); e != nil {
 		return e
 	}
-	if command == "migrate" && flags.NArg() != 0 {
-		return errors.New("migrate accepts no positional arguments")
+	if (command == "migrate" || command == "rotate-runtime-config-epoch") && flags.NArg() != 0 {
+		return fmt.Errorf("%s accepts no positional arguments", command)
 	}
 	c, e := control.LoadConfig(*config)
 	if e != nil {
@@ -64,6 +64,14 @@ func run() (result error) {
 		fmt.Fprintln(os.Stdout, localize.Text(lang, message))
 		return nil
 	}
+	if command == "rotate-runtime-config-epoch" {
+		epoch, err := storage.RotateConfigEpoch(ctx, c.DB)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stdout, epoch)
+		return nil
+	}
 	s, e := control.OpenStore(ctx, c)
 	if e != nil {
 		return e
@@ -75,7 +83,7 @@ func run() (result error) {
 	case "invite":
 		return control.Invite(ctx, s, *source, *subject)
 	default:
-		return fmt.Errorf("unknown command %q; use serve, bootstrap, invite or migrate", command)
+		return fmt.Errorf("unknown command %q; use serve, bootstrap, invite, migrate or rotate-runtime-config-epoch", command)
 	}
 }
 func main() {

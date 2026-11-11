@@ -16,6 +16,7 @@ const kubeconfig=process.env.KUBECONFIG;assert(kubeconfig,'KUBECONFIG must ident
 const kubectl=(...args)=>execFileSync('kubectl',['--kubeconfig',kubeconfig,...args],{encoding:'utf8',timeout:180000});
 const clusterName=process.env.KIND_CLUSTER_NAME;assert(clusterName,'KIND_CLUSTER_NAME must identify the intended kind cluster');
 const expectedContext='kind-'+clusterName;assert.equal(kubectl('config','current-context').trim(),expectedContext,'Verification requires the intended kind context');
+const sql=query=>kubectl('exec','-n','workers-mvp','deploy/postgres','--','psql','-U','postgres','-d',process.env.KRUN_E2E_DATABASE||'krun_e2e','-tAc',query).trim();
 const bucket=process.env.KRUN_E2E_BUCKET||'krun-e2e';
 const storage='http://minio:9000/'+bucket;
 const configuredOrigin = process.env.KRUN_E2E_ORIGIN || 'http://127.0.0.1:4380';
@@ -380,7 +381,7 @@ await check('static domains authorize reads while the artifact bucket stays priv
   const privateObjects = [
     '/pub' + path,
     '/int' + path,
-    '/config/pools/default/latest.json',
+    '/config/pools/default/epochs/' + sql("SELECT value FROM krun_meta WHERE key='worker_config_epoch'") + '/latest.json',
     '/v1/' + org.id + '/sha256/' + assetArtifact.archive_sha256 + '/bundle.tar.gz',
   ];
   for (const object of privateObjects) {
@@ -442,11 +443,13 @@ await check('site pagination is complete and shared Gateway routes stay bounded'
  assert.deepEqual([...seen].sort(),[...expected].sort());assert.equal(routeCount(),before);
  return {sites:seen.size,pages,gateway_routes:before};
 });
-await check('runtime bootstraps from a compact head and immutable host shards',async()=>{
- const latest=testerGet(storage+'/config/pools/default/latest.json');assert.equal(latest.status,200);assert.equal(latest.body.lazy_routes,true);assert.equal(latest.body.snapshot,'');
+await check('runtime checkpoints use a compact head and immutable host shards scoped to the epoch',async()=>{
+ const epoch=sql("SELECT value FROM krun_meta WHERE key='worker_config_epoch'");assert.match(epoch,/^[0-9a-f]{32}$/);
+ const configRoot=storage+'/config/pools/default/epochs/'+epoch+'/';
+ const latest=testerGet(configRoot+'latest.json');assert.equal(latest.status,200);assert.equal(latest.body.lazy_routes,true);assert.equal(latest.body.config_epoch,epoch);assert.equal(latest.body.snapshot,'');
  const {createHash}=await import('node:crypto');const shard=createHash('sha256').update(hostProd).digest('hex').slice(0,2);
- const pointer=testerGet(storage+'/config/pools/default/shards/'+shard+'/latest.json');assert.equal(pointer.status,200);assert(pointer.body.snapshot.endsWith('.json.gz'));assert(pointer.body.sha256);
- const snapshot=testerGet(storage+'/config/pools/default/'+pointer.body.snapshot);assert.equal(snapshot.status,200);
+ const pointer=testerGet(configRoot+'shards/'+shard+'/latest.json');assert.equal(pointer.status,200);assert.equal(pointer.body.config_epoch,epoch);assert(pointer.body.snapshot.endsWith('.json.gz'));assert(pointer.body.sha256);
+ const snapshot=testerGet(configRoot+pointer.body.snapshot);assert.equal(snapshot.status,200);
  return {lazy_routes:true,shard,checkpoint_revision:pointer.body.config_revision};
 });
 await check('background GC removes indexed artifact files and preserves live assets',async()=>{
@@ -457,7 +460,6 @@ await check('background GC removes indexed artifact files and preserves live ass
  const b=await buildAt(target,{source_type:'upload',entrypoint:'index.ts',source_upload:upload.source_upload,assets:{directory:'public',run_worker_first:[],not_found_handling:'none',html_handling:'none'}});
  const artifact=await api(target+'/artifacts/'+b.artifact_id);
  const objectURL=storage+'/pub/'+org.id+'/'+doomed.id+'/'+artifact.archive_sha256+'/index.html';assert.equal(testerGet(objectURL).status,200);
- const sql=query=>kubectl('exec','-n','workers-mvp','deploy/postgres','--','psql','-U','postgres','-d',process.env.KRUN_E2E_DATABASE||'krun_e2e','-tAc',query).trim();
  assert.equal(Number(sql(`SELECT count(*) FROM worker_asset_objects WHERE artifact_id='${artifact.id}'`)),2);
  sql(`WITH private AS(DELETE FROM krun_worker_build_private WHERE build_id='${b.id}') DELETE FROM krun_worker_builds WHERE build_id='${b.id}'`);
  sql(`UPDATE krun_worker_artifacts SET created_at=now()-interval '31 days' WHERE artifact_id='${artifact.id}'`);

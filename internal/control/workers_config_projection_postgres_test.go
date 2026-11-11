@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	appconfig "github.com/krun-dev/krun/internal/config"
+	"github.com/krun-dev/krun/internal/storage"
 	workerapp "github.com/krun-dev/krun/internal/workers"
 	"github.com/minio/minio-go/v7"
 )
@@ -32,7 +33,11 @@ func TestPostgresConfigDeltaStoresNormalizedEntitiesAndShards(t *testing.T) {
 		t.Fatalf("routes=%d ops=%d err=%v", routes, ops, err)
 	}
 	var latest workerapp.EdgeConfigLatest
-	if err = json.Unmarshal(objects[workerapp.WorkerPoolConfigLatestKey("default")], &latest); err != nil || !latest.LazyRoutes || latest.Snapshot != "" {
+	position, err := store.ConfigPosition(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(objects[workerapp.WorkerPoolConfigLatestKey("default", position.Epoch)], &latest); err != nil || !latest.LazyRoutes || latest.Snapshot != "" {
 		t.Fatalf("compact head=%+v err=%v", latest, err)
 	}
 	var checkpoints int
@@ -49,6 +54,22 @@ func TestPostgresConfigDeltaStoresNormalizedEntitiesAndShards(t *testing.T) {
 	}
 	if again, err := controller.PublishConfig(ctx); err != nil || again != head {
 		t.Fatalf("idle publisher=%d err=%v", again, err)
+	}
+	epoch, err := storage.RotateConfigEpoch(ctx, postgresTestPool(store).Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := controller.PublishConfig(ctx); err != nil || again != head {
+		t.Fatalf("publisher after epoch rotation: head=%d err=%v", again, err)
+	}
+	if err := json.Unmarshal(objects[workerapp.WorkerPoolConfigLatestKey("default", epoch)], &latest); err != nil ||
+		latest.Epoch != epoch || latest.ConfigRevision != head {
+		t.Fatalf("new epoch head=%+v err=%v", latest, err)
+	}
+	var published int
+	if err := postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM worker_config_checkpoints WHERE revision=published_revision`).Scan(&published); err != nil ||
+		published != checkpoints {
+		t.Fatalf("new epoch did not republish checkpoints: %d err=%v", published, err)
 	}
 }
 

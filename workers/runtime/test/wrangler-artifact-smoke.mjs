@@ -1,3 +1,4 @@
+import { fixtureConfigEpoch } from "./entry-source.mjs";
 import { fixtureRead, readObjectURL } from "./read-grant.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -302,6 +303,7 @@ const server = createServer((request, response) => {
       response.end(
         JSON.stringify({
           pool: "default",
+          config_epoch: fixtureConfigEpoch,
           config_revision: configRevision,
           lazy_routes: true,
           routes: [],
@@ -322,6 +324,7 @@ const server = createServer((request, response) => {
       response.end(
         JSON.stringify({
           pool: "default",
+          config_epoch: fixtureConfigEpoch,
           config_revision: configRevision,
           routes: [{ host, enabled: true, version: routedVersion.id }],
           versions: { [routedVersion.id]: routedVersion },
@@ -334,6 +337,7 @@ const server = createServer((request, response) => {
       response.end(
         JSON.stringify({
           pool: "default",
+          config_epoch: fixtureConfigEpoch,
           config_revision: configRevision,
           routes: [route()],
           versions: { [version.id]: version },
@@ -343,7 +347,7 @@ const server = createServer((request, response) => {
     }
     if (request.url.startsWith("/api/internal/workers/config/changes")) {
       setTimeout(() => {
-        response.writeHead(204);
+        response.writeHead(204, { "x-krun-config-epoch": fixtureConfigEpoch });
         response.end();
       }, 50);
       return;

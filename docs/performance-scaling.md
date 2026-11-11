@@ -58,7 +58,7 @@ Profile、domain 选择、placement 和 Runtime pool 认证仍共同约束可访
 
 Shard 在 repeatable-read 视图中读取，并用该视图的真实 head 命名；因此并发发布者不会
 给同一个不可变对象键写入不同内容。Pointer 使用 ETag CAS，旧 revision 不能覆盖新 revision。
-控制面不可用时，冷 host 可从对应 shard 恢复其最后持久配置；未缓存代码/资产/Secret 的加载仍需其依赖可用。
+短暂断连时，已确认代次的 Runtime 可从同代次且 revision 足够新的 shard 恢复冷路由。未缓存代码、资产和 Secret 的加载仍需各自的读取授权。控制面确认超过 60 秒未刷新时，Runtime 对新请求返回 503。
 
 ## 复现与测量范围
 

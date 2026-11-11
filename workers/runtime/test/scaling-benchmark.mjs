@@ -1,4 +1,4 @@
-import { loadRuntimeSource } from "./entry-source.mjs";
+import { fixtureConfigEpoch, loadRuntimeSource } from "./entry-source.mjs";
 import { performance } from "node:perf_hooks";
 const source = loadRuntimeSource() + "\nexport {bootstrapFromControl, resolveRoute, applyBatch};";
 const runtime = await import(
@@ -11,11 +11,17 @@ const env = {
     async fetch(request) {
       const path = new URL(request.url).pathname;
       if (path.endsWith("/config/snapshot")) {
-        return Response.json({ pool: "default", config_revision: 1, lazy_routes: true });
+        return Response.json({
+          pool: "default",
+          config_epoch: fixtureConfigEpoch,
+          config_revision: 1,
+          lazy_routes: true,
+        });
       }
       const host = decodeURIComponent(path.split("/").at(-1));
       return Response.json({
         pool: "default",
+        config_epoch: fixtureConfigEpoch,
         config_revision: 1,
         routes: [{ host, version: host, enabled: true }],
         versions: { [host]: { id: host } },
@@ -40,6 +46,7 @@ for (const n of [64, 512, 4096]) {
     const start = performance.now();
     if (
       !runtime.applyBatch({
+        config_epoch: fixtureConfigEpoch,
         from: i + 1,
         to: i + 2,
         ops: [

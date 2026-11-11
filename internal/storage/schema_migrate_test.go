@@ -27,6 +27,8 @@ func preUploadDatabase(t *testing.T) (string, *pgxpool.Pool) {
 		ALTER TABLE krun_worker_build_private DROP COLUMN config_path;
 		ALTER TABLE krun_worker_operations DROP COLUMN claim_generation;
 		ALTER TABLE krun_worker_operations DROP COLUMN edge_pool;
+		ALTER TABLE worker_runtime_acks DROP COLUMN config_epoch, ADD PRIMARY KEY(pod_uid);
+		DELETE FROM krun_meta WHERE key='worker_config_epoch';
 		INSERT INTO krun_worker_build_private(build_id,actor_user_id,actor_auth_version,source_key)
 			VALUES('old-build','old-user',1,'retained-source');
 		INSERT INTO krun_worker_operations(operation_id,kind,org_id,worker_id,env_name,state,claimed_by,claimed_at)

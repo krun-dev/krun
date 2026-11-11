@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/krun-dev/krun/internal/domain"
 )
 
 const workerClaimLease = "60 seconds"
@@ -126,12 +127,20 @@ func (s *Store) CommitOperation(ctx context.Context, claim OperationClaim) (bool
 
 // confirmOperation records convergence once every serving Pod has acked the
 // edge revision. It also appends the version history entry.
-func (s *Store) ConfirmOperation(ctx context.Context, id, pool string, edgeRevision int64) error {
+func (s *Store) ConfirmOperation(ctx context.Context, id, pool string, target domain.EdgeConfigCursor) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	var epoch string
+	if err := tx.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='worker_config_epoch' FOR SHARE`).Scan(&epoch); err != nil {
+		return err
+	}
+	if epoch != target.Epoch {
+		return nil
+	}
+	edgeRevision := target.Revision
 	// Acquire the environment row before the committed operation row, matching
 	// the order in which a replacement commit locks these two rows.
 	tag, err := tx.Exec(ctx, `UPDATE krun_worker_environments e

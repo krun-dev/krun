@@ -38,7 +38,7 @@ sequenceDiagram
     A->>A: 当前所有 serving 成员已 ack -> Operation available（可观测性）
 ```
 
-构建和发布都异步处理。Build、源码、Operation、Version、历史、幂等记录和执行者身份都按实体持久化在 PostgreSQL 的 `krun_worker_*` 表中。边缘配置的当前发布头按 route / version 分行保存在 `worker_config_routes` 与 `worker_config_versions`，`worker_config_revisions` 只保存 revision 元数据，增量则是一条 op 一行的 `worker_config_ops`。runtime ack 存在独立的 `worker_runtime_acks`（每个 Pod 一行）。未完成的 Build / Operation 行就是持久化工作队列；控制服务重启后扫描恢复。多个控制服务通过行级 CAS 与超时租约竞争不同工作，配置发布通过 `worker_config_head` CAS 线性推进。
+构建和发布都异步处理。Build、源码、Operation、Version、历史、幂等记录和执行者身份都按实体持久化在 PostgreSQL 的 `krun_worker_*` 表中。边缘配置的当前发布头按 route / version 分行保存在 `worker_config_routes` 与 `worker_config_versions`，`worker_config_revisions` 只保存 revision 元数据，增量则是一条 op 一行的 `worker_config_ops`。Runtime ACK 存在独立的 `worker_runtime_acks`，按 Pod 和配置代次记录。未完成的 Build / Operation 行就是持久化工作队列；控制服务重启后扫描恢复。多个控制服务通过行级 CAS 与超时租约竞争不同工作，配置发布通过 `worker_config_head` CAS 线性推进。
 
 Operation 每次认领递增认领代次。验证期间续租，进度、失败和提交都校验执行者、代次及租约。接管后迟到的验证结果由数据库丢弃。提交后由任意控制面副本观察 ACK。边缘 revision 与当前 serving 池的环境路由在同一数据库快照中核对并固定。资源池变更后重新确认新池的发布目标，随后只为匹配的当前部署记录成功历史。禁用或删除环境会在同一事务中结束尚未确认的发布。
 
@@ -173,14 +173,16 @@ serving Pod 在本地按 Version 记录最近一次转发业务请求的时间�
 
 入口 Worker 使用紧凑 head、不可变 shard checkpoint、增量 ops 和有界内存视图：
 
-1. **bootstrap**：读取 pool 的紧凑 `latest.json`；对象存储不可用时回退到内部 `config/snapshot` 获取同样的 lazy head，不下载全池路由。
-2. **cold host**：内部 `config/routes/{host}` 按主键解析一条 route/Version；控制面不可用时读取该 host hash 对应的 immutable shard checkpoint。Runtime 缓存最多 4096 个 host。
-3. **follow**：`config/changes` 增量只更新已缓存 host；同步提交期间不 await、不复制全量 Map，用引用计数回收不再引用的 Version。
-4. **ack**：每 Pod 每 5 秒心跳，记录已应用 revision；ACK 仍用于收敛观察。
+1. **启动**从控制面的 `config/snapshot` 确认 pool、`config_epoch` 和当前 revision，按需加载路由。
+2. **冷路由**通过内部 `config/routes/{host}` 查询 route/Version。控制面短暂不可用时，可以读取同代次的 host shard，前提是 checkpoint 的 revision 至少达到 Runtime 当前进度。Runtime 缓存最多 4096 个 host。
+3. **跟随**通过 `config/changes` 携带 epoch 和 revision。代次变化或游标越界返回 409，Runtime 重新启动配置视图。204 心跳携带 `X-Krun-Config-Epoch`，用于确认配置仍然有效。
+4. **ACK** 每约 5 秒上报 epoch 和 revision。过期代次返回 409 `CONFIG_EPOCH_CHANGED`，Runtime 通过配置流重新同步。
 
 `config/` 前缀与 `pub/`、`int/` 一样通过签名授权读取，只能通过集群内 endpoint 访问（`config_base_url` 必须指向私有地址）；生产应使用独立桶或带 VPC 条件的桶策略。对象存储快照只含 host → version 指针和不可变 Version 描述符，不含 Build、Operation、日志或 IAM 数据。PostgreSQL 不保存每个 revision 的全量投影，只保存一份归一化当前头和最近 512 个 revision 的逐实体 ops；Pod 的 revision 落后于保留窗口，或高于当前发布 head 时，通过 409 重置为紧凑 head，再按需读取 host。客户端 revision 超前不会被当作无更新而一直返回 204。
 
-控制面不可用时，已运行的 Pod 继续用最后一份内存视图服务；新 Pod 仍可从对象存储 bootstrap。尚未缓存的 Version 冷加载仍需控制面提供元数据与只读授权，因此“新版本冷启动”依赖控制面，“已加载版本继续服务”不依赖。
+对象存储的 checkpoint 放在 `config/pools/<pool>/epochs/<epoch>/` 下。后台清理保留当前代次引用的快照，其他代次及旧路径对象满 24 小时后进入清理。恢复 PostgreSQL 后，按[生产恢复步骤](../deploy/production/README.md#失败回滚与备份恢复)轮换配置代次。
+
+短暂断连时，热路由可在最后一次控制面确认后的 60 秒内继续服务。尚未缓存的代码、资产或 Secret 仍需各自的读取授权。超过 60 秒后，新请求和 serving readiness 返回 503。新 Pod 在控制面确认代次后开始服务。
 
 controller 默认对业务 pool 的 Ready serving Pod 调用 `/validate`，配置 `validator_pool` 后改用独立 validator。该接口总是在校验专用的 WorkerLoader 实例中加载并运行 `KrunValidation`；commit 后由配置流传播，controller 通过 `worker_runtime_acks` 观察收敛，`available` 表示当前 serving 成员都已上报该 revision。serving readiness 只要求配置视图已加载；Version 在首次请求时懒加载，避免 Pod 启动成本随Worker 数量线性增长。validator readiness 不启动配置跟随或 Ack，也没有业务 socket。
 
@@ -223,15 +225,15 @@ header 与该 pool 独立 token，不能只信任 header：
 
 | 方法与路径 | 用途 |
 | --- | --- |
-| `GET /api/internal/workers/config/snapshot` | 紧凑配置 head（bootstrap 回退） |
+| `GET /api/internal/workers/config/snapshot` | 当前代次及紧凑配置 head |
 | `GET /api/internal/workers/config/routes/{host}` | 当前 pool 的单条路由与 Version |
-| `GET /api/internal/workers/config/changes?since=&wait=5s` | 增量 ops：200 批次、204 超时、409 重新 bootstrap |
+| `GET /api/internal/workers/config/changes?epoch=&since=&wait=5s` | 200 增量、204 同代次心跳、409 重新同步 |
 | `GET /api/internal/workers/versions/{id}/assets` | 资产 manifest |
 | `POST /api/internal/workers/versions/{id}/assets/credentials` | 续期本 Version 资产目录的只读授权 |
 | `POST /api/internal/workers/static-assets/{prefix}/{org}/{worker}/{digest}/credentials` | signed 静态域的目录级只读授权 |
 | `GET /api/internal/workers/versions/{id}/secrets` | 精确 Version 的 Secret 值，仅接受 serving runtime token，并校验本池 placement |
 | `GET /api/internal/workers/artifacts/{id}` | 制品元数据与目录级只读授权 |
-| `POST /api/internal/workers/ack` | 上报已应用的 config revision（每 Pod 一行） |
+| `POST /api/internal/workers/ack` | 上报已应用的配置代次和 revision |
 
 构建请求（静态资产随源码包进入，见 [静态资产设计](workers-assets.md)）：
 

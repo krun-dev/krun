@@ -79,8 +79,8 @@ type WorkersConfig struct {
 	S3AccessKey          string                         `json:"s3_access_key"`
 	S3SecretKey          string                         `json:"s3_secret_key"`
 	PreviewLimit         int                            `json:"preview_limit"`
-	// ConfigBaseURL is the runtime-readable origin of config/latest.json and
-	// config/pools/<pool>/shards/*. Signed access works with any S3 provider.
+	// ConfigBaseURL is the signed object-storage base for Runtime checkpoints
+	// under config/pools/<pool>/epochs/<epoch>/shards/.
 	ConfigBaseURL string `json:"config_base_url"`
 	// CloneDirectory is where repository checkouts are written during a build.
 	// Required when the control plane runs with a read-only root filesystem.

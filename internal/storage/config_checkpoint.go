@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"encoding/json"
-	"errors"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/krun-dev/krun/internal/domain"
@@ -39,41 +38,47 @@ func (s *Store) PublishedConfigCheckpoints(ctx context.Context) ([]ConfigCheckpo
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[ConfigCheckpoint])
 }
 
-func (s *Store) MarkConfigCheckpointPublished(ctx context.Context, pool, shard string, revision int64) error {
+func (s *Store) MarkConfigCheckpointPublished(ctx context.Context, pool, shard string, position domain.EdgeConfigCursor) error {
 	_, err := s.pool.Exec(ctx, `
+		WITH epoch AS MATERIALIZED (
+			SELECT value FROM krun_meta WHERE key='worker_config_epoch' FOR SHARE
+		)
 		UPDATE worker_config_checkpoints SET published_revision=GREATEST(published_revision, $3)
-		WHERE pool=$1 AND shard=$2`, pool, shard, revision)
+		FROM epoch WHERE pool=$1 AND shard=$2 AND epoch.value=$4`, pool, shard, position.Revision, position.Epoch)
 	return err
 }
 
-func (s *Store) RuntimeConfigRoute(ctx context.Context, host, pool string) (domain.EdgeConfigProjection, int64, error) {
+func (s *Store) RuntimeConfigRoute(ctx context.Context, host, pool string) (domain.EdgeConfigProjection, domain.EdgeConfigCursor, error) {
 	out := domain.EdgeConfigProjection{Versions: map[string]domain.WorkerVersion{}}
 
 	var route domain.EdgeConfigRoute
 	var payload []byte
-	var revision int64
+	var position domain.EdgeConfigCursor
+	var found bool
 	err := s.pool.QueryRow(ctx, `
-		SELECT r.worker_id, r.host, r.pool, r.path, r.enabled, r.version_id, r.expires_at, c.payload,
-			COALESCE((SELECT value::bigint FROM krun_meta WHERE key='worker_config_head'), 0)
-		FROM worker_config_routes r
-		LEFT JOIN worker_config_versions c ON c.version_id=r.version_id AND c.pool=r.pool
-		WHERE r.host=$1 AND r.pool=$2`, host, pool).Scan(
-		&route.Worker, &route.Host, &route.Pool, &route.Path, &route.Enabled, &route.Version, &route.Expires, &payload, &revision)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return out, 0, domain.NotFound()
-	}
+		SELECT config.epoch, config.head, r.host IS NOT NULL,
+			COALESCE(r.worker_id,''), COALESCE(r.host,''), COALESCE(r.pool,''), COALESCE(r.path,''),
+			COALESCE(r.enabled,false), COALESCE(r.version_id,''), r.expires_at, c.payload
+		FROM (`+readConfigPosition+`) AS config(epoch,head)
+		LEFT JOIN worker_config_routes r ON r.host=$1 AND r.pool=$2
+		LEFT JOIN worker_config_versions c ON c.version_id=r.version_id AND c.pool=r.pool`, host, pool).Scan(
+		&position.Epoch, &position.Revision, &found,
+		&route.Worker, &route.Host, &route.Pool, &route.Path, &route.Enabled, &route.Version, &route.Expires, &payload)
 	if err != nil {
-		return out, 0, err
+		return out, position, err
+	}
+	if !found {
+		return out, position, domain.NotFound()
 	}
 	out.Routes = []domain.EdgeConfigRoute{route}
 	if len(payload) > 0 {
 		var version domain.WorkerVersion
 		if err := json.Unmarshal(payload, &version); err != nil {
-			return out, 0, err
+			return out, position, err
 		}
 		out.Versions[version.ID] = version
 	}
-	return out, revision, nil
+	return out, position, nil
 }
 
 // PublishedAssetHosts identifies active routes for an immutable artifact in a

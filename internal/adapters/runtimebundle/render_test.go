@@ -31,14 +31,16 @@ func TestRenderedServingAndValidatorStartInRealWorkerd(t *testing.T) {
 	for _, validator := range []bool{false, true} {
 		t.Run(fmt.Sprintf("validator=%t", validator), func(t *testing.T) {
 			var requests atomic.Int32
+			epoch := strings.Repeat("a", 32)
 			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests.Add(1)
 				if strings.Contains(r.URL.Path, "/changes") {
+					w.Header().Set("X-Krun-Config-Epoch", epoch)
 					w.WriteHeader(204)
 					return
 				}
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = io.WriteString(w, `{"pool":"internal-a","config_revision":1,"lazy_routes":true,"routes":[],"versions":{}}`)
+				_, _ = io.WriteString(w, `{"pool":"internal-a","config_epoch":"`+epoch+`","config_revision":1,"lazy_routes":true,"routes":[],"versions":{}}`)
 			}))
 			defer backend.Close()
 			cfg := &config.WorkersConfig{

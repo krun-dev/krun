@@ -136,7 +136,10 @@ func TestConfiguredRuntimeReads(t *testing.T) {
 			metadata[key] = objectstore.PutObjectOptions{ContentType: "text/html; charset=utf-8", UserMetadata: map[string]string{"krun-sha256": workerartifact.BytesDigest(html)}}
 		}
 	}
-	objects["config/pools/default/latest.json"] = []byte(`{"lazy_routes":true,"config_revision":0}`)
+	position, err := store.ConfigPosition(ctx)
+	if err != nil {
+		t.Fatal("fixture config cursor unavailable")
+	}
 	t.Cleanup(func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 45*time.Second)
 		defer stop()
@@ -154,18 +157,18 @@ func TestConfiguredRuntimeReads(t *testing.T) {
 			t.Fatal("fixture upload failed:", objectstore.ToErrorResponse(err).Code)
 		}
 	}
-	var manifests, renewals, staticGrants, snapshotFallbacks atomic.Int32
+	var manifests, renewals, staticGrants, bootstraps atomic.Int32
 	backend := httptest.NewServer(http.HandlerFunc(func(out http.ResponseWriter, request *http.Request) {
 		path := request.URL.Path
 		if strings.HasSuffix(path, "/config/snapshot") {
-			snapshotFallbacks.Add(1)
+			bootstraps.Add(1)
 		}
 		if strings.Contains(path, "/config/routes/") {
 			if _, allowed := s.workerRuntimeServingPool(request); !allowed {
 				out.WriteHeader(403)
 				return
 			}
-			s.json(out, 200, map[string]any{"pool": "default", "config_revision": 0, "routes": []map[string]any{{"host": "live.fixture.test", "version": version.ID, "enabled": true}}, "versions": map[string]any{version.ID: version}})
+			s.json(out, 200, map[string]any{"pool": "default", "config_epoch": position.Epoch, "config_revision": position.Revision, "routes": []map[string]any{{"host": "live.fixture.test", "version": version.ID, "enabled": true}}, "versions": map[string]any{version.ID: version}})
 			return
 		}
 		if strings.HasSuffix(path, "/assets") {
@@ -212,8 +215,8 @@ func TestConfiguredRuntimeReads(t *testing.T) {
 	if status, _, body := call("HEAD", "/about", "live.fixture.test", nil); status != 200 || len(body) != 0 {
 		t.Fatal("asset HEAD failed")
 	}
-	if snapshotFallbacks.Load() != 0 {
-		t.Fatal("S3 config bootstrap fell back to the control plane")
+	if bootstraps.Load() != 1 {
+		t.Fatal("Runtime did not bootstrap exactly once from the control plane")
 	}
 	if manifests.Load() != 1 || renewals.Load() != 0 {
 		t.Fatal("asset reads made per-file control calls")
@@ -240,5 +243,5 @@ func TestConfiguredRuntimeReads(t *testing.T) {
 	validateLiveReadCandidate(t, ctx, management, w.RuntimePools[0].ManagementToken, payload)
 	_, validator := startLiveReadRuntime(t, ctx, &w, backend.Listener.Addr().String(), true)
 	validateLiveReadCandidate(t, ctx, validator, w.RuntimePools[0].ManagementToken, payload)
-	t.Log("PASS real STS scopes, S3-signed config bootstrap, assets/ETag/HEAD, cached directory grants, private static origin, artifact execution, credential isolation, serving and dedicated validation")
+	t.Log("PASS real STS scopes, control-plane config bootstrap, S3-signed assets/ETag/HEAD, cached directory grants, private static origin, artifact execution, credential isolation, serving and dedicated validation")
 }
