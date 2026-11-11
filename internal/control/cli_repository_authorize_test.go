@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	kruncli "github.com/krun-dev/krun/internal/cli"
 	appconfig "github.com/krun-dev/krun/internal/config"
@@ -34,10 +33,7 @@ func TestCLIRepositoryAuthorizeOpensProviderAndBindsCallback(t *testing.T) {
 	s.routes()
 	for _, user := range []string{"admin", "viewer"} {
 		at := now()
-		session := Session{User: user, AuthVersion: 1, Created: at, Seen: at, Absolute: at.Add(time.Hour)}
-		if err := store.InsertSession(t.Context(), "browser-"+user, session); err != nil {
-			t.Fatal(err)
-		}
+		insertTestSession(t, store, "browser-"+user, Session{User: user, Created: at})
 	}
 	server := httptest.NewServer(s)
 	defer server.Close()

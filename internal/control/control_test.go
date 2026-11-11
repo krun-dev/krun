@@ -54,10 +54,7 @@ func testServer(t *testing.T) (*Server, *Store) {
 	}
 	for _, user := range []User{admin, viewer} {
 		token := "krun_cli_" + user.ID
-		session := Session{User: user.ID, AuthVersion: user.AuthVersion, CLI: true, Created: now(), Seen: now(), Absolute: now().Add(time.Hour)}
-		if e = store.InsertSession(ctx, token, session); e != nil {
-			t.Fatal(e)
-		}
+		insertTestSession(t, store, token, Session{User: user.ID, AuthVersion: user.AuthVersion, CLI: true})
 	}
 	return s, store
 }

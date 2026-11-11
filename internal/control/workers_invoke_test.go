@@ -205,10 +205,7 @@ func TestWorkerInvokeRejectsInvalidRequestsWithoutNetwork(t *testing.T) {
 func TestWorkerInvokeSessionCSRF(t *testing.T) {
 	s, store, endpoint, _ := publishedWorkerInvokeServer(t)
 	at := now()
-	session := Session{User: "admin", AuthVersion: 1, CSRF: "expected-csrf", Created: at, Seen: at, Absolute: at.Add(time.Hour)}
-	if err := store.InsertSession(t.Context(), "browser-admin", session); err != nil {
-		t.Fatal(err)
-	}
+	insertTestSession(t, store, "browser-admin", Session{User: "admin", CSRF: "expected-csrf", Created: at})
 	var calls int
 	s.workerInvokeClient.Transport = invokeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		calls++
