@@ -24,12 +24,13 @@ func WithReadScope(ctx context.Context, scope ReadScope) context.Context {
 }
 
 // queueStateRead preserves the shared row decoders while moving filtering into
-// indexed SQL. The parameters are values; table/predicate text is internal.
-func queueStateRead(ctx context.Context, b *pgx.Batch, query string) {
-	if queueInvitationRead(ctx, b, query) {
+// indexed SQL. The table is passed explicitly so a new query cannot silently
+// fall back to an empty predicate because its FROM text was not recognized.
+func queueStateRead(ctx context.Context, b *pgx.Batch, table, query string) {
+	if queueInvitationRead(ctx, b, table, query) {
 		return
 	}
-	if queueLoginRead(ctx, b, query) {
+	if queueLoginRead(ctx, b, table, query) {
 		return
 	}
 	scope, ok := ctx.Value(ReadScopeKey{}).(ReadScope)
@@ -38,9 +39,17 @@ func queueStateRead(ctx context.Context, b *pgx.Batch, query string) {
 		return
 	}
 	split := strings.SplitN(query, " ORDER BY ", 2)
-	query = split[0]
-	table := query[strings.LastIndex(query, " FROM ")+6:]
-	args := []any{scope.User, scope.Organization, scope.Worker, scope.Key, scope.Kind, scope.After, scope.Limit, scope.Search}
+	query = split[0] + " WHERE " + scopePredicate(table, scope)
+	if len(split) > 1 {
+		query += " ORDER BY " + split[1]
+	}
+	// pgx rejects unused bind arguments. A typed VALUES row makes the common
+	// argument contract explicit, including for deliberately empty tables.
+	query = `WITH scope_args AS (SELECT $1::text,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::text) ` + query
+	b.Queue(query, scope.User, scope.Organization, scope.Worker, scope.Key, scope.Kind, scope.After, scope.Limit, scope.Search)
+}
+
+func scopePredicate(table string, scope ReadScope) string {
 	resources := `SELECT resource_id FROM krun_resources WHERE org_id=$2 AND kind=$5 AND ($3='' OR resource_id=$3) AND ($3<>'' OR resource_id COLLATE "C">$6 COLLATE "C") AND ($8='' OR strpos(lower(name),lower($8))>0 OR strpos(lower(resource_id),lower($8))>0 OR strpos(lower(locator),lower($8))>0) ORDER BY resource_id COLLATE "C" LIMIT $7`
 	workers := `worker_id IN (` + resources + `)`
 	pred := "false"
@@ -96,52 +105,45 @@ func queueStateRead(ctx context.Context, b *pgx.Batch, query string) {
 			pred = `idem_key LIKE replace(replace(replace($2,'\','\\'),'_','\_'),'%','\%') || '/' || replace(replace(replace($3,'\','\\'),'_','\_'),'%','\%') || '/%'`
 		}
 	}
-	if scope.ActorOnly {
-		actor := `(subject_kind='user' AND subject_id=$1 OR subject_kind='group' AND subject_id IN(SELECT group_id FROM krun_group_members WHERE user_id=$1))`
-		actorResources := `SELECT scope_id FROM krun_assignments WHERE ` + actor + ` AND scope_kind IN('worker','model')`
-		switch table {
-		case "krun_resources":
-			pred = `resource_id IN(` + actorResources + `)`
-			if scope.Organization != "" {
-				pred += ` AND org_id=$2`
-			}
-		case "krun_assignments":
-			pred = actor
-		case "krun_groups":
-			pred = `group_id IN(SELECT group_id FROM krun_group_members WHERE user_id=$1)`
-		case "krun_members":
-			pred = `user_id=$1`
-			if !scope.AllOrganizations {
-				pred += ` AND org_id=$2`
-			}
-		case "krun_organizations", "krun_org_sources":
-			if scope.AllOrganizations {
-				pred = `(org_id IN(SELECT org_id FROM krun_members WHERE user_id=$1) OR EXISTS(SELECT 1 FROM krun_assignments WHERE ` + actor + ` AND scope_kind='system' AND role='system_admin'))`
-			}
+	if !scope.ActorOnly {
+		return pred
+	}
+	actor := `(subject_kind='user' AND subject_id=$1 OR subject_kind='group' AND subject_id IN(SELECT group_id FROM krun_group_members WHERE user_id=$1))`
+	actorResources := `SELECT scope_id FROM krun_assignments WHERE ` + actor + ` AND scope_kind IN('worker','model')`
+	switch table {
+	case "krun_resources":
+		pred = `resource_id IN(` + actorResources + `)`
+		if scope.Organization != "" {
+			pred += ` AND org_id=$2`
+		}
+	case "krun_assignments":
+		pred = actor
+	case "krun_groups":
+		pred = `group_id IN(SELECT group_id FROM krun_group_members WHERE user_id=$1)`
+	case "krun_members":
+		pred = `user_id=$1`
+		if !scope.AllOrganizations {
+			pred += ` AND org_id=$2`
+		}
+	case "krun_organizations", "krun_org_sources":
+		if scope.AllOrganizations {
+			pred = `(org_id IN(SELECT org_id FROM krun_members WHERE user_id=$1) OR EXISTS(SELECT 1 FROM krun_assignments WHERE ` + actor + ` AND scope_kind='system' AND role='system_admin'))`
 		}
 	}
-	query += " WHERE " + pred
-	if len(split) > 1 {
-		query += " ORDER BY " + split[1]
-	}
-	// pgx rejects unused bind arguments. A typed VALUES row makes the common
-	// argument contract explicit, including for deliberately empty tables.
-	query = `WITH scope_args AS (SELECT $1::text,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::text) ` + query
-	b.Queue(query, args...)
+	return pred
 }
 
 type LoginScope struct{ Source, Subject string }
 
 type LoginScopeKey struct{}
 
-func queueLoginRead(ctx context.Context, b *pgx.Batch, query string) bool {
+func queueLoginRead(ctx context.Context, b *pgx.Batch, table, query string) bool {
 	scope, ok := ctx.Value(LoginScopeKey{}).(LoginScope)
 	if !ok {
 		return false
 	}
 	parts := strings.SplitN(query, " ORDER BY ", 2)
 	base := parts[0]
-	table := base[strings.LastIndex(base, " FROM ")+6:]
 	switch table {
 	case "krun_users", "krun_invitations":
 		base += " WHERE source=$1 AND subject=$2"
