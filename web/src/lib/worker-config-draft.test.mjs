@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { draftRows, hyperdriveInput, hyperdriveRows } from "./worker-config-draft.ts";
+import {
+  draftRows,
+  environmentConfigPatch,
+  hyperdriveInput,
+  hyperdriveRows,
+} from "./worker-config-draft.ts";
 
 test("hyperdrive rows round-trip bindings", () => {
   const rows = hyperdriveRows({ DB: "hd-1", CACHE: "hd-2" });
@@ -36,4 +41,29 @@ test("draft rows normalize variables, bindings and metadata", () => {
   assert.deepEqual(rows.hyperdriveBindings, [{ name: "DB", id: "hd-1" }]);
   assert.equal(rows.versionMetadata, "CF_VERSION");
   assert.deepEqual(rows.secretNames, ["TOKEN"]);
+});
+
+test("environment configuration saves only the edited section", () => {
+  const saved = { variables: { SAVED: "value" }, secret_names: ["TOKEN"] };
+  const draft = {
+    variables: [{ id: "var", name: "UPLOADS", kind: "text", value: "unsaved" }],
+    versionMetadata: "",
+    r2Bindings: [{ id: "r2", name: "UPLOADS", bucket: "uploads" }],
+    hyperdriveBindings: [],
+  };
+  const payload = (section) =>
+    JSON.parse(JSON.stringify(environmentConfigPatch(section, saved, draft)));
+
+  assert.deepEqual(payload("variables"), {
+    variables: { UPLOADS: "unsaved" },
+    version_metadata: "",
+  });
+  assert.deepEqual(payload("r2"), { r2_buckets: { UPLOADS: "uploads" } });
+  assert.deepEqual(payload("hyperdrive"), { hyperdrive_bindings: {} });
+  assert.throws(() =>
+    environmentConfigPatch("r2", saved, {
+      ...draft,
+      r2Bindings: [{ id: "r2", name: "TOKEN", bucket: "uploads" }],
+    }),
+  );
 });

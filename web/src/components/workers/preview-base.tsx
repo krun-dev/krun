@@ -5,11 +5,15 @@ import type { Environment } from "@/lib/workers";
 import { Button } from "@/components/ui/button";
 import { R2BindingsEditor } from "./r2-bindings";
 import { HyperdriveBindingsEditor } from "./hyperdrive-bindings";
-import { bindingRows, bindingInput } from "@/lib/object-storage";
-import { variableRows, variableInput } from "@/lib/worker-variables";
+import { bindingRows } from "@/lib/object-storage";
+import { variableRows } from "@/lib/worker-variables";
 import { VariablesEditor, VersionMetadataField } from "./variables";
 import { SecretsEditor } from "./secrets";
-import { hyperdriveInput, hyperdriveRows } from "@/lib/worker-config-draft";
+import {
+  environmentConfigPatch,
+  hyperdriveRows,
+  type ConfigSection,
+} from "@/lib/worker-config-draft";
 import { useConfigDraft } from "@/lib/use-config-draft";
 
 export function PreviewBasePanel({
@@ -76,27 +80,12 @@ export function PreviewBasePanel({
     }
   }
 
-  async function save(section: "variables" | "r2" | "hyperdrive") {
+  async function save(section: ConfigSection) {
     if (!config) return;
     setBusy(true);
     try {
-      const input =
-        section === "variables"
-          ? { variables: variableInput(variables), version_metadata: versionMetadata }
-          : section === "r2"
-            ? {
-                r2_buckets: bindingInput(
-                  r2Bindings,
-                  config.variables,
-                  config.secret_names || [],
-                  config.version_metadata || "",
-                ),
-              }
-            : {
-                hyperdrive_bindings: hyperdriveInput(hyperdriveBindings),
-              };
       const result = await api<Environment>(base + "/previews-base", "PATCH", {
-        ...input,
+        ...environmentConfigPatch(section, config, draft),
         expected_revision: config.configuration_revision,
       });
       setConfig(result);
