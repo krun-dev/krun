@@ -15,6 +15,12 @@ type deferredResponse struct {
 	run func(context.Context) (any, int, error)
 }
 
+func (d deferredResponse) Run(ctx context.Context) (any, int, error) { return d.run(ctx) }
+
+type deferredRunner interface {
+	Run(context.Context) (any, int, error)
+}
+
 type objectRedirect string
 
 func (s *Server) workerObjects(st *State, p Principal, r *http.Request) (any, int, error) {

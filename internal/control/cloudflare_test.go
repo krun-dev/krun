@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/krun-dev/krun/internal/adapters/cfcompat"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -73,7 +74,7 @@ func TestCloudflareRejectsUnsupportedTrafficAndBindings(t *testing.T) {
 	if r.Code != 422 {
 		t.Fatalf("traffic split accepted: %d %s", r.Code, r.Body.String())
 	}
-	if _, err := cfBindingInput(cfUploadMetadata{Bindings: []cfBinding{{Name: "DB", Type: "d1"}}}, false); err == nil {
+	if _, err := cfcompat.BindingInput(cfcompat.UploadMetadata{Bindings: []cfcompat.Binding{{Name: "DB", Type: "d1"}}}, false); err == nil {
 		t.Fatal("D1 binding accepted")
 	}
 	r = request(s, "POST", base+"/subdomain", "krun_cli_admin", `{"enabled":false}`)
@@ -93,7 +94,7 @@ func TestCloudflareMultipartRetainsNestedModuleNames(t *testing.T) {
 	_ = mw.Close()
 	req := httptest.NewRequest(http.MethodPost, "/", &raw)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
-	meta, modules, err := cfReadUpload(req)
+	meta, modules, err := cfcompat.ReadUpload(req)
 	if err != nil || meta.Main != "nested/index.mjs" || len(modules) != 1 || modules[0].Name != meta.Main {
 		t.Fatalf("multipart paths lost: %#v %#v %v", meta, modules, err)
 	}
@@ -103,8 +104,8 @@ func TestCloudflareMergePatchBodies(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(`{"env":{"TOKEN":{"type":"secret_text","text":"fixture"}},"annotations":{"workers/message":"Updated secret"}}`))
 	r.Header.Set("Content-Type", "application/merge-patch+json")
 	var in struct {
-		Env         map[string]*cfBinding `json:"env"`
-		Annotations map[string]string     `json:"annotations"`
+		Env         map[string]*cfcompat.Binding `json:"env"`
+		Annotations map[string]string            `json:"annotations"`
 	}
 	if err := cfBody(r, &in); err != nil || in.Env["TOKEN"].Text != "fixture" {
 		t.Fatalf("merge patch: %#v %v", in, err)

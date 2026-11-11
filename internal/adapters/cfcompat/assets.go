@@ -1,4 +1,4 @@
-package control
+package cfcompat
 
 import (
 	"encoding/base64"
@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	artifact "github.com/krun-dev/krun/internal/artifact"
+	"github.com/krun-dev/krun/internal/authorization"
 	"github.com/krun-dev/krun/internal/configfile"
 	"github.com/krun-dev/krun/internal/domain"
 	"github.com/krun-dev/krun/internal/securetoken"
@@ -16,69 +17,69 @@ import (
 )
 
 func (s *Server) cfAssetSession(w http.ResponseWriter, r *http.Request) {
-	if err := s.checkRateLimit(r); err != nil {
-		s.writeError(w, r, err)
+	if err := s.CheckRateLimit(r); err != nil {
+		s.WriteError(w, r, err)
 		return
 	}
 	var in struct {
 		Manifest map[string]workerapp.AssetUploadFile `json:"manifest"`
 	}
-	if err := cfBody(r, &in); err != nil {
-		s.writeError(w, r, err)
+	if err := s.body(r, &in); err != nil {
+		s.WriteError(w, r, err)
 		return
 	}
 	if _, err := s.cfEnsureScript(r, r.PathValue("script")); err != nil {
-		s.writeError(w, r, err)
+		s.WriteError(w, r, err)
 		return
 	}
 	var err error
 	r, err = s.cfRequest(r)
 	if err != nil {
-		s.writeError(w, r, err)
+		s.WriteError(w, r, err)
 		return
 	}
-	if err = s.cfCall(r, false, func(st *State, p Principal) error {
-		_, e := s.workerTarget(st, r, r.PathValue("environment"), "worker.publish", p)
+	if err = s.cfCall(r, false, func(st *domain.State, p authorization.Principal) error {
+		_, e := s.WorkerTarget(st, r, r.PathValue("environment"), "worker.publish", p)
 		return e
 	}); err != nil {
-		s.writeError(w, r, err)
+		s.WriteError(w, r, err)
 		return
 	}
-	if s.workers == nil {
-		s.writeError(w, r, problem(503, "WORKERS_NOT_CONFIGURED", "Worker uploads unavailable"))
+	if s.Workers == nil {
+		s.WriteError(w, r, domain.Problem(503, "WORKERS_NOT_CONFIGURED", "domain.Worker uploads unavailable"))
 		return
 	}
-	out, err := s.workers.StartAssetUpload(r.Context(), workerRef(r), in.Manifest)
+	out, err := s.Workers.StartAssetUpload(r.Context(), workerRef(r), in.Manifest)
 	if err != nil {
-		s.writeError(w, r, err)
+		s.WriteError(w, r, err)
 		return
 	}
-	s.json(w, 200, cfResult(out))
+	s.JSON(w, 200, Result(out))
 }
 
 // Bulk uploads are authorized by the short-lived manifest capability, rather
 // than by the user's API key. The token cannot access another account or file.
 func (s *Server) cfAssetUpload(w http.ResponseWriter, r *http.Request) {
-	if err := s.checkRateLimit(r); err != nil {
-		s.writeError(w, r, err)
+	if err := s.CheckRateLimit(r); err != nil {
+		s.WriteError(w, r, err)
 		return
 	}
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if token == "" || token == r.Header.Get("Authorization") {
-		s.writeError(w, r, problem(401, "UNAUTHENTICATED", "Asset upload token required"))
+		s.WriteError(w, r, domain.Problem(401, "UNAUTHENTICATED", "Asset upload token required"))
 		return
 	}
-	if err := s.resolveCloudflareAccount(r); err != nil {
-		s.writeError(w, r, err)
+	if err := s.ResolveAccount(r); err != nil {
+		s.WriteError(w, r, err)
 		return
 	}
 	a, err := s.Store.WorkerAssetSession(r.Context(), r.PathValue("org"), securetoken.Digest(token), false)
 	if err != nil {
-		s.writeError(w, r, err)
+		s.WriteError(w, r, err)
 		return
 	}
-	if s.workers == nil {
-		s.writeError(w, r, problem(503, "WORKERS_NOT_CONFIGURED", "Worker uploads unavailable"))
+	if s.Workers == nil {
+		s.WriteError(w, r, domain.Problem(503, "WORKERS_NOT_CONFIGURED", "domain.Worker uploads unavailable"))
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 30<<20)
@@ -86,12 +87,12 @@ func (s *Server) cfAssetUpload(w http.ResponseWriter, r *http.Request) {
 		raw, e := io.ReadAll(io.LimitReader(r.Body, artifact.WorkerAssetMax+1))
 		err = e
 		if err == nil {
-			err = s.workers.UploadAssetFile(r.Context(), a, hash, raw)
+			err = s.Workers.UploadAssetFile(r.Context(), a, hash, raw)
 		}
 	} else {
 		reader, e := r.MultipartReader()
 		if e != nil {
-			s.writeError(w, r, problem(400, "INVALID_REQUEST", "Expected multipart asset upload"))
+			s.WriteError(w, r, domain.Problem(400, "INVALID_REQUEST", "Expected multipart asset upload"))
 			return
 		}
 		seen := map[string]bool{}
@@ -101,12 +102,12 @@ func (s *Server) cfAssetUpload(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			if e != nil {
-				err = problem(400, "INVALID_REQUEST", "Invalid asset upload")
+				err = domain.Problem(400, "INVALID_REQUEST", "Invalid asset upload")
 				break
 			}
 			hash := part.FormName()
 			if seen[hash] || count >= artifact.WorkerAssetsFilesMax {
-				err = problem(422, "WORKER_ASSETS_INVALID", "Duplicate or excess asset parts")
+				err = domain.Problem(422, "WORKER_ASSETS_INVALID", "Duplicate or excess asset parts")
 				break
 			}
 			seen[hash] = true
@@ -118,28 +119,28 @@ func (s *Server) cfAssetUpload(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Query().Get("base64") == "true" {
 				raw, e = base64.StdEncoding.Strict().DecodeString(string(raw))
 				if e != nil {
-					err = problem(422, "WORKER_ASSETS_INVALID", "Invalid base64 asset")
+					err = domain.Problem(422, "WORKER_ASSETS_INVALID", "Invalid base64 asset")
 					break
 				}
 			}
-			if err = s.workers.UploadAssetFile(r.Context(), a, hash, raw); err != nil {
+			if err = s.Workers.UploadAssetFile(r.Context(), a, hash, raw); err != nil {
 				break
 			}
 		}
 	}
 	if err != nil {
-		s.writeError(w, r, err)
+		s.WriteError(w, r, err)
 		return
 	}
-	completion, err := s.workers.CompleteAssetUpload(r.Context(), a.Organization, token)
+	completion, err := s.Workers.CompleteAssetUpload(r.Context(), a.Organization, token)
 	if err != nil {
-		s.writeError(w, r, err)
+		s.WriteError(w, r, err)
 		return
 	}
-	s.json(w, 200, cfResult(map[string]string{"jwt": completion}))
+	s.JSON(w, 200, Result(map[string]string{"jwt": completion}))
 }
 
-func (s *Server) cfUploadedAssets(r *http.Request, meta cfUploadMetadata, in workerapp.BindingsInput) (*artifact.WorkerManifestAssets, map[string][]byte, error) {
+func (s *Server) cfUploadedAssets(r *http.Request, meta UploadMetadata, in workerapp.BindingsInput) (*artifact.WorkerManifestAssets, map[string][]byte, error) {
 	config := domain.WorkerAssetsConfig{Directory: "public", HTMLHandling: "auto-trailing-slash", NotFoundHandling: "none", RunWorkerFirst: []string{}}
 	if in.AssetsBinding != nil {
 		config.Binding = *in.AssetsBinding
@@ -158,7 +159,7 @@ func (s *Server) cfUploadedAssets(r *http.Request, meta cfUploadMetadata, in wor
 	hasConfig := len(meta.Assets) > 0 && string(meta.Assets) != "null"
 	if hasConfig {
 		if err := configfile.DecodeJSON(meta.Assets, &upload); err != nil {
-			return nil, nil, problem(422, "UNSUPPORTED_ASSETS", "Invalid or unsupported assets configuration")
+			return nil, nil, domain.Problem(422, "UNSUPPORTED_ASSETS", "Invalid or unsupported assets configuration")
 		}
 		config.BasePath = upload.Config.BasePath
 		config.Headers = upload.Config.Headers
@@ -174,7 +175,7 @@ func (s *Server) cfUploadedAssets(r *http.Request, meta cfUploadMetadata, in wor
 			config.RunWorkerFirst = []string{"/*"}
 		} else if len(first) > 0 && string(first) != "false" && string(first) != "null" {
 			if err := json.Unmarshal(first, &config.RunWorkerFirst); err != nil {
-				return nil, nil, problem(422, "WORKER_ASSETS_INVALID", "Invalid run_worker_first")
+				return nil, nil, domain.Problem(422, "WORKER_ASSETS_INVALID", "Invalid run_worker_first")
 			}
 		}
 	}
@@ -182,12 +183,12 @@ func (s *Server) cfUploadedAssets(r *http.Request, meta cfUploadMetadata, in wor
 		return nil, nil, err
 	}
 	if upload.JWT != "" {
-		return s.workers.UploadedAssets(r.Context(), workerRef(r), upload.JWT, config)
+		return s.Workers.UploadedAssets(r.Context(), workerRef(r), upload.JWT, config)
 	}
 	if meta.KeepAssets {
-		var previous WorkerVersion
+		var previous domain.WorkerVersion
 		var art domain.WorkerArtifact
-		err := s.cfCall(r, false, func(st *State, p Principal) error {
+		err := s.cfCall(r, false, func(st *domain.State, p authorization.Principal) error {
 			_, env, e := s.cfCurrent(st, p, r)
 			if e != nil {
 				return e
@@ -200,14 +201,14 @@ func (s *Server) cfUploadedAssets(r *http.Request, meta cfUploadMetadata, in wor
 			return nil, nil, err
 		}
 		if art.ID == "" {
-			return nil, nil, problem(409, "ASSETS_NOT_READY", "There are no deployed assets to retain")
+			return nil, nil, domain.Problem(409, "ASSETS_NOT_READY", "There are no deployed assets to retain")
 		}
-		code, err := s.workers.ArtifactCode(r.Context(), art)
+		code, err := s.Workers.ArtifactCode(r.Context(), art)
 		if err != nil {
 			return nil, nil, err
 		}
 		if code.Assets == nil {
-			return nil, nil, problem(409, "ASSETS_NOT_READY", "There are no deployed assets to retain")
+			return nil, nil, domain.Problem(409, "ASSETS_NOT_READY", "There are no deployed assets to retain")
 		}
 		if !hasConfig {
 			config = *code.Assets
@@ -232,7 +233,7 @@ func (s *Server) cfUploadedAssets(r *http.Request, meta cfUploadMetadata, in wor
 		return manifest, code.AssetBytes, nil
 	}
 	if hasConfig || config.Binding != "" {
-		return nil, nil, problem(422, "WORKER_ASSETS_INVALID", "A completed assets upload is required")
+		return nil, nil, domain.Problem(422, "WORKER_ASSETS_INVALID", "A completed assets upload is required")
 	}
 	return nil, nil, nil
 }

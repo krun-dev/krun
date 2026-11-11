@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/krun-dev/krun/internal/adapters/cfcompat"
 	"github.com/krun-dev/krun/internal/domain"
 	"github.com/krun-dev/krun/internal/securetoken"
 	workerapp "github.com/krun-dev/krun/internal/workers"
@@ -14,11 +15,11 @@ import (
 
 func TestCloudflareJSONAndMetadataBindings(t *testing.T) {
 	server, store, _ := cfTestServer(t)
-	var meta cfUploadMetadata
+	var meta cfcompat.UploadMetadata
 	if err := json.Unmarshal([]byte(`{"bindings":[{"name":"CONFIG","type":"json","json":{"nested":[1,true,null,{"x":"y"}]}},{"name":"META","type":"version_metadata"}],"annotations":{"workers/tag":"v1"}}`), &meta); err != nil {
 		t.Fatal(err)
 	}
-	in, err := cfBindingInput(meta, false)
+	in, err := cfcompat.BindingInput(meta, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +40,7 @@ func TestCloudflareJSONAndMetadataBindings(t *testing.T) {
 		if original["x"] != "y" || version.VersionMetadata != "META" {
 			t.Fatal("version bindings were not frozen")
 		}
-		bindings := cfBindings(WorkerEnvironment{Variables: version.Variables, VersionMetadata: version.VersionMetadata})
+		bindings := cfcompat.Bindings(WorkerEnvironment{Variables: version.Variables, VersionMetadata: version.VersionMetadata})
 		if bindings[0].(map[string]any)["type"] != "json" || bindings[1].(map[string]any)["type"] != "version_metadata" {
 			t.Fatal(bindings)
 		}
@@ -47,12 +48,12 @@ func TestCloudflareJSONAndMetadataBindings(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for _, bindings := range [][]cfBinding{
+	for _, bindings := range [][]cfcompat.Binding{
 		{{Name: "X", Type: "json"}},
 		{{Name: "X", Type: "json", JSON: json.RawMessage(`{}`)}, {Name: "X", Type: "version_metadata"}},
 		{{Name: "M1", Type: "version_metadata"}, {Name: "M2", Type: "version_metadata"}},
 	} {
-		if _, e := cfBindingInput(cfUploadMetadata{Bindings: bindings}, false); e == nil {
+		if _, e := cfcompat.BindingInput(cfcompat.UploadMetadata{Bindings: bindings}, false); e == nil {
 			t.Fatal("invalid bindings accepted", bindings)
 		}
 	}
@@ -133,7 +134,7 @@ func TestCloudflareKeepVariableTypes(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server, store, _ := cfTestServer(t)
-			input, err := cfBindingInput(cfUploadMetadata{Keep: test.keep, Bindings: []cfBinding{{Name: "CHANGED", Type: "plain_text", Text: "new"}}}, false)
+			input, err := cfcompat.BindingInput(cfcompat.UploadMetadata{Keep: test.keep, Bindings: []cfcompat.Binding{{Name: "CHANGED", Type: "plain_text", Text: "new"}}}, false)
 			if err != nil {
 				t.Fatal(err)
 			}
