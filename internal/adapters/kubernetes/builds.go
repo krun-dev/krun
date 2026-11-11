@@ -26,17 +26,18 @@ type WorkerJob struct {
 
 func (k *Client) EnsureBuildJob(ctx context.Context, b domain.WorkerBuild, private domain.WorkerBuildPrivate, sourceURL, uploadURL, image, pullPolicy string) error {
 	buildMode := "direct"
-	configPath := ""
+	configPath := private.ConfigPath
 	assets := b.Assets
 	if b.Repository != nil {
-		buildMode = "wrangler"
 		configPath = b.Repository.ConfigPath
-		// Wrangler is authoritative for repository assets.  Do not let stale
-		// service metadata override the checked-out project's configuration.
-		assets = nil
 		if configPath == "" {
 			return errors.New("repository build requires an explicit Wrangler config")
 		}
+	}
+	if configPath != "" {
+		buildMode = "wrangler"
+		// The project configuration is authoritative for Wrangler builds.
+		assets = nil
 	}
 	buildInput, e := json.Marshal(map[string]any{
 		"build_mode":          buildMode,

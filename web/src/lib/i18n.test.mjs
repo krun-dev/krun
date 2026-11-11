@@ -118,6 +118,7 @@ test("all literal translation keys are cataloged", async () => {
     "../components/resource-inventory.tsx",
     "../components/system-config.tsx",
     "../components/workers/build-inspector.tsx",
+    "../components/workers/local-upload.tsx",
     "../components/workers/domains.tsx",
     "../components/workers/hyperdrive-bindings.tsx",
     "../components/workers/shared.tsx",
@@ -141,6 +142,7 @@ test("all literal translation keys are cataloged", async () => {
     "../components/language.tsx",
     "../components/ui/dialog.tsx",
     "./api.ts",
+    "./local-build.ts",
     "./i18n.ts",
     "./permissions.ts",
   ];

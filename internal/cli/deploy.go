@@ -38,6 +38,8 @@ func (c *Client) deploy(ctx context.Context, action string, args []string, loadS
 	var outdir string
 	if action == "deploy" {
 		build.flags(f)
+		f.StringVar(&build.localPath, "path", "", "Upload a local directory or ZIP for deployment")
+		f.StringVar(&build.projectRoot, "project-root", "", "Select the project root relative to --path")
 		f.BoolVar(&dryRun, "dry-run", false, "Bundle the local checkout with Wrangler without deploying")
 		f.StringVar(&outdir, "outdir", "", "Write the local bundle to this directory (requires --dry-run)")
 		f.Usage = func() {

@@ -74,6 +74,7 @@ func (s *Server) workersRoutes(m *recordingMux) {
 	m.HandleFunc("PUT "+base+"/repository", protect(false, s.workerRepositoryUpdate))
 	m.HandleFunc("POST "+base+"/builds", protectWithBodyLimit(false, workerapp.WorkerBuildRequestBodyMax, s.workerBuildCreate))
 	m.HandleFunc("POST "+base+"/source-uploads", protect(false, s.workerSourceUploadCreate))
+	m.HandleFunc("POST "+base+"/environments/{environment}/local-builds", localProjectUploadDeadline(protectWithBodyLimit(false, localProjectRequestMax, s.workerLocalBuildCreate)))
 	m.HandleFunc("GET "+base+"/builds", protect(false, s.workerBuildList))
 	m.HandleFunc("GET "+base+"/builds/{build}", protect(false, s.workerBuildGet))
 	m.HandleFunc("GET "+base+"/builds/{build}/logs", protect(false, s.workerBuildLogs))

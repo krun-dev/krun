@@ -38,6 +38,13 @@ type Client struct {
 	In         io.Reader
 	HTTP       *http.Client
 }
+type requestPayload struct {
+	data           []byte
+	contentType    string
+	idempotencyKey string
+	timeout        time.Duration
+}
+
 type responseError struct {
 	Status        int
 	Code, Message string
@@ -72,19 +79,26 @@ func (c *Client) requestOnce(ctx context.Context, method, path string, input any
 	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
 		return errors.New("relative API path required")
 	}
-	var raw []byte
-	var e error
-	if input != nil {
-		raw, e = json.Marshal(input)
-		if e != nil {
-			return e
+	payload := requestPayload{contentType: "application/json"}
+	switch value := input.(type) {
+	case requestPayload:
+		payload = value
+	case nil:
+	default:
+		raw, err := json.Marshal(input)
+		if err != nil {
+			return err
 		}
+		payload.data = raw
 	}
-	r, e := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.Profile.Endpoint, "/")+path, bytes.NewReader(raw))
+	r, e := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.Profile.Endpoint, "/")+path, bytes.NewReader(payload.data))
 	if e != nil {
 		return e
 	}
-	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Content-Type", payload.contentType)
+	if payload.idempotencyKey != "" {
+		r.Header.Set("Idempotency-Key", payload.idempotencyKey)
+	}
 	r.Header.Set("Accept-Language", "en")
 	if !anonymous && c.Profile.Token != "" {
 		r.Header.Set("Authorization", "Bearer "+c.Profile.Token)
@@ -92,6 +106,11 @@ func (c *Client) requestOnce(ctx context.Context, method, path string, input any
 	client := c.HTTP
 	if client == nil {
 		client = &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("API redirects refused") }}
+	}
+	if payload.timeout > client.Timeout && client.Timeout > 0 {
+		uploadClient := *client
+		uploadClient.Timeout = payload.timeout
+		client = &uploadClient
 	}
 	response, e := client.Do(r)
 	if e != nil {
@@ -492,7 +511,7 @@ const help = `krun — control-plane CLI
 Workers
   krun workers --help
   krun build --help
-  krun deploy [--org ID] --worker ID --env NAME [--build ID]
+  krun deploy [--org ID] --worker ID --env NAME [--build ID | --path DIR_OR_ZIP]
   krun deploy --dry-run [--config FILE] [--outdir DIR]
   krun rollback VERSION_ID [--org ID] --worker ID --env NAME
   krun deployments --help

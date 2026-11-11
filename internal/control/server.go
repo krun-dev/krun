@@ -428,7 +428,16 @@ func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, b
 		// must not hold a database transaction open.
 		if r.Body != nil && r.Method != "GET" && r.Method != "HEAD" {
 			raw, e := io.ReadAll(io.LimitReader(r.Body, bodyLimit+1))
-			if e != nil || int64(len(raw)) > bodyLimit {
+			if e != nil {
+				var timeout net.Error
+				if errors.As(e, &timeout) && timeout.Timeout() {
+					s.writeError(w, r, problem(408, "REQUEST_TIMEOUT", "Request body upload timed out"))
+				} else {
+					s.writeError(w, r, problem(400, "INVALID_REQUEST", "Could not read request body"))
+				}
+				return
+			}
+			if int64(len(raw)) > bodyLimit {
 				s.writeError(w, r, problem(413, "INVALID_REQUEST", "Request body too large"))
 				return
 			}

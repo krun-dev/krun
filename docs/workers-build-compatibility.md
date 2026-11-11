@@ -65,7 +65,7 @@ back to, the user's repository.
 
 ## Isolation boundary
 
-Installing dependencies and running a project build executes repository code.
+Installing dependencies and running a project build executes project code from a repository or an upload.
 Production project builds therefore use the Kubernetes builder mode. The job
 has no control-plane, database, object-store or Kubernetes credentials; it only
 receives narrowly scoped source-download and artifact-upload URLs. Network
@@ -73,7 +73,7 @@ policy permits the configured package registry and the build transfer endpoint
 and denies cluster services and arbitrary public destinations.
 
 `builder_mode: local` requires `development: true`; other configurations fail
-to load. Use it only with trusted repositories. Deployments that offer builds to
+to load. Use it only with trusted users and trusted project sources. Deployments that offer builds to
 untrusted tenants should set a sandboxed Kubernetes `runtimeClassName` backed
 by gVisor, Kata Containers or an equivalent isolation layer.
 

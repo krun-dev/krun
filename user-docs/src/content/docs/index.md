@@ -86,6 +86,8 @@ krun login --endpoint {{KRUN_ORIGIN}} --device --browser=false
 
 ## 接下来
 
+要发布 Worker，可以从 Git 仓库构建，也可以上传本地项目目录或 ZIP。[部署项目](/docs/guides/deploy-project.html)
+
 不熟悉 Workers、Wrangler 或 krun CLI？先阅读[基础概念](/docs/guides/concepts.html)，了解工具的作用和发布路径。
 
 从[示例总览](/docs/guides/worker-examples.html)选择一个项目，或直接查看 [Workers + R2](/docs/guides/examples-r2-workers.html)、[Workers + PG](/docs/guides/examples-postgres-todo.html)、[Hono](/docs/guides/examples-hono.html)、[Astro](/docs/guides/examples-astro.html)和[静态页面](/docs/guides/examples-static-site.html)的部署指南。

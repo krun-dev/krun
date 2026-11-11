@@ -193,6 +193,7 @@ controller 默认对业务 pool 的 Ready serving Pod 调用 `/validate`，配�
 | 方法与路径 | 用途 |
 | --- | --- |
 | `POST /source-uploads` | 领取源码包 presigned PUT（`src/` + `assets/`），返回 `source_upload` |
+| `POST /environments/{environment}/local-builds` | 上传目录文件或 ZIP，自动识别项目并返回 202 `{kind, build}` |
 | `POST /builds` | 提交源码包（或内联 `files`）与入口，返回 202 Build |
 | `GET /builds` | 按可见环境过滤构建历史 |
 | `GET /builds/{id}` | 构建状态和 Artifact 引用 |
@@ -276,7 +277,9 @@ header 与该 pool 独立 token，不能只信任 header：
 
 尚无跨构建依赖缓存、构建取消、运行日志 API 或独立消息队列。已有数据库租约队列轮转、有界并行协调、增量配置发布和共享网关路由，见 [规模边界与验证](performance-scaling.md)。完成 Job 30 分钟后由 TTL 清理，控制器按保留策略清理源码上传、日志、操作和无引用制品。实验部署采用开发登录和单节点 kind，不能直接视作生产部署模板。
 
-仓库来源构建、Workers 列表与管理员来源配置见 [仓库构建说明](workers-repositories.md)。内联源码 API 仍可用于小 Worker；新控制台从仓库发起构建。
+仓库来源构建、Workers 列表与管理员来源配置见 [仓库构建说明](workers-repositories.md)。控制台和 krun CLI 共用本地上传接口。请求为 multipart，使用一个 `archive` part 上传 ZIP，或使用 `file:<相对路径>` parts 上传目录文件。`Idempotency-Key` 和规范化的构建输入一起确定重试结果，可用 `project_root` 指定上传内容中的项目目录。上传创建构建记录，随后通过现有环境部署接口发布。[部署本地项目](../user-docs/src/content/docs/guides/deploy-local-project.md)
+
+同源网关需允许此接口接收最多 34 MiB 的 multipart 请求，并允许客户端在 2 分钟内上传。开发模式的本地构建器只供可信用户构建可信项目。共享环境应使用 Kubernetes 构建器。[构建隔离](workers-build-compatibility.md#isolation-boundary)
 
 ### 构建日志
 

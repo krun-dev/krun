@@ -3,16 +3,17 @@ package artifact_test
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/krun-dev/krun/internal/adapters/localbuilder"
 	workerartifact "github.com/krun-dev/krun/internal/artifact"
+	"github.com/krun-dev/krun/internal/config"
+	"github.com/krun-dev/krun/internal/domain"
 	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
@@ -20,16 +21,8 @@ import (
 // produces the exact archive that the Go control plane later finalizes. The
 // runtime suite independently loads the same profile in a real workerd.
 func TestWranglerBuilderArtifactPassesControlPlaneValidation(t *testing.T) {
-	builderRoot, err := filepath.Abs("../../workers/builder")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(builderRoot, "node_modules", ".bin", "wrangler")); err != nil {
-		t.Skip("workers/builder dependencies are not installed")
-	}
-
-	project := map[string]string{
-		"wrangler.jsonc": `{
+	files := map[string][]byte{
+		"wrangler.jsonc": []byte(`{
   "name": "control-integration",
   "main": "src/index.mjs",
   "compatibility_date": "2026-09-28",
@@ -39,78 +32,18 @@ func TestWranglerBuilderArtifactPassesControlPlaneValidation(t *testing.T) {
     {"type":"CompiledWasm","globs":["**/*.wasm"],"fallthrough":true}
   ],
   "assets": {"directory":"public","binding":"ASSETS"}
-}`,
-		"src/index.mjs": `import message from "./message.html";
+}`),
+		"src/index.mjs": []byte(`import message from "./message.html";
 import payload from "./payload.bin";
 import wasm from "./empty.wasm";
 export class Named { fetch(){ return new Response("named") } }
-export default { fetch(){ return new Response(message + payload.byteLength + typeof wasm) } };`,
-		"src/message.html":  "hello",
-		"src/payload.bin":   string([]byte{0, 1, 2, 3}),
-		"src/empty.wasm":    string([]byte{0, 'a', 's', 'm', 1, 0, 0, 0}),
-		"public/index.html": "<!doctype html><title>integration</title>",
+export default { fetch(){ return new Response(message + payload.byteLength + typeof wasm) } };`),
+		"src/message.html":  []byte("hello"),
+		"src/payload.bin":   []byte{0, 1, 2, 3},
+		"src/empty.wasm":    []byte{0, 'a', 's', 'm', 1, 0, 0, 0},
+		"public/index.html": []byte("<!doctype html><title>integration</title>"),
 	}
-	source, err := workerapp.WorkerSourceBundle(project, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var uploaded []byte
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/source":
-			w.Header().Set("Content-Type", "application/gzip")
-			_, _ = w.Write(source)
-		case "/upload":
-			defer r.Body.Close()
-			var body bytes.Buffer
-			if _, err := body.ReadFrom(http.MaxBytesReader(w, r.Body, workerartifact.WorkerArchiveAssetsMax)); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			uploaded = append([]byte(nil), body.Bytes()...)
-			w.WriteHeader(http.StatusOK)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	temp := t.TempDir()
-	inputPath := filepath.Join(temp, "input.json")
-	work := filepath.Join(temp, "work")
-	if err := os.MkdirAll(work, 0700); err != nil {
-		t.Fatal(err)
-	}
-	input, err := json.Marshal(map[string]any{
-		"build_mode":          "wrangler",
-		"config_path":         "wrangler.jsonc",
-		"source_url":          server.URL + "/source",
-		"upload_url":          server.URL + "/upload",
-		"compatibility_date":  workerartifact.WorkerDefaultCompatibilityDate,
-		"compatibility_flags": []string{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(inputPath, input, 0600); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "node", "build-worker.mjs")
-	cmd.Dir = builderRoot
-	cmd.Env = workerapp.LocalBuilderEnvironment(inputPath, work, "https://registry.npmjs.org/", filepath.Join(temp, "home"), filepath.Join(temp, "tmp"), 120)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("builder failed: %v\n%s", err, output)
-	}
-	if len(uploaded) == 0 {
-		t.Fatalf("builder did not upload an artifact\n%s", output)
-	}
-	code, _, err := workerartifact.ParseWorkerArchive(uploaded)
-	if err != nil {
-		t.Fatalf("control plane rejected Wrangler artifact: %v\n%s", err, output)
-	}
+	code := buildUploadedWranglerFixture(t, files)
 	if code.MainModule != "index.js" || code.Assets == nil || code.Assets.Binding != "ASSETS" || len(code.AssetFiles) != 1 {
 		t.Fatalf("artifact metadata was not preserved: main=%q assets=%+v files=%d", code.MainModule, code.Assets, len(code.AssetFiles))
 	}
@@ -122,5 +55,84 @@ export default { fetch(){ return new Response(message + payload.byteLength + typ
 		if !types[kind] {
 			t.Fatalf("Wrangler artifact lost %s module: %#v", kind, types)
 		}
+	}
+}
+
+func TestLocalStaticUploadBuildsWithPinnedWrangler(t *testing.T) {
+	html := []byte("<!doctype html><title>Static upload</title>")
+	code := buildUploadedWranglerFixture(t, map[string][]byte{
+		"index.html":    html,
+		"site logo.svg": []byte("<svg xmlns='http://www.w3.org/2000/svg'/>"),
+	})
+	if code.Assets == nil || len(code.AssetFiles) != 2 ||
+		code.AssetFiles["index.html"].Digest != workerartifact.BytesDigest(html) ||
+		code.AssetFiles["site logo.svg"].ContentType != "image/svg+xml" {
+		t.Fatalf("static artifact lost uploaded files: %+v", code.AssetFiles)
+	}
+}
+
+func buildUploadedWranglerFixture(t *testing.T, files map[string][]byte) workerartifact.WorkerCode {
+	t.Helper()
+	builderRoot, err := filepath.Abs("../../workers/builder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(builderRoot, "node_modules", ".bin", "wrangler")); err != nil {
+		t.Skip("workers/builder dependencies are not installed")
+	}
+
+	project, err := workerartifact.PrepareLocalProject(nil, files, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := workerapp.WorkerSourceBundle(project.Files, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploaded := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/source":
+			w.Header().Set("Content-Type", "application/gzip")
+			_, _ = w.Write(source)
+		case "/upload":
+			var body bytes.Buffer
+			if _, err := body.ReadFrom(http.MaxBytesReader(w, r.Body, workerartifact.WorkerArchiveAssetsMax)); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			uploaded <- body.Bytes()
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cfg := &config.WorkersConfig{
+		BuilderScript:         filepath.Join(builderRoot, "build-worker.mjs"),
+		BuilderTimeoutSeconds: 120,
+	}
+	build := domain.WorkerBuild{
+		Entrypoint: project.Entrypoint, CompatibilityDate: project.CompatibilityDate,
+		CompatibilityFlags: project.CompatibilityFlags,
+	}
+	private := domain.WorkerBuildPrivate{ConfigPath: project.ConfigPath}
+	output, err := localbuilder.Execute(ctx, cfg, build, private, server.URL+"/source", server.URL+"/upload")
+	if err != nil {
+		t.Fatalf("builder failed: %v\n%s", err, output)
+	}
+	select {
+	case raw := <-uploaded:
+		code, _, err := workerartifact.ParseWorkerArchive(raw)
+		if err != nil {
+			t.Fatalf("control plane rejected Wrangler artifact: %v\n%s", err, output)
+		}
+		return code
+	default:
+		t.Fatalf("builder did not upload an artifact\n%s", output)
+		return workerartifact.WorkerCode{}
 	}
 }

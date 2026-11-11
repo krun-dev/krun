@@ -2,6 +2,7 @@ import { useCollectionPage } from "@/lib/collection-page";
 import { CollectionToolbar, CollectionPagination } from "@/components/collection-controls";
 import { readBuildLog } from "../lib/build-logs";
 import { BuildInspector, type BuildArtifact } from "./workers/build-inspector";
+import { LocalUpload } from "./workers/local-upload";
 import { ConfigurationsPanel } from "./workers/configurations";
 import { PreviewBasePanel } from "./workers/preview-base";
 import { VersionsPanel } from "./workers/versions";
@@ -692,7 +693,9 @@ function WorkerDetail({
   const rollbackBusy = operations.some(
     (o) => o.environment === env?.name && pending(o.state) && o.state !== "committed",
   );
-  const active = operations.some((o) => o.environment === env?.name && pending(o.state));
+  const deploymentPending = (name?: string) =>
+    operations.some((o) => o.environment === name && pending(o.state));
+  const active = deploymentPending(env?.name);
   async function createPreview() {
     setBusy(true);
     try {
@@ -813,7 +816,6 @@ function WorkerDetail({
           >
             <RefreshCw size={16} />
           </Button>
-          <Button onClick={() => setEditor(true)}>{t("构建新版本")}</Button>
         </div>
       </div>
       {error ? (
@@ -958,165 +960,210 @@ function WorkerDetail({
           </div>
           <TabsContent
             value="delivery"
-            className="mt-5 grid gap-5"
+            forceMount
+            className="mt-5 grid grid-cols-1 gap-5 data-[state=inactive]:hidden"
           >
-            {!binding?.source ? (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-primary/25 bg-primary/5 px-4 py-3 text-sm">
-                <p className="text-muted-foreground">
-                  {t("此Worker尚未绑定代码仓库；绑定后可直接从分支或 Tag 构建版本。")}
-                </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setTab("source")}
+            <section
+              aria-label={t("部署项目")}
+              className="grid gap-3"
+            >
+              <h3 className="font-medium">{t("部署项目")}</h3>
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                <section
+                  aria-label={t("Git 仓库")}
+                  className="grid min-w-0 content-start gap-3 rounded-lg border bg-card p-4"
                 >
-                  {t("绑定代码仓库")}
-                </Button>
-              </div>
-            ) : null}
-            <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
-              {Object.entries(artifactIcons).map(([label, Icon]) => (
-                <span
-                  key={label}
-                  className={cn("inline-flex items-center gap-1.5", artifactColors[label])}
-                >
-                  <Icon size={14} />
-                  {t(label)}
-                </span>
-              ))}
-            </div>
-            <Card className="py-0 shadow-none">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>{t("构建记录")}</TableHead>
-                    <TableHead>{t("状态")}</TableHead>
-                    <TableHead className="min-w-48">{t("已部署到")}</TableHead>
-                    <TableHead>{t("操作")}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {data.builds.map((b) => (
-                    <TableRow key={b.id}>
-                      <TableCell>
-                        <code className="text-xs">{shortID(b.id)}</code>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {b.entrypoint} · {new Date(b.created_at).toLocaleString()}
+                  <div className="flex min-w-0 items-start gap-3">
+                    <GitBranch className="mt-0.5 size-5 shrink-0 text-primary" />
+                    <div className="grid min-w-0 gap-1">
+                      <h4 className="text-sm font-medium">{t("Git 仓库")}</h4>
+                      <p className="text-xs text-muted-foreground">
+                        {t("适合在 GitHub 或 GitLab 持续维护的项目，可从分支、Tag 或提交构建。")}
+                      </p>
+                      {binding?.source ? (
+                        <p className="break-all text-xs text-muted-foreground">
+                          {binding.source.repository} · {binding.source.ref}
                         </p>
-                        {b.repository_source ? (
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {b.repository_source.repository} · {b.repository_source.ref} ·{" "}
-                            {b.repository_source.commit?.slice(0, 12) || t("等待解析 Commit")}
-                          </p>
-                        ) : null}
-                      </TableCell>
-                      <TableCell>
-                        <Status state={b.state} />
-                        {b.error ? (
-                          <p className="mt-1 max-w-xs text-xs text-destructive">{b.error}</p>
-                        ) : null}
-                      </TableCell>
-                      <TableCell>
-                        <VersionSummary
-                          build={b}
-                          data={data}
-                          onSelect={(name) => setEnvironment(name)}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
+                      ) : null}
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="justify-self-start"
+                    onClick={() => (binding?.source ? setEditor(true) : setTab("source"))}
+                  >
+                    {t(binding?.source ? "从仓库构建" : "绑定代码仓库")}
+                  </Button>
+                </section>
+                <LocalUpload
+                  base={base}
+                  worker={worker.name}
+                  env={env}
+                  builds={data.builds}
+                  canPublish={(name) =>
+                    !busy &&
+                    !deploymentPending(name) &&
+                    data.environments.some((e) => e.name === name && e.enabled)
+                  }
+                  onQueued={reload}
+                  onPublish={(build, name) => {
+                    setEnvironment(name);
+                    setPublish(build);
+                  }}
+                />
+              </div>
+            </section>
+            {tab === "delivery" ? (
+              <>
+                <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
+                  {Object.entries(artifactIcons).map(([label, Icon]) => (
+                    <span
+                      key={label}
+                      className={cn("inline-flex items-center gap-1.5", artifactColors[label])}
+                    >
+                      <Icon size={14} />
+                      {t(label)}
+                    </span>
+                  ))}
+                </div>
+                <Card className="py-0 shadow-none">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>{t("构建记录")}</TableHead>
+                        <TableHead>{t("状态")}</TableHead>
+                        <TableHead className="min-w-48">{t("已部署到")}</TableHead>
+                        <TableHead>{t("操作")}</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {data.builds.map((b) => (
+                        <TableRow key={b.id}>
+                          <TableCell>
+                            <code className="text-xs">{shortID(b.id)}</code>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {b.entrypoint} · {new Date(b.created_at).toLocaleString()}
+                            </p>
+                            {b.repository_source ? (
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                {b.repository_source.repository} · {b.repository_source.ref} ·{" "}
+                                {b.repository_source.commit?.slice(0, 12) || t("等待解析 Commit")}
+                              </p>
+                            ) : null}
+                          </TableCell>
+                          <TableCell>
+                            <Status state={b.state} />
+                            {b.error ? (
+                              <p className="mt-1 max-w-xs text-xs text-destructive">{b.error}</p>
+                            ) : null}
+                          </TableCell>
+                          <TableCell>
+                            <VersionSummary
+                              build={b}
+                              data={data}
+                              onSelect={(name) => setEnvironment(name)}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant="outline"
+                                className="border-primary/20 bg-primary/5 text-primary shadow-none hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
+                                size="sm"
+                                disabled={!!inspectingBuild}
+                                onClick={() => void inspectBuild(b)}
+                              >
+                                {inspectingBuild === b.id ? (
+                                  <LoaderCircle
+                                    size={14}
+                                    className="animate-spin"
+                                  />
+                                ) : (
+                                  <FileText size={14} />
+                                )}
+                                {inspectingBuild === b.id ? t("加载中…") : t("日志与制品")}
+                              </Button>
+                              <Button
+                                size="sm"
+                                className="shadow-none"
+                                disabled={b.state !== "succeeded" || active || !env.enabled}
+                                onClick={() => setPublish(b)}
+                              >
+                                <Rocket size={14} />
+                                {t("发布")}
+                              </Button>
+                              <BuildVersionMenu
+                                disabled={b.state !== "succeeded" || busy || !env.enabled}
+                                create={() => setVersionDraft({ build: b, env })}
+                              />
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {data.builds.length === 0 ? (
+                        <TableRow>
+                          <TableCell
+                            colSpan={4}
+                            className="py-10 text-center text-muted-foreground"
+                          >
+                            {t("还没有构建。")}
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                    </TableBody>
+                  </Table>
+                </Card>
+                {operation ? (
+                  <OperationPanel
+                    operation={operation}
+                    operations={operations.filter((o) => o.environment === env.name)}
+                    select={setSelectedOperation}
+                  />
+                ) : null}
+                <Card className="py-0 shadow-none">
+                  <CardContent className="p-5">
+                    <h3 className="mb-4 font-medium">
+                      {env.name} · {t("发布历史")}
+                    </h3>
+                    {(data.histories[env.name] || []).length === 0 ? (
+                      <p className="text-sm text-muted-foreground">{t("尚无成功生效的发布。")}</p>
+                    ) : (
+                      (data.histories[env.name] || []).map((h) => (
+                        <div
+                          key={h.operation_id}
+                          className="flex flex-wrap items-center justify-between gap-3 border-t py-3 first:border-0"
+                        >
+                          <div>
+                            <span className="font-medium">r{h.revision}</span>{" "}
+                            <code className="ml-2 text-xs">{shortID(h.version_id)}</code>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {h.kind} · {new Date(h.time).toLocaleString()}
+                            </p>
+                          </div>
                           <Button
                             variant="outline"
-                            className="border-primary/20 bg-primary/5 text-primary shadow-none hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
                             size="sm"
-                            disabled={!!inspectingBuild}
-                            onClick={() => void inspectBuild(b)}
+                            disabled={
+                              rollbackBusy || !env.enabled || env.version_id === h.version_id
+                            }
+                            onClick={() =>
+                              setRollback({
+                                id: h.version_id,
+                                revision: h.revision,
+                              })
+                            }
                           >
-                            {inspectingBuild === b.id ? (
-                              <LoaderCircle
-                                size={14}
-                                className="animate-spin"
-                              />
-                            ) : (
-                              <FileText size={14} />
-                            )}
-                            {inspectingBuild === b.id ? t("加载中…") : t("日志与制品")}
+                            {t("回滚到此版本")}
                           </Button>
-                          <Button
-                            size="sm"
-                            className="shadow-none"
-                            disabled={b.state !== "succeeded" || active || !env.enabled}
-                            onClick={() => setPublish(b)}
-                          >
-                            <Rocket size={14} />
-                            {t("发布")}
-                          </Button>
-                          <BuildVersionMenu
-                            disabled={b.state !== "succeeded" || busy || !env.enabled}
-                            create={() => setVersionDraft({ build: b, env })}
-                          />
                         </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {data.builds.length === 0 ? (
-                    <TableRow>
-                      <TableCell
-                        colSpan={4}
-                        className="py-10 text-center text-muted-foreground"
-                      >
-                        {t("还没有构建，点击构建新版本。")}
-                      </TableCell>
-                    </TableRow>
-                  ) : null}
-                </TableBody>
-              </Table>
-            </Card>
-            {operation ? (
-              <OperationPanel
-                operation={operation}
-                operations={operations.filter((o) => o.environment === env.name)}
-                select={setSelectedOperation}
-              />
+                      ))
+                    )}
+                  </CardContent>
+                </Card>
+              </>
             ) : null}
-            <Card className="py-0 shadow-none">
-              <CardContent className="p-5">
-                <h3 className="mb-4 font-medium">
-                  {env.name} · {t("发布历史")}
-                </h3>
-                {(data.histories[env.name] || []).length === 0 ? (
-                  <p className="text-sm text-muted-foreground">{t("尚无成功生效的发布。")}</p>
-                ) : (
-                  (data.histories[env.name] || []).map((h) => (
-                    <div
-                      key={h.operation_id}
-                      className="flex flex-wrap items-center justify-between gap-3 border-t py-3 first:border-0"
-                    >
-                      <div>
-                        <span className="font-medium">r{h.revision}</span>{" "}
-                        <code className="ml-2 text-xs">{shortID(h.version_id)}</code>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {h.kind} · {new Date(h.time).toLocaleString()}
-                        </p>
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={rollbackBusy || !env.enabled || env.version_id === h.version_id}
-                        onClick={() =>
-                          setRollback({
-                            id: h.version_id,
-                            revision: h.revision,
-                          })
-                        }
-                      >
-                        {t("回滚到此版本")}
-                      </Button>
-                    </div>
-                  ))
-                )}
-              </CardContent>
-            </Card>
           </TabsContent>
           <TabsContent
             value="versions"

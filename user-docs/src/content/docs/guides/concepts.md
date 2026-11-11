@@ -24,10 +24,11 @@ krun CLI 是操作 krun 自身的命令行工具，用于登录、管理组织�
 | 需要做什么 | 使用方式 |
 | --- | --- |
 | 在项目目录构建并直接发布已有 Wrangler 项目 | 配置 krun 兼容 API 地址和凭据后使用 `wrangler deploy`；支持范围见 [Wrangler 配置兼容范围](/docs/guides/wrangler-configuration.html) |
+| 上传本地静态产物或 Worker 项目 | 在控制台拖入目录或 ZIP，也可运行 `krun deploy --path ./project --worker WORKER_ID --env production`。见 [部署本地项目](/docs/guides/deploy-local-project.html) |
 | 从已绑定的 Git 仓库构建并发布到 krun 环境 | 使用 `krun deploy --worker WORKER_ID --env production`，也可在控制台操作 |
 | 管理组织、对象存储和 krun 环境 | 使用 krun 控制台或 krun CLI |
 
-两条发布路径都可以使用 Wrangler 项目配置，但处理方式不同：直接部署由本地 Wrangler 构建并上传；仓库构建由 krun 构建器读取配置并构建，变量和资源绑定需要在目标 krun 环境配置。两者的环境模型也不同：Wrangler 的 `--env` 不会映射到同一 Worker 的 krun 环境。Cloudflare 的产品和 API 不会因为使用 Wrangler 而自动在 krun 可用，具体边界见[配置兼容范围](/docs/guides/wrangler-configuration.html)。
+用 Wrangler 直接部署时，Wrangler 在本地构建并上传。从控制台或 krun CLI 上传项目、从仓库构建时，krun 构建器读取项目配置，变量和资源绑定在目标 krun 环境设置。Wrangler 的 `--env` 会按 Wrangler 配置解析 Script 名称，krun CLI 的 `--env` 选择同一个 Worker 的目标环境。[配置兼容范围](/docs/guides/wrangler-configuration.html)
 
 ## 构建、环境与版本
 

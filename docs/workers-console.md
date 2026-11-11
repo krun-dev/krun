@@ -15,7 +15,7 @@ Workers 列表接口 `GET /api/v1/orgs/{org}/workers` 接受 `q`、`limit`（1�
 
 ## 页面流程
 
-1. 从组织 Workers 列表进入 Worker，选择上传源码或配置好的 GitHub / GitLab 仓库。
+1. 从组织 Workers 列表进入 Worker，选择目标环境后上传本地目录或 ZIP，也可以从配置好的 GitHub / GitLab 仓库构建。上传会自动识别静态产物和 Wrangler 项目。[部署本地项目](../user-docs/src/content/docs/guides/deploy-local-project.md)
 2. 查看持久化 Build 状态、编译日志和对象存储 Artifact。
 3. 选择成功构建并发布到目标环境；Operation 经认领、验证、提交和 runtime ack
    最终收敛到 available。

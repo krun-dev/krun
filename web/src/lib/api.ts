@@ -24,6 +24,16 @@ export async function api<T>(
   return readAPIJSON<T>(response);
 }
 
+export async function apiForm<T>(
+  path: string,
+  input: FormData,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<T> {
+  const response = await fetchAPI(path, "POST", input, signal, idempotencyKey);
+  return readAPIJSON<T>(response);
+}
+
 export async function downloadAuditCSV(path: string): Promise<Blob> {
   const response = await fetchAPI(path, "GET");
   if (!response.ok) await readAPIJSON(response);
@@ -38,17 +48,17 @@ async function fetchAPI(
   method: string,
   input?: unknown,
   signal?: AbortSignal,
+  idempotencyKey?: string,
 ): Promise<Response> {
   if (!path.startsWith("/api/")) {
     throw new APIError(0, "INVALID_API_PATH", "Refusing a non-API request path");
   }
-  signal = signal
-    ? AbortSignal.any([signal, AbortSignal.timeout(20000)])
-    : AbortSignal.timeout(20000);
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "Accept-Language": locale(),
-  };
+  const multipart = input instanceof FormData;
+  const timeout = AbortSignal.timeout(multipart ? 180_000 : 20_000);
+  signal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  const headers: Record<string, string> = { "Accept-Language": locale() };
+  if (!multipart) headers["Content-Type"] = "application/json";
+  if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
   if (method !== "GET") {
     const response = await fetch("/api/auth/csrf", {
       method: "POST",
@@ -66,7 +76,7 @@ async function fetchAPI(
     headers,
     credentials: "same-origin",
     signal,
-    body: input === undefined ? undefined : JSON.stringify(input),
+    body: multipart ? input : JSON.stringify(input),
   });
   notifyAuthRequired(response.status);
   return response;

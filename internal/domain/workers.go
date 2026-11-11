@@ -48,10 +48,11 @@ type WorkerBuild struct {
 
 // Private job inputs and credentials are not returned by Build APIs.
 type WorkerBuildPrivate struct {
-	Actor     WorkerActor
-	SourceKey string
-	Files     map[string]string
-	LogKey    string
+	Actor      WorkerActor
+	SourceKey  string
+	ConfigPath string
+	Files      map[string]string
+	LogKey     string
 }
 
 type WorkerArtifact struct {

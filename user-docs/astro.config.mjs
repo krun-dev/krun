@@ -69,11 +69,18 @@ export default defineConfig({
               items: [
                 { label: "概览", slug: "guides/component-workers" },
                 {
-                  label: "Git 仓库集成",
+                  label: "项目部署",
                   items: [
-                    { label: "连接与构建", slug: "guides/git-repositories" },
-                    "guides/gitlab-integration",
-                    "guides/github-integration",
+                    { label: "概览", slug: "guides/deploy-project" },
+                    {
+                      label: "Git 仓库",
+                      items: [
+                        { label: "连接与构建", slug: "guides/git-repositories" },
+                        "guides/gitlab-integration",
+                        "guides/github-integration",
+                      ],
+                    },
+                    "guides/deploy-local-project",
                   ],
                 },
                 "guides/workers-runtime-compatibility",

@@ -34,6 +34,10 @@ type WorkerBuildCreateInput struct {
 const WorkerBuildRequestBodyMax = 16 << 20
 
 func (s *Service) WorkerBuildCreate(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, in WorkerBuildCreateInput) (any, Outcome, error) {
+	return s.workerBuildCreate(ctx, st, p, ref, in, nil)
+}
+
+func (s *Service) workerBuildCreate(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, in WorkerBuildCreateInput, local *LocalBuildSource) (any, Outcome, error) {
 	if in.Environment == "" {
 		return nil, Read, domain.Invalid("WORKER_BUILD_INVALID", "environment is required (production or a preview slug)")
 	}
@@ -56,7 +60,12 @@ func (s *Service) WorkerBuildCreate(ctx context.Context, st *domain.State, p aut
 		return nil, Read, domain.Conflict("ENVIRONMENT_DISABLED", "Target environment is disabled")
 	}
 	key := WorkerIdempotencyKey(t, p, "build", in.Environment, in.Key)
-	id, e := WorkerIdempotent(st, key, in)
+	var request any = in
+	if local != nil {
+		key = WorkerIdempotencyKey(t, p, "local-build", in.Environment, in.Key)
+		request = local.Digest
+	}
+	id, e := WorkerIdempotent(st, key, request)
 	if e != nil {
 		return nil, Read, e
 	}
@@ -67,6 +76,10 @@ func (s *Service) WorkerBuildCreate(ctx context.Context, st *domain.State, p aut
 	compatibilityDate := in.CompatibilityDate
 	compatibilityFlags := in.CompatibilityFlags
 	switch in.SourceType {
+	case "local-project":
+		if local == nil || local.ConfigPath == "" || !ValidWorkerSourceUpload(t.Organization, in.SourceUpload) {
+			return nil, Read, domain.Invalid("WORKER_BUILD_INVALID", "Use the local upload endpoint for project builds")
+		}
 	case "repository":
 		if in.Assets != nil {
 			return nil, Read, domain.Invalid("WORKER_BUILD_INVALID", "Repository assets are read from the Wrangler configuration")
@@ -151,9 +164,14 @@ func (s *Service) WorkerBuildCreate(ctx context.Context, st *domain.State, p aut
 		b.Repository = repository
 		b.SourceDigest = ""
 	}
+	private := domain.WorkerBuildPrivate{Actor: WorkerActor(p), Files: in.Files, SourceKey: in.SourceUpload}
+	if local != nil {
+		b.SourceDigest = local.Digest
+		private.ConfigPath = local.ConfigPath
+	}
 	st.Workers.Builds[id] = b
-	st.Workers.BuildPrivate[id] = domain.WorkerBuildPrivate{Actor: WorkerActor(p), Files: in.Files, SourceKey: in.SourceUpload}
-	WorkerRemember(st, key, in, id)
+	st.Workers.BuildPrivate[id] = private
+	WorkerRemember(st, key, request, id)
 	return b, Queued, nil
 
 }

@@ -24,7 +24,7 @@ setTimeout(() => {
 		t.Fatal(err)
 	}
 	seen := false
-	log, err := Execute(context.Background(), &config.WorkersConfig{BuilderScript: script, BuilderTimeoutSeconds: 60}, domain.WorkerBuild{}, "", "", func(text string) {
+	log, err := Execute(context.Background(), &config.WorkersConfig{BuilderScript: script, BuilderTimeoutSeconds: 60}, domain.WorkerBuild{}, domain.WorkerBuildPrivate{}, "", "", func(text string) {
 		if !strings.Contains(text, "build started") || strings.Contains(text, "build finished") {
 			t.Errorf("not a live snapshot: %q", text)
 		}
