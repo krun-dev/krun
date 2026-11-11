@@ -4,12 +4,11 @@ package deployment
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/krun-dev/krun/internal/securetoken"
 	"net"
 	"net/url"
 	"os"
@@ -329,8 +328,7 @@ func (r *renderer) add(api, kind, name string, fields map[string]any) {
 }
 func hash(value any) string {
 	raw, _ := json.Marshal(value)
-	digest := sha256.Sum256(raw)
-	return hex.EncodeToString(digest[:])
+	return securetoken.DigestBytes(raw)
 }
 
 // LoadConfig expands dollar expressions once more inside the container. Escape

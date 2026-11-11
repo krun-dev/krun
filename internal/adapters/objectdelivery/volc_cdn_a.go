@@ -3,8 +3,6 @@
 package objectdelivery
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -52,9 +50,8 @@ func (p volcTypeA) Access(b domain.WorkerBucket, key string, now time.Time) (dom
 	stamp := strconv.FormatInt(now.Unix(), 10)
 	rand := strings.ReplaceAll(securetoken.UUID(), "-", "")
 	payload := fmt.Sprintf("%s-%s-%s-0-%s", u.EscapedPath(), stamp, rand, c.SigningKey)
-	digest := sha256.Sum256([]byte(payload))
 	query := make(url.Values)
-	query.Set("sign", stamp+"-"+rand+"-0-"+hex.EncodeToString(digest[:]))
+	query.Set("sign", stamp+"-"+rand+"-0-"+securetoken.Digest(payload))
 	u.RawQuery = query.Encode()
 	result.URL = u.String()
 	result.ExpiresAt = time.Unix(now.Unix()+int64(c.TTLSeconds), 0).UTC()

@@ -4,15 +4,13 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"github.com/krun-dev/krun/internal/securetoken"
 	"net/http"
 	"strings"
 	"time"
 )
 
-func hash(value string) string {
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:])
-}
+func hash(value string) string { return securetoken.Digest(value) }
 
 func hmacSHA256(key []byte, value string) []byte {
 	h := hmac.New(sha256.New, key)

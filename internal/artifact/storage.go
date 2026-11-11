@@ -4,10 +4,9 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/krun-dev/krun/internal/securetoken"
 	"io"
 	"path"
 	"regexp"
@@ -195,7 +194,7 @@ func WorkerAssetPath(name string) (string, bool) {
 	return name, true
 }
 
-func BytesDigest(raw []byte) string { sum := sha256.Sum256(raw); return hex.EncodeToString(sum[:]) }
+func BytesDigest(raw []byte) string { return securetoken.DigestBytes(raw) }
 
 func WorkerModuleNameValid(name string) bool {
 	return name != "" && len(name) <= 240 && !path.IsAbs(name) && path.Clean(name) == name &&
