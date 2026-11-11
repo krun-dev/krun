@@ -1,8 +1,7 @@
 package storage
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"github.com/krun-dev/krun/internal/securetoken"
 	"time"
 )
 
@@ -12,7 +11,7 @@ const WorkerConfigOpsRetain = 512
 
 func now() time.Time                { return time.Now().UTC() }
 func digest(value string) string    { return bytesDigest([]byte(value)) }
-func bytesDigest(raw []byte) string { sum := sha256.Sum256(raw); return hex.EncodeToString(sum[:]) }
+func bytesDigest(raw []byte) string { return securetoken.DigestBytes(raw) }
 
 const workerBaseline = "production"
 

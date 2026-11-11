@@ -2,10 +2,10 @@ package cli
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/krun-dev/krun/internal/securetoken"
 	"net/url"
 	"time"
 )
@@ -52,7 +52,7 @@ func (b releaseBuild) resolve(ctx context.Context, c *Client, action, base, env,
 	}
 	// Retrying a release with the same inputs must find the original build,
 	// even if the branch has moved since that build was queued.
-	buildKey := fmt.Sprintf("cli-build-%x", sha256.Sum256([]byte(action+"\x00"+releaseKey)))
+	buildKey := "cli-build-" + securetoken.Digest(action+"\x00"+releaseKey)
 	fmt.Fprintln(c.Err, "Build idempotency key:", buildKey)
 	input["idempotency_key"] = buildKey
 	path := base + "/builds"

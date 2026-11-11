@@ -2,9 +2,9 @@ package cli
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"github.com/krun-dev/krun/internal/securetoken"
 	"io"
 	"os"
 	"path/filepath"
@@ -47,8 +47,7 @@ func claimCLIUpdateCheck(cacheDir, endpoint string, now time.Time) bool {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return false
 	}
-	key := sha256.Sum256([]byte(endpoint))
-	path := filepath.Join(dir, fmt.Sprintf("%x", key))
+	path := filepath.Join(dir, securetoken.Digest(endpoint))
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return false

@@ -35,7 +35,12 @@ func IsID(value, prefix string) bool {
 	return strings.Trim(suffix, "0123456789abcdef") == ""
 }
 
-func Digest(value string) string { b := sha256.Sum256([]byte(value)); return hex.EncodeToString(b[:]) }
+func Digest(value string) string { return DigestBytes([]byte(value)) }
+
+func DigestBytes(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
 
 // UUID is the public identifier shared with Cloudflare-compatible version APIs.
 func UUID() string {
