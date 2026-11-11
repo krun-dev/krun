@@ -64,8 +64,9 @@ Shard 在 repeatable-read 视图中读取，并用该视图的真实 head 命名
 
 测试分为真实 PostgreSQL 规模回归、实际 Runtime 函数复杂度测试、真实 workerd / Wrangler
 制品 smoke、独立 kind E2E 和 Playwright UI。百万站点 fixture 包含站点、placement 与
-production 环境，未包含百万个活跃 Version；单路由更新微基准不包含网络、业务代码和
-端到端延迟。这些结果用于约束算法与元数据读取范围，不是生产 QPS 或发布吞吐承诺。
+production 环境，未包含百万个活跃 Version。单路由更新微基准分别通过冷查询缓存 64、512
+和 4096 条路由，再测量单条增量更新。测量不包含网络、业务代码和端到端延迟。这些结果用于
+约束算法与元数据读取范围，不是生产 QPS 或发布吞吐承诺。
 
 复现命令（数据库必须是专用、可写的测试数据库）：
 

@@ -9,7 +9,7 @@ const source = loadRuntimeSource();
 writeFileSync(
   join(directory, "entry.mjs"),
   source +
-    `export { applySnapshot, applyBatch, resolveRoute, assetManifest };
+    `export { bootstrap, bootstrapFromControl, applyBatch, resolveRoute, assetManifest };
 export const inspect = () => ({ view, versionRefs, routeVersions, manifests });
 `,
 );
@@ -21,66 +21,21 @@ const environment = (fetch) => ({
   PLATFORM: { fetch },
 });
 try {
-  const runtime = await fresh();
-  const count = 100000;
-  runtime.applySnapshot({
-    config_revision: 1,
-    routes: Array.from({ length: count }, (_, i) => ({
-      host: `site-${i}.test`,
-      version: `version-${i}`,
-    })),
-    versions: Object.fromEntries(
-      Array.from({ length: count }, (_, i) => [`version-${i}`, { id: `version-${i}` }]),
-    ),
-  });
-  const before = runtime.inspect();
-  // Iterating either entire index on an incremental update is a regression,
-  // independently of machine speed and wall-clock benchmark variance.
-  for (const index of [before.view.routes, before.view.versions]) {
-    for (const method of [Symbol.iterator, "entries", "values", "keys"]) {
-      index[method] = () => {
-        throw new Error("incremental update scanned full index");
-      };
-    }
-  }
-  assert(
-    runtime.applyBatch({
-      from: 1,
-      to: 2,
-      ops: [
-        { type: "version_put", version: { id: "new-version" } },
-        {
-          type: "route_upsert",
-          host: "site-0.test",
-          route: { host: "site-0.test", version: "new-version" },
-        },
-      ],
-    }),
-  );
-  assert.equal(runtime.inspect().view.routes, before.view.routes);
-  assert.equal(runtime.inspect().view.versions, before.view.versions);
-  assert(!runtime.inspect().view.versions.has("version-0"));
-  assert(runtime.inspect().view.versions.has("new-version"));
-  assert.throws(() =>
-    runtime.applyBatch({
-      from: 2,
-      to: 3,
-      ops: [{ type: "route_delete", host: "site-0.test" }, { type: "broken" }],
-    }),
-  );
-  assert(runtime.inspect().view.routes.has("site-0.test"));
-  assert.equal(runtime.inspect().view.revision, 2);
-  console.log("PASS bounded incremental update and malformed-batch atomicity at 100k routes");
   const lazy = await fresh();
-  lazy.applySnapshot({
-    pool: "default",
-    config_revision: 1,
-    lazy_routes: true,
-  });
   let requests = 0;
   const env = environment(async (request) => {
+    const path = new URL(request.url).pathname;
+    if (path.endsWith("/config/snapshot")) {
+      return Response.json({
+        pool: "default",
+        config_revision: 1,
+        lazy_routes: true,
+        routes: [{ host: "cold.test", version: "stale" }],
+        versions: { stale: { id: "stale" } },
+      });
+    }
     requests++;
-    const host = decodeURIComponent(new URL(request.url).pathname.split("/").at(-1));
+    const host = decodeURIComponent(path.split("/").at(-1));
     return Response.json({
       pool: "default",
       config_revision: 2,
@@ -88,7 +43,11 @@ try {
       versions: { [host]: { id: host } },
     });
   });
-  await Promise.all(Array.from({ length: 20 }, () => lazy.resolveRoute(env, "cold.test")));
+  await lazy.bootstrapFromControl(env);
+  const lookups = await Promise.all(
+    Array.from({ length: 20 }, () => lazy.resolveRoute(env, "cold.test")),
+  );
+  assert.equal(lookups[0].version, "cold.test", "the head cannot prepopulate the route cache");
   assert.equal(requests, 1);
   // A cold lookup can observe a newer revision than the following delta feed.
   lazy.applyBatch({
@@ -105,27 +64,64 @@ try {
   for (let i = 0; i < 4100; i++) {
     await lazy.resolveRoute(env, `cold-${i}.test`);
   }
-  const view = lazy.inspect();
-  assert.equal(view.view.routes.size, 4096);
-  assert.equal(view.view.versions.size, 4096);
-  assert.equal(view.routeVersions.size, 4096);
-  assert.equal(view.versionRefs.size, 4096);
-  lazy.applyBatch({
-    from: 2,
-    to: 3,
-    ops: [
-      { type: "version_put", version: { id: "uncached" } },
-      {
-        type: "route_upsert",
-        host: "never-visited.test",
-        route: { host: "never-visited.test", version: "uncached" },
-      },
-    ],
-  });
-  assert(!view.view.routes.has("never-visited.test"));
-  assert(!view.view.versions.has("uncached"));
+  const { view, routeVersions, versionRefs } = lazy.inspect();
+  const { routes, versions } = view;
+  assert.equal(routes.size, 4096);
+  assert.equal(versions.size, 4096);
+  assert.equal(routeVersions.size, 4096);
+  assert.equal(versionRefs.size, 4096);
+  console.log("PASS compact bootstrap, coalesced cold lookup and bounded route caches");
+
+  // Guard the whole-index scan directly, without relying on elapsed time.
+  for (const index of [routes, versions]) {
+    for (const method of [Symbol.iterator, "entries", "values", "keys", "forEach"]) {
+      index[method] = () => {
+        throw new Error("incremental update scanned full index");
+      };
+    }
+  }
+  const cachedHost = "cold-4099.test";
+  const uncachedHost = "never-visited.test";
+  assert(
+    lazy.applyBatch({
+      from: 2,
+      to: 3,
+      ops: [
+        { type: "version_put", version: { id: "new-version" } },
+        { type: "version_put", version: { id: "uncached" } },
+        {
+          type: "route_upsert",
+          host: cachedHost,
+          route: { host: cachedHost, version: "new-version" },
+        },
+        {
+          type: "route_upsert",
+          host: uncachedHost,
+          route: { host: uncachedHost, version: "uncached" },
+        },
+      ],
+    }),
+  );
+  assert.equal(lazy.inspect().view.routes, routes);
+  assert.equal(lazy.inspect().view.versions, versions);
+  assert.equal(routes.get(cachedHost).version, "new-version");
+  assert(!versions.has(cachedHost));
+  assert(versions.has("new-version"));
+  assert(!routes.has(uncachedHost));
+  assert(!versions.has("uncached"));
+  assert.throws(
+    () =>
+      lazy.applyBatch({
+        from: 3,
+        to: 4,
+        ops: [{ type: "route_delete", host: cachedHost }, { type: "broken" }],
+      }),
+    /invalid config op broken/,
+  );
+  assert(routes.has(cachedHost));
+  assert.equal(lazy.inspect().view.revision, 3);
   console.log(
-    "PASS coalesced cold lookup, bounded route/descriptor caches and unloaded delta filtering",
+    "PASS bounded incremental update, cold delta filtering and malformed-batch atomicity",
   );
   const assets = await fresh();
   let assetCalls = 0;
@@ -148,11 +144,6 @@ try {
   assert.equal(assetCalls, callsBefore);
   console.log("PASS single-flight manifest loading and LRU without whole-cache invalidation");
   const fallback = await fresh();
-  fallback.applySnapshot({
-    pool: "default",
-    config_revision: 7,
-    lazy_routes: true,
-  });
   const snapshot = {
     pool: "default",
     config_revision: 7,
@@ -162,19 +153,26 @@ try {
   const compressed = gzipSync(JSON.stringify(snapshot));
   const digest = Buffer.from(await crypto.subtle.digest("SHA-256", compressed)).toString("hex");
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url) =>
-    (url instanceof Request ? url.url : String(url)).endsWith("/latest.json")
-      ? Response.json({
-          snapshot: "shards/fixture/7.json.gz",
-          sha256: digest,
-          config_revision: 7,
-        })
-      : new Response(compressed);
+  globalThis.fetch = async (input) => {
+    const path = new URL(input instanceof Request ? input.url : input).pathname;
+    if (path === "/latest.json") {
+      return Response.json({ config_revision: 7, lazy_routes: true });
+    }
+    if (path.endsWith("/latest.json")) {
+      return Response.json({
+        snapshot: "shards/fixture/7.json.gz",
+        sha256: digest,
+        config_revision: 7,
+      });
+    }
+    return new Response(compressed);
+  };
   try {
     const env = environment(async () => {
       throw new Error("control down");
     });
     env.CONFIG_BASE = "http://config.test";
+    await fallback.bootstrap(env);
     assert.equal((await fallback.resolveRoute(env, "fallback.test")).version, "fallback");
   } finally {
     globalThis.fetch = originalFetch;

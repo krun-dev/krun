@@ -1,33 +1,39 @@
 import { loadRuntimeSource } from "./entry-source.mjs";
 import { performance } from "node:perf_hooks";
-const source = loadRuntimeSource() + "\nexport {applySnapshot,applyBatch};";
+const source = loadRuntimeSource() + "\nexport {bootstrapFromControl, resolveRoute, applyBatch};";
 const runtime = await import(
   "data:text/javascript;base64," + Buffer.from(source).toString("base64")
 );
+const env = {
+  RUNTIME_POOL: "default",
+  RUNTIME_TOKEN: "fixture",
+  PLATFORM: {
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/config/snapshot")) {
+        return Response.json({ pool: "default", config_revision: 1, lazy_routes: true });
+      }
+      const host = decodeURIComponent(path.split("/").at(-1));
+      return Response.json({
+        pool: "default",
+        config_revision: 1,
+        routes: [{ host, version: host, enabled: true }],
+        versions: { [host]: { id: host } },
+      });
+    },
+  },
+};
 console.log(
   JSON.stringify({
     node: process.version,
-    kind: "actual applyBatch; minimal synthetic descriptors; not production workerd throughput",
+    kind: "single-route applyBatch with a warm lazy cache; excludes network and workerd",
   }),
 );
-for (const n of [10000, 100000, 1000000]) {
-  let routes = Array.from({ length: n }, (_, i) => ({
-    host: `s${i}.example.invalid`,
-    version: `r${i}`,
-    pool: "default",
-    enabled: true,
-  }));
-  let versions = Object.fromEntries(
-    routes.map((r, i) => [r.version, { id: r.version, worker_id: `s${i}` }]),
-  );
-  runtime.applySnapshot({
-    config_revision: 1,
-    pool: "default",
-    routes,
-    versions,
-  });
-  routes = null;
-  versions = null;
+for (const n of [64, 512, 4096]) {
+  await runtime.bootstrapFromControl(env);
+  for (let i = 0; i < n; i++) {
+    await runtime.resolveRoute(env, `s${i}.example.invalid`);
+  }
   const samples = [];
   for (let i = 0; i < 3; i++) {
     globalThis.gc?.();
@@ -42,8 +48,7 @@ for (const n of [10000, 100000, 1000000]) {
             host: "s0.example.invalid",
             route: {
               host: "s0.example.invalid",
-              version: "r0",
-              pool: "default",
+              version: "s0.example.invalid",
               enabled: true,
             },
           },
