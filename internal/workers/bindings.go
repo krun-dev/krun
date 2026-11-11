@@ -2,10 +2,10 @@ package workers
 
 import (
 	"context"
-	workerartifact "github.com/krun-dev/krun/internal/artifact"
 	"maps"
 	"strings"
 
+	workerartifact "github.com/krun-dev/krun/internal/artifact"
 	"github.com/krun-dev/krun/internal/authorization"
 	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/domain"
@@ -115,7 +115,7 @@ func (s *Service) StageBindings(ctx context.Context, st *domain.State, p authori
 		return domain.Invalid("WORKER_BINDINGS_INVALID", "Invalid variable names or size")
 	}
 	for name, value := range in.Secrets {
-		if !WorkerSecretNameValid(name) || value != nil && len(*value) > WorkerSecretMaxBytes {
+		if !workerSecretInputValid(name, value) {
 			return domain.Invalid("WORKER_SECRET_INVALID", "Invalid secret name or size")
 		}
 		if value == nil {
@@ -124,16 +124,11 @@ func (s *Service) StageBindings(ctx context.Context, st *domain.State, p authori
 			continue
 		}
 		delete(vars, name)
-		encrypted, err := EncryptWorkerSecret(s.Config.Workers, target.Organization, target.ID, env, name, p.User.ID, *value)
+		id, err := s.stageWorkerSecret(st, target, env, name, p.User.ID, *value)
 		if err != nil {
-			return domain.Unavailable("WORKER_SECRETS_NOT_CONFIGURED", "Worker secret encryption is not configured")
+			return err
 		}
-		st.Workers.SecretVersions[encrypted.Version.ID] = encrypted.Version
-		if st.PendingWorkerSecrets == nil {
-			st.PendingWorkerSecrets = map[string]domain.EncryptedWorkerSecret{}
-		}
-		st.PendingWorkerSecrets[encrypted.Version.ID] = encrypted
-		secrets[name] = encrypted.Version.ID
+		secrets[name] = id
 	}
 	if len(secrets) > WorkerSecretMaxCount {
 		return domain.Invalid("WORKER_SECRET_INVALID", "At most 100 secrets per environment")
@@ -145,39 +140,27 @@ func (s *Service) StageBindings(ctx context.Context, st *domain.State, p authori
 	}
 	current.Variables = vars
 	current.SecretVersions = secrets
-	if in.R2Buckets != nil {
-		if in.KeepR2Buckets {
-			for name, binding := range current.R2Bindings {
-				if _, exists := (*in.R2Buckets)[name]; !exists {
-					(*in.R2Buckets)[name] = binding.BucketName
-				}
+	if in.R2Buckets != nil && in.KeepR2Buckets {
+		for name, binding := range current.R2Bindings {
+			if _, exists := (*in.R2Buckets)[name]; !exists {
+				(*in.R2Buckets)[name] = binding.BucketName
 			}
 		}
-		if len(*in.R2Buckets) > 0 && (s.Config.Workers == nil || s.Config.Workers.ObjectStorage == nil || s.Config.Workers.ObjectStorage.CursorKey == "") {
-			return domain.Unavailable("OBJECT_STORAGE_NOT_CONFIGURED", "R2 storage and its cursor key must be configured")
-		}
-		resolved, err := resolveR2Bindings(st, target.Organization, *in.R2Buckets)
-		if err != nil {
-			return err
-		}
-		current.R2Bindings = resolved
 	}
-	if in.HyperdriveBindings != nil {
+	if in.R2Buckets != nil && len(*in.R2Buckets) > 0 && !s.r2BindingStorageConfigured() {
+		return domain.Unavailable("OBJECT_STORAGE_NOT_CONFIGURED", "R2 storage and its cursor key must be configured")
+	}
+	if in.HyperdriveBindings != nil && in.KeepHyperdrive {
 		bindings := maps.Clone(*in.HyperdriveBindings)
-		if in.KeepHyperdrive {
-			for name, id := range current.HyperdriveBindings {
-				if _, exists := bindings[name]; !exists {
-					bindings[name] = id
-				}
+		for name, id := range current.HyperdriveBindings {
+			if _, exists := bindings[name]; !exists {
+				bindings[name] = id
 			}
 		}
-		if err := s.validateHyperdriveBindings(ctx, target.Organization, bindings); err != nil {
-			return err
-		}
-		current.HyperdriveBindings = cloneHyperdriveBindings(bindings)
+		in.HyperdriveBindings = &bindings
 	}
-	if in.VersionMetadata != nil {
-		current.VersionMetadata = *in.VersionMetadata
+	if err := s.applyBindingPatch(ctx, st, target.Organization, &current, in.R2Buckets, in.HyperdriveBindings, in.VersionMetadata); err != nil {
+		return err
 	}
 	if in.AssetsBinding != nil {
 		current.AssetsBinding = *in.AssetsBinding
@@ -194,6 +177,34 @@ func (s *Service) StageBindings(ctx context.Context, st *domain.State, p authori
 	}
 	st.Workers.Workers[target.ID] = worker
 	s.audit(st, p, "workers.bindings.change", target.ID+"/"+env, true)
+	return nil
+}
+
+func (s *Service) r2BindingStorageConfigured() bool {
+	workers := s.Config.Workers
+	return workers != nil && workers.ObjectStorage != nil && workers.ObjectStorage.CursorKey != ""
+}
+
+func (s *Service) applyBindingPatch(
+	ctx context.Context, st *domain.State, organization string, env *domain.WorkerEnvironment,
+	r2Buckets, hyperdriveBindings *map[string]string, versionMetadata *string,
+) error {
+	if r2Buckets != nil {
+		resolved, err := resolveR2Bindings(st, organization, *r2Buckets)
+		if err != nil {
+			return err
+		}
+		env.R2Bindings = resolved
+	}
+	if hyperdriveBindings != nil {
+		if err := s.validateHyperdriveBindings(ctx, organization, *hyperdriveBindings); err != nil {
+			return err
+		}
+		env.HyperdriveBindings = cloneHyperdriveBindings(*hyperdriveBindings)
+	}
+	if versionMetadata != nil {
+		env.VersionMetadata = *versionMetadata
+	}
 	return nil
 }
 

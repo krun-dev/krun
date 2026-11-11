@@ -73,6 +73,10 @@ func WorkerSecretNameValid(name string) bool {
 	return WorkerBindingName.MatchString(name) && !strings.HasPrefix(name, "KRUN_")
 }
 
+func workerSecretInputValid(name string, value *string) bool {
+	return WorkerSecretNameValid(name) && (value == nil || len(*value) <= WorkerSecretMaxBytes)
+}
+
 func WorkerSecretAAD(version domain.WorkerSecretVersion) []byte {
 	return []byte(strings.Join([]string{
 		"krun-worker-secret-v1", version.ID, version.Organization, version.Worker,
@@ -135,6 +139,20 @@ func DecryptWorkerSecret(config *appconfig.WorkersConfig, encrypted domain.Encry
 		return "", errors.New("Worker secret digest mismatch")
 	}
 	return string(plaintext), nil
+}
+
+func (s *Service) stageWorkerSecret(st *domain.State, target authorization.Target, environment, name, actor, value string) (string, error) {
+	encrypted, err := EncryptWorkerSecret(s.Config.Workers, target.Organization, target.ID, environment, name, actor, value)
+	if err != nil {
+		return "", domain.Unavailable("WORKER_SECRETS_NOT_CONFIGURED", "Worker secret encryption is not configured")
+	}
+	id := encrypted.Version.ID
+	st.Workers.SecretVersions[id] = encrypted.Version
+	if st.PendingWorkerSecrets == nil {
+		st.PendingWorkerSecrets = map[string]domain.EncryptedWorkerSecret{}
+	}
+	st.PendingWorkerSecrets[id] = encrypted
+	return id, nil
 }
 
 func (s *Service) WorkerSecretList(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
@@ -220,7 +238,7 @@ func (s *Service) WorkerSecretBatch(ctx context.Context, st *domain.State, p aut
 	}
 	versions := domain.CloneStringsMap(current.SecretVersions)
 	for name, value := range in.Secrets {
-		if !WorkerSecretNameValid(name) || value != nil && len(*value) > WorkerSecretMaxBytes {
+		if !workerSecretInputValid(name, value) {
 			return nil, Read, domain.Invalid("WORKER_SECRET_INVALID", "Invalid secret name or value size")
 		}
 		if value == nil {
@@ -233,16 +251,11 @@ func (s *Service) WorkerSecretBatch(ctx context.Context, st *domain.State, p aut
 		if _, collision := current.Variables[name]; collision {
 			return nil, Read, domain.Conflict("WORKER_BINDING_CONFLICT", "A plain variable already uses this binding name")
 		}
-		encrypted, err := EncryptWorkerSecret(s.Config.Workers, target.Organization, target.ID, environment, name, p.User.ID, *value)
+		id, err := s.stageWorkerSecret(st, target, environment, name, p.User.ID, *value)
 		if err != nil {
-			return nil, Read, domain.Unavailable("WORKER_SECRETS_NOT_CONFIGURED", "Worker secret encryption is not configured")
+			return nil, Read, err
 		}
-		st.Workers.SecretVersions[encrypted.Version.ID] = encrypted.Version
-		if st.PendingWorkerSecrets == nil {
-			st.PendingWorkerSecrets = map[string]domain.EncryptedWorkerSecret{}
-		}
-		st.PendingWorkerSecrets[encrypted.Version.ID] = encrypted
-		versions[name] = encrypted.Version.ID
+		versions[name] = id
 	}
 	if len(versions) > WorkerSecretMaxCount {
 		return nil, Read, domain.Invalid("WORKER_SECRET_INVALID", "At most 100 secrets are supported per environment")

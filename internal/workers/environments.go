@@ -192,24 +192,11 @@ func (s *Service) applyWorkerEnvironmentBindings(
 	env *domain.WorkerEnvironment,
 	in WorkerEnvironmentUpdateInput,
 ) error {
-	if in.VersionMetadata != nil {
-		env.VersionMetadata = *in.VersionMetadata
+	if in.R2Buckets != nil && !s.r2BindingStorageConfigured() {
+		return domain.Unavailable("OBJECT_STORAGE_NOT_CONFIGURED", "R2 storage must be configured")
 	}
-	if in.R2Buckets != nil {
-		if s.Config.Workers == nil || s.Config.Workers.ObjectStorage == nil || s.Config.Workers.ObjectStorage.CursorKey == "" {
-			return domain.Unavailable("OBJECT_STORAGE_NOT_CONFIGURED", "R2 storage must be configured")
-		}
-		resolved, err := resolveR2Bindings(st, organization, *in.R2Buckets)
-		if err != nil {
-			return err
-		}
-		env.R2Bindings = resolved
-	}
-	if in.HyperdriveBindings != nil {
-		if err := s.validateHyperdriveBindings(ctx, organization, *in.HyperdriveBindings); err != nil {
-			return err
-		}
-		env.HyperdriveBindings = cloneHyperdriveBindings(*in.HyperdriveBindings)
+	if err := s.applyBindingPatch(ctx, st, organization, env, in.R2Buckets, in.HyperdriveBindings, in.VersionMetadata); err != nil {
+		return err
 	}
 	return ValidateWorkerBindings(*env)
 }

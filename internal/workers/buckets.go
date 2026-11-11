@@ -127,17 +127,11 @@ func resolveR2Bindings(st *domain.State, organization string, requested map[stri
 	}
 	out := make(map[string]domain.WorkerR2Binding, len(requested))
 	for name, bucketName := range requested {
-		found := false
-		for _, bucket := range st.Workers.Buckets {
-			if bucket.Organization == organization && bucket.Name == bucketName && bucket.Enabled {
-				out[name] = domain.WorkerR2Binding{StoreID: bucket.Store, BucketID: bucket.ID, BucketName: bucket.Name}
-				found = true
-				break
-			}
-		}
-		if !found {
+		bucket, found := findBucket(st, organization, bucketName, true)
+		if !found || !bucket.Enabled {
 			return nil, domain.Invalid("STORAGE_BUCKET_UNAVAILABLE", "R2 bucket does not exist or is disabled in this organization")
 		}
+		out[name] = domain.WorkerR2Binding{StoreID: bucket.Store, BucketID: bucket.ID, BucketName: bucket.Name}
 	}
 	return out, nil
 }
