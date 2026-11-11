@@ -22,7 +22,7 @@ export function OrganizationSwitcher({
       <DropdownMenu.Trigger asChild>
         <button
           type="button"
-          aria-label={`${t("切换组织")}：${name}`}
+          aria-label={`${t("切换组织")}: ${name}`}
           title={name}
           disabled={organizations.length === 0}
           className="flex w-full min-w-0 items-center gap-2.5 rounded-md px-2 py-2.5 text-left transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50 data-[state=open]:bg-secondary"

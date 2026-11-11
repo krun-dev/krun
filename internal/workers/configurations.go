@@ -16,16 +16,17 @@ import (
 )
 
 type WorkerConfigurationCreateInput struct {
-	Name            string             `json:"name"`
-	Message         string             `json:"message,omitempty"`
-	Source          string             `json:"source_configuration_id,omitempty"`
-	Version         string             `json:"source_version_id,omitempty"`
-	Revision        int                `json:"expected_configuration_revision"`
-	Variables       map[string]any     `json:"variables,omitempty"`
-	R2Buckets       *map[string]string `json:"r2_buckets,omitempty"`
-	VersionMetadata *string            `json:"version_metadata,omitempty"`
-	Secrets         map[string]*string `json:"secrets,omitempty"`
-	Key             string             `json:"idempotency_key"`
+	Name               string             `json:"name"`
+	Message            string             `json:"message,omitempty"`
+	Source             string             `json:"source_configuration_id,omitempty"`
+	Version            string             `json:"source_version_id,omitempty"`
+	Revision           int                `json:"expected_configuration_revision"`
+	Variables          map[string]any     `json:"variables,omitempty"`
+	R2Buckets          *map[string]string `json:"r2_buckets,omitempty"`
+	HyperdriveBindings *map[string]string `json:"hyperdrive_bindings,omitempty"`
+	VersionMetadata    *string            `json:"version_metadata,omitempty"`
+	Secrets            map[string]*string `json:"secrets,omitempty"`
+	Key                string             `json:"idempotency_key"`
 }
 
 type WorkerConfigurationDeployInput struct {
@@ -150,6 +151,12 @@ func (s *Service) WorkerConfigurationCreate(ctx context.Context, st *domain.Stat
 		if err != nil {
 			return nil, Read, err
 		}
+	}
+	if in.HyperdriveBindings != nil {
+		if err := s.validateHyperdriveBindings(ctx, ref.Organization, *in.HyperdriveBindings); err != nil {
+			return nil, Read, err
+		}
+		config.HyperdriveBindings = cloneHyperdriveBindings(*in.HyperdriveBindings)
 	}
 
 	if len(in.Secrets) > WorkerSecretMaxCount {

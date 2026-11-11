@@ -51,6 +51,12 @@ func (s *Service) PreviewBase(ctx context.Context, st *domain.State, p authoriza
 		}
 		base.R2Bindings = resolved
 	}
+	if in.HyperdriveBindings != nil {
+		if err := s.validateHyperdriveBindings(ctx, ref.Organization, *in.HyperdriveBindings); err != nil {
+			return nil, Read, err
+		}
+		base.HyperdriveBindings = cloneHyperdriveBindings(*in.HyperdriveBindings)
+	}
 	if err := ValidateWorkerBindings(base); err != nil {
 		return nil, Read, err
 	}

@@ -33,17 +33,13 @@ func (o renderOptions) secretResources() map[string]any {
 				"KRUN_MANAGEMENT_TOKEN": o.pool.ManagementToken,
 			},
 		}),
-	}
-
-	if o.signed {
-		storageSecret := kubernetesResource("Secret", "workers-storage", map[string]any{
+		kubernetesResource("Secret", "workers-storage", map[string]any{
 			"type": "Opaque",
 			"stringData": map[string]string{
 				"access": o.workers.S3AccessKey,
 				"secret": o.workers.S3SecretKey,
 			},
-		})
-		secrets = append(secrets, storageSecret)
+		}),
 	}
 
 	return resourceList(secrets)
@@ -51,7 +47,7 @@ func (o renderOptions) secretResources() map[string]any {
 
 func (o renderOptions) runtimePodPatch() map[string]any {
 	// The patch preserves pod identity and runtime credentials. Storage
-	// credentials are mounted separately when runtime reads use signed access.
+	// credentials are mounted separately for signed runtime reads.
 	volumes := []any{
 		map[string]any{
 			"name": "config",
@@ -94,25 +90,19 @@ func (o renderOptions) runtimePodPatch() map[string]any {
 				},
 			},
 		},
+		map[string]any{
+			"name": "storage",
+			"secret": map[string]string{
+				"secretName": "workers-storage",
+			},
+		},
 	}
 
 	mounts := []any{
 		map[string]any{"name": "config", "mountPath": "/config", "readOnly": true},
 		map[string]any{"name": "pod", "mountPath": "/pod", "readOnly": true},
 		map[string]any{"name": "secrets", "mountPath": "/secrets", "readOnly": true},
-	}
-	if o.signed {
-		volumes = append(volumes, map[string]any{
-			"name": "storage",
-			"secret": map[string]string{
-				"secretName": "workers-storage",
-			},
-		})
-		mounts = append(mounts, map[string]any{
-			"name":      "storage",
-			"mountPath": "/storage",
-			"readOnly":  true,
-		})
+		map[string]any{"name": "storage", "mountPath": "/storage", "readOnly": true},
 	}
 
 	container := map[string]any{

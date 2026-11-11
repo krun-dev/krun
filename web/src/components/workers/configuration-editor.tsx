@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { VariablesEditor, VersionMetadataField } from "./variables";
 import { R2BindingsEditor } from "./r2-bindings";
+import { HyperdriveBindingsEditor, type HyperdriveBindingRow } from "./hyperdrive-bindings";
 import { SecretsEditor } from "./secrets";
 
 export type ConfigurationSource = { configuration?: WorkerConfiguration; version?: Version };
@@ -39,11 +40,17 @@ export function ConfigurationEditor({
 }) {
   const original = source.configuration || source.version || env;
   const [name, setName] = useState(
-    source.configuration ? source.configuration.name + " · 调整" : "",
+    source.configuration ? source.configuration.name + " · " + t("调整") : "",
   );
   const [message, setMessage] = useState("");
   const [variables, setVariables] = useState(() => variableRows(original.variables));
   const [bindings, setBindings] = useState(() => bindingRows(original.r2_buckets));
+  const [hyperdriveBindings, setHyperdriveBindings] = useState<HyperdriveBindingRow[]>(() =>
+    Object.entries(original.hyperdrive_bindings || {}).map(([name, id]) => ({
+      name,
+      id,
+    })),
+  );
   const [metadata, setMetadata] = useState(original.version_metadata || "");
   const [secrets, setSecrets] = useState<Record<string, string | null>>({});
   const [revision] = useState(env.configuration_revision);
@@ -61,11 +68,17 @@ export function ConfigurationEditor({
     setError("");
     try {
       const values = variableInput(variables);
+      const hyperdrive = Object.fromEntries(
+        hyperdriveBindings
+          .filter((row) => row.name.trim() && row.id)
+          .map((row) => [row.name.trim(), row.id]),
+      );
       const payload = {
         name: name.trim(),
         message: message.trim(),
         variables: values,
         r2_buckets: bindingInput(bindings, values, secretNames, metadata),
+        hyperdrive_bindings: hyperdrive,
         version_metadata: metadata,
         secrets,
         expected_configuration_revision: revision,
@@ -78,6 +91,12 @@ export function ConfigurationEditor({
         new TextEncoder().encode(payload.message).length > 1000
       ) {
         throw new Error(t("配置名称必填且最多 100 字节，说明最多 1000 字节。"));
+      }
+      if (
+        hyperdriveBindings.some((row) => !row.name.trim() || !row.id) ||
+        new Set(hyperdriveBindings.map((row) => row.name.trim())).size !== hyperdriveBindings.length
+      ) {
+        throw new Error(t("Hyperdrive 绑定名称和配置不能为空，且名称不能重复。"));
       }
       const fingerprint = JSON.stringify(payload);
       if (request.current.fingerprint !== fingerprint)
@@ -162,6 +181,12 @@ export function ConfigurationEditor({
             organizationBase={organizationBase}
             rows={bindings}
             onChange={setBindings}
+            disabled={busy}
+          />
+          <HyperdriveBindingsEditor
+            organizationBase={organizationBase}
+            rows={hyperdriveBindings}
+            onChange={setHyperdriveBindings}
             disabled={busy}
           />
           <SecretsEditor

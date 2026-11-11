@@ -23,7 +23,7 @@ SSH 隧道或 `dev-*.sh` 启动生产。两者共用 `internal/adapters/runtimeb
 ```
 
 - 控制面、Postgres、builder、前端都在开发机；对象存储可使用本地 MinIO 或外部 S3/TOS；改后端或 builder 不需要构建镜像。
-- 本地 MinIO 模式通过 selectorless `static-assets` Service/EndpointSlice 访问开发机；外部 S3/TOS 模式由 runtime 直接访问 HTTPS，不固定云存储 IP。两种模式都不需要集群内 MinIO Pod。
+- 对象存储统一使用签名读取：runtime 直接访问 `s3_runtime_endpoint`，不需要 selectorless Service 或集群内 MinIO Pod。
 - 集群里只保留 `runtime-default`、不接业务 Gateway 的 `runtime-validator-default` 和 kgateway；旧的 backend/postgres/minio/tester deployment 已 scale 到 0。
 - 业务 Worker 的 host 仍然是 `w-xxx-<env>.workers.test`；nginx 把外网域名改写成它。
 
@@ -47,8 +47,7 @@ SSH 隧道或 `dev-*.sh` 启动生产。两者共用 `internal/adapters/runtimeb
 - 使用本地 MinIO 时，`s3_endpoint` 和 `s3_builder_endpoint` 指向开发机（通常是 `http://127.0.0.1:9000`）；本地 builder 使用同一地址。
 - `s3_runtime_endpoint` 是 runtime 下载制品和静态文件所见的地址。本地 MinIO 使用
   `http://<minio-host>:9000`；该开发机地址由 `dev-runtime-config.sh` 同时加入 workerd
-  `restrictPeers` allowlist 和 NetworkPolicy。不能使用 runtime 自己的 `127.0.0.1`，也
-  不能使用 `static-assets` Service DNS（workerd 会在 kube-proxy 转发前拒绝其 ClusterIP）。
+  `restrictPeers` allowlist 和 NetworkPolicy。不能使用 runtime 自己的 `127.0.0.1`。
 - `config_base_url` 可省略，由 runtime endpoint、寻址方式、桶和前缀生成；不能指向控制面的 loopback 地址。
 
 ## S3 兼容对象存储
@@ -143,10 +142,9 @@ KRUN_DEV_CONTROL_HOST=<new-control-host> ./scripts/dev-runtime-config.sh
 ```
 
 该脚本会写入 `runtime-config` 和不启动配置跟随/Ack 的 `validator-config`，确保独立
-validator Deployment/Service 存在，创建供 Gateway 静态域使用、指向本地 MinIO 的
-`static-assets` Service/EndpointSlice，更新 runtime/validator NetworkPolicy，并把 in-cluster 的
+validator Deployment/Service 存在，更新 runtime/validator NetworkPolicy，并把 in-cluster 的
 backend/postgres/minio/tester 缩到 0。业务 runtime 下载制品时使用
-`s3_runtime_endpoint` 的开发机地址，不经过 `static-assets` Service。
+`s3_runtime_endpoint` 的开发机地址。
 
 validator 或 Gateway rollout 会让本地 38084/38080/38081 的 port-forward 失效；`./scripts/dev-up.sh` 会探测 `/ready` 并自动重建隧道。
 

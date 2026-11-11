@@ -248,7 +248,6 @@ workers:
   s3_addressing_style: auto # auto / path / virtual；按端点能力选择，不按厂商切换代码
   s3_prefix: "" # 同一桶中的独立对象前缀，例如 dev/run；不带首尾斜杠
   s3_bucket_mode: managed # managed 自动建桶；external 使用已有桶且不修改策略
-  s3_access_mode: signed # 配置与资产使用私有签名读取
   s3_bucket: krun-artifacts
   s3_location_id: primary
   s3_access_key: ${KRUN_S3_ACCESS:-replace-me}

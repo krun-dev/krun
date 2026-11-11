@@ -67,7 +67,6 @@ type WorkersConfig struct {
 	S3Region             string                         `json:"s3_region"`
 	S3AddressingStyle    string                         `json:"s3_addressing_style"`
 	S3Prefix             string                         `json:"s3_prefix"`
-	S3AccessMode         string                         `json:"s3_access_mode"`
 	S3BucketMode         string                         `json:"s3_bucket_mode"`
 	S3Bucket             string                         `json:"s3_bucket"`
 	S3LocationID         string                         `json:"s3_location_id"`
@@ -75,8 +74,6 @@ type WorkersConfig struct {
 	S3AccessKey          string                         `json:"s3_access_key"`
 	S3SecretKey          string                         `json:"s3_secret_key"`
 	PreviewLimit         int                            `json:"preview_limit"`
-	StaticService        string                         `json:"static_service"`
-	StaticServicePort    int                            `json:"static_service_port"`
 	// ConfigBaseURL is the runtime-readable origin of config/latest.json and
 	// config/pools/<pool>/shards/*. Signed access works with any S3 provider.
 	ConfigBaseURL string `json:"config_base_url"`

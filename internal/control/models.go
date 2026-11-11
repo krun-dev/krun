@@ -92,8 +92,6 @@ type APIError = domain.APIError
 
 var newState = domain.NewState
 
-var newWorkerState = domain.NewWorkerState
-
 var memberKey = domain.MemberKey
 
 var workerPlacementKey = domain.WorkerPlacementKey

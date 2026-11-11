@@ -171,7 +171,6 @@ workers:
   s3_region: ${KRUN_ARTIFACT_REGION:-cn-beijing}
   s3_addressing_style: virtual
   s3_bucket_mode: external
-  s3_access_mode: signed
   s3_bucket: ${KRUN_ARTIFACT_BUCKET:-example-krun-artifacts}
   s3_prefix: krun/test/artifacts
   s3_location_id: krun-test-v1

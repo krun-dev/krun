@@ -1027,7 +1027,7 @@ func TestStaticRoutesFollowDomainGatewayBinding(t *testing.T) {
 	}
 	k := &kubernetes.Client{Base: srv.URL, Namespace: "workers-mvp", Client: srv.Client()}
 	for _, d := range c.Domains {
-		if err := k.EnsureStaticRoute(context.Background(), c, d.ID, "assets"); err != nil {
+		if err := k.EnsureStaticRoute(context.Background(), c, d.ID); err != nil {
 			t.Fatal(err)
 		}
 	}

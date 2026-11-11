@@ -3,11 +3,17 @@ import type { Version } from "@/lib/workers";
 
 type Configuration = Pick<
   Version,
-  "configuration_revision" | "variables" | "r2_buckets" | "version_metadata" | "assets_binding"
+  | "configuration_revision"
+  | "variables"
+  | "r2_buckets"
+  | "hyperdrive_bindings"
+  | "version_metadata"
+  | "assets_binding"
 > & { secret_names?: string[]; secret_digest?: string };
 
 export function VersionConfiguration({ config }: { config: Configuration }) {
   const bindings = Object.entries(config.r2_buckets || {});
+  const hyperdrive = Object.entries(config.hyperdrive_bindings || {});
   return (
     <div className="grid gap-3 text-sm">
       <p className="text-muted-foreground">
@@ -28,6 +34,20 @@ export function VersionConfiguration({ config }: { config: Configuration }) {
             {bindings.map(([name, bucket]) => (
               <li key={name}>
                 <code>{name}</code> → {bucket.bucket_name}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-1 text-xs text-muted-foreground">{t("无")}</p>
+        )}
+      </div>
+      <div>
+        <p className="font-medium">{t("Hyperdrive 绑定")}</p>
+        {hyperdrive.length ? (
+          <ul className="mt-1 grid gap-1 break-all text-xs text-muted-foreground">
+            {hyperdrive.map(([name, id]) => (
+              <li key={name}>
+                <code>{name}</code> → {id}
               </li>
             ))}
           </ul>

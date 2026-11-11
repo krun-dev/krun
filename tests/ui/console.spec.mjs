@@ -175,12 +175,12 @@ test("deep link opens a service outside the first page", async ({ page }) => {
     .at(-1);
   await page.goto(locationFor(last.id));
   await expect(
-    page.getByRole("tab", { name: "环境配置", exact: true }),
+    page.getByRole("tab", { name: "配置版本", exact: true }),
   ).toBeVisible();
   await expect(page.getByText(last.name, { exact: true })).toBeVisible();
   await page.reload();
   await expect(
-    page.getByRole("tab", { name: "环境配置", exact: true }),
+    page.getByRole("tab", { name: "配置版本", exact: true }),
   ).toBeVisible();
 });
 test("UI binds repository, builds, publishes and invokes a real Worker", async ({
@@ -234,7 +234,8 @@ test("UI saves variables, publishes new configuration, and rolls back", async ({
   context,
 }) => {
   await page.goto(locationFor(workflow.id));
-  await page.getByRole("tab", { name: "环境配置", exact: true }).click();
+  await page.getByRole("tab", { name: "配置版本", exact: true }).click();
+  await page.getByText("管理环境草稿", { exact: true }).click();
   await fillVariables(page, { UI_MARKER: "revision-two" });
   await page.getByRole("button", { name: "保存环境变量", exact: true }).click();
   await expect
@@ -273,7 +274,7 @@ test("UI creates a Worker and a preview environment", async ({ page }) => {
     .getByRole("button", { name: "创建 Worker", exact: true })
     .click();
   await expect(
-    page.getByRole("tab", { name: "环境配置", exact: true }),
+    page.getByRole("tab", { name: "配置版本", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "创建预览环境", exact: true }).click();
   await page.getByRole("dialog").getByRole("textbox").fill("ui-preview");
@@ -357,21 +358,30 @@ test("UI configures Previews Base without changing production", async ({
 }) => {
   await context.addCookies(cookies);
   await page.goto(locationFor(workflow.id));
-  await page.getByRole("tab", { name: "预览基础配置", exact: true }).click();
+  await page.getByRole("button", { name: "创建预览环境", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByText("新建预览默认配置", { exact: true }).click();
   const production = await currentEnvironment(context);
   await fillVariables(page, {
     GREETING: "base-from-ui",
     CONFIG: { nested: [1, true, null] },
   });
-  await page
+  await dialog
     .getByRole("button", { name: "保存环境变量", exact: true })
     .click();
   await expect(
-    page.getByText("预览基础配置已保存，仅影响新建 Preview。", { exact: true }),
+    page.getByText("新建预览默认配置已保存，仅影响之后新建的预览。", {
+      exact: true,
+    }),
   ).toBeVisible();
-  const preview = await api(context, workerBase() + "/environments", "POST", {
-    name: "base-" + run,
-  });
+  await dialog
+    .getByRole("textbox", { name: "预览名称", exact: true })
+    .fill("base-" + run);
+  await dialog.getByRole("button", { name: "创建", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  const preview = (await api(context, workerBase() + "/environments")).items.find(
+    (environment) => environment.name === "base-" + run,
+  );
   expect(preview.variables.GREETING).toBe("base-from-ui");
   expect(preview.variables.CONFIG).toEqual({ nested: [1, true, null] });
   expect((await currentEnvironment(context)).version_id).toBe(
@@ -386,7 +396,8 @@ test("UI edits JSON values and metadata bindings, then displays immutable versio
 }) => {
   await context.addCookies(cookies);
   await page.goto(locationFor(workflow.id));
-  await page.getByRole("tab", { name: "环境配置", exact: true }).click();
+  await page.getByRole("tab", { name: "配置版本", exact: true }).click();
+  await page.getByText("管理环境草稿", { exact: true }).click();
   await fillVariables(page, { CONFIG: { nested: [1, true, null] }, COUNT: 7, FLAG: false });
   await page.getByText("高级设置：在代码中读取版本信息", { exact: true }).click();
   await page

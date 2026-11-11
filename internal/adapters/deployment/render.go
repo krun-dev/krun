@@ -145,7 +145,7 @@ func validate(c config.Config) error {
 		return errors.New("deployment requires development=false, HTTPS public_url and empty static_dir")
 	}
 	w := c.Workers
-	if w.BuilderMode != "kubernetes" || w.BuilderPullPolicy == "Never" || !w.S3UsesSignedAccess() || w.S3BucketMode != "external" {
+	if w.BuilderMode != "kubernetes" || w.BuilderPullPolicy == "Never" || w.S3BucketMode != "external" {
 		return errors.New("deployment requires Kubernetes builder, pullable images and external signed object storage")
 	}
 	if len(w.RuntimePools) == 0 || len(w.Gateways) == 0 || len(w.Domains) == 0 {

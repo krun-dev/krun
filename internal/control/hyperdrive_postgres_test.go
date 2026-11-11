@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -44,6 +45,41 @@ func TestHyperdriveControlAndRuntimeBindings(t *testing.T) {
 	}
 	if _, err := store.GetHyperdrive(ctx, "org-b", id); err == nil {
 		t.Fatal("a different organization can read the configuration")
+	}
+
+	native := "/api/v1/orgs/org-a/workers/svc-a"
+	environments := request(s, http.MethodGet, native+"/environments", "krun_cli_admin", "")
+	var environmentList struct {
+		Items []struct {
+			Name                  string `json:"name"`
+			ConfigurationRevision int    `json:"configuration_revision"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(environments.Body.Bytes(), &environmentList); err != nil {
+		t.Fatal(err)
+	}
+	var configurationRevision int
+	for _, environment := range environmentList.Items {
+		if environment.Name == "production" {
+			configurationRevision = environment.ConfigurationRevision
+		}
+	}
+	configuration := request(s, http.MethodPost, native+"/environments/production/configurations", "krun_cli_admin", fmt.Sprintf(`{
+		"name":"hyperdrive-config",
+		"variables":{},
+		"hyperdrive_bindings":{"DB":%q},
+		"expected_configuration_revision":%d,
+		"idempotency_key":"hyperdrive-config-%d"
+	}`, id, configurationRevision, time.Now().UnixNano()))
+	if configuration.Code != http.StatusCreated || !strings.Contains(configuration.Body.String(), id) {
+		t.Fatalf("configuration with Hyperdrive binding: %d %s", configuration.Code, configuration.Body.String())
+	}
+	preview := request(s, http.MethodPatch, native+"/previews-base", "krun_cli_admin", fmt.Sprintf(`{
+		"hyperdrive_bindings":{"DB":%q},
+		"expected_revision":0
+	}`, id))
+	if preview.Code != http.StatusOK || !strings.Contains(preview.Body.String(), id) {
+		t.Fatalf("Previews Base with Hyperdrive binding: %d %s", preview.Code, preview.Body.String())
 	}
 
 	input, err := cfBindingInput(cfUploadMetadata{Bindings: []cfBinding{{Type: "hyperdrive", Name: "DB", ID: id}}}, false)
