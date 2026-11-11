@@ -1,0 +1,20 @@
+- job_name: krun-worker-runtime
+  metrics_path: /metrics
+  kubernetes_sd_configs:
+    - role: pod
+      selectors:
+        - role: pod
+          label: role=krun-runtime
+  relabel_configs:
+    - source_labels: [__meta_kubernetes_pod_phase]
+      regex: Running
+      action: keep
+    - source_labels: [__meta_kubernetes_pod_container_name, __meta_kubernetes_pod_container_port_name]
+      regex: workerd;metrics
+      action: keep
+    - source_labels: [__meta_kubernetes_namespace]
+      target_label: namespace
+    - source_labels: [__meta_kubernetes_pod_name]
+      target_label: pod
+    - source_labels: [__meta_kubernetes_pod_label_pool]
+      target_label: pool

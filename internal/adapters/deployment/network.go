@@ -140,6 +140,20 @@ func (r *renderer) networkPolicies() {
 		controlIn = append(controlIn, ingress([]any{gatewayPeer(r.gateway)}, integerPort(r.cfg.InternalListen)))
 	}
 	r.policy("krun-control", map[string]string{"app": "krun-control"}, controlIn, controlOut)
+	r.add("networking.k8s.io/v1", "NetworkPolicy", "krun-runtime-metrics", map[string]any{
+		"spec": map[string]any{
+			"podSelector": map[string]any{"matchLabels": map[string]string{"role": "krun-runtime"}},
+			"policyTypes": []string{"Ingress"},
+			"ingress": []any{ingress([]any{map[string]any{
+				"namespaceSelector": map[string]any{
+					"matchLabels": map[string]string{"kubernetes.io/metadata.name": "krun-observability"},
+				},
+				"podSelector": map[string]any{
+					"matchLabels": map[string]string{"app.kubernetes.io/name": "vmagent"},
+				},
+			}}, 8084)},
+		},
+	})
 	for _, pool := range r.cfg.Workers.RuntimePools {
 		r.pool = pool
 		for _, validator := range []bool{false, true} {

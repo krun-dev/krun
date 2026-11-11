@@ -14,6 +14,80 @@ import { signRequest } from "./storage/signature.js";
 // Only completed plain data is cached across workerd requests. Each signing call gets
 // its own request context; no request-owned I/O object or promise is retained.
 const storageGrants = new Map();
+
+const durationBuckets = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60];
+const requestsByStatusClass = { "1xx": 0, "2xx": 0, "3xx": 0, "4xx": 0, "5xx": 0, other: 0 };
+const requestDuration = durationHistogram();
+const bundleLoadDuration = { success: durationHistogram(), error: durationHistogram() };
+
+function durationHistogram() {
+  return { buckets: durationBuckets.map(() => 0), count: 0, sum: 0 };
+}
+
+function observeDuration(histogram, startedAt) {
+  const seconds = (performance.now() - startedAt) / 1000;
+  histogram.count++;
+  histogram.sum += seconds;
+  for (let i = 0; i < durationBuckets.length; i++) {
+    if (seconds <= durationBuckets[i]) {
+      histogram.buckets[i]++;
+      break;
+    }
+  }
+}
+
+function histogramSamples(name, histogram, labels = "") {
+  const samples = [];
+  const prefix = labels ? labels + "," : "";
+  const suffix = labels ? `{${labels}}` : "";
+  let cumulative = 0;
+  for (const [i, limit] of durationBuckets.entries()) {
+    cumulative += histogram.buckets[i];
+    samples.push(`${name}_bucket{${prefix}le="${limit}"} ${cumulative}`);
+  }
+  samples.push(
+    `${name}_bucket{${prefix}le="+Inf"} ${histogram.count}`,
+    `${name}_count${suffix} ${histogram.count}`,
+    `${name}_sum${suffix} ${histogram.sum}`,
+  );
+  return samples;
+}
+
+export class Metrics extends WorkerEntrypoint {
+  fetch(request) {
+    if (request.method !== "GET" || new URL(request.url).pathname !== "/metrics") {
+      return json({ error: "not found" }, 404);
+    }
+
+    const samples = [
+      "# HELP krun_worker_requests_total Completed HTTP dispatches to business Workers.",
+      "# TYPE krun_worker_requests_total counter",
+    ];
+    for (const [statusClass, count] of Object.entries(requestsByStatusClass)) {
+      samples.push(`krun_worker_requests_total{status_class="${statusClass}"} ${count}`);
+    }
+    samples.push(
+      "# HELP krun_worker_request_duration_seconds Business Worker HTTP dispatch time to response.",
+      "# TYPE krun_worker_request_duration_seconds histogram",
+      ...histogramSamples("krun_worker_request_duration_seconds", requestDuration),
+      "# HELP krun_worker_bundle_load_duration_seconds Time spent preparing a serving Worker bundle on a loader cache miss.",
+      "# TYPE krun_worker_bundle_load_duration_seconds histogram",
+    );
+    for (const [outcome, histogram] of Object.entries(bundleLoadDuration)) {
+      samples.push(
+        ...histogramSamples(
+          "krun_worker_bundle_load_duration_seconds",
+          histogram,
+          `outcome="${outcome}"`,
+        ),
+      );
+    }
+    return new Response(samples.join("\n") + "\n", {
+      headers: { "content-type": "text/plain; version=0.0.4; charset=utf-8" },
+    });
+  }
+}
+
 async function storageGrant(env, props) {
   if (env.VALIDATOR_ONLY === "true" || props.validation === true) {
     throw new Error("Storage access is unavailable during validation");
@@ -1446,11 +1520,18 @@ function trackWorkerSource(entry, prepare) {
   if (!entry) {
     return prepare;
   }
-  return () =>
-    prepare().catch((error) => {
+  return async () => {
+    const startedAt = performance.now();
+    try {
+      const code = await prepare();
+      observeDuration(bundleLoadDuration.success, startedAt);
+      return code;
+    } catch (error) {
+      observeDuration(bundleLoadDuration.error, startedAt);
       entry.sourceFailed = true;
       throw error;
-    });
+    }
+  };
 }
 
 async function worker(env, ctx, d, { artifact, validation, entry } = {}) {
@@ -1878,11 +1959,20 @@ export class Private extends WorkerEntrypoint {
           }
         };
         request.signal.addEventListener("abort", finish, { once: true });
+        const startedAt = performance.now();
         let stub;
+        let statusClass = "5xx";
         try {
           stub = await worker(this.env, this.ctx, d, { entry });
-          return await stub.getEntrypoint().fetch(forwarded);
+          const response = await stub.getEntrypoint().fetch(forwarded);
+          const responseClass = `${Math.floor(response.status / 100)}xx`;
+          statusClass = Object.hasOwn(requestsByStatusClass, responseClass)
+            ? responseClass
+            : "other";
+          return response;
         } finally {
+          requestsByStatusClass[statusClass]++;
+          observeDuration(requestDuration, startedAt);
           request.signal.removeEventListener("abort", finish);
           finish();
           if (stub) {

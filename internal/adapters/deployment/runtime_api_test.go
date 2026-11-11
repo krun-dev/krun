@@ -51,7 +51,7 @@ func TestRuntimeAPIURLRoutesAndPolicies(t *testing.T) {
 						t.Fatal("runtime API did not use internal listener")
 					}
 				}
-				if kind != "NetworkPolicy" {
+				if kind != "NetworkPolicy" || name == "krun-runtime-metrics" {
 					continue
 				}
 				spec := item["spec"].(map[string]any)

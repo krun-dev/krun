@@ -12,6 +12,7 @@ configMapGenerator:
   - name: vmagent-scrape
     files:
       - scrape.yaml
+      - runtime-scrape.yaml
   - name: grafana-datasources
     files:
       - datasources.yaml
