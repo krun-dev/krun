@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	authapp "github.com/krun-dev/krun/internal/auth"
 )
@@ -19,10 +18,7 @@ const oauthTestVerifier = "oauth-pkce-fixture-verifier-0123456789012345678901234
 func oauthBrowser(t *testing.T, s *Server, store *Store) {
 	t.Helper()
 	at := now()
-	session := Session{User: "admin", AuthVersion: 1, CSRF: "oauth-csrf", Created: at, Seen: at, Absolute: at.Add(time.Hour)}
-	if err := store.InsertSession(t.Context(), "oauth-browser", session); err != nil {
-		t.Fatal(err)
-	}
+	insertTestSession(t, store, "oauth-browser", Session{User: "admin", CSRF: "oauth-csrf", Created: at})
 }
 func oauthFormTest(s *Server, path string, form url.Values) *httptest.ResponseRecorder {
 	r := httptest.NewRequest("POST", path, strings.NewReader(form.Encode()))

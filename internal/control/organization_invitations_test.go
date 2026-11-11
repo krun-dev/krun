@@ -10,7 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/krun-dev/krun/internal/domain"
 	"github.com/krun-dev/krun/internal/securetoken"
@@ -39,10 +38,7 @@ func invitationTestServer(t *testing.T) (*Server, *Store) {
 		t.Fatal(err)
 	}
 	for _, user := range append([]string{"admin", "viewer"}, recipientIDs(24)...) {
-		session := Session{User: user, AuthVersion: 1, CSRF: "fixture-invitation-csrf", Created: now(), Seen: now(), Absolute: now().Add(time.Hour)}
-		if err := store.InsertSession(context.Background(), "krun_browser_"+user, session); err != nil {
-			t.Fatal(err)
-		}
+		insertTestSession(t, store, "krun_browser_"+user, Session{User: user, CSRF: "fixture-invitation-csrf"})
 	}
 	return server, store
 }
