@@ -43,7 +43,7 @@ func reserveWorkerSourceUpload(ctx context.Context, tx pgx.Tx, key, organization
 		return err
 	}
 	if tag.RowsAffected() != 1 {
-		return domain.Problem(422, "WORKER_SOURCE_UPLOAD_INVALID", "Source upload is missing, expired, or already used")
+		return domain.Invalid("WORKER_SOURCE_UPLOAD_INVALID", "Source upload is missing, expired, or already used")
 	}
 	return nil
 }

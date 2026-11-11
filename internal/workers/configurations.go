@@ -89,10 +89,10 @@ func (s *Service) WorkerConfigurationCreate(ctx context.Context, st *domain.Stat
 	}
 	name := strings.TrimSpace(in.Name)
 	if name == "" || !utf8.ValidString(name) || len(name) > 100 || len(in.Message) > 1000 || in.Source != "" && in.Version != "" {
-		return nil, Read, domain.Problem(422, "WORKER_CONFIGURATION_INVALID", "Configuration name is required (100 bytes maximum); message allows 1000 bytes")
+		return nil, Read, domain.Invalid("WORKER_CONFIGURATION_INVALID", "Configuration name is required (100 bytes maximum); message allows 1000 bytes")
 	}
 	if in.Key == "" || len(in.Key) > 128 {
-		return nil, Read, domain.Problem(422, "IDEMPOTENCY_REQUIRED", "idempotency_key required")
+		return nil, Read, domain.Invalid("IDEMPOTENCY_REQUIRED", "idempotency_key required")
 	}
 	key := WorkerIdempotencyKey(target, p, "configuration-create", ref.Environment, in.Key)
 	if id, err := WorkerIdempotent(st, key, in); err != nil {
@@ -106,7 +106,7 @@ func (s *Service) WorkerConfigurationCreate(ctx context.Context, st *domain.Stat
 	}
 	current := s.Worker(st, target).Environments[ref.Environment]
 	if current.ConfigRevision != in.Revision {
-		return nil, Read, domain.Problem(409, "REVISION_CONFLICT", "Environment configuration changed")
+		return nil, Read, domain.Conflict("REVISION_CONFLICT", "Environment configuration changed")
 	}
 	config := current
 	if in.Source != "" {
@@ -138,14 +138,14 @@ func (s *Service) WorkerConfigurationCreate(ctx context.Context, st *domain.Stat
 		config.Variables = in.Variables
 	}
 	if !appconfig.WorkerVariablesValid(config.Variables) {
-		return nil, Read, domain.Problem(422, "WORKER_VARIABLES_INVALID", "Invalid variable names or size")
+		return nil, Read, domain.Invalid("WORKER_VARIABLES_INVALID", "Invalid variable names or size")
 	}
 	if in.VersionMetadata != nil {
 		config.VersionMetadata = *in.VersionMetadata
 	}
 	if in.R2Buckets != nil {
 		if len(*in.R2Buckets) > 0 && (s.Config.Workers.ObjectStorage == nil || s.Config.Workers.ObjectStorage.CursorKey == "") {
-			return nil, Read, domain.Problem(503, "OBJECT_STORAGE_NOT_CONFIGURED", "R2 storage must be configured")
+			return nil, Read, domain.Unavailable("OBJECT_STORAGE_NOT_CONFIGURED", "R2 storage must be configured")
 		}
 		config.R2Bindings, err = resolveR2Bindings(st, ref.Organization, *in.R2Buckets)
 		if err != nil {
@@ -160,7 +160,7 @@ func (s *Service) WorkerConfigurationCreate(ctx context.Context, st *domain.Stat
 	}
 
 	if len(in.Secrets) > WorkerSecretMaxCount {
-		return nil, Read, domain.Problem(422, "WORKER_SECRET_INVALID", "At most 100 secrets per environment")
+		return nil, Read, domain.Invalid("WORKER_SECRET_INVALID", "At most 100 secrets per environment")
 	}
 	if len(in.Secrets) > 0 {
 		if err := s.require(st, p, "worker.publish", target); err != nil {
@@ -169,7 +169,7 @@ func (s *Service) WorkerConfigurationCreate(ctx context.Context, st *domain.Stat
 		config.SecretVersions = domain.CloneStringsMap(config.SecretVersions)
 		for name, value := range in.Secrets {
 			if !WorkerSecretNameValid(name) || strings.HasPrefix(name, "KRUN_") || value != nil && len(*value) > WorkerSecretMaxBytes {
-				return nil, Read, domain.Problem(422, "WORKER_SECRET_INVALID", "Invalid secret name or size")
+				return nil, Read, domain.Invalid("WORKER_SECRET_INVALID", "Invalid secret name or size")
 			}
 			if value == nil {
 				delete(config.SecretVersions, name)
@@ -177,7 +177,7 @@ func (s *Service) WorkerConfigurationCreate(ctx context.Context, st *domain.Stat
 			}
 			encrypted, err := EncryptWorkerSecret(s.Config.Workers, ref.Organization, ref.Worker, ref.Environment, name, p.User.ID, *value)
 			if err != nil {
-				return nil, Read, domain.Problem(503, "WORKER_SECRETS_NOT_CONFIGURED", "Worker secret encryption is not configured")
+				return nil, Read, domain.Unavailable("WORKER_SECRETS_NOT_CONFIGURED", "Worker secret encryption is not configured")
 			}
 			st.Workers.SecretVersions[encrypted.Version.ID] = encrypted.Version
 			if st.PendingWorkerSecrets == nil {
@@ -188,7 +188,7 @@ func (s *Service) WorkerConfigurationCreate(ctx context.Context, st *domain.Stat
 		}
 	}
 	if len(config.SecretVersions) > WorkerSecretMaxCount {
-		return nil, Read, domain.Problem(422, "WORKER_SECRET_INVALID", "At most 100 secrets per environment")
+		return nil, Read, domain.Invalid("WORKER_SECRET_INVALID", "At most 100 secrets per environment")
 	}
 	if err := ValidateWorkerBindings(config); err != nil {
 		return nil, Read, err
@@ -218,7 +218,7 @@ func (s *Service) WorkerConfigurationDeploy(ctx context.Context, st *domain.Stat
 		return nil, Read, err
 	}
 	if in.Key == "" || len(in.Key) > 128 {
-		return nil, Read, domain.Problem(422, "IDEMPOTENCY_REQUIRED", "idempotency_key required")
+		return nil, Read, domain.Invalid("IDEMPOTENCY_REQUIRED", "idempotency_key required")
 	}
 	// Include the selected configuration in the idempotency digest.
 	request := struct {
@@ -241,19 +241,19 @@ func (s *Service) WorkerConfigurationDeploy(ctx context.Context, st *domain.Stat
 	worker := s.Worker(st, target)
 	current := worker.Environments[ref.Environment]
 	if current.Revision != in.Revision || current.ConfigRevision != in.ConfigRevision {
-		return nil, Read, domain.Problem(409, "REVISION_CONFLICT", "Environment configuration or deployment changed")
+		return nil, Read, domain.Conflict("REVISION_CONFLICT", "Environment configuration or deployment changed")
 	}
 	if (in.CodeVersion == "") == (in.Build == "") {
-		return nil, Read, domain.Problem(422, "WORKER_CONFIGURATION_INVALID", "Select code_version_id or build_id")
+		return nil, Read, domain.Invalid("WORKER_CONFIGURATION_INVALID", "Select code_version_id or build_id")
 	}
 	artifactID := ""
 	if in.CodeVersion != "" {
 		version, ok := st.Workers.Versions[in.CodeVersion]
 		if !ok || version.Organization != ref.Organization || version.Worker != ref.Worker || version.Environment != ref.Environment || current.Version != version.ID {
-			return nil, Read, domain.Problem(409, "REVISION_CONFLICT", "Current code version changed")
+			return nil, Read, domain.Conflict("REVISION_CONFLICT", "Current code version changed")
 		}
 		if current.Confirmed != "" && current.Confirmed != current.Version {
-			return nil, Read, domain.Problem(409, "DEPLOYMENT_BUSY", "Wait for the current deployment to synchronize")
+			return nil, Read, domain.Conflict("DEPLOYMENT_BUSY", "Wait for the current deployment to synchronize")
 		}
 		artifactID = version.Artifact
 	} else {
@@ -262,19 +262,19 @@ func (s *Service) WorkerConfigurationDeploy(ctx context.Context, st *domain.Stat
 			return nil, Read, domain.NotFound()
 		}
 		if build.State != "succeeded" {
-			return nil, Read, domain.Problem(409, "BUILD_NOT_READY", "Build must have a finalized artifact")
+			return nil, Read, domain.Conflict("BUILD_NOT_READY", "Build must have a finalized artifact")
 		}
 		artifactID = build.Artifact
 	}
 	artifact, ok := st.Workers.Artifacts[artifactID]
 	if !ok || artifact.State != "finalized" || artifact.Organization != ref.Organization {
-		return nil, Read, domain.Problem(409, "ARTIFACT_UNAVAILABLE", "Artifact unavailable")
+		return nil, Read, domain.Conflict("ARTIFACT_UNAVAILABLE", "Artifact unavailable")
 	}
 	config := configurationEnvironment(c)
 	for _, binding := range config.R2Bindings {
 		bucket, ok := st.Workers.Buckets[binding.BucketID]
 		if !ok || !bucket.Enabled || bucket.Organization != ref.Organization {
-			return nil, Read, domain.Problem(409, "STORAGE_BUCKET_UNAVAILABLE", "Bucket is unavailable")
+			return nil, Read, domain.Conflict("STORAGE_BUCKET_UNAVAILABLE", "Bucket is unavailable")
 		}
 	}
 	if err := ValidateWorkerBindings(config); err != nil {

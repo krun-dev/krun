@@ -27,7 +27,7 @@ func (s *Service) StartConnection(ctx context.Context, st *domain.State, p autho
 	}
 	conf := (&repooauth.Client{Config: s.Config}).RepositoryOAuthConfig(provider)
 	if conf == nil {
-		return "", domain.Problem(409, "WORKER_REPOSITORY_OAUTH_DISABLED", "This provider is not configured for user connections")
+		return "", domain.Conflict("WORKER_REPOSITORY_OAUTH_DISABLED", "This provider is not configured for user connections")
 	}
 	state := securetoken.Random()
 	pending := domain.WorkerRepositoryConnectState{User: p.User.ID, Provider: provider.ID, Organization: organization, Browser: browser, Expires: time.Now().UTC().Add(10 * time.Minute)}
@@ -59,7 +59,7 @@ func (s *Service) IssueBrowserLaunch(ctx context.Context, st *domain.State, p au
 		return "", err
 	}
 	if (&repooauth.Client{Config: s.Config}).RepositoryOAuthConfig(provider) == nil {
-		return "", domain.Problem(409, "WORKER_REPOSITORY_OAUTH_DISABLED", "This provider is not configured for user connections")
+		return "", domain.Conflict("WORKER_REPOSITORY_OAUTH_DISABLED", "This provider is not configured for user connections")
 	}
 	ticket := securetoken.Random()
 	pending := domain.WorkerRepositoryConnectState{
@@ -72,7 +72,7 @@ func (s *Service) IssueBrowserLaunch(ctx context.Context, st *domain.State, p au
 
 func (s *Service) OpenBrowserLaunch(ctx context.Context, p authorization.Principal, organization, provider, ticket, browser, requestID string) (string, error) {
 	if ticket == "" || len(ticket) > 128 {
-		return "", domain.Problem(403, "WORKER_REPOSITORY_STATE_INVALID", "Connect request expired; try again")
+		return "", domain.ForbiddenCode("WORKER_REPOSITORY_STATE_INVALID", "Connect request expired; try again")
 	}
 	key := browserLaunchKey(ticket)
 	binding := browserLaunchBinding(p.User.ID, organization, provider)
@@ -83,7 +83,7 @@ func (s *Service) OpenBrowserLaunch(ctx context.Context, p authorization.Princip
 			return err
 		}
 		if !ok {
-			return domain.Problem(403, "WORKER_REPOSITORY_STATE_INVALID", "Connect request expired or belongs to a different krun account")
+			return domain.ForbiddenCode("WORKER_REPOSITORY_STATE_INVALID", "Connect request expired or belongs to a different krun account")
 		}
 		redirect, err = s.StartConnection(ctx, st, p, organization, provider, browser, requestID)
 		return err
@@ -107,7 +107,7 @@ func (s *Service) CompleteConnection(ctx context.Context, in ConnectInput) (Conn
 		return ConnectResult{}, err
 	}
 	if !consumed {
-		return ConnectResult{}, domain.Problem(403, "WORKER_REPOSITORY_STATE_INVALID", "Connect request expired; try again")
+		return ConnectResult{}, domain.ForbiddenCode("WORKER_REPOSITORY_STATE_INVALID", "Connect request expired; try again")
 	}
 	out := ConnectResult{Provider: pending.Provider, Organization: pending.Organization}
 	failed := func(err error) (ConnectResult, error) {
@@ -118,20 +118,20 @@ func (s *Service) CompleteConnection(ctx context.Context, in ConnectInput) (Conn
 		return failed(domain.Problem(400, "WORKER_REPOSITORY_OAUTH_DENIED", "Provider rejected the connection"))
 	}
 	if pending.Provider != in.Provider {
-		return failed(domain.Problem(403, "WORKER_REPOSITORY_STATE_INVALID", "Connect request expired; try again"))
+		return failed(domain.ForbiddenCode("WORKER_REPOSITORY_STATE_INVALID", "Connect request expired; try again"))
 	}
 	provider, err := s.RepositoryProvider(pending.Provider, pending.Organization)
 	if err != nil {
 		return failed(err)
 	}
 	if provider.ClientID == "" {
-		return failed(domain.Problem(409, "WORKER_REPOSITORY_OAUTH_DISABLED", "This provider is not configured for user connections"))
+		return failed(domain.Conflict("WORKER_REPOSITORY_OAUTH_DISABLED", "This provider is not configured for user connections"))
 	}
 	// The exchange happens before the bounded metadata write, never in a database transaction.
 	token, err := (&repooauth.Client{Config: s.Config}).Exchange(ctx, provider, in.Code)
 	if err != nil {
 		if repooauth.IsUnavailable(err) {
-			return failed(domain.Problem(503, "WORKER_REPOSITORY_OAUTH_UNAVAILABLE", "Repository authorization is unavailable"))
+			return failed(domain.Unavailable("WORKER_REPOSITORY_OAUTH_UNAVAILABLE", "Repository authorization is unavailable"))
 		}
 		return failed(domain.Problem(400, "WORKER_REPOSITORY_OAUTH_DENIED", "Provider rejected the connection"))
 	}

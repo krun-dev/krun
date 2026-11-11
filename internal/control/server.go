@@ -237,7 +237,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, e error) {
 		// context to correlate a generic 503 with the actual storage/runtime error.
 		slog.Error("request failed", "error", e, "request_id", r.Header.Get("X-Krun-Request-ID"), "method", r.Method, "path", r.URL.Path)
 	}
-	s.json(w, a.Status, map[string]any{"error": map[string]string{"code": a.Code, "message": localize.Text(localize.RequestLanguage(r.Header.Get("Accept-Language")), a.Message)}, "request_id": r.Header.Get("X-Krun-Request-ID")})
+	s.json(w, a.HTTPStatus(), map[string]any{"error": map[string]string{"code": a.Code, "message": localize.Text(localize.RequestLanguage(r.Header.Get("Accept-Language")), a.Message)}, "request_id": r.Header.Get("X-Krun-Request-ID")})
 }
 
 func (s *Server) secureCookies() bool {

@@ -18,7 +18,7 @@ func (s Service) Members(st *domain.State, t authorization.Target) ([]domain.Use
 func (s Service) AddMember(st *domain.State, t authorization.Target, in MemberInput) (domain.Member, error) {
 	u, ok := st.Users[in.User]
 	if !ok || u.Status != "active" {
-		return domain.Member{}, domain.Problem(422, "INVALID_REQUEST", "Existing active local user_id required")
+		return domain.Member{}, domain.Invalid("INVALID_REQUEST", "Existing active local user_id required")
 	}
 	m := domain.Member{Organization: t.ID, User: u.ID}
 	st.Members[domain.MemberKey(t.ID, u.ID)] = m

@@ -29,7 +29,7 @@ func (s *Server) oauthError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {
-		s.json(w, apiErr.Status, map[string]string{"error": "invalid_request", "error_description": apiErr.Message})
+		s.json(w, apiErr.HTTPStatus(), map[string]string{"error": "invalid_request", "error_description": apiErr.Message})
 		return
 	}
 	s.json(w, 503, map[string]string{"error": "temporarily_unavailable", "error_description": "Authorization service unavailable"})

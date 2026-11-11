@@ -38,7 +38,7 @@ func WorkerBusy(st *domain.State, worker, env string) bool {
 
 func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, t authorization.Target, env string, kind string, in WorkerDeploymentCreateInput) (any, Outcome, error) {
 	if in.Key == "" || len(in.Key) > 128 || in.Revision < 0 {
-		return nil, Read, domain.Problem(422, "WORKER_VERSION_INVALID", "expected_revision and idempotency_key required")
+		return nil, Read, domain.Invalid("WORKER_VERSION_INVALID", "expected_revision and idempotency_key required")
 	}
 	ws := s.Worker(st, t)
 	current := ws.Environments[env]
@@ -55,16 +55,16 @@ func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, 
 		return nil, Read, domain.NotFound()
 	}
 	if !current.Enabled {
-		return nil, Read, domain.Problem(409, "ENVIRONMENT_DISABLED", "Target environment is disabled")
+		return nil, Read, domain.Conflict("ENVIRONMENT_DISABLED", "Target environment is disabled")
 	}
 	if current.Revision != in.Revision {
-		return nil, Read, domain.Problem(409, "REVISION_CONFLICT", "Environment version changed")
+		return nil, Read, domain.Conflict("REVISION_CONFLICT", "Environment version changed")
 	}
 	for _, active := range st.Workers.Operations {
 		// Cancellation is only possible before commit; a committed version is
 		// durable and may be replaced by a newer publish.
 		if active.Worker == t.ID && active.Environment == env && !appconfig.WorkerTerminal(active.State) && active.State != "committed" {
-			return nil, Read, domain.Problem(409, "DEPLOYMENT_BUSY", "Wait for the active version operation")
+			return nil, Read, domain.Conflict("DEPLOYMENT_BUSY", "Wait for the active version operation")
 		}
 	}
 	var version domain.WorkerVersion
@@ -76,18 +76,18 @@ func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, 
 		}
 	} else if kind == "publish" {
 		if in.Build == "" || in.Version != "" {
-			return nil, Read, domain.Problem(422, "WORKER_VERSION_INVALID", "Publish requires build_id only")
+			return nil, Read, domain.Invalid("WORKER_VERSION_INVALID", "Publish requires build_id only")
 		}
 		b, ok := st.Workers.Builds[in.Build]
 		if !ok || b.Worker != t.ID || b.Organization != t.Organization {
 			return nil, Read, domain.NotFound()
 		}
 		if b.State != "succeeded" {
-			return nil, Read, domain.Problem(409, "BUILD_NOT_READY", "Build must have a finalized artifact")
+			return nil, Read, domain.Conflict("BUILD_NOT_READY", "Build must have a finalized artifact")
 		}
 		a, ok := st.Workers.Artifacts[b.Artifact]
 		if !ok || a.State != "finalized" {
-			return nil, Read, domain.Problem(409, "ARTIFACT_UNAVAILABLE", "Artifact unavailable")
+			return nil, Read, domain.Conflict("ARTIFACT_UNAVAILABLE", "Artifact unavailable")
 		}
 		version = domain.WorkerVersion{
 			R2Bindings:         domain.CloneR2Bindings(current.R2Bindings),
@@ -123,7 +123,7 @@ func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, 
 		st.Workers.Versions[version.ID] = version
 	} else {
 		if in.Version == "" || in.Build != "" {
-			return nil, Read, domain.Problem(422, "WORKER_VERSION_INVALID", "Rollback requires version_id only")
+			return nil, Read, domain.Invalid("WORKER_VERSION_INVALID", "Rollback requires version_id only")
 		}
 		d, ok := st.Workers.Versions[in.Version]
 		if !ok || d.Worker != t.ID || d.Organization != t.Organization || d.Environment != env {
@@ -136,7 +136,7 @@ func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, 
 			}
 		}
 		if !historical {
-			return nil, Read, domain.Problem(409, "ROLLBACK_NOT_PUBLISHED", "Rollback target must be a successfully published version")
+			return nil, Read, domain.Conflict("ROLLBACK_NOT_PUBLISHED", "Rollback target must be a successfully published version")
 		}
 		version = d
 	}

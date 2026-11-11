@@ -19,7 +19,7 @@ func insertLocator(ctx context.Context, message string, query *bun.InsertQuery) 
 		return err
 	}
 	if count != 1 {
-		return domain.Problem(409, "LOCATOR_CONFLICT", message)
+		return domain.Conflict("LOCATOR_CONFLICT", message)
 	}
 	return nil
 }

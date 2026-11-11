@@ -106,7 +106,7 @@ func (s Service) ActiveKey(st *domain.State, id string) (domain.APIKey, error) {
 		return domain.APIKey{}, domain.NotFound()
 	}
 	if !k.Active() {
-		return domain.APIKey{}, domain.Problem(409, "KEY_INACTIVE", "Key inactive")
+		return domain.APIKey{}, domain.Conflict("KEY_INACTIVE", "Key inactive")
 	}
 	return k, nil
 }

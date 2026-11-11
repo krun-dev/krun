@@ -10,7 +10,7 @@ import (
 
 func WorkerIdempotent(st *domain.State, key string, in any) (string, error) {
 	if key == "" {
-		return "", domain.Problem(422, "IDEMPOTENCY_REQUIRED", "An idempotency_key is required")
+		return "", domain.Invalid("IDEMPOTENCY_REQUIRED", "An idempotency_key is required")
 	}
 	raw, _ := json.Marshal(in)
 	record, ok := st.Workers.Idempotency[key]
@@ -18,7 +18,7 @@ func WorkerIdempotent(st *domain.State, key string, in any) (string, error) {
 		return "", nil
 	}
 	if record.Digest != workerartifact.BytesDigest(raw) {
-		return "", domain.Problem(409, "IDEMPOTENCY_CONFLICT", "Idempotency key used for another request")
+		return "", domain.Conflict("IDEMPOTENCY_CONFLICT", "Idempotency key used for another request")
 	}
 	return record.ID, nil
 }

@@ -117,11 +117,11 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 				// idempotent. A repository mutation, however, promises CAS semantics
 				// for expected_revision=0 and only one writer may win.
 				if tag.RowsAffected() == 0 && (svc.RepositoryRevision != 0 || svc.Repository != nil || svc.DomainsRevision != 0 || svc.PreviewRevision != 0) {
-					return domain.Problem(409, "REVISION_CONFLICT", "Repository configuration changed")
+					return domain.Conflict("REVISION_CONFLICT", "Repository configuration changed")
 				}
 			} else {
 				if svc.RepositoryRevision != old.RepositoryRevision+1 {
-					return domain.Problem(409, "REVISION_CONFLICT", "Repository configuration changed")
+					return domain.Conflict("REVISION_CONFLICT", "Repository configuration changed")
 				}
 				tag, err := tx.Exec(ctx, `UPDATE krun_workers
 					SET repository=$2, repository_revision=$3, updated_at=now()
@@ -130,13 +130,13 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 					return err
 				}
 				if tag.RowsAffected() != 1 {
-					return domain.Problem(409, "REVISION_CONFLICT", "Repository configuration changed")
+					return domain.Conflict("REVISION_CONFLICT", "Repository configuration changed")
 				}
 			}
 		}
 		if existed && old.DomainsRevision != svc.DomainsRevision {
 			if svc.DomainsRevision != old.DomainsRevision+1 {
-				return domain.Problem(409, "REVISION_CONFLICT", "Domain configuration changed")
+				return domain.Conflict("REVISION_CONFLICT", "Domain configuration changed")
 			}
 			tag, err := tx.Exec(ctx, `UPDATE krun_workers
 				SET domains_revision=$2, network_profile=$4, updated_at=now()
@@ -145,7 +145,7 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 				return err
 			}
 			if tag.RowsAffected() != 1 {
-				return domain.Problem(409, "REVISION_CONFLICT", "Domain configuration changed")
+				return domain.Conflict("REVISION_CONFLICT", "Domain configuration changed")
 			}
 		}
 		if profileChanged && !domainsChanged {
@@ -155,7 +155,7 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 				return err
 			}
 			if tag.RowsAffected() != 1 {
-				return domain.Problem(409, "REVISION_CONFLICT", "Runtime placement changed")
+				return domain.Conflict("REVISION_CONFLICT", "Runtime placement changed")
 			}
 		}
 		if domainsChanged {
@@ -165,7 +165,7 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 		}
 		if existed && previewSetChanged {
 			if svc.PreviewRevision != old.PreviewRevision+1 {
-				return domain.Problem(409, "REVISION_CONFLICT", "Preview environments changed")
+				return domain.Conflict("REVISION_CONFLICT", "Preview environments changed")
 			}
 			tag, err := tx.Exec(ctx, `UPDATE krun_workers
 				SET preview_revision=$2, updated_at=now()
@@ -174,7 +174,7 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 				return err
 			}
 			if tag.RowsAffected() != 1 {
-				return domain.Problem(409, "REVISION_CONFLICT", "Preview environments changed")
+				return domain.Conflict("REVISION_CONFLICT", "Preview environments changed")
 			}
 		}
 		for name, env := range domain.StorageWorkerEnvironments(svc) {
@@ -195,7 +195,7 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 					return err
 				}
 				if tag.RowsAffected() == 0 && !defaultWorkerBaseline(name, env) {
-					return domain.Problem(409, "REVISION_CONFLICT", "Environment configuration changed")
+					return domain.Conflict("REVISION_CONFLICT", "Environment configuration changed")
 				}
 			} else {
 				tag, err := tx.Exec(ctx, `UPDATE krun_worker_environments
@@ -209,7 +209,7 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 					return err
 				}
 				if tag.RowsAffected() != 1 {
-					return domain.Problem(409, "REVISION_CONFLICT", "Environment configuration changed")
+					return domain.Conflict("REVISION_CONFLICT", "Environment configuration changed")
 				}
 			}
 			if err := replaceWorkerEnvironmentSecrets(ctx, tx, id, name, env.SecretVersions); err != nil {
@@ -229,7 +229,7 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 					return err
 				}
 				if tag.RowsAffected() != 1 {
-					return domain.Problem(409, "REVISION_CONFLICT", "Environment configuration changed")
+					return domain.Conflict("REVISION_CONFLICT", "Environment configuration changed")
 				}
 				if err := deleteEnvironmentConfigurations(ctx, tx, id, name); err != nil {
 					return err
@@ -270,7 +270,7 @@ func writePlacements(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState)
 			return err
 		}
 		if tag.RowsAffected() != 1 {
-			return domain.Problem(409, "REVISION_CONFLICT", "Runtime placement changed")
+			return domain.Conflict("REVISION_CONFLICT", "Runtime placement changed")
 		}
 	}
 	for key, placement := range aw.Placements {
@@ -298,7 +298,7 @@ func writePlacements(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState)
 			return err
 		}
 		if tag.RowsAffected() != 1 {
-			return domain.Problem(409, "REVISION_CONFLICT", "Runtime placement changed")
+			return domain.Conflict("REVISION_CONFLICT", "Runtime placement changed")
 		}
 	}
 	return nil
@@ -399,7 +399,7 @@ func writeBuilds(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) err
 					return err
 				}
 				if tag.RowsAffected() != 1 {
-					return domain.Problem(409, "BUILD_LIMIT", "At most 100 builds may be active per worker")
+					return domain.Conflict("BUILD_LIMIT", "At most 100 builds may be active per worker")
 				}
 			}
 			if private, ok := aw.BuildPrivate[id]; ok && private.SourceKey != "" {
@@ -607,7 +607,7 @@ func writeVersions(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 				return err
 			}
 			if tag.RowsAffected() != 1 {
-				return domain.Problem(409, "WORKER_CONFIGURATION_UNAVAILABLE", "Saved configuration is no longer available")
+				return domain.Conflict("WORKER_CONFIGURATION_UNAVAILABLE", "Saved configuration is no longer available")
 			}
 		}
 		variables, err := json.Marshal(r.Variables)
@@ -629,7 +629,7 @@ func writeVersions(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 			return err
 		}
 		if tag.RowsAffected() == 0 {
-			return domain.Problem(409, "ARTIFACT_UNAVAILABLE", "Artifact is no longer available")
+			return domain.Conflict("ARTIFACT_UNAVAILABLE", "Artifact is no longer available")
 		}
 		if err := replaceWorkerVersionSecrets(ctx, tx, id, r.Worker, r.Environment, r.SecretVersions); err != nil {
 			return err
@@ -728,7 +728,7 @@ func writeIdempotency(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState
 	for key, record := range aw.Idempotency {
 		if old, ok := bw.Idempotency[key]; ok {
 			if old != record {
-				return domain.Problem(409, "IDEMPOTENCY_CONFLICT", "Idempotency key was already used for another request")
+				return domain.Conflict("IDEMPOTENCY_CONFLICT", "Idempotency key was already used for another request")
 			}
 			continue
 		}
@@ -738,7 +738,7 @@ func writeIdempotency(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState
 			return err
 		}
 		if tag.RowsAffected() == 0 {
-			return domain.Problem(409, "IDEMPOTENCY_CONFLICT", "Idempotency key is being handled by another request; retry")
+			return domain.Conflict("IDEMPOTENCY_CONFLICT", "Idempotency key is being handled by another request; retry")
 		}
 	}
 	for key := range bw.Idempotency {

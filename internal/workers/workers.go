@@ -249,12 +249,12 @@ func (s *Service) WorkerRoutingDomains(ctx context.Context, st *domain.State, p 
 
 func (s *Service) WorkerRoutingDomainsUpdate(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, t authorization.Target, in WorkerRoutingDomainsUpdateInput) (any, Outcome, error) {
 	if len(in.Domains) == 0 {
-		return nil, Read, domain.Problem(422, "DOMAINS_INVALID", "Select at least one domain")
+		return nil, Read, domain.Invalid("DOMAINS_INVALID", "Select at least one domain")
 	}
 	ws := s.Worker(st, t)
 	profile, ok := s.Config.Workers.NetworkProfile(ws.NetworkProfile)
 	if !ok {
-		return nil, Read, domain.Problem(409, "WORKER_NETWORK_PROFILE_INVALID", "The worker network profile is no longer available")
+		return nil, Read, domain.Conflict("WORKER_NETWORK_PROFILE_INVALID", "The worker network profile is no longer available")
 	}
 	allowed := map[string]bool{}
 	for _, domain := range s.Config.Workers.DomainsForProfile(profile) {
@@ -263,18 +263,18 @@ func (s *Service) WorkerRoutingDomainsUpdate(ctx context.Context, st *domain.Sta
 	seen := map[string]bool{}
 	for _, id := range in.Domains {
 		if !allowed[id] {
-			return nil, Read, domain.Problem(422, "DOMAINS_INVALID", "Domain is not allowed by the selected network profile: "+id)
+			return nil, Read, domain.Invalid("DOMAINS_INVALID", "Domain is not allowed by the selected network profile: "+id)
 		}
 		if seen[id] {
-			return nil, Read, domain.Problem(422, "DOMAINS_INVALID", "Duplicate domain: "+id)
+			return nil, Read, domain.Invalid("DOMAINS_INVALID", "Duplicate domain: "+id)
 		}
 		seen[id] = true
 	}
 	if in.ExpectedRevision == nil {
-		return nil, Read, domain.Problem(422, "DOMAINS_INVALID", "expected_revision is required")
+		return nil, Read, domain.Invalid("DOMAINS_INVALID", "expected_revision is required")
 	}
 	if *in.ExpectedRevision != ws.DomainsRevision {
-		return nil, Read, domain.Problem(409, "REVISION_CONFLICT", "Domain configuration changed")
+		return nil, Read, domain.Conflict("REVISION_CONFLICT", "Domain configuration changed")
 	}
 	ws.Domains = append([]string(nil), in.Domains...)
 	ws.DomainsRevision++
@@ -287,29 +287,29 @@ func (s *Service) WorkerRoutingDomainsUpdate(ctx context.Context, st *domain.Sta
 
 func (s *Service) WorkerNetworkProfileUpdate(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, t authorization.Target, in WorkerNetworkProfileUpdateInput) (any, Outcome, error) {
 	if in.ExpectedRevision == nil {
-		return nil, Read, domain.Problem(422, "NETWORK_PROFILE_INVALID", "expected_revision is required")
+		return nil, Read, domain.Invalid("NETWORK_PROFILE_INVALID", "expected_revision is required")
 	}
 	profile, ok := s.Config.Workers.NetworkProfile(in.Profile)
 	if !ok || profile.Visibility != "public" {
-		return nil, Read, domain.Problem(404, "NETWORK_PROFILE_NOT_FOUND", "Network profile not found")
+		return nil, Read, domain.NotFoundCode("NETWORK_PROFILE_NOT_FOUND", "Network profile not found")
 	}
 	if profile.Approval == "required" {
-		return nil, Read, domain.Problem(403, "NETWORK_PROFILE_APPROVAL_REQUIRED", "This network profile requires platform approval")
+		return nil, Read, domain.ForbiddenCode("NETWORK_PROFILE_APPROVAL_REQUIRED", "This network profile requires platform approval")
 	}
 	pool, ok := s.Config.Workers.SelectPoolForWorker(profile.ID, t.ID)
 	if !ok {
-		return nil, Read, domain.Problem(409, "NETWORK_PROFILE_UNAVAILABLE", "The selected network profile has no available runtime placement")
+		return nil, Read, domain.Conflict("NETWORK_PROFILE_UNAVAILABLE", "The selected network profile has no available runtime placement")
 	}
 	ws := s.Worker(st, t)
 	if ws.DomainsRevision != *in.ExpectedRevision {
-		return nil, Read, domain.Problem(409, "REVISION_CONFLICT", "Network configuration changed")
+		return nil, Read, domain.Conflict("REVISION_CONFLICT", "Network configuration changed")
 	}
 	if ws.NetworkProfile == profile.ID {
 		return s.WorkerRoutingDomains(ctx, st, p, ref)
 	}
 	for _, env := range ws.Environments {
 		if env.Version != "" {
-			return nil, Read, domain.Problem(409, "WORKER_NETWORK_REASSIGNMENT_REQUIRED", "Published Workers require a platform-managed runtime reassignment before changing network profile")
+			return nil, Read, domain.Conflict("WORKER_NETWORK_REASSIGNMENT_REQUIRED", "Published Workers require a platform-managed runtime reassignment before changing network profile")
 		}
 	}
 	ws.NetworkProfile = profile.ID
@@ -587,7 +587,7 @@ func (s *Service) WorkerRepositoryGet(ctx context.Context, st *domain.State, p a
 func (s *Service) WorkerRepositoryUpdate(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, target authorization.Target, in WorkerRepositoryUpdateInput) (any, Outcome, error) {
 	worker := s.Worker(st, target)
 	if worker.RepositoryRevision != in.Revision {
-		return nil, Read, domain.Problem(409, "REVISION_CONFLICT", "Repository configuration changed")
+		return nil, Read, domain.Conflict("REVISION_CONFLICT", "Repository configuration changed")
 	}
 	if in.Source == nil {
 		worker.Repository = nil
@@ -600,7 +600,7 @@ func (s *Service) WorkerRepositoryUpdate(ctx context.Context, st *domain.State, 
 		in.Source.AuthorizationUser = ""
 		if in.UseAuthorization {
 			if p.Kind == "api_key" {
-				return nil, Read, domain.Problem(403, "SESSION_REQUIRED", "A user session is required to bind repository authorization")
+				return nil, Read, domain.ForbiddenCode("SESSION_REQUIRED", "A user session is required to bind repository authorization")
 			}
 			if err := s.Repository.CheckBindingAuthorization(ctx, provider, p.User.ID); err != nil {
 				return nil, Read, err

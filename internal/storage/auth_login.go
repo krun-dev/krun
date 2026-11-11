@@ -27,7 +27,7 @@ func (s *Store) BeginLoginState(ctx context.Context, browserHash string, expecte
 		WHERE browser_hash=$1 AND generation=$2 AND csrf=$3 AND expires_at > now()
 		RETURNING generation`, browserHash, expected.Generation, expected.CSRF).Scan(&generation)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.Login{}, domain.Problem(403, "AUTH_STATE_INVALID", "Login state changed")
+		return domain.Login{}, domain.ForbiddenCode("AUTH_STATE_INVALID", "Login state changed")
 	}
 	if err != nil {
 		return domain.Login{}, err
@@ -96,7 +96,7 @@ func (s *Store) BeginEmailLogin(ctx context.Context, browserHash string, expecte
 		WHERE browser_hash=$1 AND generation=$2 AND csrf=$3 AND expires_at > now()
 		RETURNING generation`, browserHash, expected.Generation, expected.CSRF, now().Add(15*time.Minute)).Scan(&generation)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.EmailLogin{}, domain.Problem(403, "AUTH_STATE_INVALID", "Login state changed")
+		return domain.EmailLogin{}, domain.ForbiddenCode("AUTH_STATE_INVALID", "Login state changed")
 	}
 	if err != nil {
 		return domain.EmailLogin{}, err

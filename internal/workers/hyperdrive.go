@@ -37,7 +37,7 @@ type HyperdriveInput struct {
 
 func (s *Service) AuthorizeHyperdrive(st *domain.State, p authorization.Principal, org string, write bool) error {
 	if s.Config.Workers == nil || s.Config.Workers.Hyperdrive == nil {
-		return domain.Problem(503, "HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive is not configured")
+		return domain.Unavailable("HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive is not configured")
 	}
 	target, err := s.orgTarget(st, WorkerRef{Organization: org})
 	if err != nil {
@@ -53,7 +53,7 @@ func (s *Service) AuthorizeHyperdrive(st *domain.State, p authorization.Principa
 func (s *Service) SaveHyperdrive(ctx context.Context, org, actor, id string, input HyperdriveInput) (domain.HyperdriveConfig, error) {
 	item := domain.HyperdriveOrigin{}
 	if input.Caching != nil && !input.Caching.Disabled {
-		return item.HyperdriveConfig, domain.Problem(422, "HYPERDRIVE_UNSUPPORTED", "Hyperdrive query caching is unavailable")
+		return item.HyperdriveConfig, domain.Invalid("HYPERDRIVE_UNSUPPORTED", "Hyperdrive query caching is unavailable")
 	}
 	if id != "" {
 		var err error
@@ -71,11 +71,11 @@ func (s *Service) SaveHyperdrive(ctx context.Context, org, actor, id string, inp
 		item.Name = strings.TrimSpace(input.Name)
 	}
 	if item.Name == "" || len(item.Name) > 100 {
-		return item.HyperdriveConfig, domain.Problem(422, "HYPERDRIVE_INVALID", "Hyperdrive name must contain 1–100 bytes")
+		return item.HyperdriveConfig, domain.Invalid("HYPERDRIVE_INVALID", "Hyperdrive name must contain 1–100 bytes")
 	}
 	if origin := input.Origin; origin != nil {
 		if origin.Scheme != "" && origin.Scheme != "postgresql" && origin.Scheme != "postgres" {
-			return item.HyperdriveConfig, domain.Problem(422, "HYPERDRIVE_UNSUPPORTED", "Only PostgreSQL is supported")
+			return item.HyperdriveConfig, domain.Invalid("HYPERDRIVE_UNSUPPORTED", "Only PostgreSQL is supported")
 		}
 		host := strings.ToLower(strings.TrimSuffix(origin.Host, "."))
 		if id == "" {
@@ -85,16 +85,16 @@ func (s *Service) SaveHyperdrive(ctx context.Context, org, actor, id string, inp
 			}
 		} else if (host != "" && host != item.Host) || (origin.Port != 0 && origin.Port != item.Port) ||
 			(origin.Database != "" && origin.Database != item.Database) || (origin.User != "" && origin.User != item.User) {
-			return item.HyperdriveConfig, domain.Problem(422, "HYPERDRIVE_ORIGIN_IMMUTABLE", "Create a new configuration to change the origin")
+			return item.HyperdriveConfig, domain.Invalid("HYPERDRIVE_ORIGIN_IMMUTABLE", "Create a new configuration to change the origin")
 		}
 		if origin.Password != nil {
 			if !hyperdriveOriginValue(*origin.Password, 4096) {
-				return item.HyperdriveConfig, domain.Problem(422, "HYPERDRIVE_INVALID", "A valid origin password is required")
+				return item.HyperdriveConfig, domain.Invalid("HYPERDRIVE_INVALID", "A valid origin password is required")
 			}
 			var err error
 			item.Secret, err = EncryptWorkerSecret(s.Config.Workers, org, item.ID, "hyperdrive", "password", actor, *origin.Password)
 			if err != nil {
-				return item.HyperdriveConfig, domain.Problem(503, "HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive secret encryption is unavailable")
+				return item.HyperdriveConfig, domain.Unavailable("HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive secret encryption is unavailable")
 			}
 		}
 	}
@@ -105,7 +105,7 @@ func (s *Service) SaveHyperdrive(ctx context.Context, org, actor, id string, inp
 	if ipErr == nil || len(item.Host) > 253 || !hyperdriveOriginHost.MatchString(item.Host) ||
 		item.Port < 1 || item.Port > 65535 || !hyperdriveOriginValue(item.Database, 63) ||
 		!hyperdriveOriginValue(item.User, 63) || item.Secret.Version.ID == "" {
-		return item.HyperdriveConfig, domain.Problem(422, "HYPERDRIVE_INVALID", "A PostgreSQL hostname, port, database, username and password are required")
+		return item.HyperdriveConfig, domain.Invalid("HYPERDRIVE_INVALID", "A PostgreSQL hostname, port, database, username and password are required")
 	}
 	return item.HyperdriveConfig, s.Store.CreateHyperdrive(ctx, item)
 }
@@ -117,7 +117,7 @@ func hyperdriveOriginValue(value string, limit int) bool {
 func (s *Service) HyperdriveConnectionStrings(version domain.WorkerVersion) (map[string]string, error) {
 	workers := s.Config.Workers
 	if workers == nil || workers.Hyperdrive == nil {
-		return nil, domain.Problem(503, "HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive is not configured")
+		return nil, domain.Unavailable("HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive is not configured")
 	}
 	key, err := workers.WorkerSecretKey(workers.SecretsActiveKey)
 	if err != nil {
@@ -192,10 +192,10 @@ func (s *Service) validateHyperdriveBindings(ctx context.Context, org string, bi
 		return nil
 	}
 	if s.Config.Workers == nil || s.Config.Workers.Hyperdrive == nil {
-		return domain.Problem(503, "HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive is not configured")
+		return domain.Unavailable("HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive is not configured")
 	}
 	if len(bindings) > 32 {
-		return domain.Problem(422, "WORKER_BINDINGS_INVALID", "Too many Hyperdrive bindings")
+		return domain.Invalid("WORKER_BINDINGS_INVALID", "Too many Hyperdrive bindings")
 	}
 	for _, id := range bindings {
 		if _, err := s.Store.GetHyperdrive(ctx, org, id); err != nil {

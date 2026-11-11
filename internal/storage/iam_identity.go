@@ -33,7 +33,7 @@ func writeIdentitySources(ctx context.Context, tx ormTransaction, before, after 
 				return err
 			}
 			if row.Fingerprint != fingerprint {
-				return domain.Problem(409, "REVISION_CONFLICT", "Identity source cannot be reassigned")
+				return domain.Conflict("REVISION_CONFLICT", "Identity source cannot be reassigned")
 			}
 		}
 	}
@@ -65,18 +65,18 @@ func writeIdentitySources(ctx context.Context, tx ormTransaction, before, after 
 		if affected == 0 {
 			if err := tx.orm.NewSelect().Model(&row).WherePK().Scan(ctx); err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
-					return domain.Problem(409, "REVISION_CONFLICT", "Identity namespace already registered")
+					return domain.Conflict("REVISION_CONFLICT", "Identity namespace already registered")
 				}
 				return err
 			}
 			if row.Source != value || row.Namespace != namespace {
-				return domain.Problem(409, "REVISION_CONFLICT", "Identity provider cannot be reassigned")
+				return domain.Conflict("REVISION_CONFLICT", "Identity provider cannot be reassigned")
 			}
 		}
 	}
 	for key := range before.Sources {
 		if _, exists := after.Sources[key]; !exists {
-			return domain.Problem(409, "REVISION_CONFLICT", "Identity source registrations are permanent")
+			return domain.Conflict("REVISION_CONFLICT", "Identity source registrations are permanent")
 		}
 	}
 	return nil

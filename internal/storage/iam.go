@@ -31,7 +31,7 @@ func (s *Store) persistIAM(ctx context.Context, before, after *domain.State, aud
 			if login.EmailChallengeHash != "" {
 				return domain.Problem(400, "EMAIL_CODE_INVALID", "Invalid or expired verification code")
 			}
-			return domain.Problem(403, "AUTH_STATE_INVALID", "Login state changed")
+			return domain.ForbiddenCode("AUTH_STATE_INVALID", "Login state changed")
 		}
 	}
 	revisionChanged := after.Revision != before.Revision
@@ -129,7 +129,7 @@ func writeIAMDiff(ctx context.Context, tx ormTransaction, before, after *domain.
 				return err
 			}
 			if tag.RowsAffected() == 0 {
-				return domain.Problem(409, "REVISION_CONFLICT", "Bootstrap state changed")
+				return domain.Conflict("REVISION_CONFLICT", "Bootstrap state changed")
 			}
 		}
 	}

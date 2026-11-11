@@ -10,7 +10,7 @@ import (
 
 func (s Service) CreateKey(st *domain.State, p authorization.Principal, t authorization.Target, in KeyInput) (CreatedKey, error) {
 	if !nameValid(in.Name) || in.Expires == nil || *in.Expires < 0 || (*in.Expires > 0 && *in.Expires < 60) || *in.Expires > 90*86400 {
-		return CreatedKey{}, domain.Problem(422, "POLICY_INVALID", "Name and expires_in 0 (never) or between 60 seconds and 90 days required")
+		return CreatedKey{}, domain.Invalid("POLICY_INVALID", "Name and expires_in 0 (never) or between 60 seconds and 90 days required")
 	}
 	org := t.Organization
 	scope := t.Kind
@@ -63,10 +63,10 @@ func (s Service) UpdateKey(st *domain.State, p authorization.Principal, t author
 		return domain.APIKey{}, err
 	}
 	if in.Revision != k.Revision {
-		return domain.APIKey{}, domain.Problem(409, "REVISION_CONFLICT", "Key changed")
+		return domain.APIKey{}, domain.Conflict("REVISION_CONFLICT", "Key changed")
 	}
 	if !nameValid(in.Name) {
-		return domain.APIKey{}, domain.Problem(422, "INVALID_REQUEST", "Name required")
+		return domain.APIKey{}, domain.Invalid("INVALID_REQUEST", "Name required")
 	}
 	if err := authorization.ResolvePolicyReferences(st, &in.Policy); err != nil {
 		return domain.APIKey{}, err
@@ -76,7 +76,7 @@ func (s Service) UpdateKey(st *domain.State, p authorization.Principal, t author
 	}
 	owner := st.Users[k.Owner]
 	if owner.Status != "active" || !s.sourceEnabled(owner.Source) {
-		return domain.APIKey{}, domain.Problem(422, "POLICY_INVALID", "Owner inactive")
+		return domain.APIKey{}, domain.Invalid("POLICY_INVALID", "Owner inactive")
 	}
 	if e := authorization.ValidatePolicy(st, authorization.Principal{User: owner, Kind: "session"}, k.Organization, k.ScopeKind, in.Policy); e != nil {
 		return domain.APIKey{}, e

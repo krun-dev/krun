@@ -36,7 +36,7 @@ func (s *Server) keyDetail(st *State, p Principal, r *http.Request) (any, int, e
 		return nil, 0, e
 	}
 	if e = s.require(st, p, r, "apiKey.read", t); e != nil {
-		if denied, ok := e.(*APIError); ok && denied.Status == 403 {
+		if denied, ok := e.(*APIError); ok && denied.HTTPStatus() == 403 {
 			return nil, 0, notFound()
 		}
 		return nil, 0, e

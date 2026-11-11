@@ -61,7 +61,7 @@ func (w *Controller) StartAssetUpload(ctx context.Context, ref WorkerRef, manife
 		f := manifest[name]
 		clean, valid := artifact.WorkerAssetPath(strings.TrimPrefix(name, "/"))
 		if !strings.HasPrefix(name, "/") || !valid || !assetHashPattern.MatchString(f.Hash) || f.Size < 0 || f.Size > artifact.WorkerAssetMax {
-			return AssetUploadSession{}, domain.Problem(422, "WORKER_ASSETS_INVALID", "Invalid asset path, hash or size")
+			return AssetUploadSession{}, domain.Invalid("WORKER_ASSETS_INVALID", "Invalid asset path, hash or size")
 		}
 		total += f.Size
 		if total > artifact.WorkerAssetsTotalMax {
@@ -102,14 +102,14 @@ func (w *Controller) UploadAssetFile(ctx context.Context, a domain.WorkerAssetSe
 	for _, f := range a.Files {
 		if f.Hash == hash {
 			if len(raw) != f.Size || AssetUploadHash(f.Path, raw) != f.Hash {
-				return domain.Problem(422, "WORKER_ASSETS_INVALID", "Asset size or hash does not match manifest")
+				return domain.Invalid("WORKER_ASSETS_INVALID", "Asset size or hash does not match manifest")
 			}
 			item := f
 			selected = &item
 		}
 	}
 	if selected == nil {
-		return domain.Problem(422, "WORKER_ASSETS_INVALID", "Asset was not declared in this upload")
+		return domain.Invalid("WORKER_ASSETS_INVALID", "Asset was not declared in this upload")
 	}
 	if err := w.EnsureBucket(ctx); err != nil {
 		return err
@@ -148,14 +148,14 @@ func (w *Controller) UploadedAssets(ctx context.Context, ref WorkerRef, token st
 	manifest := &artifact.WorkerManifestAssets{Directory: "public", BasePath: config.BasePath, Headers: config.Headers, Redirects: config.Redirects, Binding: config.Binding, RunWorkerFirst: config.RunWorkerFirst, HTMLHandling: config.HTMLHandling, NotFoundHandling: config.NotFoundHandling, Files: []artifact.WorkerManifestFile{}}
 	for _, f := range a.Files {
 		if !f.Uploaded {
-			return nil, nil, domain.Problem(409, "ASSETS_NOT_READY", "Asset upload is incomplete")
+			return nil, nil, domain.Conflict("ASSETS_NOT_READY", "Asset upload is incomplete")
 		}
 		raw, e := w.GetObject(ctx, f.ObjectKey)
 		if e != nil {
 			return nil, nil, e
 		}
 		if len(raw) != f.Size || AssetUploadHash(f.Path, raw) != f.Hash {
-			return nil, nil, domain.Problem(422, "WORKER_ASSETS_INVALID", "Uploaded asset integrity check failed")
+			return nil, nil, domain.Invalid("WORKER_ASSETS_INVALID", "Uploaded asset integrity check failed")
 		}
 		kind, _ := artifact.WorkerAssetType(f.Path)
 		files[f.Path] = raw

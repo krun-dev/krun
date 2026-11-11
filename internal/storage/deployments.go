@@ -25,7 +25,7 @@ func writeDeployments(ctx context.Context, tx pgx.Tx, before, after *domain.Work
 			return err
 		}
 		if tag.RowsAffected() != 1 {
-			return domain.Problem(409, "REVISION_CONFLICT", "Deployment changed")
+			return domain.Conflict("REVISION_CONFLICT", "Deployment changed")
 		}
 	}
 	return nil

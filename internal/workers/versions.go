@@ -26,10 +26,10 @@ func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p a
 		return nil, Read, err
 	}
 	if len(in.Tag) > 100 || len(in.Message) > 1000 {
-		return nil, Read, domain.Problem(422, "WORKER_VERSION_INVALID", "Version tag or message is too long")
+		return nil, Read, domain.Invalid("WORKER_VERSION_INVALID", "Version tag or message is too long")
 	}
 	if in.Key == "" || len(in.Key) > 128 {
-		return nil, Read, domain.Problem(422, "IDEMPOTENCY_REQUIRED", "idempotency_key required")
+		return nil, Read, domain.Invalid("IDEMPOTENCY_REQUIRED", "idempotency_key required")
 	}
 	key := WorkerIdempotencyKey(target, p, "version-upload", ref.Environment, in.Key)
 	if id, err := WorkerIdempotent(st, key, in); err != nil {
@@ -43,28 +43,28 @@ func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p a
 		return nil, Read, domain.NotFound()
 	}
 	if !environment.Enabled {
-		return nil, Read, domain.Problem(409, "ENVIRONMENT_DISABLED", "Target environment is disabled")
+		return nil, Read, domain.Conflict("ENVIRONMENT_DISABLED", "Target environment is disabled")
 	}
 	if in.ConfigurationRevision != nil && *in.ConfigurationRevision != environment.ConfigRevision {
-		return nil, Read, domain.Problem(409, "REVISION_CONFLICT", "Environment configuration changed")
+		return nil, Read, domain.Conflict("REVISION_CONFLICT", "Environment configuration changed")
 	}
 	artifactID := in.Artifact
 	if in.Build != "" {
 		if artifactID != "" {
-			return nil, Read, domain.Problem(422, "WORKER_VERSION_INVALID", "Use build_id or artifact_id")
+			return nil, Read, domain.Invalid("WORKER_VERSION_INVALID", "Use build_id or artifact_id")
 		}
 		build, ok := st.Workers.Builds[in.Build]
 		if !ok || build.Worker != ref.Worker || build.Organization != ref.Organization {
 			return nil, Read, domain.NotFound()
 		}
 		if build.State != "succeeded" {
-			return nil, Read, domain.Problem(409, "BUILD_NOT_READY", "Build must have a finalized artifact")
+			return nil, Read, domain.Conflict("BUILD_NOT_READY", "Build must have a finalized artifact")
 		}
 		artifactID = build.Artifact
 	}
 	artifact, ok := st.Workers.Artifacts[artifactID]
 	if !ok || artifact.Organization != ref.Organization || artifact.State != "finalized" {
-		return nil, Read, domain.Problem(409, "ARTIFACT_UNAVAILABLE", "Artifact unavailable")
+		return nil, Read, domain.Conflict("ARTIFACT_UNAVAILABLE", "Artifact unavailable")
 	}
 	// Only a build belonging to this worker or an existing version can authorize
 	// reusing an artifact. An organization-wide artifact ID is not a capability.

@@ -81,7 +81,7 @@ func (s *Service) Artifact(ctx context.Context, id, pool string) (Artifact, erro
 	}
 	grant, err := s.Controller.ArtifactReadGrant(ctx, out)
 	if err != nil {
-		return Artifact{}, domain.Problem(503, "ARTIFACT_UNAVAILABLE", "Artifact storage unavailable")
+		return Artifact{}, domain.Unavailable("ARTIFACT_UNAVAILABLE", "Artifact storage unavailable")
 	}
 	return Artifact{
 		ID:            out.ID,
@@ -112,14 +112,14 @@ func (s *Service) Secrets(ctx context.Context, version, pool string) (Secrets, e
 }
 func (s *Service) Ack(ctx context.Context, pool string, in domain.WorkerAck) error {
 	if in.Pool != pool || in.Pod == "" || in.UID == "" {
-		return domain.Problem(422, "ACK_INVALID", "Pod UID and pool required")
+		return domain.Invalid("ACK_INVALID", "Pod UID and pool required")
 	}
 	head, err := s.Head(ctx)
 	if err != nil {
 		return err
 	}
 	if in.Revision < 0 || int64(in.Revision) > head {
-		return domain.Problem(422, "ACK_INVALID", "Config revision is outside the published range")
+		return domain.Invalid("ACK_INVALID", "Config revision is outside the published range")
 	}
 	in.Time = time.Now().UTC()
 	return s.Store.RecordAck(ctx, in)
