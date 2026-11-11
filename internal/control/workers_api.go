@@ -16,7 +16,7 @@ func (s *Server) requireWorkers(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-func (s *Server) workersRoutes(m *http.ServeMux) {
+func (s *Server) workersRoutes(m *recordingMux) {
 	base := "/api/v1/orgs/{org}/workers/{resource}"
 	protectWithBodyLimit := func(sessionOnly bool, bodyLimit int64, fn endpoint) http.HandlerFunc {
 		return s.protectedWorkersWithBodyLimit(sessionOnly, bodyLimit, func(st *State, p Principal, r *http.Request) (any, int, error) {
@@ -29,6 +29,7 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	protect := func(sessionOnly bool, fn endpoint) http.HandlerFunc {
 		return protectWithBodyLimit(sessionOnly, apiJSONBodyMax, fn)
 	}
+	m.useScope(scopeOrganization)
 	hyperdrive := "/api/v1/orgs/{org}/hyperdrive"
 	hyperdriveHandler := s.protectedWith(false, PartitionAll, 0, apiJSONBodyMax, s.workerHyperdrive)
 	for _, method := range []string{"GET", "POST"} {
@@ -49,7 +50,9 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	m.HandleFunc("DELETE "+objects, objectHandler)
 	m.HandleFunc("POST "+objects+"/access", objectHandler)
 	m.HandleFunc("GET "+objects+"/{objectOperation}", objectHandler)
+	m.useScope(scopeWorkerSummary)
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers", s.protectedWorkersWithBodyLimit(false, apiJSONBodyMax, s.workerList))
+	m.useScope(scopeOrganization)
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/domains", protect(false, s.workerDomains))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/network-profiles", protect(false, s.workerNetworkProfiles))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/repository-providers", protect(false, s.workerRepositoryProviders))
@@ -58,8 +61,10 @@ func (s *Server) workersRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/v1/orgs/{org}/worker-repositories/{provider}/authorize", protect(true, s.workerRepositoryBrowserOpen))
 	m.HandleFunc("POST /api/v1/orgs/{org}/worker-repositories/{provider}/repositories", protect(true, s.workerRepositoryCatalog))
 	m.HandleFunc("DELETE /api/v1/orgs/{org}/worker-repositories/{provider}/disconnect", protect(true, s.workerRepositoryDisconnect))
+	m.useScope(scopeNone)
 	m.HandleFunc("GET /api/v1/workers/repository/{provider}/callback", s.workerRepositoryCallback)
 	m.HandleFunc("POST /api/v1/workers/repository/{provider}/callback", s.workerRepositoryCallback)
+	m.useScope(scopeWorker)
 	m.HandleFunc("GET "+base+"/domains", protect(false, s.workerRoutingDomains))
 	m.HandleFunc("PUT "+base+"/domains", protect(false, s.workerRoutingDomainsUpdate))
 	m.HandleFunc("PUT "+base+"/network-profile", protect(false, s.workerNetworkProfileUpdate))

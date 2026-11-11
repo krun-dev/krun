@@ -14,25 +14,47 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 		}
 	}
 
-	// IAM writes need the other users and grants they may affect. In particular,
-	// changing organization sources checks every organization administrator.
-	// Resource and Workers endpoints only need their target.
-	isResource := strings.Contains(r.Pattern, "/workers") || strings.Contains(r.Pattern, "/models")
-	auditRoute := strings.HasSuffix(r.Pattern, "/audit")
-	simpleIAM := strings.HasPrefix(r.URL.Path, oauthPrefix+"/") ||
-		r.URL.Path == "/api/auth/me" ||
-		r.URL.Path == "/api/auth/logout" ||
-		r.URL.Path == "/api/v1/roles" ||
-		r.URL.Path == "/api/v1/orgs" ||
-		r.Pattern == "GET /api/v1/orgs/{org}" ||
-		r.Pattern == "GET /api/v1/orgs/{org}/permissions" ||
-		r.Pattern == "GET /api/v1/system/config" ||
-		r.Pattern == "GET /api/v1/system/inventory/{kind}" ||
-		auditRoute
-	if !isResource && !strings.Contains(r.Pattern, "/workers/") && !simpleIAM && !cloudflare {
+	mode, ok := s.routeScopes[r.Pattern]
+	if !ok {
+		return r, problem(500, "INTERNAL", "route read scope is not declared")
+	}
+	if mode == scopeNone {
 		return r, nil
 	}
-	scope := stateReadScope{ActorOnly: simpleIAM || cloudflare && r.PathValue("org") == "", AllOrganizations: cloudflare && r.PathValue("org") == "" || r.URL.Path == "/api/v1/orgs" && r.Method == "GET", User: c.session.User, Key: c.keyID, Organization: r.PathValue("org"), Worker: r.PathValue("resource"), Kind: resourceKind(r), Limit: 100}
+
+	scope := stateReadScope{
+		User:         c.session.User,
+		Key:          c.keyID,
+		Organization: r.PathValue("org"),
+		Worker:       r.PathValue("resource"),
+		Kind:         resourceKind(r),
+		Limit:        100,
+	}
+	switch mode {
+	case scopeActor, scopeActorAudit:
+		scope.ActorOnly = true
+		scope.Summary = true
+	case scopeActorAllOrganizations:
+		scope.ActorOnly = true
+		scope.AllOrganizations = true
+		scope.Summary = true
+	case scopeOrganization:
+		// Organization catalogs and bindings do not need build, version or
+		// operation rows; only the organization's Worker/resource rows.
+		scope.Summary = true
+	case scopeWorker:
+		scope.Summary = false
+	case scopeWorkerSummary:
+		scope.Summary = true
+	case scopeCloudflareOrganization:
+		// Script-scoped endpoints need the Worker's versions, builds and
+		// deployments; organization-level endpoints only need the catalog.
+		scope.Summary = scope.Worker == "" || strings.HasSuffix(r.URL.Path, "/workers")
+	case scopeCloudflareAccounts:
+		scope.ActorOnly = true
+		scope.AllOrganizations = true
+		scope.Summary = true
+	}
 	if c.isKey {
 		owner, found, err := s.Store.APIKeyOwner(r.Context(), c.keyID)
 		if err != nil {
@@ -44,7 +66,7 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 		scope.User = owner
 	}
 	// Audit and Cloudflare endpoints own their pagination contracts.
-	if !auditRoute && !cloudflare {
+	if mode != scopeActorAudit && mode != scopeCloudflareOrganization && mode != scopeCloudflareAccounts {
 		scope.After = r.URL.Query().Get("after")
 		if raw := r.URL.Query().Get("limit"); raw != "" {
 			n, err := strconv.Atoi(raw)
@@ -54,10 +76,8 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 			scope.Limit = n
 		}
 	}
-	if scope.Worker == "" && strings.HasSuffix(r.URL.Path, "/workers") {
+	if mode == scopeWorkerSummary {
 		scope.Worker = workerFilter(r)
-	}
-	if r.Pattern == "GET /api/v1/orgs/{org}/workers" {
 		options, err := workerListOptions(r)
 		if err != nil {
 			return r, err
@@ -69,7 +89,6 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 			scope.After = ""
 		}
 	}
-	scope.Summary = scope.Worker == "" || strings.HasSuffix(r.URL.Path, "/workers")
 	return r.WithContext(withStateScope(r.Context(), scope)), nil
 }
 

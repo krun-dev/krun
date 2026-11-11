@@ -11,7 +11,8 @@ import (
 
 const oauthPrefix = "/api/auth/oauth"
 
-func (s *Server) oauthRoutes(m *http.ServeMux) {
+func (s *Server) oauthRoutes(m *recordingMux) {
+	m.useScope(scopeNone)
 	m.HandleFunc("GET "+oauthPrefix+"/authorize", s.oauthAuthorize)
 	m.HandleFunc("POST "+oauthPrefix+"/device/auth", s.oauthDeviceStart)
 	m.HandleFunc("GET "+oauthPrefix+"/requests/{request}", s.oauthRequest)
