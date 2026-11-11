@@ -476,7 +476,12 @@ func writeBuilds(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) err
 				return err
 			}
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_build_private (build_id, actor_user_id, actor_key_id, actor_auth_version, source_key, files, log_key) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (build_id) DO UPDATE SET actor_user_id=excluded.actor_user_id, actor_key_id=excluded.actor_key_id, actor_auth_version=excluded.actor_auth_version, source_key=excluded.source_key, files=excluded.files, log_key=excluded.log_key`, id, p.Actor.User, p.Actor.Key, p.Actor.AuthVersion, p.SourceKey, files, p.LogKey); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_build_private (build_id, actor_user_id, actor_key_id, actor_auth_version, source_key, config_path, files, log_key)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+			ON CONFLICT (build_id) DO UPDATE SET actor_user_id=excluded.actor_user_id,
+			actor_key_id=excluded.actor_key_id, actor_auth_version=excluded.actor_auth_version,
+			source_key=excluded.source_key, config_path=excluded.config_path,
+			files=excluded.files, log_key=excluded.log_key`, id, p.Actor.User, p.Actor.Key, p.Actor.AuthVersion, p.SourceKey, p.ConfigPath, files, p.LogKey); err != nil {
 			return err
 		}
 	}
@@ -515,7 +520,7 @@ func sameBuild(a, b domain.WorkerBuild) bool {
 }
 
 func sameBuildPrivate(a, b domain.WorkerBuildPrivate) bool {
-	return a.Actor == b.Actor && a.SourceKey == b.SourceKey && reflect.DeepEqual(a.Files, b.Files) && a.LogKey == b.LogKey
+	return a.Actor == b.Actor && a.SourceKey == b.SourceKey && a.ConfigPath == b.ConfigPath && reflect.DeepEqual(a.Files, b.Files) && a.LogKey == b.LogKey
 }
 
 // workerBuildPrivate fetches one potentially large source row and its log object key. List and
@@ -536,8 +541,9 @@ func (s *Store) WorkerBuildPrivate(ctx context.Context, id string) (domain.Worke
 			Key:         row.ActorKeyID,
 			AuthVersion: row.ActorAuthVersion,
 		},
-		SourceKey: row.SourceKey,
-		LogKey:    row.LogKey,
+		SourceKey:  row.SourceKey,
+		ConfigPath: row.ConfigPath,
+		LogKey:     row.LogKey,
 	}
 	if len(row.Files) > 0 {
 		if err = json.Unmarshal(row.Files, &private.Files); err != nil {

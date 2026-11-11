@@ -16,23 +16,24 @@ import (
 	domain "github.com/krun-dev/krun/internal/domain"
 )
 
-func Execute(ctx context.Context, config *appconfig.WorkersConfig, b domain.WorkerBuild, source, upload string, progress ...func(string)) (string, error) {
+func Execute(ctx context.Context, config *appconfig.WorkersConfig, b domain.WorkerBuild, private domain.WorkerBuildPrivate, source, upload string, progress ...func(string)) (string, error) {
 	dir, e := os.MkdirTemp("", "krun-local-build-")
 	if e != nil {
 		return "", e
 	}
 	defer os.RemoveAll(dir)
 	buildMode := "direct"
-	configPath := ""
+	configPath := private.ConfigPath
 	assets := b.Assets
 	if b.Repository != nil {
-		buildMode = "wrangler"
 		configPath = b.Repository.ConfigPath
-
-		assets = nil
 		if configPath == "" {
 			return "", errors.New("repository build requires an explicit Wrangler config")
 		}
+	}
+	if configPath != "" {
+		buildMode = "wrangler"
+		assets = nil
 	}
 	input, e := json.Marshal(map[string]any{"build_mode": buildMode, "config_path": configPath, "entrypoint": b.Entrypoint, "source_url": source, "assets": assets, "compatibility_date": b.CompatibilityDate, "compatibility_flags": b.CompatibilityFlags, "upload_url": upload})
 	if e != nil {

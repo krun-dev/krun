@@ -232,7 +232,7 @@ func (w *Controller) ExecuteLocalBuilder(ctx context.Context, b domain.WorkerBui
 	if e != nil {
 		return "", e
 	}
-	return localbuilder.Execute(ctx, w.Config, b, source, upload, func(text string) {
+	return localbuilder.Execute(ctx, w.Config, b, private, source, upload, func(text string) {
 		_ = w.PublishBuildLog(ctx, b, repositoryBuildLog(b)+text)
 	})
 }

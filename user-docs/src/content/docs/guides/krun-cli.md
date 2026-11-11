@@ -5,7 +5,7 @@ description: 安装 krun CLI，管理身份、构建和发布 Workers，并操�
 
 krun CLI 用于登录控制面、构建和发布 Worker，以及管理组织权限与对象存储。下面的地址会使用当前控制台地址。
 
-它与 Cloudflare 的 Wrangler 是两个不同的工具：krun CLI 管理 krun 的组织、环境和资源，`krun deploy` 可从已绑定的 Git 仓库构建发布；Wrangler 则读取本地项目配置，可以通过 krun 的兼容接口直接构建并部署。两者的凭据、发布方式和环境语义不同。先读[基础概念中的对比](/docs/guides/concepts.html#wrangler-和-krun-cli)，再根据项目选择入口。
+krun CLI 管理 krun 的组织、环境和资源，`krun deploy` 可以上传本地项目，也可以从已绑定的 Git 仓库构建发布。官方 Wrangler 在本地读取项目配置、打包，再通过 krun 的兼容接口部署。[基础概念](/docs/guides/concepts.html#wrangler-和-krun-cli)
 
 ## 安装
 
@@ -196,6 +196,15 @@ krun deploy --worker WORKER_ID --env production
 
 默认构建仓库绑定中的 Git ref，也可以用 `--ref` 指定分支或提交。CLI 会等构建成功再提交发布，并等待运行时确认。`--build-timeout` 限制等待构建的时间，`--timeout` 限制等待发布确认的时间。`--wait=false` 仍会等待构建完成，提交发布后即返回。
 
+用 `--path` 上传本地目录或 ZIP。krun 自动识别静态产物和 Wrangler 项目，构建成功后发布到指定环境。目标 Worker 需先创建。
+
+```sh
+krun deploy --worker WORKER_ID --env production --path ./dist
+krun deploy --worker WORKER_ID --env production --path ./project.zip
+```
+
+归档有多个项目时，用 `--project-root` 指定相对于上传根部的目录。`--path` 和 `--ref`、`--repository-revision`、`--build`、`--dry-run` 各自选择不同的输入方式。发布响应丢失时，可用相同内容、目标和 `--idempotency-key` 重试，并用 `--revision` 传回原命令打印的 Deployment revision。已有 Operation ID 时，直接用 `krun deployments wait --worker WORKER_ID --operation OPERATION_ID` 查询。[部署本地项目](/docs/guides/deploy-local-project.html)
+
 要从本地源文件构建，先得到 Build ID，再通过 `--build` 复用。将下面的 `WORKER_ID` 替换成 `workers create` 返回的 `id`。
 
 ```sh
@@ -217,7 +226,7 @@ krun workers invoke --worker WORKER_ID --env production --path /
 krun deploy --dry-run --config ./wrangler.jsonc --outdir ./build-preview
 ```
 
-这会通过 Node.js 和 npm 调用 Wrangler 打包本地工作区，不向 krun 创建构建或发布。省略 `--config` 时由 Wrangler 查找项目文件。它不会检出服务端绑定的 Git ref，也不会验证 krun 的目标环境、权限或绑定。正式发布仍从服务端绑定的仓库取代码。
+这会通过 Node.js 和 npm 调用 Wrangler 打包本地工作区。省略 `--config` 时由 Wrangler 查找项目文件。预检只检查本地打包，正式发布时可用 `--path` 上传项目，或用默认模式构建已绑定的仓库。
 
 带静态资产的本地源码可以先按平台要求打成 portable ustar 格式的 `tar.gz`，顶层包含 `src/` 和 `assets/`。使用 `build upload --bundle FILE` 上传，再将返回的 `source_upload` 与 `--entrypoint src/index.ts` 传给 `build start`；需要配置静态资产时传入 `--assets-config FILE`。在本地按 `wrangler.jsonc` 打包并直接上传的项目可继续使用 [Wrangler 部署流程](/docs/guides/cloudflare-workers.html)。
 
