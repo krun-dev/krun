@@ -29,7 +29,7 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 		SecretVersions:   map[string]domain.WorkerSecretVersion{},
 	}
 
-	rows, err := s.pool.Query(ctx, `SELECT operation_id, kind, org_id, worker_id, env_name, state, build_id, version_id, expected_revision, config_revision, edge_revision, deployment_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at
+	rows, err := s.pool.Query(ctx, `SELECT `+workerOperationColumns+`
 		FROM krun_worker_operations
 		WHERE state NOT IN ('succeeded','failed','available','superseded') AND reconcile_after<=now() AND (state IN ('queued','committed') OR claimed_by=$2 OR claimed_at IS NULL OR claimed_at<now()-'60 seconds'::interval)
 		ORDER BY reconcile_after,created_at LIMIT $1`, limit, replica)
@@ -45,7 +45,7 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 		state.Operations[op.Operation.ID] = op.Operation
 		state.OperationPrivate[op.Operation.ID] = domain.WorkerOperationPrivate{Actor: op.Actor}
 	}
-	rows, err = s.pool.Query(ctx, `SELECT build_id, org_id, worker_id, env_name, state, entrypoint, source_digest, profile, compatibility_date, compatibility_flags, job, artifact_id, error, repository, assets, created_at, finished_at, claimed_by, claimed_at
+	rows, err = s.pool.Query(ctx, `SELECT `+workerBuildColumns+`
 		FROM krun_worker_builds
 		WHERE state NOT IN ('succeeded','failed') AND reconcile_after<=now() AND (state='queued' OR claimed_by=$2 OR claimed_at IS NULL OR claimed_at<now()-'60 seconds'::interval)
 		ORDER BY reconcile_after,created_at LIMIT $1`, limit, replica)
@@ -87,7 +87,7 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 			}
 		}
 		if len(versionIDs) > 0 {
-			rows, err = s.pool.Query(ctx, `SELECT version_id, org_id, worker_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message, created_by, created_by_name, configuration_id, hyperdrive_bindings
+			rows, err = s.pool.Query(ctx, `SELECT `+workerVersionColumns+`
 				FROM krun_worker_versions WHERE version_id = ANY($1)`, versionIDs)
 			if err != nil {
 				return state, err
@@ -133,7 +133,7 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 			}
 		}
 		if len(artifactIDs) > 0 {
-			rows, err = s.pool.Query(ctx, `SELECT artifact_id, org_id, state, profile, archive_digest, manifest_digest, module_digest, compatibility_date, compatibility_flags, size_bytes, object_key, storage_location, bucket, created_at
+			rows, err = s.pool.Query(ctx, `SELECT `+workerArtifactColumns+`
 				FROM krun_worker_artifacts WHERE artifact_id = ANY($1)`, artifactIDs)
 			if err != nil {
 				return state, err
@@ -168,36 +168,22 @@ func readWorkerBuildPrivateRows(rows pgx.Rows, state *domain.WorkerState) error 
 
 func readVersionRows(rows pgx.Rows, state *domain.WorkerState) error {
 	for rows.Next() {
-		var r domain.WorkerVersion
-		var variables, flags []byte
-		if err := rows.Scan(&r.ID, &r.Organization, &r.Worker, &r.Environment, &r.Artifact, &r.Profile, &r.ArchiveDigest, &r.ModuleDigest, &r.CompatibilityDate, &flags, &r.ConfigRevision, &variables, &r.SecretDigest, &r.Created, &r.VersionMetadata, &r.AssetsBinding, &r.Tag, &r.Message, &r.CreatedBy, &r.CreatedByName, &r.Configuration, &r.HyperdriveBindings); err != nil {
+		version, err := scanWorkerVersion(rows)
+		if err != nil {
 			return err
 		}
-		if err := json.Unmarshal(flags, &r.CompatibilityFlags); err != nil {
-			return err
-		}
-		r.Variables = map[string]any{}
-		if len(variables) > 0 {
-			if err := json.Unmarshal(variables, &r.Variables); err != nil {
-				return err
-			}
-		}
-		state.Versions[r.ID] = r
+		state.Versions[version.ID] = version
 	}
 	return rows.Err()
 }
 
 func readArtifactRows(rows pgx.Rows, state *domain.WorkerState) error {
 	for rows.Next() {
-		var a domain.WorkerArtifact
-		var flags []byte
-		if err := rows.Scan(&a.ID, &a.Organization, &a.State, &a.Profile, &a.ArchiveDigest, &a.ManifestDigest, &a.ModuleDigest, &a.CompatibilityDate, &flags, &a.Size, &a.ObjectKey, &a.StorageLocation, &a.Bucket, &a.Created); err != nil {
+		artifact, err := scanWorkerArtifact(rows)
+		if err != nil {
 			return err
 		}
-		if err := json.Unmarshal(flags, &a.CompatibilityFlags); err != nil {
-			return err
-		}
-		state.Artifacts[a.ID] = a
+		state.Artifacts[artifact.ID] = artifact
 	}
 	return rows.Err()
 }
@@ -211,21 +197,14 @@ func scanOperations(rows pgx.Rows) ([]struct {
 		Actor     domain.WorkerActor
 	}{}
 	for rows.Next() {
-		var item struct {
-			Operation domain.WorkerOperation
-			Actor     domain.WorkerActor
-		}
-		op := &item.Operation
-		var steps []byte
-		if err := rows.Scan(&op.ID, &op.Kind, &op.Organization, &op.Worker, &op.Environment, &op.State, &op.Build, &op.Version, &op.ExpectedRevision, &op.ConfigRevision, &op.EdgeRevision, &op.DeploymentRevision, &op.Error, &steps, &item.Actor.User, &item.Actor.Key, &item.Actor.AuthVersion, &op.Created, &op.Finished); err != nil {
+		operation, actor, err := scanWorkerOperation(rows)
+		if err != nil {
 			return nil, err
 		}
-		if len(steps) > 0 {
-			if err := json.Unmarshal(steps, &op.Steps); err != nil {
-				return nil, err
-			}
-		}
-		out = append(out, item)
+		out = append(out, struct {
+			Operation domain.WorkerOperation
+			Actor     domain.WorkerActor
+		}{Operation: operation, Actor: actor})
 	}
 	return out, rows.Err()
 }
@@ -233,29 +212,11 @@ func scanOperations(rows pgx.Rows) ([]struct {
 func scanBuilds(rows pgx.Rows) ([]domain.WorkerBuild, error) {
 	out := []domain.WorkerBuild{}
 	for rows.Next() {
-		var b domain.WorkerBuild
-		var repository, assets, flags []byte
-		if err := rows.Scan(&b.ID, &b.Organization, &b.Worker, &b.Environment, &b.State, &b.Entrypoint, &b.SourceDigest, &b.Profile, &b.CompatibilityDate, &flags, &b.Job, &b.Artifact, &b.Error, &repository, &assets, &b.Created, &b.Finished, &b.ClaimedBy, &b.ClaimedAt); err != nil {
+		build, err := scanWorkerBuild(rows)
+		if err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal(flags, &b.CompatibilityFlags); err != nil {
-			return nil, err
-		}
-		if len(repository) > 0 {
-			var src domain.WorkerBuildRepository
-			if err := json.Unmarshal(repository, &src); err != nil {
-				return nil, err
-			}
-			b.Repository = &src
-		}
-		if len(assets) > 0 {
-			var a domain.WorkerAssetsConfig
-			if err := json.Unmarshal(assets, &a); err != nil {
-				return nil, err
-			}
-			b.Assets = &a
-		}
-		out = append(out, b)
+		out = append(out, build)
 	}
 	return out, rows.Err()
 }
