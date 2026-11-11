@@ -118,7 +118,6 @@ func (s *Service) NormalizeWorker(ws domain.Worker) domain.Worker {
 	if baseline.SecretVersions == nil {
 		baseline.SecretVersions = map[string]string{}
 	}
-	baseline.SecretNames = domain.WorkerSecretNames(baseline.SecretVersions)
 	ws.Environments[appconfig.WorkerBaseline] = baseline
 	for name, env := range ws.Environments {
 		if env.SecretVersions == nil {
@@ -129,6 +128,18 @@ func (s *Service) NormalizeWorker(ws domain.Worker) domain.Worker {
 		ws.Environments[name] = env
 	}
 	return ws
+}
+
+func workerEnvironmentNames(environments map[string]domain.WorkerEnvironment) []string {
+	names := make([]string, 1, len(environments)+1)
+	names[0] = appconfig.WorkerBaseline
+	for name := range environments {
+		if name != appconfig.WorkerBaseline {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names[1:])
+	return names
 }
 
 type WorkerOverviewEnvironment struct {
@@ -144,24 +155,10 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 		return nil, Read, err
 	}
 	ws := s.WorkerView(st, t)
-	names := make([]string, 0, len(ws.Environments))
-	for name := range ws.Environments {
-		names = append(names, name)
-	}
-	sort.Slice(names, func(i, j int) bool {
-		if names[i] == appconfig.WorkerBaseline {
-			return true
-		}
-		if names[j] == appconfig.WorkerBaseline {
-			return false
-		}
-		return names[i] < names[j]
-	})
 
 	environments := []WorkerOverviewEnvironment{}
 	versionVisible := map[string]bool{}
-	versionIDs := map[string]bool{}
-	for _, name := range names {
+	for _, name := range workerEnvironmentNames(ws.Environments) {
 		target := authorization.Target{Kind: "worker", ID: t.ID, Organization: t.Organization, Environment: name}
 		read, versions, authErr := workerEnvironmentReadAccess(st, p, target)
 		if authErr != nil {
@@ -171,23 +168,17 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 			continue
 		}
 		env := ws.Environments[name]
-		s.SyncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains)
 		entry := WorkerOverviewEnvironment{Environment: env, History: []domain.WorkerHistory{}}
 		versionVisible[name] = versions
 		if versions {
 			entry.History = append(entry.History, st.Workers.Histories[t.ID+"/"+name]...)
-			for _, history := range entry.History {
-				versionIDs[history.Version] = true
-			}
 			if version, ok := st.Workers.Versions[env.Version]; ok {
 				value := PublicWorkerVersion(version)
 				entry.CurrentVersion = &value
-				versionIDs[version.ID] = true
 			}
 			if version, ok := st.Workers.Versions[env.Confirmed]; ok {
 				value := PublicWorkerVersion(version)
 				entry.ConfirmedVersion = &value
-				versionIDs[version.ID] = true
 			}
 		}
 		environments = append(environments, entry)
@@ -218,11 +209,6 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 	versions := map[string]domain.WorkerVersion{}
 	for id, version := range st.Workers.Versions {
 		if version.Worker == t.ID && version.Organization == t.Organization && versionVisible[version.Environment] {
-			versionIDs[id] = true
-		}
-	}
-	for id := range versionIDs {
-		if version, ok := st.Workers.Versions[id]; ok && version.Worker == t.ID && version.Organization == t.Organization && versionVisible[version.Environment] {
 			versions[id] = PublicWorkerVersion(version)
 		}
 	}
@@ -508,24 +494,8 @@ func (s *Service) WorkerList(ctx context.Context, st *domain.State, p authorizat
 				summary.NetworkProfile = WorkerNetworkProfileView{ID: profile.ID, Name: profile.Name, Description: profile.Description, ApprovalRequired: profile.Approval == "required", Default: profile.Default}
 			}
 		}
-		names := make([]string, 0, len(worker.Environments)+1)
-		if _, exists := worker.Environments[appconfig.WorkerBaseline]; !exists {
-			names = append(names, appconfig.WorkerBaseline)
-		}
-		for name := range worker.Environments {
-			names = append(names, name)
-		}
-		sort.Slice(names, func(i, j int) bool {
-			if names[i] == appconfig.WorkerBaseline {
-				return true
-			}
-			if names[j] == appconfig.WorkerBaseline {
-				return false
-			}
-			return names[i] < names[j]
-		})
 		visible := false
-		for _, env := range names {
+		for _, env := range workerEnvironmentNames(worker.Environments) {
 			decision, err := authorization.Authorize(st, p, "worker.read", authorization.Target{Kind: "worker", ID: resource.ID, Organization: target.ID, Environment: env})
 			if err != nil {
 				return nil, Read, err

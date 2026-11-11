@@ -32,8 +32,6 @@ type Browser = domain.Browser
 
 type Login = domain.Login
 
-type EmailLogin = domain.EmailLogin
-
 type Audit = domain.Audit
 
 type State = domain.State

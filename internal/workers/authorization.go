@@ -2,10 +2,8 @@ package workers
 
 import (
 	"context"
-	"sort"
 
 	authorization "github.com/krun-dev/krun/internal/authorization"
-	appconfig "github.com/krun-dev/krun/internal/config"
 	domain "github.com/krun-dev/krun/internal/domain"
 	storage "github.com/krun-dev/krun/internal/storage"
 )
@@ -24,18 +22,7 @@ func (s *Service) WorkerCollectionTarget(st *domain.State, ref WorkerRef, action
 	if e != nil || t.Organization != ref.Organization {
 		return t, domain.NotFound()
 	}
-	candidates := []string{appconfig.WorkerBaseline}
-	if ws, ok := st.Workers.Workers[t.ID]; ok {
-		names := make([]string, 0, len(ws.Environments))
-		for name := range ws.Environments {
-			if name != appconfig.WorkerBaseline {
-				names = append(names, name)
-			}
-		}
-		sort.Strings(names)
-		candidates = append(candidates, names...)
-	}
-	for _, env := range candidates {
+	for _, env := range workerEnvironmentNames(st.Workers.Workers[t.ID].Environments) {
 		target := t
 		target.Environment = env
 		d, e := authorization.Authorize(st, p, action, target)
