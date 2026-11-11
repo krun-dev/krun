@@ -559,6 +559,7 @@ CREATE TABLE IF NOT EXISTS krun_worker_operations (
 	expected_revision  integer NOT NULL DEFAULT 0,
 	config_revision    integer NOT NULL DEFAULT 0,
 	edge_revision      bigint NOT NULL DEFAULT 0,
+	edge_pool          text NOT NULL DEFAULT '',
 	deployment_revision   integer NOT NULL DEFAULT 0,
 	error              text NOT NULL DEFAULT '',
 	steps              jsonb NOT NULL DEFAULT '[]'::jsonb,
@@ -570,7 +571,8 @@ CREATE TABLE IF NOT EXISTS krun_worker_operations (
 	created_at         timestamptz NOT NULL DEFAULT now(),
 	finished_at        timestamptz,
 	claimed_by         text NOT NULL DEFAULT '',
-	claimed_at         timestamptz
+	claimed_at         timestamptz,
+	claim_generation   bigint NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS krun_worker_operations_worker ON krun_worker_operations (worker_id, env_name, created_at DESC);
 

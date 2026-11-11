@@ -278,6 +278,7 @@ type Operation struct {
 	ExpectedRevision   int             `bun:"expected_revision"`
 	ConfigRevision     int             `bun:"config_revision"`
 	EdgeRevision       int64           `bun:"edge_revision"`
+	EdgePool           string          `bun:"edge_pool"`
 	DeploymentRevision int             `bun:"deployment_revision"`
 	Error              string          `bun:"error"`
 	Steps              json.RawMessage `bun:"steps,type:jsonb"`
@@ -290,6 +291,7 @@ type Operation struct {
 	FinishedAt         *time.Time      `bun:"finished_at"`
 	ClaimedBy          string          `bun:"claimed_by"`
 	ClaimedAt          *time.Time      `bun:"claimed_at"`
+	ClaimGeneration    int64           `bun:"claim_generation"`
 }
 
 type History struct {

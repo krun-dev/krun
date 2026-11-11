@@ -46,7 +46,7 @@ func (w *Controller) ProcessBuild(ctx context.Context, b domain.WorkerBuild, pri
 			return nil
 		}
 	}
-	started, startErr := w.Service.Store.WorkerExecutionStarted(ctx, "build", b.ID, b.Created)
+	started, startErr := w.Service.Store.BuildExecutionStarted(ctx, b.ID, b.Created)
 	if startErr != nil {
 		return startErr
 	}

@@ -6,9 +6,7 @@ import (
 	"time"
 )
 
-// leaseGuard renews a build claim while work runs and cancels the work when the
-// claim is lost. One implementation keeps the Kubernetes and local builders on
-// the same lease semantics.
+// leaseGuard renews the claim while work runs and cancels work after claim loss.
 type leaseGuard struct {
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -16,6 +14,12 @@ type leaseGuard struct {
 }
 
 func (w *Controller) guardBuildLease(parent context.Context, id string) (context.Context, *leaseGuard) {
+	return guardLease(parent, func(ctx context.Context) (bool, error) {
+		return w.Service.Store.RenewBuildClaim(ctx, id, w.Replica)
+	}, "build lease lost")
+}
+
+func guardLease(parent context.Context, renew func(context.Context) (bool, error), lostMessage string) (context.Context, *leaseGuard) {
 	ctx, cancel := context.WithCancel(parent)
 	guard := &leaseGuard{cancel: cancel, done: make(chan struct{}), lost: make(chan error, 1)}
 	go func() {
@@ -28,12 +32,12 @@ func (w *Controller) guardBuildLease(parent context.Context, id string) (context
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				owned, err := w.Service.Store.RenewBuildClaim(ctx, id, w.Replica)
+				owned, err := renew(ctx)
 				if err == nil && owned {
 					continue
 				}
 				if err == nil {
-					err = errors.New("build lease lost")
+					err = errors.New(lostMessage)
 				}
 				select {
 				case <-guard.done:

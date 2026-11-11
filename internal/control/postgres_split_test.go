@@ -395,7 +395,7 @@ func TestPostgresOperationClaimIsExclusive(t *testing.T) {
 		wg.Add(1)
 		go func(replica string) {
 			defer wg.Done()
-			claimed, err := store.ClaimOperation(ctx, "op-1", replica)
+			_, claimed, err := store.ClaimOperation(ctx, "op-1", replica)
 			if err != nil {
 				t.Error(err)
 				return
@@ -412,17 +412,18 @@ func TestPostgresOperationClaimIsExclusive(t *testing.T) {
 		t.Fatalf("expected exactly one claimer, got %d", count)
 	}
 	// A stale claim on a validating row can be taken over by another replica.
-	claimed, err := store.ClaimStaleOperation(ctx, "op-1", "replica-c")
+	_, claimed, err := store.ClaimOperation(ctx, "op-1", "replica-c")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if claimed {
 		t.Error("a fresh claim must not be stolen")
 	}
-	if _, err := postgresTestPool(store).Exec(ctx, `UPDATE krun_worker_operations SET claimed_at = now() - interval '5 minutes' WHERE operation_id='op-1'`); err != nil {
+	if _, err := postgresTestPool(store).Exec(ctx, `UPDATE krun_worker_operations
+		SET claimed_at=now()-interval '5 minutes',reconcile_after=now() WHERE operation_id='op-1'`); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err = store.ClaimStaleOperation(ctx, "op-1", "replica-c")
+	_, claimed, err = store.ClaimOperation(ctx, "op-1", "replica-c")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +447,11 @@ func TestPostgresCommitRequiresMatchingRevision(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	committed, err := store.CommitOperation(ctx, WorkerOperation{ID: "op-1", Worker: "svc-1", Environment: "production", Version: "rel-1", ExpectedRevision: 2})
+	claim, owned, err := store.ClaimOperation(ctx, "op-1", "replica")
+	if err != nil || !owned {
+		t.Fatalf("claim: owned=%t err=%v", owned, err)
+	}
+	committed, err := store.CommitOperation(ctx, claim)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -736,7 +741,11 @@ func TestPostgresCommitMarksStepsDone(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	committed, err := store.CommitOperation(ctx, WorkerOperation{ID: "op1", Worker: "s1", Environment: "production", Version: "r1", ExpectedRevision: 0})
+	claim, owned, err := store.ClaimOperation(ctx, "op1", "replica")
+	if err != nil || !owned {
+		t.Fatalf("claim: owned=%t err=%v", owned, err)
+	}
+	committed, err := store.CommitOperation(ctx, claim)
 	if err != nil {
 		t.Fatal(err)
 	}

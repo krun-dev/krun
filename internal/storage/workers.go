@@ -211,6 +211,11 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 				if tag.RowsAffected() != 1 {
 					return domain.Conflict("REVISION_CONFLICT", "Environment configuration changed")
 				}
+				if oldEnv.Enabled && !env.Enabled {
+					if err := supersedeEnvironmentOperations(ctx, tx, id, name, "Environment disabled"); err != nil {
+						return err
+					}
+				}
 			}
 			if err := replaceWorkerEnvironmentSecrets(ctx, tx, id, name, env.SecretVersions); err != nil {
 				return err
@@ -231,6 +236,9 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 				if tag.RowsAffected() != 1 {
 					return domain.Conflict("REVISION_CONFLICT", "Environment configuration changed")
 				}
+				if err := supersedeEnvironmentOperations(ctx, tx, id, name, "Environment deleted"); err != nil {
+					return err
+				}
 				if err := deleteEnvironmentConfigurations(ctx, tx, id, name); err != nil {
 					return err
 				}
@@ -249,6 +257,9 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 			if _, err := tx.Exec(ctx, statement, id); err != nil {
 				return err
 			}
+		}
+		if err := supersedeEnvironmentOperations(ctx, tx, id, "", "Worker deleted"); err != nil {
+			return err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM krun_workers WHERE worker_id=$1`, id); err != nil {
 			return err

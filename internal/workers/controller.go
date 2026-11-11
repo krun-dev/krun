@@ -174,7 +174,7 @@ func (w *Controller) Reconcile(ctx context.Context) error {
 			if err != nil || !claimed {
 				return err
 			}
-			if err = w.Service.Store.ScheduleWorkerRetry(ctx, "build", b.ID); err != nil {
+			if err = w.Service.Store.ScheduleBuildRetry(ctx, b.ID); err != nil {
 				return err
 			}
 			b.State = "building"
@@ -209,9 +209,6 @@ func (w *Controller) Reconcile(ctx context.Context) error {
 	for _, op := range ops {
 		op := op
 		work <- func() error {
-			if err := w.Service.Store.ScheduleWorkerRetry(ctx, "operation", op.ID); err != nil {
-				return err
-			}
 			ready := false
 			if p, ok := domain.ActiveWorkerPlacement(&pending, op.Worker); ok {
 				ready = routesReady["pool:"+p.Pool]
