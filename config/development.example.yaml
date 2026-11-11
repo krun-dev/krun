@@ -9,6 +9,10 @@ listen: 127.0.0.1:8080
 # 默认 false；开启后仍校验 pool 凭据，并且内部监听器仍需正常启动。
 merged_deployment: false
 public_url: http://127.0.0.1:8080
+# 可选。Grafana 地址使用浏览器能访问的 URL，允许配置子路径。
+# worker_metrics:
+#   grafana_url: https://grafana.example.com
+#   dashboard_uid: krun-worker-metrics
 development: true
 # 允许已登录用户创建组织并成为该组织管理员；设为 false 则仅系统管理员可创建。
 organization_self_service: true

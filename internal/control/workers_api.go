@@ -80,6 +80,7 @@ func (s *Server) workersRoutes(m *recordingMux) {
 	m.HandleFunc("GET "+base+"/builds/{build}/logs", protect(false, s.workerBuildLogs))
 	m.HandleFunc("GET "+base+"/builds/{build}/source", protect(false, s.workerBuildSource))
 	m.HandleFunc("GET "+base+"/overview", protect(false, s.workerOverview))
+	m.HandleFunc("GET "+base+"/metrics", protect(false, s.workerMetrics))
 	m.HandleFunc("GET "+base+"/environments", protect(false, s.workerEnvironments))
 	m.HandleFunc("POST "+base+"/environments", protect(false, s.workerEnvironmentCreate))
 	m.HandleFunc("DELETE "+base+"/environments/{environment}", protect(false, s.workerEnvironmentDelete))

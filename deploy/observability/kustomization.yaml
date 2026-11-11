@@ -22,3 +22,4 @@ configMapGenerator:
   - name: grafana-workers-runtime
     files:
       - workers-runtime.json
+      - worker-metrics.json

@@ -1,5 +1,7 @@
 - job_name: krun-worker-runtime
   metrics_path: /metrics
+  # A serving Pod can export metrics for up to 4096 Worker versions.
+  max_scrape_size: 32MiB
   kubernetes_sd_configs:
     - role: pod
       selectors:

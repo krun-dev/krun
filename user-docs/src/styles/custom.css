@@ -386,6 +386,92 @@ html[data-has-toc] {
   left: 85%;
 }
 
+.krun-metrics-figure {
+  max-width: 34rem;
+  margin-inline: 0;
+}
+
+.krun-metrics-overview {
+  max-width: 28rem;
+}
+
+.krun-metrics-screenshot {
+  position: relative;
+  border-radius: 0.5rem;
+  outline: 1px solid var(--sl-color-hairline-light);
+  overflow: hidden;
+}
+
+.krun-metrics-screenshot img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.krun-metrics-screenshot span {
+  position: absolute;
+  top: var(--marker-top);
+  left: var(--marker-left);
+  display: grid;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0;
+  place-items: center;
+  border: 1px solid #fff;
+  border-radius: 50%;
+  background: #197c50;
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+  transform: translate(-50%, -50%);
+}
+
+.krun-metrics-tab {
+  --marker-top: 42.1%;
+  --marker-left: 47.2%;
+}
+
+.krun-metrics-filters {
+  --marker-top: 53.1%;
+  --marker-left: 50.8%;
+}
+
+.krun-metrics-time {
+  --marker-top: 50%;
+  --marker-left: 70%;
+}
+
+.krun-metrics-requests {
+  --marker-top: 12.8%;
+  --marker-left: 11.2%;
+}
+
+.krun-metrics-errors {
+  --marker-top: 12.8%;
+  --marker-left: 63%;
+}
+
+.krun-metrics-latency {
+  --marker-top: 57.1%;
+  --marker-left: 16.5%;
+}
+
+.krun-metrics-figure figcaption {
+  color: var(--sl-color-text);
+  font-size: var(--sl-text-sm);
+}
+
+.krun-metrics-figure ol {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 2rem;
+}
+
+.krun-metrics-figure li + li {
+  margin-top: 0;
+}
+
 .sidebar-content li li li summary .group-label .large {
   font-weight: 400;
 }

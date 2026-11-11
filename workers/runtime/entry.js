@@ -19,13 +19,15 @@ const durationBuckets = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10
 const requestsByStatusClass = { "1xx": 0, "2xx": 0, "3xx": 0, "4xx": 0, "5xx": 0, other: 0 };
 const requestDuration = durationHistogram();
 const bundleLoadDuration = { success: durationHistogram(), error: durationHistogram() };
+const versionRequests = new Map();
+const versionMetricsIdleMs = 60 * 60 * 1000;
+const versionMetricsMax = 4096;
 
 function durationHistogram() {
   return { buckets: durationBuckets.map(() => 0), count: 0, sum: 0 };
 }
 
-function observeDuration(histogram, startedAt) {
-  const seconds = (performance.now() - startedAt) / 1000;
+function observeDuration(histogram, seconds) {
   histogram.count++;
   histogram.sum += seconds;
   for (let i = 0; i < durationBuckets.length; i++) {
@@ -34,6 +36,40 @@ function observeDuration(histogram, startedAt) {
       break;
     }
   }
+}
+
+function recordRequestMetrics(version, statusClass, startedAt) {
+  const seconds = (performance.now() - startedAt) / 1000;
+  requestsByStatusClass[statusClass]++;
+  observeDuration(requestDuration, seconds);
+
+  if (!version.organization_id || !version.worker_id || !version.environment) {
+    return;
+  }
+  const metrics = versionRequests.get(version.id) ?? {
+    labels: [
+      `organization_id=${metricLabel(version.organization_id)}`,
+      `worker_id=${metricLabel(version.worker_id)}`,
+      `environment=${metricLabel(version.environment)}`,
+      `version_id=${metricLabel(version.id)}`,
+    ].join(","),
+    non5xx: 0,
+    errors5xx: 0,
+    duration: durationHistogram(),
+    lastSeen: 0,
+  };
+  if (statusClass === "5xx") {
+    metrics.errors5xx++;
+  } else {
+    metrics.non5xx++;
+  }
+  observeDuration(metrics.duration, seconds);
+  metrics.lastSeen = Date.now();
+  lruPut(versionRequests, version.id, metrics, versionMetricsMax);
+}
+
+function metricLabel(value) {
+  return '"' + value.replaceAll("\\", "\\\\").replaceAll("\n", "\\n").replaceAll('"', '\\"') + '"';
 }
 
 function histogramSamples(name, histogram, labels = "") {
@@ -79,6 +115,29 @@ export class Metrics extends WorkerEntrypoint {
           "krun_worker_bundle_load_duration_seconds",
           histogram,
           `outcome="${outcome}"`,
+        ),
+      );
+    }
+    samples.push(
+      "# HELP krun_worker_version_requests_total Completed HTTP dispatches by Worker version and outcome.",
+      "# TYPE krun_worker_version_requests_total counter",
+      "# HELP krun_worker_version_request_duration_seconds HTTP dispatch time to response by Worker version.",
+      "# TYPE krun_worker_version_request_duration_seconds histogram",
+    );
+    const cutoff = Date.now() - versionMetricsIdleMs;
+    for (const [id, metrics] of versionRequests) {
+      if (metrics.lastSeen < cutoff) {
+        versionRequests.delete(id);
+        continue;
+      }
+      const { labels } = metrics;
+      samples.push(
+        `krun_worker_version_requests_total{${labels},outcome="non_5xx"} ${metrics.non5xx}`,
+        `krun_worker_version_requests_total{${labels},outcome="5xx"} ${metrics.errors5xx}`,
+        ...histogramSamples(
+          "krun_worker_version_request_duration_seconds",
+          metrics.duration,
+          labels,
         ),
       );
     }
@@ -1524,10 +1583,10 @@ function trackWorkerSource(entry, prepare) {
     const startedAt = performance.now();
     try {
       const code = await prepare();
-      observeDuration(bundleLoadDuration.success, startedAt);
+      observeDuration(bundleLoadDuration.success, (performance.now() - startedAt) / 1000);
       return code;
     } catch (error) {
-      observeDuration(bundleLoadDuration.error, startedAt);
+      observeDuration(bundleLoadDuration.error, (performance.now() - startedAt) / 1000);
       entry.sourceFailed = true;
       throw error;
     }
@@ -1971,8 +2030,7 @@ export class Private extends WorkerEntrypoint {
             : "other";
           return response;
         } finally {
-          requestsByStatusClass[statusClass]++;
-          observeDuration(requestDuration, startedAt);
+          recordRequestMetrics(d, statusClass, startedAt);
           request.signal.removeEventListener("abort", finish);
           finish();
           if (stub) {

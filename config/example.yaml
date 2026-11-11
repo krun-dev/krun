@@ -2,6 +2,10 @@
 # 生产：development: false，public_url 使用真实 HTTPS origin。
 # 本地：development: true 时，listen 和 internal_listen 必须使用回环 IP，如 127.0.0.1。
 # Vite 本地入口可设 public_url: http://127.0.0.1:5173。
+# 可选。Grafana 地址使用浏览器能访问的 URL，允许配置子路径。
+# worker_metrics:
+#   grafana_url: https://grafana.example.com
+#   dashboard_uid: krun-worker-metrics
 # 若不用 Vite、直接访问 Go 提供的静态前端，本地 public_url 改为 http://127.0.0.1:8080。
 listen: 0.0.0.0:8080
 # Workers runtime 的配置流、制品下载与 ACK 只监听此端口。启用下方 workers:

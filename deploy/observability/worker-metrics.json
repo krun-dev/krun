@@ -1,0 +1,176 @@
+{
+  "uid": "krun-worker-metrics",
+  "title": "krun Worker Metrics",
+  "schemaVersion": 41,
+  "tags": ["krun", "workers"],
+  "editable": false,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "organization",
+        "type": "textbox",
+        "hide": 2,
+        "query": "__none__",
+        "current": {
+          "text": "__none__",
+          "value": "__none__"
+        }
+      },
+      {
+        "name": "worker",
+        "type": "textbox",
+        "hide": 2,
+        "query": "__none__",
+        "current": {
+          "text": "__none__",
+          "value": "__none__"
+        }
+      },
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "victoria-metrics"
+        },
+        "query": "label_values(krun_worker_version_requests_total{job=\"krun-worker-runtime\",organization_id=${organization:doublequote},worker_id=${worker:doublequote}}, environment)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "version",
+        "label": "Version",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "victoria-metrics"
+        },
+        "query": "label_values(krun_worker_version_requests_total{job=\"krun-worker-runtime\",organization_id=${organization:doublequote},worker_id=${worker:doublequote},environment=~\"${environment:regex}\"}, version_id)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Requests",
+      "description": "Completed HTTP requests forwarded to the Worker, per time interval. Static assets served directly are excluded.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (environment, version_id) (increase_pure(krun_worker_version_requests_total{job=\"krun-worker-runtime\",organization_id=${organization:doublequote},worker_id=${worker:doublequote},environment=~\"${environment:regex}\",version_id=~\"${version:regex}\"}[$__interval]))",
+          "legendFormat": "{{environment}} / {{version_id}}"
+        }
+      ],
+      "interval": "30s"
+    },
+    {
+      "id": 2,
+      "title": "HTTP 5xx ratio",
+      "description": "Share of forwarded requests that returned HTTP 5xx or failed before returning a response.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (environment, version_id) (increase_pure(krun_worker_version_requests_total{job=\"krun-worker-runtime\",organization_id=${organization:doublequote},worker_id=${worker:doublequote},environment=~\"${environment:regex}\",version_id=~\"${version:regex}\",outcome=\"5xx\"}[$__interval])) / (sum by (environment, version_id) (increase_pure(krun_worker_version_requests_total{job=\"krun-worker-runtime\",organization_id=${organization:doublequote},worker_id=${worker:doublequote},environment=~\"${environment:regex}\",version_id=~\"${version:regex}\"}[$__interval])) > 0)",
+          "legendFormat": "{{environment}} / {{version_id}}"
+        }
+      ],
+      "interval": "30s"
+    },
+    {
+      "id": 3,
+      "title": "Response latency",
+      "description": "Time from forwarding to receiving the Worker response, including cold loading when applicable.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (environment, version_id, le) (increase_pure(krun_worker_version_request_duration_seconds_bucket{job=\"krun-worker-runtime\",organization_id=${organization:doublequote},worker_id=${worker:doublequote},environment=~\"${environment:regex}\",version_id=~\"${version:regex}\"}[$__rate_interval])))",
+          "legendFormat": "{{environment}} / {{version_id}} · P50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (environment, version_id, le) (increase_pure(krun_worker_version_request_duration_seconds_bucket{job=\"krun-worker-runtime\",organization_id=${organization:doublequote},worker_id=${worker:doublequote},environment=~\"${environment:regex}\",version_id=~\"${version:regex}\"}[$__rate_interval])))",
+          "legendFormat": "{{environment}} / {{version_id}} · P95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (environment, version_id, le) (increase_pure(krun_worker_version_request_duration_seconds_bucket{job=\"krun-worker-runtime\",organization_id=${organization:doublequote},worker_id=${worker:doublequote},environment=~\"${environment:regex}\",version_id=~\"${version:regex}\"}[$__rate_interval])))",
+          "legendFormat": "{{environment}} / {{version_id}} · P99"
+        }
+      ]
+    }
+  ]
+}
