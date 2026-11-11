@@ -32,28 +32,42 @@ func (s *Server) apiRoutes(m *recordingMux) {
 	m.useScope(scopeActorAudit)
 	m.HandleFunc("GET /api/v1/system/audit", s.protected(false, s.auditList))
 	m.HandleFunc("GET /api/v1/orgs/{org}/audit", s.protected(false, s.auditList))
-	m.useScope(scopeNone)
+	m.useScope(scopeOrganizationWide)
 	m.HandleFunc("GET /api/v1/orgs/{org}/members", s.protected(false, s.members))
+	m.useScope(scopeNone)
 	m.HandleFunc("POST /api/v1/orgs/{org}/members", s.protected(true, s.memberAdd))
 	m.HandleFunc("DELETE /api/v1/orgs/{org}/members/{user}", s.protected(true, s.memberDelete))
 	for _, base := range []string{"/api/v1/orgs/{org}", "/api/v1/system"} {
 		m.useScope(scopeActorAudit)
 		m.HandleFunc("GET "+base+"/audit/export", s.protected(false, s.auditExport))
-		m.useScope(scopeNone)
+		if base == "/api/v1/orgs/{org}" {
+			m.useScope(scopeOrganizationWide)
+		} else {
+			m.useScope(scopeNone)
+		}
 		m.HandleFunc("GET "+base+"/groups", s.protected(false, s.groupList))
+		if base == "/api/v1/orgs/{org}" {
+			m.useScope(scopeOrganizationWide)
+		} else {
+			m.useScope(scopeNone)
+		}
+		m.HandleFunc("GET "+base+"/role-assignments", s.protected(false, s.assignmentList))
+		m.useScope(scopeNone)
 		m.HandleFunc("POST "+base+"/groups", s.protected(true, s.groupCreate))
 		m.HandleFunc("PATCH "+base+"/groups/{group}", s.protected(true, s.groupUpdate))
 		m.HandleFunc("DELETE "+base+"/groups/{group}", s.protected(true, s.groupDelete))
 		m.HandleFunc("PUT "+base+"/groups/{group}/members/{user}", s.protected(true, s.groupMember))
 		m.HandleFunc("DELETE "+base+"/groups/{group}/members/{user}", s.protected(true, s.groupMember))
-		m.HandleFunc("GET "+base+"/role-assignments", s.protected(false, s.assignmentList))
 		m.HandleFunc("POST "+base+"/role-assignments", s.protected(true, s.assignmentCreate))
 		m.HandleFunc("PUT "+base+"/role-assignments/{assignment}", s.protected(true, s.assignmentUpdate))
 		m.HandleFunc("DELETE "+base+"/role-assignments/{assignment}", s.protected(true, s.assignmentDelete))
 		m.HandleFunc("POST "+base+"/api-keys", s.protected(true, s.keyCreate))
 	}
+	m.useScope(scopeNone)
 	m.HandleFunc("GET /api/v1/system/api-keys", s.protected(false, s.keyList))
+	m.useScope(scopeOrganizationWide)
 	m.HandleFunc("GET /api/v1/orgs/{org}/api-keys", s.protected(false, s.keyList))
+	m.useScope(scopeNone)
 	m.HandleFunc("GET /api/v1/api-keys/{key}", s.protected(false, s.keyDetail))
 	m.HandleFunc("PATCH /api/v1/api-keys/{key}", s.protected(true, s.keyUpdate))
 	m.HandleFunc("DELETE /api/v1/api-keys/{key}", s.protected(false, s.keyDelete))

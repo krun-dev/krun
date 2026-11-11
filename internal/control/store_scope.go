@@ -42,6 +42,9 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 		// Organization catalogs and bindings do not need build, version or
 		// operation rows; only the organization's Worker/resource rows.
 		scope.Summary = true
+	case scopeOrganizationWide:
+		scope.OrganizationWide = true
+		scope.Summary = true
 	case scopeWorker:
 		scope.Summary = false
 	case scopeWorkerSummary:
