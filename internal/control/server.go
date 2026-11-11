@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/krun-dev/krun/internal/adapters/bucketobjects"
+	"github.com/krun-dev/krun/internal/adapters/cfcompat"
 	identityprovider "github.com/krun-dev/krun/internal/adapters/identity"
 	mailer "github.com/krun-dev/krun/internal/adapters/mail"
 	"github.com/krun-dev/krun/internal/adapters/storagecredentials"
@@ -60,6 +61,7 @@ type Server struct {
 	Config             appconfig.Config
 	Store              *Store
 	mux                *http.ServeMux
+	cf                 *cfcompat.Server
 	routeScopes        map[string]readScopeMode
 	internalMux        *http.ServeMux
 	providers          map[string]*identityprovider.Provider
@@ -111,6 +113,38 @@ func NewServer(ctx context.Context, c appconfig.Config, store *Store) (*Server, 
 		if err != nil {
 			return nil, err
 		}
+	}
+	s.cf = &cfcompat.Server{
+		Config:      &s.Config,
+		Store:       s.Store,
+		Workers:     s.workers,
+		Application: s.workerApplication,
+		IAM:         s.iam,
+		DecodeBody:  body,
+		ReadCredentials: func(r *http.Request) (cfcompat.Credentials, error) {
+			credentials, err := s.readCredentials(r)
+			return cfCredentials(credentials), err
+		},
+		ResolveAccount: s.resolveCloudflareAccount,
+		ScopedRequest: func(r *http.Request, credentials cfcompat.Credentials) (*http.Request, error) {
+			return s.scopedRequest(r, controlCredentials(credentials))
+		},
+		ProtectedPrincipal: func(st *State, credentials cfcompat.Credentials, r *http.Request, sessionOnly bool) (Principal, error) {
+			return s.protectedPrincipal(st, controlCredentials(credentials), r, sessionOnly)
+		},
+		ProtectedWorkers: func(sessionOnly bool, limit int64, fn cfcompat.Endpoint) http.HandlerFunc {
+			return s.protectedWorkersWithBodyLimit(sessionOnly, limit, func(st *State, p Principal, r *http.Request) (any, int, error) {
+				return fn(st, p, r)
+			})
+		},
+		Require:        s.require,
+		WorkerTarget:   s.workerTarget,
+		OrgTarget:      s.orgTarget,
+		ResourceTarget: s.resourceTarget,
+		OrgList:        s.orgList,
+		CheckRateLimit: s.checkRateLimit,
+		JSON:           s.json,
+		WriteError:     s.writeError,
 	}
 	s.routes()
 	return s, nil
@@ -427,8 +461,8 @@ func (s *Server) protectedWith(sessionOnly bool, load, persist StatePartition, b
 		if err != nil {
 			appErr = err
 		}
-		if deferred, ok := out.(deferredResponse); ok && appErr == nil {
-			out, status, appErr = deferred.run(r.Context())
+		if deferred, ok := out.(deferredRunner); ok && appErr == nil {
+			out, status, appErr = deferred.Run(r.Context())
 		}
 		if appErr != nil {
 			s.writeError(w, r, appErr)

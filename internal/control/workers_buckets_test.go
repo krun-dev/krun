@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/krun-dev/krun/internal/adapters/cfcompat"
 	"github.com/krun-dev/krun/internal/adapters/storagecredentials"
 	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/domain"
@@ -60,7 +61,7 @@ func TestBucketAPIAndCloudflareBindings(t *testing.T) {
 	if out := request(s, "GET", strings.Replace(cf, "org-a", "org-b", 1), "krun_cli_admin", ""); out.Code != 404 {
 		t.Fatal("cross-account bucket visible", out.Code)
 	}
-	input, err := cfBindingInput(cfUploadMetadata{Bindings: []cfBinding{{Name: "IMAGES", Type: "r2_bucket", BucketName: "images"}}}, false)
+	input, err := cfcompat.BindingInput(cfcompat.UploadMetadata{Bindings: []cfcompat.Binding{{Name: "IMAGES", Type: "r2_bucket", BucketName: "images"}}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +80,7 @@ func TestBucketAPIAndCloudflareBindings(t *testing.T) {
 		if version.R2Bindings["IMAGES"].BucketID != bucket.ID {
 			t.Fatal("version binding changed with desired configuration")
 		}
-		encoded, _ := json.Marshal(cfBindings(WorkerEnvironment{R2Bindings: version.R2Bindings}))
+		encoded, _ := json.Marshal(cfcompat.Bindings(WorkerEnvironment{R2Bindings: version.R2Bindings}))
 		if !strings.Contains(string(encoded), `"bucket_name":"images"`) || strings.Contains(string(encoded), "store_id") {
 			t.Fatal("invalid Cloudflare binding response")
 		}
