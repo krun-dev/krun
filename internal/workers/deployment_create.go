@@ -41,7 +41,6 @@ func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, 
 		return nil, Read, domain.Invalid("WORKER_VERSION_INVALID", "expected_revision and idempotency_key required")
 	}
 	ws := s.Worker(st, t)
-	current := ws.Environments[env]
 	key := WorkerIdempotencyKey(t, p, kind, env, in.Key)
 	id, e := WorkerIdempotent(st, key, in)
 	if e != nil {
@@ -60,12 +59,8 @@ func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, 
 	if current.Revision != in.Revision {
 		return nil, Read, domain.Conflict("REVISION_CONFLICT", "Environment version changed")
 	}
-	for _, active := range st.Workers.Operations {
-		// Cancellation is only possible before commit; a committed version is
-		// durable and may be replaced by a newer publish.
-		if active.Worker == t.ID && active.Environment == env && !appconfig.WorkerTerminal(active.State) && active.State != "committed" {
-			return nil, Read, domain.Conflict("DEPLOYMENT_BUSY", "Wait for the active version operation")
-		}
+	if WorkerBusy(st, t.ID, env) {
+		return nil, Read, domain.Conflict("DEPLOYMENT_BUSY", "Wait for the active version operation")
 	}
 	var version domain.WorkerVersion
 	if kind == "publish" && in.Version != "" && in.Build == "" {
@@ -89,25 +84,7 @@ func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, 
 		if !ok || a.State != "finalized" {
 			return nil, Read, domain.Conflict("ARTIFACT_UNAVAILABLE", "Artifact unavailable")
 		}
-		version = domain.WorkerVersion{
-			R2Bindings:         domain.CloneR2Bindings(current.R2Bindings),
-			HyperdriveBindings: cloneHyperdriveBindings(current.HyperdriveBindings),
-			VersionMetadata:    current.VersionMetadata,
-			AssetsBinding:      current.AssetsBinding,
-			Worker:             t.ID,
-			Organization:       t.Organization,
-			Environment:        env,
-			Artifact:           a.ID,
-			Profile:            a.Profile,
-			ArchiveDigest:      a.ArchiveDigest,
-			ModuleDigest:       a.ModuleDigest,
-			CompatibilityDate:  a.CompatibilityDate,
-			CompatibilityFlags: append([]string(nil), a.CompatibilityFlags...),
-			ConfigRevision:     current.ConfigRevision,
-			Variables:          domain.CloneWorkerVariables(current.Variables),
-			SecretDigest:       WorkerSecretsDigest(current.SecretVersions),
-			SecretVersions:     domain.CloneStringsMap(current.SecretVersions),
-		}
+		version = versionSnapshot(t.Organization, t.ID, env, a, current)
 		version.Configuration = inheritedConfiguration(st, current)
 		raw, _ := json.Marshal(version)
 		digest := workerartifact.BytesDigest(raw)
@@ -140,27 +117,33 @@ func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, 
 		}
 		version = d
 	}
-	id = securetoken.NewID("op")
-	op := domain.WorkerOperation{
-		ID:               id,
+	return queueWorkerDeployment(st, p, domain.WorkerOperation{
 		Kind:             kind,
 		Organization:     t.Organization,
 		Worker:           t.ID,
 		Environment:      env,
-		State:            "queued",
 		Build:            in.Build,
 		Version:          version.ID,
 		ExpectedRevision: current.Revision,
 		ConfigRevision:   current.ConfigRevision,
-		Steps:            []domain.WorkerStep{{Name: "artifact", State: "pending"}, {Name: "candidate", State: "pending"}, {Name: "commit", State: "pending"}, {Name: "synchronize", State: "pending"}},
-		Created:          time.Now().UTC(),
-	}
-	st.Workers.Operations[id] = op
-	RememberDeployment(st, op)
-	st.Workers.OperationPrivate[id] = domain.WorkerOperationPrivate{Actor: WorkerActor(p)}
-	WorkerRemember(st, key, in, id)
-	return op, Queued, nil
+	}, key, in), Queued, nil
+}
 
+func queueWorkerDeployment(st *domain.State, p authorization.Principal, op domain.WorkerOperation, key string, input any) domain.WorkerOperation {
+	op.ID = securetoken.NewID("op")
+	op.State = "queued"
+	op.Steps = []domain.WorkerStep{
+		{Name: "artifact", State: "pending"},
+		{Name: "candidate", State: "pending"},
+		{Name: "commit", State: "pending"},
+		{Name: "synchronize", State: "pending"},
+	}
+	op.Created = time.Now().UTC()
+	st.Workers.Operations[op.ID] = op
+	RememberDeployment(st, op)
+	st.Workers.OperationPrivate[op.ID] = domain.WorkerOperationPrivate{Actor: WorkerActor(p)}
+	WorkerRemember(st, key, input, op.ID)
+	return op
 }
 
 func (s *Service) WorkerOperationGet(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {

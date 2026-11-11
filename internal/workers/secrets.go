@@ -278,11 +278,13 @@ func (s *Service) WorkerSecretBatch(ctx context.Context, st *domain.State, p aut
 		WorkerRemember(st, key, in, version.ID)
 		return version, Created, nil
 	}
-	operationID := securetoken.NewID("op")
-	op := domain.WorkerOperation{ID: operationID, Kind: "secret", Organization: target.Organization, Worker: target.ID, Environment: environment, State: "queued", Version: version.ID, ExpectedRevision: in.Revision, ConfigRevision: current.ConfigRevision, Steps: []domain.WorkerStep{{Name: "artifact", State: "pending"}, {Name: "candidate", State: "pending"}, {Name: "commit", State: "pending"}, {Name: "synchronize", State: "pending"}}, Created: time.Now().UTC()}
-	st.Workers.Operations[op.ID] = op
-	RememberDeployment(st, op)
-	st.Workers.OperationPrivate[op.ID] = domain.WorkerOperationPrivate{Actor: WorkerActor(p)}
-	WorkerRemember(st, key, in, op.ID)
-	return op, Queued, nil
+	return queueWorkerDeployment(st, p, domain.WorkerOperation{
+		Kind:             "secret",
+		Organization:     target.Organization,
+		Worker:           target.ID,
+		Environment:      environment,
+		Version:          version.ID,
+		ExpectedRevision: in.Revision,
+		ConfigRevision:   current.ConfigRevision,
+	}, key, in), Queued, nil
 }

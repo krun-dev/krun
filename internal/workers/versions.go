@@ -95,10 +95,16 @@ func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p a
 	return version, Created, nil
 }
 func SnapshotVersion(org, worker, environment string, artifact domain.WorkerArtifact, config domain.WorkerEnvironment) domain.WorkerVersion {
+	version := versionSnapshot(org, worker, environment, artifact, config)
+	version.ID = securetoken.UUID()
+	version.Created = time.Now().UTC()
+	return version
+}
+
+func versionSnapshot(org, worker, environment string, artifact domain.WorkerArtifact, config domain.WorkerEnvironment) domain.WorkerVersion {
 	return domain.WorkerVersion{
 		R2Bindings:         domain.CloneR2Bindings(config.R2Bindings),
 		HyperdriveBindings: cloneHyperdriveBindings(config.HyperdriveBindings),
-		ID:                 securetoken.UUID(),
 		VersionMetadata:    config.VersionMetadata,
 		AssetsBinding:      config.AssetsBinding,
 		Organization:       org,
@@ -114,7 +120,6 @@ func SnapshotVersion(org, worker, environment string, artifact domain.WorkerArti
 		Variables:          domain.CloneWorkerVariables(config.Variables),
 		SecretVersions:     domain.CloneStringsMap(config.SecretVersions),
 		SecretDigest:       WorkerSecretsDigest(config.SecretVersions),
-		Created:            time.Now().UTC(),
 	}
 }
 func (s *Service) WorkerVersionList(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, options ...VersionPageOptions) (any, Outcome, error) {

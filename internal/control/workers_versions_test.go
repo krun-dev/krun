@@ -174,6 +174,15 @@ func TestBuildDeploymentFreezesJSONAndVersionMetadata(t *testing.T) {
 		if version.VersionMetadata != "META" || version.Variables["CONFIG"].(map[string]any)["nullable"] != nil {
 			t.Fatal("native deployment lost frozen bindings", version)
 		}
+		version.ID, version.CreatedBy, version.CreatedByName = "", "", ""
+		version.Created = time.Time{}
+		raw, err := json.Marshal(version)
+		if err != nil {
+			return err
+		}
+		if op.Version != "rel-"+digest(string(raw)) {
+			t.Fatal("build deployment version ID no longer matches its snapshot digest")
+		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
