@@ -71,7 +71,7 @@ flowchart LR
 
 必须提供：
 
-- PostgreSQL 独立数据库及备份；完整 schema 由当前源码初始化，不做自动迁移/删库。
+- 独立 PostgreSQL 数据库及备份。空库启动时初始化完整 schema，已有库通过显式命令升级。
 - 公司 OIDC/OAuth2 应用；回调为 `https://<console>/api/auth/company/callback`。
 - 公司 GitLab OAuth 应用；回调为
   `https://<console>/api/v1/workers/repository/company-gitlab/callback`，用户连接自己的仓库授权。
@@ -180,13 +180,56 @@ FQDN 白名单。需要更严的目的域限制时，使用公司 CNI 的 FQDN �
 
 ## 更新与恢复
 
-保留每个 release 的私有配置清单、镜像 digest、数据库备份及 Worker 加密 key ring。
-更新时重新渲染并 apply；pod template 的配置/Secret hash 会触发 rollout。回退应重新
-应用上一版完整清单，不能只 rollout undo 后假定 Secret/ConfigMap 也被回退。
+### 停写升级
 
-数据库 schema fingerprint 不一致会拒绝启动。当前没有自动数据库升级机制，公司
-持久数据必须先制定迁移与恢复步骤，不能复用开发环境清库流程。更换 storage location、
-pool ID、域名或存储 prefix 也需要显式规划；不要原地把稳定 ID 指向另一个安全边界。
+在对正式数据库执行下列步骤前，先用备份和对象存储副本完成一次隔离的升级及恢复演练。
+
+1. 进入维护窗，停止所有控制面副本和后台写入。记录上一版镜像 digest、私有配置清单、
+   Worker 加密 key ring 版本、PostgreSQL 备份恢复点和对应的对象存储备份。保留历史版本
+   引用的制品、静态资产和对应时点的 Runtime 配置对象。
+2. 用目标版本的二进制和主配置执行升级。以下命令需要 PostgreSQL 客户端工具（版本至少与服务器
+   主版本一致）和目标版本的 `krun-server`。`krun_source` 是源库的 PostgreSQL service
+   名称，凭据由 service 配置及凭据文件提供。执行前核对 service 和
+   `/config/control.yaml` 中的 `db` 指向同一个 PostgreSQL 实例和数据库，并确认应用使用的 schema。
+
+   ```sh
+   umask 077
+   KRUN_BACKUP_DIR="$(mktemp -d ./krun-db-backup.XXXXXX)" &&
+     KRUN_BACKUP_FILE="$KRUN_BACKUP_DIR/krun-before-upgrade.dump" &&
+     pg_dump --dbname='service=krun_source' --format=custom --file="$KRUN_BACKUP_FILE" &&
+     pg_restore --list "$KRUN_BACKUP_FILE" >/dev/null &&
+     krun-server migrate --config /config/control.yaml --lang en
+   ```
+
+3. 命令成功后部署目标版本的完整清单。重复执行应返回 `Database schema is already current`。
+   控制面启动即恢复协调和后台清理。继续拦截外部写流量，核对 `/api/healthz` 返回 200、
+   历史版本可查询，并通过真实入口调用指定版本，验证制品、静态资产和需要历史 Secret 的
+   业务行为。通过后恢复外部写流量。
+
+已支持的来源见[存储说明](../../docs/storage.md#schema-基线)。`no supported schema upgrade`
+表示来源 fingerprint 与目标版本之间缺少已发布的升级路径，应使用支持该路径的版本或恢复匹配的备份。
+`schema upgrade requires an existing krun database` 或 `existing schema fingerprint`
+表示目标库或 schema 选择有误，先核对主配置中的数据库与 `search_path`。
+`lock timeout` 表示仍有连接持锁，确认写入已停止后重试。
+
+### 失败回滚与备份恢复
+
+- 升级事务失败时，增量 DDL 和 fingerprint 更新一并回滚。核对源库 fingerprint 后，启动上一版
+  完整清单验证健康和数据。连接在提交时中断的情况下，先用同一目标版本重试并确认最终状态。
+- 升级已提交而需要回退时，在保持停写的情况下把备份恢复到**新建的空数据库**。
+  `krun_recovery` 是指向该空库的 PostgreSQL service 名称。用有建表权限的应用所有者
+  角色恢复，让它拥有新对象。若服务使用不同的运行角色，启动前按部署配置重新授予权限。
+  将 `KRUN_BACKUP_FILE` 设为步骤 2 生成的备份文件路径。
+
+  ```sh
+  pg_restore --dbname='service=krun_recovery' --no-owner --no-acl --exit-on-error \
+    --single-transaction "$KRUN_BACKUP_FILE"
+  ```
+
+- 用上一版镜像、私有配置和 key ring 指向恢复库。隔离验收时使用对象存储副本，保留备份时的
+  `storage_location_id`、对象键及对应的 Runtime 配置指针。替换 Runtime Pod 后再检查业务，
+  避免旧 Pod 的内存状态影响结果。验证 `/api/healthz`、历史版本调用和资产读取后再切流，
+  并记录实测恢复耗时和恢复点。
 
 ## 三入口集群测试配置
 

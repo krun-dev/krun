@@ -9,9 +9,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// schemaSQL is the only supported control-plane schema. The project has not
-// shipped yet, so startup creates this baseline directly; there is deliberately
-// no migration ledger or compatibility import path.
+// schemaSQL is the full baseline for new databases. Existing databases may
+// change baselines only through the explicit migration command.
 //
 // No foreign keys: reference integrity comes from write-path validation,
 // explicit cascade deletes in the same statement batch, and reconciliation
@@ -20,8 +19,7 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-// The schema fingerprint identifies this source baseline, not an upgrade path.
-// An existing database must already match; initialization never rewrites it.
+// An existing database must match the schema fingerprint before serving.
 func initializeStoreSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -37,7 +35,7 @@ func initializeStoreSchema(ctx context.Context, pool *pgxpool.Pool) error {
 		var stored string
 		err = tx.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='schema_baseline'`).Scan(&stored)
 		if errors.Is(err, pgx.ErrNoRows) || err == nil && stored != baseline {
-			return errors.New("database does not match the current schema baseline; recreate the development/test database explicitly")
+			return errors.New("database does not match the current schema baseline; run krun-server migrate for a supported upgrade or restore a matching database")
 		}
 		if err != nil {
 			return err

@@ -65,5 +65,6 @@ KRUN_INTERNAL_DOCS_DIR=../docs-internal npm run docs:dev
 | 自动化验证 | [验证](verification.md) |
 | 规模边界与压测复现 | [规模](performance-scaling.md) |
 
-开发和测试库需要显式重建时，先停止所有连接并确认它是可丢弃的专用数据库；启动器
-不会自动清空数据库或对象存储。现有库 fingerprint 与源码基线不同会拒绝启动。
+现有库 fingerprint 与源码基线不同会拒绝启动。受支持的旧库可按
+[数据库升级与恢复](../deploy/production/README.md#更新与恢复)在维护窗升级。仅对可丢弃的
+开发或测试库执行显式重建。

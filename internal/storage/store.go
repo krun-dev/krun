@@ -43,6 +43,18 @@ const (
 )
 
 func Open(ctx context.Context, dsn string, keys RepositoryTokenKeys) (*Store, error) {
+	pool, err := openPostgresPool(ctx, dsn)
+	if err != nil {
+		return nil, err
+	}
+	if err = initializeStoreSchema(ctx, pool); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return &Store{pool: pool, orm: newORM(pool), repositoryTokenKeys: keys}, nil
+}
+
+func openPostgresPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	if dsn == "" {
 		return nil, errors.New("PostgreSQL db required")
 	}
@@ -53,15 +65,7 @@ func Open(ctx context.Context, dsn string, keys RepositoryTokenKeys) (*Store, er
 	// Detect connections invalidated by a quick database restart before beginning
 	// a transaction; never retry an already-running state mutation.
 	config.ShouldPing = func(context.Context, pgxpool.ShouldPingParams) bool { return true }
-	pool, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		return nil, err
-	}
-	if err = initializeStoreSchema(ctx, pool); err != nil {
-		pool.Close()
-		return nil, err
-	}
-	return &Store{pool: pool, orm: newORM(pool), repositoryTokenKeys: keys}, nil
+	return pgxpool.NewWithConfig(ctx, config)
 }
 
 func (s *Store) Close() {

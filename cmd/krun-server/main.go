@@ -5,11 +5,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/krun-dev/krun/internal/control"
-	"github.com/krun-dev/krun/internal/localize"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/krun-dev/krun/internal/control"
+	"github.com/krun-dev/krun/internal/localize"
+	"github.com/krun-dev/krun/internal/storage"
 )
 
 func run() (result error) {
@@ -37,6 +39,9 @@ func run() (result error) {
 	if e := flags.Parse(args); e != nil {
 		return e
 	}
+	if command == "migrate" && flags.NArg() != 0 {
+		return errors.New("migrate accepts no positional arguments")
+	}
 	c, e := control.LoadConfig(*config)
 	if e != nil {
 		return e
@@ -46,6 +51,18 @@ func run() (result error) {
 	ctx = localize.WithLanguage(ctx, lang)
 	if command == "serve" {
 		return control.Serve(ctx, c)
+	}
+	if command == "migrate" {
+		applied, err := storage.MigrateSchema(ctx, c.DB)
+		if err != nil {
+			return err
+		}
+		message := "Database schema is already current"
+		if applied {
+			message = "Database schema upgraded"
+		}
+		fmt.Fprintln(os.Stdout, localize.Text(lang, message))
+		return nil
 	}
 	s, e := control.OpenStore(ctx, c)
 	if e != nil {
@@ -58,7 +75,7 @@ func run() (result error) {
 	case "invite":
 		return control.Invite(ctx, s, *source, *subject)
 	default:
-		return fmt.Errorf("unknown command %q; use serve, bootstrap or invite", command)
+		return fmt.Errorf("unknown command %q; use serve, bootstrap, invite or migrate", command)
 	}
 }
 func main() {

@@ -107,10 +107,10 @@
 ## 6. 当前基线
 
 项目尚未上线，以当前代码、主配置与 `internal/storage/schema.sql` 为唯一基线。
-不保留旧路由、旧制品格式、旧库导入、补列或回填兼容。数据库初始化保存 schema
-fingerprint；已有库与基线不一致时拒绝启动，由开发者显式重建专用开发/测试库。
-禁止启动时自动删库、删表或重写旧数据。后续模型修改直接更新完整建表定义，正式上线
-后的升级策略另行制定。
+数据库初始化保存 schema fingerprint，已有库与基线不一致时拒绝启动。受支持的旧库在
+维护窗内通过 `krun-server migrate` 显式升级。修改完整建表定义时，为需要保留数据的
+来源版本追加固定 fingerprint 的迁移步骤，并验证失败回滚和备份恢复。启动过程禁止
+自动升级、删库、删表或重写旧数据。
 
 文档只描述已实现接口、运行约束和复现步骤；不保留评审稿、实施阶段或未实现方案。
 当前架构入口见 [docs/README.md](docs/README.md)。
@@ -169,7 +169,7 @@ fingerprint；已有库与基线不一致时拒绝启动，由开发者显式重
 - `internal/authorization` 负责 Cedar、权限交集、策略校验及资源解析；只依赖共享模型和 Cedar。授权缓存仅供单次只读请求使用，不进入 `State` 或存储层。
 - `internal/storage` 集中 SQL、行映射、事务、CAS 和数据库清理，按认证、IAM、Workers、配置分发等领域组织。对外只提供有业务含义的类型化存储方法，不暴露 `pgx.Tx`、Rows 或连接池。
 - `internal/domain` 保存共享数据类型，只依赖标准库。待提交命令必须显式 `json:"-"`，不得进入序列化快照。通用随机凭据、ID 与摘要实现集中在 `internal/securetoken`。
-- 完整 DDL 唯一来源是 `internal/storage/schema.sql`，由同目录 `schema.go` 嵌入并校验 fingerprint；不增加自动迁移或启动回填。
+- 完整 DDL 唯一来源是 `internal/storage/schema.sql`，由同目录 `schema.go` 嵌入并校验 fingerprint；`schema_migrate.go` 仅记录显式升级的增量步骤，不增加自动迁移或启动回填。
 - 改表时集中检查 DDL、domain 类型、对应 storage 文件和数据库测试。分层边界由 `TestStorageLayerBoundaries` 和 `TestIAMHandlersDoNotMutateEntities` 自动检查。当前实现边界见 [docs/architecture.md](docs/architecture.md)。
 
 - 业务模块为 `auth`、`iam`、`authorization`、`workers`、`repository`、`runtimeconfig` 和 `audit`；不得导入 HTTP、数据库驱动或基础设施 SDK，不得接收 `http.Request`。源码与制品校验在 `artifact`，配置在 `config`。

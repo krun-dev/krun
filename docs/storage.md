@@ -38,7 +38,7 @@ IAM 与 Workers 是两套独立分区，**不共享事务**：
 
 仓库 OAuth 的访问令牌与刷新令牌使用 `workers.secrets_keys` 中的版本化密钥做 AES-256-GCM
 加密。加密验证绑定用户、仓库提供商与字段。轮换时保留旧密钥版本，已有连接仍可读取，新连接
-及刷新后的令牌使用当前密钥。旧开发库按 schema fingerprint 校验，由开发者重建专用库后重新连接仓库。
+及刷新后的令牌使用当前密钥。旧库按 schema fingerprint 校验，受支持的版本可显式升级。
 
 构建日志正文仅存于对象存储；`krun_worker_build_private` 只保留 `log_key` 引用，不含日志正文列。
 
@@ -114,9 +114,15 @@ CF 资产临时对象在写入前登记 `krun_worker_source_uploads`，由现有
 
 ## Schema 基线
 
-`OpenStore` 只支持当前完整基线。新库在一个事务中创建表、索引、触发器和
-`schema_baseline` fingerprint；再次启动只校验 fingerprint。已有库不匹配时返回明确错误，
-不执行 ALTER、回填、导入或自动删除。开发/测试库由所有者显式重建；不改写任意已有数据库。
+`OpenStore` 在空库创建表、索引、触发器和 `schema_baseline` fingerprint。已有库启动时
+必须匹配当前基线。受支持的旧库停写后使用 `krun-server migrate --config /config/control.yaml`
+升级。命令锁定该 schema 的 fingerprint 行，将增量 DDL 和 fingerprint 更新提交为一个事务。
+同一目标重复执行会返回已是当前版本。空库、缺少 fingerprint 或没有完整升级路径的库会被拒绝。
+
+当前支持从指纹 `8f802b41ccf74f398f6c4c8ede9c480ad29b7e29ae95d7febda6046baa3842ef`
+升级，该基线包含提交 `96b6dd4`。这一步为已有构建补充 `config_path`，旧行取空字符串默认值。
+新增迁移时，在 `schema_migrate.go` 按发布顺序追加增量 SQL 和准确的源、目标文件 SHA-256，
+并更新建库 DDL。维护窗、备份与恢复步骤见[生产部署](../deploy/production/README.md#更新与恢复)。
 
 ## 已知限制
 
