@@ -25,9 +25,19 @@ krun 优先检查 Wrangler 配置，其次识别静态产物。ZIP 可以直接�
 ## 在 Workers 控制台上传
 
 1. 选择组织，打开 **Workers**，创建或打开要更新的 Worker。
-2. 选择目标环境，进入 **构建与发布 → 部署项目 → 上传部署**，拖入目录或 ZIP，也可以使用文件选择按钮。
-3. 查看识别出的类型和构建状态。构建成功后，点击 **发布**，核对目标环境并确认。
-4. 等运行时确认后，打开该环境的访问地址。更新站点时重新上传，历史版本可在 **版本与部署** 中回滚。
+2. 选择目标环境，进入 **构建与发布 → 部署项目 → 上传部署**。将目录或 ZIP 拖进虚线框，也可以点击 **选择文件夹** 或 **选择 ZIP**。
+
+   [![构建与发布页的部署项目区，拖入文件时右侧上传部署卡片以绿色虚线高亮](/docs/screenshots/local-upload/upload-entry.png)](/docs/screenshots/local-upload/upload-entry.png)
+
+3. 查看识别出的项目类型和构建状态。图中的 `upload-demo-site.zip` 被识别为「静态网站」。看到「构建成功」后，点击 **发布构建版本**。
+
+   [![上传部署卡片显示 ZIP 文件名、静态网站类型、构建成功状态和发布构建版本按钮](/docs/screenshots/local-upload/upload-build.png)](/docs/screenshots/local-upload/upload-build.png)
+
+4. 在弹窗核对目标环境，点击 **确认发布**。
+
+   [![发布构建版本弹窗选中 production，底部是确认发布按钮](/docs/screenshots/local-upload/upload-publish.png)](/docs/screenshots/local-upload/upload-publish.png)
+
+5. 在 **版本与部署** 确认新版本生效，再打开该环境的访问地址。更新站点时重新上传，历史版本可在 **版本与部署** 中回滚。
 
 上传和构建需要目标环境的构建权限，确认发布需要发布权限。
 
