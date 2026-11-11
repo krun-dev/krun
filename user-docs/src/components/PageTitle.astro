@@ -7,13 +7,9 @@ const hasSections = toc?.items.some((item) => item.slug !== "_top" || item.child
 const id = entry.id.replace(/\.(md|mdx)$/, "") || "index";
 const source = `/docs/${id}.md${import.meta.env.DEV ? "" : ".txt"}`;
 const isInternal = id === "internal" || id.startsWith("internal/");
-const workerPages = [
-  "guides/component-workers",
-  "guides/git-repositories",
-  "guides/gitlab-integration",
-  "guides/github-integration",
-  "guides/workers-runtime-compatibility",
-];
+const workerPages = ["guides/component-workers", "guides/workers-runtime-compatibility"];
+const deploymentPages = ["guides/deploy-project", "guides/git-repositories", "guides/deploy-local-project"];
+const gitProviderPages = ["guides/gitlab-integration", "guides/github-integration"];
 const wranglerPages = ["guides/cloudflare-workers", "guides/wrangler-configuration"];
 const section = isInternal
   ? ["内部文档"]
@@ -21,11 +17,15 @@ const section = isInternal
     ? ["命令行工具", "Wrangler 使用指南"]
     : id === "guides/krun-cli"
       ? ["命令行工具"]
-      : workerPages.includes(id)
-        ? ["组件", "计算 · Workers", ...(id.endsWith("-integration") ? ["Git 仓库集成"] : [])]
-        : id === "guides/component-object-storage"
-          ? ["组件"]
-          : ["开始使用"];
+      : gitProviderPages.includes(id)
+        ? ["组件", "计算 · Workers", "项目部署", "Git 仓库"]
+        : deploymentPages.includes(id)
+          ? ["组件", "计算 · Workers", "项目部署"]
+          : workerPages.includes(id)
+            ? ["组件", "计算 · Workers"]
+            : id === "guides/component-object-storage"
+              ? ["组件"]
+              : ["开始使用"];
 const eyebrow = isInternal ? "● INTERNAL ONLY" : "● GETTING STARTED";
 ---
 <div class="krun-breadcrumb">文档 <span>/</span> {section.map((label) => <>{label} <span>/</span>{" "}</>)} {Astro.locals.starlightRoute.entry.data.title}</div>

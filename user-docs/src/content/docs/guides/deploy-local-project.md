@@ -1,5 +1,5 @@
 ---
-title: 部署本地项目
+title: 上传部署
 description: 从浏览器、krun CLI 或 Wrangler 发布本地静态站点和 Worker 项目，无需 Git 仓库。
 ---
 
@@ -31,15 +31,18 @@ krun 优先检查 Wrangler 配置，其次识别静态产物。ZIP 可以直接�
 
 上传和构建需要目标环境的构建权限，确认发布需要发布权限。
 
-持续在 GitHub 或 GitLab 维护的项目也可以从仓库构建。[两种部署方式与验证步骤](/docs/guides/deploy-project.html)
-
 ## 使用 krun CLI 上传并部署
 
-先完成 [krun CLI 登录](/docs/guides/krun-cli.html)，并使用现有 Worker 的 ID，或者先创建一个 Worker。以下命令分别发布本地静态目录和 Worker 项目 ZIP。
+先[安装 krun CLI](/docs/guides/krun-cli.html#安装)，[配置控制台地址](/docs/guides/krun-cli.html#配置-endpoint)并[登录](/docs/guides/krun-cli.html#登录和退出)。CI 使用 [API Key 登录](/docs/guides/krun-cli.html#自动化与非交互登录)。按 [API Key 策略示例](/docs/guides/krun-cli.html#管理-api-key)将权限限定到目标 Worker，并授予 `worker.read`、`build.start`、`worker.version.read` 和 `worker.publish`。
+
+把 `ORG_ID` 换成 `krun org list` 返回的组织 ID，把 `WORKER_ID` 换成 `krun workers list --org "$ORG_ID"` 返回的 Worker ID。以下两条命令按本地内容任选一条，并将 `./dist` 或 `./worker.zip` 换成实际路径。
 
 ```sh
-krun deploy --org ORG_ID --worker STATIC_WORKER_ID --env production --path ./dist
-krun deploy --org ORG_ID --worker APP_WORKER_ID --env production --path ./worker.zip
+ORG_ID=replace-with-organization-id
+WORKER_ID=replace-with-worker-id
+
+krun deploy --org "$ORG_ID" --worker "$WORKER_ID" --env production --path ./dist
+krun deploy --org "$ORG_ID" --worker "$WORKER_ID" --env production --path ./worker.zip
 ```
 
 CLI 等待构建成功并提交发布，默认继续等待运行时确认。使用 `--wait=false` 可在提交后返回。ZIP 包含多个项目时，可以加 `--project-root repo/apps/site`。构建失败时，用命令输出的 Build ID 查看日志。[构建并部署 Worker](/docs/guides/krun-cli.html#构建并部署-worker)
@@ -53,3 +56,14 @@ npx wrangler@4.155.0 deploy --assets ./dist --name my-static-site --compatibilit
 ```
 
 `--name` 是组织内的 Worker 定位符。命令会将产物上传到 krun，发布结果可以在控制台查看。[配置 Wrangler 并部署](/docs/guides/cloudflare-workers.html)
+
+## 上传问题
+
+| 提示 | 原因 | 处理 |
+| --- | --- | --- |
+| HTTP 422 `LOCAL_PROJECT_ROOT_REQUIRED`，消息以 `Multiple projects found.` 开头 | 上传内容包含多个候选项目目录 | 在页面上填写相对于上传根部的项目目录，或在 CLI 命令中加 `--project-root` |
+| HTTP 422 `LOCAL_PROJECT_INVALID`，消息为 `The project directory must contain a Wrangler configuration or a built static index.html` | 所选目录没有 Wrangler 配置，也没有构建好的首页 | 上传包含 `index.html` 的静态产物目录，或上传含 Wrangler 配置的项目根目录 |
+
+## 验证发布
+
+在目标环境确认新版本生效，并访问业务路由。[项目部署概览中的验证命令](/docs/guides/deploy-project.html#验证发布)
