@@ -1,12 +1,13 @@
 # 服务端配置总示例：复制后修改地址、数据库和需要启用的登录来源。
-# 生产：development: false，listen 可绑定 0.0.0.0，public_url 使用真实 HTTPS origin。
+# 生产：development: false，public_url 使用真实 HTTPS origin。配置 workers.hyperdrive 后，
+# HTTP 监听必须使用具体 IP（不能是 0.0.0.0），与代理专用 IP 隔离。
 # 本地：development: true 时，listen 和 internal_listen 必须使用回环 IP，如 127.0.0.1。
 # Vite 本地入口可设 public_url: http://127.0.0.1:5173。
 # 若不用 Vite、直接访问 Go 提供的静态前端，本地 public_url 改为 http://127.0.0.1:8080。
-listen: 0.0.0.0:8080
+listen: 10.10.0.5:8080
 # Workers runtime 的配置流、制品下载与 ACK 只监听此端口。启用下方 workers:
 # 时必填；仅通过内部 Service/NetworkPolicy 暴露给 runtime，不得接入公网网关。
-internal_listen: 0.0.0.0:8081
+internal_listen: 10.10.0.5:8081
 # 合并部署兼容开关：主端口把 /api/internal/workers/* 转发到本机 internal_listen。
 # 默认 false；开启后仍校验 pool 凭据，并且内部监听器仍需正常启动。
 merged_deployment: false
@@ -192,12 +193,14 @@ workers:
   runtime_api_url: ""
   # 禁止业务访问的平台地址。公网可路由的管理地址也应显式列出。
   protected_egress_cidrs: []
-  # hyperdrive:
-  #   listen: ${KRUN_HYPERDRIVE_LISTEN} # 代理专用 IP:port，与 HTTP 监听地址隔离。
-  #   address: ${KRUN_HYPERDRIVE_ADDRESS} # Worker 可解析的代理 DNS 名称:port。
-  #   tls_cert_file: ${KRUN_HYPERDRIVE_CERT_FILE}
-  #   tls_key_file: ${KRUN_HYPERDRIVE_KEY_FILE}
-  #   origin_ca_file: ${KRUN_HYPERDRIVE_ORIGIN_CA_FILE:-}
+  # PostgreSQL 托管接入（Hyperdrive）是 Workers 的内置能力，配置 workers: 时必填。
+  # 代理监听使用专用 IP:port，与 HTTP 监听地址隔离；address 是 Worker 可解析的代理 DNS 名称:port。
+  hyperdrive:
+    listen: ${KRUN_HYPERDRIVE_LISTEN}
+    address: ${KRUN_HYPERDRIVE_ADDRESS}
+    tls_cert_file: ${KRUN_HYPERDRIVE_CERT_FILE}
+    tls_key_file: ${KRUN_HYPERDRIVE_KEY_FILE}
+    origin_ca_file: ${KRUN_HYPERDRIVE_ORIGIN_CA_FILE:-}
   validator_pool: ""
   runtime_pools:
     - id: public-a

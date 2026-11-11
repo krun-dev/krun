@@ -33,6 +33,11 @@ func fixture(t *testing.T) config.Config {
 	t.Setenv("KRUN_MANAGEMENT_TOKEN", "fixture-management-token-long-enough-for-tests")
 	t.Setenv("KRUN_OBJECT_STORAGE_ACCESS", "fixture-issuer-access")
 	t.Setenv("KRUN_OBJECT_STORAGE_SECRET", "fixture-issuer-secret")
+	// Hyperdrive is required whenever workers: is configured.
+	t.Setenv("KRUN_HYPERDRIVE_LISTEN", "10.10.0.10:6432")
+	t.Setenv("KRUN_HYPERDRIVE_ADDRESS", "hyperdrive.workers.example.com:6432")
+	t.Setenv("KRUN_HYPERDRIVE_CERT_FILE", "/fixture/hyperdrive.crt")
+	t.Setenv("KRUN_HYPERDRIVE_KEY_FILE", "/fixture/hyperdrive.key")
 	c, err := config.LoadConfig(filepath.Join("..", "..", "..", "config", "production.example.yaml"))
 	if err != nil {
 		t.Fatal(err)

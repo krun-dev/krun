@@ -17,7 +17,9 @@ Hyperdrive 使用同一组池字段判断代理能拨号的范围。公网需要
 
 ## 代理部署
 
-使用主 YAML 的 `workers.hyperdrive` 段启用代理。`listen` 使用独立私有 IP 和 TCP 端口。
+PostgreSQL 托管接入是 Workers 的内置能力：配置 `workers:` 时必须配置 `workers.hyperdrive`，
+没有单独的启用开关。主机部署中 `listen` 使用独立私有 IP 和 TCP 端口；Kubernetes 渲染部署
+（含 `deployment:` 段）暂不承载代理，会在加载配置时显式报错。
 HTTP `listen` 和 `internal_listen` 使用不同的明确 IP，代理专用地址上只运行 PostgreSQL
 监听。`address` 使用 Worker 可解析到该专用 IP 的 DNS 名称与同一端口，TLS 证书应匹配此名称，
 且证书链须受 serving workerd 的浏览器 CA 根证书信任。源库若使用内部 CA，可配置

@@ -534,6 +534,8 @@ func testWorkersConfig() *appconfig.WorkersConfig {
 	return &appconfig.WorkersConfig{
 		Namespace:   "workers-mvp",
 		BuilderMode: "local",
+		// Hyperdrive is a built-in Workers capability; every fixture carries it.
+		Hyperdrive: &appconfig.WorkerHyperdriveConfig{Listen: "127.0.0.2:6432", Address: "hyperdrive.example.test:6432", TLSCertFile: "/fixture/hyperdrive.crt", TLSKeyFile: "/fixture/hyperdrive.key"},
 		RuntimePools: []appconfig.WorkerRuntimePool{{
 			ID: "default", Access: []string{"private"}, PrivateEgress: "direct", PublicEgress: "deny",
 			RuntimeService: "runtime-default", ValidatorService: "runtime-validator-default", RuntimeToken: "fixture-default-runtime-credential",

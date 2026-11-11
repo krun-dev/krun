@@ -580,7 +580,10 @@ func (s *Server) clientIP(r *http.Request) string {
 // cleanup is gone from the request path: expired sessions, browsers and login
 // transactions are deleted by the background retention loop in retention.go.
 func (s *Server) me(st *State, p Principal, r *http.Request) (any, int, error) {
-	return map[string]any{"user": p.User, "credential_kind": p.Kind, "system_admin": isAdmin(st, p.User, ""), "revision": st.Revision, "workers_configured": s.Config.Workers != nil, "hyperdrive_configured": s.Config.Workers != nil && s.Config.Workers.Hyperdrive != nil}, 200, nil
+	// Hyperdrive is a built-in Workers capability: whenever Workers are
+	// configured the proxy listener is configured too, so the console never
+	// needs to hide the database section behind a separate flag.
+	return map[string]any{"user": p.User, "credential_kind": p.Kind, "system_admin": isAdmin(st, p.User, ""), "revision": st.Revision, "workers_configured": s.Config.Workers != nil, "hyperdrive_configured": s.Config.Workers != nil}, 200, nil
 }
 
 // logout deletes this session row and bumps the browser generation so a

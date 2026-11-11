@@ -396,8 +396,9 @@ export default function App() {
     oauthLogin,
   ]);
   const canOpen = (page: Section) =>
+    // Hyperdrive is a built-in capability: the database section ships with
+    // Workers and no longer hides behind hyperdrive_configured.
     (page !== "git-authorizations" || me?.workers_configured !== false) &&
-    (page !== "hyperdrive" || me?.hyperdrive_configured === true) &&
     canOpenSection(
       page,
       system,

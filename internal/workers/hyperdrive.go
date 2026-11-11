@@ -37,7 +37,7 @@ type HyperdriveInput struct {
 
 func (s *Service) AuthorizeHyperdrive(st *domain.State, p authorization.Principal, org string, write bool) error {
 	if s.Config.Workers == nil || s.Config.Workers.Hyperdrive == nil {
-		return domain.Unavailable("HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive is not configured")
+		return domain.Unavailable("HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive proxy is not configured on this control plane; workers.hyperdrive is required in the server config (see config/example.yaml)")
 	}
 	target, err := s.orgTarget(st, WorkerRef{Organization: org})
 	if err != nil {
@@ -117,7 +117,7 @@ func hyperdriveOriginValue(value string, limit int) bool {
 func (s *Service) HyperdriveConnectionStrings(version domain.WorkerVersion) (map[string]string, error) {
 	workers := s.Config.Workers
 	if workers == nil || workers.Hyperdrive == nil {
-		return nil, domain.Unavailable("HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive is not configured")
+		return nil, domain.Unavailable("HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive proxy is not configured on this control plane; workers.hyperdrive is required in the server config (see config/example.yaml)")
 	}
 	key, err := workers.WorkerSecretKey(workers.SecretsActiveKey)
 	if err != nil {
@@ -192,7 +192,7 @@ func (s *Service) validateHyperdriveBindings(ctx context.Context, org string, bi
 		return nil
 	}
 	if s.Config.Workers == nil || s.Config.Workers.Hyperdrive == nil {
-		return domain.Unavailable("HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive is not configured")
+		return domain.Unavailable("HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive proxy is not configured on this control plane; workers.hyperdrive is required in the server config (see config/example.yaml)")
 	}
 	if len(bindings) > 32 {
 		return domain.Invalid("WORKER_BINDINGS_INVALID", "Too many Hyperdrive bindings")
