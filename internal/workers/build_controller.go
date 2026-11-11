@@ -14,44 +14,10 @@ import (
 )
 
 func (w *Controller) ProcessClaimedBuild(ctx context.Context, b domain.WorkerBuild, private domain.WorkerBuildPrivate) error {
-	workCtx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	leaseErr := make(chan error, 1)
-	go func() {
-		ticker := time.NewTicker(20 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-workCtx.Done():
-				return
-			case <-ticker.C:
-				owned, err := w.Service.Store.RenewBuildClaim(workCtx, b.ID, w.Replica)
-				if err == nil && owned {
-					continue
-				}
-				if err == nil {
-					err = errors.New("build lease lost")
-				}
-				select {
-				case <-done:
-					return
-				default:
-					leaseErr <- err
-					cancel()
-					return
-				}
-			}
-		}
-	}()
+	workCtx, guard := w.guardBuildLease(ctx, b.ID)
 	err := w.ProcessBuild(workCtx, b, private)
-	close(done)
-	cancel()
-	select {
-	case lost := <-leaseErr:
-		if err == nil {
-			return lost
-		}
-	default:
+	if lost := guard.stop(); err == nil {
+		err = lost
 	}
 	return err
 }
@@ -210,31 +176,10 @@ func (w *Controller) RunLocalBuild(b domain.WorkerBuild, private domain.WorkerBu
 	if timeout == 0 {
 		timeout = 600
 	}
-	ctx, cancel := context.WithTimeout(parent, time.Duration(timeout)*time.Second)
-	defer cancel()
-	done := make(chan struct{})
-	defer close(done)
-	leaseLost := make(chan struct{}, 1)
-	go func() {
-		ticker := time.NewTicker(20 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				owned, err := w.Service.Store.RenewBuildClaim(ctx, b.ID, w.Replica)
-				if err == nil && owned {
-					continue
-				}
-				leaseLost <- struct{}{}
-				cancel()
-				return
-			}
-		}
-	}()
+	timeoutCtx, cancelTimeout := context.WithTimeout(parent, time.Duration(timeout)*time.Second)
+	defer cancelTimeout()
+	ctx, guard := w.guardBuildLease(timeoutCtx, b.ID)
+	defer guard.stop()
 	log, e := w.ExecuteLocalBuilder(ctx, b, private)
 	// Persist timeout diagnostics using an independent bounded cleanup context.
 	finishCtx := ctx
@@ -244,11 +189,8 @@ func (w *Controller) RunLocalBuild(b domain.WorkerBuild, private domain.WorkerBu
 	}
 	defer finishCancel()
 	log = repositoryBuildLog(b) + log
-	select {
-	case <-leaseLost:
-
+	if guard.lostErr() != nil {
 		return
-	default:
 	}
 	if e != nil {
 		_ = w.FailBuild(finishCtx, b.ID, "Builder failed", log)
