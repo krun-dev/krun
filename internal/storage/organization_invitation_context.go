@@ -26,14 +26,13 @@ func (s *Store) OrganizationInvitationContext(ctx context.Context, organization 
 	return st, nil
 }
 
-func queueInvitationRead(ctx context.Context, batch *pgx.Batch, query string) bool {
+func queueInvitationRead(ctx context.Context, batch *pgx.Batch, table, query string) bool {
 	scope, ok := ctx.Value(invitationReadScopeKey{}).(invitationReadScope)
 	if !ok {
 		return false
 	}
 	parts := strings.SplitN(query, " ORDER BY ", 2)
 	base := parts[0]
-	table := base[strings.LastIndex(base, " FROM ")+6:]
 	groups := `SELECT group_id FROM krun_group_members WHERE user_id=ANY($2::text[])`
 	subjects := `(subject_kind='user' AND subject_id=ANY($2::text[]) OR subject_kind='group' AND subject_id IN (` + groups + `))`
 	predicate := "false"
