@@ -186,7 +186,7 @@ func (s *Server) routes() {
 		s.internalMux.HandleFunc("GET /api/internal/workers/versions/{version}/assets", s.workerRuntimeVersionAssets)
 		s.internalMux.HandleFunc("POST /api/internal/workers/versions/{version}/assets/credentials", s.workerRuntimeAssetCredentials)
 		s.internalMux.HandleFunc("GET /api/internal/workers/versions/{version}/secrets", s.workerRuntimeVersionSecrets)
-		s.internalMux.HandleFunc("GET /api/internal/workers/versions/{version}/hyperdrive", s.workerRuntimeHyperdrive)
+		s.internalMux.HandleFunc("GET /api/internal/workers/versions/{version}/hyperdrive-direct", s.workerRuntimeHyperdrive)
 		s.internalMux.HandleFunc("POST /api/internal/workers/versions/{version}/bindings/{binding}/credentials", s.workerRuntimeStorageCredentials)
 		s.internalMux.HandleFunc("GET /api/internal/workers/artifacts/{artifact}", s.workerRuntimeArtifact)
 		s.internalMux.HandleFunc("POST /api/internal/workers/ack", s.workerRuntimeAck)
@@ -580,10 +580,7 @@ func (s *Server) clientIP(r *http.Request) string {
 // cleanup is gone from the request path: expired sessions, browsers and login
 // transactions are deleted by the background retention loop in retention.go.
 func (s *Server) me(st *State, p Principal, r *http.Request) (any, int, error) {
-	// Hyperdrive is a built-in Workers capability: whenever Workers are
-	// configured the proxy listener is configured too, so the console never
-	// needs to hide the database section behind a separate flag.
-	return map[string]any{"user": p.User, "credential_kind": p.Kind, "system_admin": isAdmin(st, p.User, ""), "revision": st.Revision, "workers_configured": s.Config.Workers != nil, "hyperdrive_configured": s.Config.Workers != nil}, 200, nil
+	return map[string]any{"user": p.User, "credential_kind": p.Kind, "system_admin": isAdmin(st, p.User, ""), "revision": st.Revision, "workers_configured": s.Config.Workers != nil, "hyperdrive_configured": s.Config.Workers != nil && s.Config.Workers.SecretsActiveKey != ""}, 200, nil
 }
 
 // logout deletes this session row and bumps the browser generation so a
@@ -638,10 +635,6 @@ func Serve(ctx context.Context, c appconfig.Config) error {
 	if e != nil {
 		return e
 	}
-	proxyDone, err := handler.startHyperdrive(runCtx, cancelRun)
-	if err != nil {
-		return err
-	}
 	workersDone := make(chan struct{})
 	if handler.workers != nil {
 		go func() {
@@ -665,14 +658,14 @@ func Serve(ctx context.Context, c appconfig.Config) error {
 		servers = append(servers, &http.Server{Addr: c.InternalListen, Handler: http.HandlerFunc(handler.serveInternal), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 35 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10})
 	}
 	fmt.Print(localize.Format(localize.Language(ctx), "krun control server: %s/\n", c.PublicURL))
-	err = serveHTTPServers(runCtx, servers)
+	err := serveHTTPServers(runCtx, servers)
 	// Stop every background user of the Store before its deferred Close runs.
 	// A listener bind failure follows the same order as a normal shutdown.
 	cancelRun()
 	stopRetention()
 	<-retentionDone
 	<-workersDone
-	return errors.Join(err, <-proxyDone)
+	return err
 }
 
 // serveHTTPServers treats every configured listener as required. In

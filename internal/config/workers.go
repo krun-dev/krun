@@ -2,7 +2,12 @@ package config
 
 // Workers is opt-in: existing authentication deployments keep their current behavior.
 type WorkersConfig struct {
-	Hyperdrive *WorkerHyperdriveConfig `json:"hyperdrive,omitempty"`
+	// LocalDatabaseEgress configures PostgreSQL destinations in the local-first
+	// serving pods' Kubernetes NetworkPolicy.
+	LocalDatabaseEgress []WorkerDatabaseEgress `json:"local_database_egress,omitempty"`
+	// DatabaseOriginCAFile adds public CA certificates to the workerd
+	// network service used by versions with PostgreSQL bindings.
+	DatabaseOriginCAFile string `json:"database_origin_ca_file,omitempty"`
 	// RuntimeAPIURL overrides the cluster Service used by workerd to call the
 	// authenticated Runtime API. Only deployment operators may configure it.
 	RuntimeAPIURL        string                     `json:"runtime_api_url,omitempty"`
@@ -154,4 +159,9 @@ type WorkerDomain struct {
 	// StaticDomain overrides the static-asset host served through this domain's
 	// Gateway. Empty derives "static." + Domain.
 	StaticDomain string `json:"static_domain"`
+}
+
+type WorkerDatabaseEgress struct {
+	CIDR string `json:"cidr"`
+	Port int    `json:"port"`
 }

@@ -73,7 +73,7 @@ Worker 可通过 `fetch()` 访问公网 HTTP 和 HTTPS，通过 `cloudflare:sock
 
 省略池的出口字段时默认使用 `deny`。配置改变后重新渲染并重启 serving workerd。
 实际连通性还受宿主机网络和部署环境出口规则约束。
-PostgreSQL 托管接入的池级限制和代理配置见 [Workers 出网](workers-egress.md)。
+PostgreSQL 托管接入的池级出网限制见 [Workers 出网](workers-egress.md)。
 
 ## 运维
 

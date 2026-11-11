@@ -146,5 +146,5 @@ Cloudflare 客户端读取版本仍得到标准 bindings 和 annotations，不�
 API 的自动发布行为也保持不变。
 
 Hyperdrive 配置接口仅接受 PostgreSQL。原版 Wrangler 将 `--connection-string` 解析为
-源库字段后提交，响应只返回源库元数据。绑定使用配置 ID，部署后注入代理连接串。
+源库字段后提交，响应只返回源库元数据。绑定使用配置 ID，部署后注入源库直连串。
 创建、绑定和密码轮换见 [PostgreSQL 托管接入](../user-docs/src/content/docs/guides/workers-hyperdrive.md)。

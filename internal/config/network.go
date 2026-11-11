@@ -59,6 +59,23 @@ func (c *WorkersConfig) validateProtectedEgressCIDRs() error {
 	return nil
 }
 
+func (c *WorkersConfig) validateLocalDatabaseEgress() error {
+	if len(c.LocalDatabaseEgress) > 64 {
+		return fmt.Errorf("Workers local_database_egress allows at most 64 entries")
+	}
+	for i, target := range c.LocalDatabaseEgress {
+		prefix, err := netip.ParsePrefix(target.CIDR)
+		if err != nil || prefix.Bits() == 0 || prefix.Addr().Is4In6() {
+			return fmt.Errorf("invalid Workers local_database_egress CIDR at index %d", i)
+		}
+		if target.Port < 1 || target.Port > 65535 {
+			return fmt.Errorf("invalid Workers local_database_egress port at index %d", i)
+		}
+		c.LocalDatabaseEgress[i].CIDR = prefix.Masked().String()
+	}
+	return nil
+}
+
 func ValidateWorkerLabels(labels map[string]string) error {
 	if len(labels) > 32 {
 		return fmt.Errorf("at most 32 labels are allowed")

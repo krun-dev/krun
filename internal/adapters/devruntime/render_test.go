@@ -221,3 +221,68 @@ func TestCheckStorageUsesStandardS3BucketRequests(t *testing.T) {
 		})
 	}
 }
+
+func TestLocalDatabaseEgressIsOnlyGrantedToServingPods(t *testing.T) {
+	t.Chdir(filepath.Join("..", "..", ".."))
+	for _, mode := range []string{"direct", "deny"} {
+		t.Run(mode, func(t *testing.T) {
+			out := t.TempDir()
+			cfg := config.Config{
+				InternalListen: "0.0.0.0:9001",
+				Workers: &config.WorkersConfig{
+					ValidatorPool:     "default",
+					S3RuntimeEndpoint: "http://192.0.2.20:9000",
+					S3BucketMode:      "external",
+					S3Region:          "us-east-1",
+					ConfigBaseURL:     "http://192.0.2.20:9000/bucket/config",
+					LocalDatabaseEgress: []config.WorkerDatabaseEgress{
+						{CIDR: "198.51.100.0/24", Port: 5432},
+					},
+					RuntimePools: []config.WorkerRuntimePool{
+						{ID: "default", Default: true, PrivateEgress: mode},
+					},
+				},
+			}
+			if err := Render(cfg, "192.0.2.10", out); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(filepath.Join(out, "networkpolicy.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var policies struct {
+				Items []struct {
+					Spec struct {
+						PodSelector struct {
+							MatchLabels map[string]string `json:"matchLabels"`
+						} `json:"podSelector"`
+						Egress []renderedEgressRule `json:"egress"`
+					} `json:"spec"`
+				} `json:"items"`
+			}
+			if err := json.Unmarshal(raw, &policies); err != nil {
+				t.Fatal(err)
+			}
+			if len(policies.Items) != 2 {
+				t.Fatal("expected serving and validator policies")
+			}
+			for _, policy := range policies.Items {
+				role := policy.Spec.PodSelector.MatchLabels["role"]
+				allow := role == "krun-runtime" && mode == "direct"
+				var database, dns bool
+				for _, rule := range policy.Spec.Egress {
+					if len(rule.To) != 1 {
+						continue
+					}
+					for _, port := range rule.Ports {
+						database = database || (rule.To[0].IPBlock.CIDR == "198.51.100.0/24" && port.Port == 5432)
+						dns = dns || port.Port == 53
+					}
+				}
+				if database != allow || dns != allow {
+					t.Fatalf("%s must match serving database and DNS policy: database=%t, DNS=%t", role, database, dns)
+				}
+			}
+		})
+	}
+}

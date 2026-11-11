@@ -70,6 +70,20 @@ Runtime 镜像或配置后，刷新指向旧 validator Pod 的隧道：
 ./scripts/dev-up.sh --refresh-tunnels
 ```
 
+需要直连 PostgreSQL 时，在 `.data/dev.yaml` 的 `workers.local_database_egress` 中填写
+实际数据库 CIDR 和 TCP 端口，每个目标一条。下例用文档地址表示待替换的 CIDR：
+
+```yaml
+workers:
+  local_database_egress:
+    - cidr: 192.0.2.0/24
+      port: 5432
+```
+
+默认池和对应网络配置需允许数据库所在网络出网。运行 `./scripts/dev-runtime-config.sh`
+重新生成并应用规则。该配置给 serving Pod 开放源库端口和 DNS。Worker 仍须绑定数据库，
+并通过 workerd 的池级出网检查。数据库验证步骤见 [Workers 出网](workers-egress.md)。
+
 ## 本地变量（gitignored）
 
 `.data/dev.env` 保存环境相关的非代码值；`dev-up.sh` / `dev-runtime-*.sh` 会自动读取，但不会覆盖命令行已设置的变量：

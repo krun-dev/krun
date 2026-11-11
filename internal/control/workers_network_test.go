@@ -24,11 +24,9 @@ import (
 
 func catalogConfig() *appconfig.WorkersConfig {
 	return &appconfig.WorkersConfig{
-		Namespace:     "workers-mvp",
-		BuilderMode:   "local",
-		BuilderScript: "workers/builder/build-worker.mjs",
-		// Hyperdrive is a built-in Workers capability; every fixture carries it.
-		Hyperdrive: &appconfig.WorkerHyperdriveConfig{Listen: "127.0.0.2:6432", Address: "hyperdrive.example.test:6432", TLSCertFile: "/fixture/hyperdrive.crt", TLSKeyFile: "/fixture/hyperdrive.key"},
+		Namespace:        "workers-mvp",
+		BuilderMode:      "local",
+		BuilderScript:    "workers/builder/build-worker.mjs",
 		SecretsActiveKey: "test-v1",
 		SecretsKeys:      map[string]string{"test-v1": testWorkerSecretsKey()},
 		RuntimePools: []appconfig.WorkerRuntimePool{{

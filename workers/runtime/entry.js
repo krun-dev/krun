@@ -1322,12 +1322,12 @@ for(const name of ${JSON.stringify(Object.keys(d.r2_buckets))}) {
 
       const hyperdrive = Object.keys(d.hyperdrive_bindings || {});
       if (hyperdrive.length) {
-        if (!validating && !env.HYPERDRIVE_EGRESS) {
+        if (!validating && !env.HYPERDRIVE_DIRECT_EGRESS) {
           throw new Error("Hyperdrive egress unavailable");
         }
         const connectionStrings = validating
           ? {}
-          : await platform(env, "/versions/" + encodeURIComponent(d.id) + "/hyperdrive");
+          : await platform(env, "/versions/" + encodeURIComponent(d.id) + "/hyperdrive-direct");
         for (const name of hyperdrive) {
           if (
             !bindingName.test(name) ||
@@ -1409,7 +1409,7 @@ for(const name of ${JSON.stringify(Object.keys(d.r2_buckets))}) {
         globalOutbound: validating
           ? null
           : hyperdrive.length
-            ? env.HYPERDRIVE_EGRESS
+            ? env.HYPERDRIVE_DIRECT_EGRESS
             : (env.PUBLIC_EGRESS ?? null),
       };
     },
@@ -1625,7 +1625,7 @@ export class Management extends WorkerEntrypoint {
           status: "ready",
           role: "validator",
           validation_protocol: 1,
-          hyperdrive_protocol: 1,
+          hyperdrive_protocol: 2,
           pod_uid: this.env.POD_UID,
           pool: this.env.RUNTIME_POOL || "default",
         });
@@ -1639,7 +1639,7 @@ export class Management extends WorkerEntrypoint {
         status: "ready",
         role: "runtime",
         validation_protocol: 1,
-        hyperdrive_protocol: this.env.HYPERDRIVE_EGRESS ? 1 : 0,
+        hyperdrive_protocol: this.env.HYPERDRIVE_DIRECT_EGRESS ? 2 : 0,
         pod_uid: this.env.POD_UID,
         pool: this.env.RUNTIME_POOL || "default",
         revision: view.revision,

@@ -28,7 +28,7 @@ krun 基于 workerd 运行模块格式的 JavaScript 和 TypeScript Worker。下
 | 版本元数据（`version_metadata`） | 通过指定的 `env` binding 读取 `id`、`tag`、`timestamp`。 |
 | 静态资产（`assets`） | 支持 `env.ASSETS.fetch(request)`（名称可配置）、纯静态部署和常用路由模式，包括 SPA 回退。重写限站内路径。 [资产配置](user-docs/src/content/docs/guides/wrangler-configuration.md#静态资产配置) |
 | R2（`r2_bucket`） | 支持 S3 兼容逻辑桶的 `head`、`get`、`put`、`delete`、`list` 和分片上传，覆盖常用 Range 和条件请求。每页最多 64 项，批量删除最多 1000 项。`startAfter`、SSE-C、PUT checksum 和组合条件超出兼容范围。 [R2 方法与限制](docs/workers-r2.md#已实现的-runtime-api) |
-| Hyperdrive（`hyperdrive`） | 支持 PostgreSQL 配置管理和 `env.DB.connectionString`（名称可配置）。代理为每个客户端会话建立一条源库连接。查询缓存与跨会话连接复用超出兼容范围。 [PostgreSQL 托管接入](user-docs/src/content/docs/guides/workers-hyperdrive.md) |
+| Hyperdrive（`hyperdrive`） | 支持 PostgreSQL 配置管理和 `env.DB.connectionString`（名称可配置）。Worker 通过 workerd 按池出网规则直连 PostgreSQL。兼容范围涵盖配置和绑定，查询缓存与平台连接池超出范围。 [PostgreSQL 托管接入](user-docs/src/content/docs/guides/workers-hyperdrive.md) |
 
 KV、D1、Durable Objects、Queues 和 Service bindings 目前未实现。全局 Cache API 提供 `caches.default`、`caches.open()` 和 `put`、`match`、`delete`，缓存只在单个运行时进程内生效。 [Cache API](docs/workers-r2.md#cache-api)
 

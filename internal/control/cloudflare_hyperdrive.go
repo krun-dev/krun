@@ -55,10 +55,11 @@ func (s *Server) workerRuntimeHyperdrive(w http.ResponseWriter, r *http.Request)
 		s.writeError(w, r, err)
 		return
 	}
-	bindings, err := s.workerApplication(nil).HyperdriveConnectionStrings(version)
+	bindings, err := s.workerApplication(nil).HyperdriveConnectionStrings(r.Context(), version, pool.ID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	s.json(w, 200, bindings)
 }

@@ -2,12 +2,11 @@ package workers
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
+	"net"
 	"net/netip"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,8 +14,6 @@ import (
 	"github.com/krun-dev/krun/internal/domain"
 	"github.com/krun-dev/krun/internal/securetoken"
 )
-
-const HyperdriveUser = "krun"
 
 var hyperdriveOriginHost = regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
 
@@ -36,8 +33,8 @@ type HyperdriveInput struct {
 }
 
 func (s *Service) AuthorizeHyperdrive(st *domain.State, p authorization.Principal, org string, write bool) error {
-	if s.Config.Workers == nil || s.Config.Workers.Hyperdrive == nil {
-		return domain.Unavailable("HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive proxy is not configured on this control plane; workers.hyperdrive is required in the server config (see config/example.yaml)")
+	if s.Config.Workers == nil || s.Config.Workers.SecretsActiveKey == "" {
+		return domain.Unavailable("HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive requires worker secret encryption")
 	}
 	target, err := s.orgTarget(st, WorkerRef{Organization: org})
 	if err != nil {
@@ -114,85 +111,38 @@ func hyperdriveOriginValue(value string, limit int) bool {
 	return len(value) > 0 && len(value) <= limit && !strings.ContainsRune(value, 0)
 }
 
-func (s *Service) HyperdriveConnectionStrings(version domain.WorkerVersion) (map[string]string, error) {
-	workers := s.Config.Workers
-	if workers == nil || workers.Hyperdrive == nil {
-		return nil, domain.Unavailable("HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive proxy is not configured on this control plane; workers.hyperdrive is required in the server config (see config/example.yaml)")
-	}
-	key, err := workers.WorkerSecretKey(workers.SecretsActiveKey)
-	if err != nil {
-		return nil, err
-	}
-	keyID := base64.RawURLEncoding.EncodeToString([]byte(workers.SecretsActiveKey))
+// HyperdriveConnectionStrings issues source credentials only for bindings on
+// a version currently served by the authenticated pool.
+func (s *Service) HyperdriveConnectionStrings(ctx context.Context, version domain.WorkerVersion, poolID string) (map[string]string, error) {
 	result := make(map[string]string, len(version.HyperdriveBindings))
 	for binding := range version.HyperdriveBindings {
-		claims := keyID + "." + version.ID + "." + binding
-		token := claims + "." + base64.RawURLEncoding.EncodeToString(hyperdriveMAC(key, claims))
-		dsn := url.URL{
-			Scheme: "postgresql",
-			User:   url.UserPassword(HyperdriveUser, token),
-			Host:   workers.Hyperdrive.Address,
-			Path:   "/krun",
+		origin, err := s.Store.RuntimeHyperdriveOrigin(ctx, version.ID, binding, poolID)
+		if err != nil {
+			return nil, err
 		}
-		dsn.RawQuery = "sslmode=verify-full"
+		password, err := DecryptWorkerSecret(s.Config.Workers, origin.Secret)
+		if err != nil {
+			return nil, err
+		}
+		dsn := url.URL{
+			Scheme:   "postgresql",
+			User:     url.UserPassword(origin.User, password),
+			Host:     net.JoinHostPort(origin.Host, strconv.Itoa(origin.Port)),
+			Path:     "/" + origin.Database,
+			RawPath:  "/" + url.PathEscape(origin.Database),
+			RawQuery: "sslmode=verify-full",
+		}
 		result[binding] = dsn.String()
 	}
 	return result, nil
-}
-
-func (s *Service) ResolveHyperdriveSession(ctx context.Context, user, token string) (domain.HyperdriveConfig, string, bool, bool, error) {
-	workers := s.Config.Workers
-	if workers == nil || workers.Hyperdrive == nil || user != HyperdriveUser || len(token) > 512 {
-		return domain.HyperdriveConfig{}, "", false, false, domain.Forbidden()
-	}
-	claims, encodedMAC, ok := strings.Cut(token, ".")
-	if !ok {
-		return domain.HyperdriveConfig{}, "", false, false, domain.Forbidden()
-	}
-	keyID, err := base64.RawURLEncoding.DecodeString(claims)
-	key, keyErr := workers.WorkerSecretKey(string(keyID))
-	parts := strings.Split(encodedMAC, ".")
-	if err != nil || keyErr != nil || len(parts) != 3 {
-		return domain.HyperdriveConfig{}, "", false, false, domain.Forbidden()
-	}
-	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
-	signed := token[:len(token)-len(parts[2])-1]
-	if err != nil || !hmac.Equal(hyperdriveMAC(key, signed), signature) {
-		return domain.HyperdriveConfig{}, "", false, false, domain.Forbidden()
-	}
-	origin, poolID, err := s.Store.HyperdriveForSession(ctx, parts[0], parts[1])
-	if err != nil {
-		return domain.HyperdriveConfig{}, "", false, false, err
-	}
-	pool, ok := workers.RuntimePool(poolID)
-	if !ok || pool.PublicEgress != "direct" && pool.PrivateEgress != "direct" {
-		return domain.HyperdriveConfig{}, "", false, false, domain.Forbidden()
-	}
-	password, err := DecryptWorkerSecret(workers, origin.Secret)
-	return origin.HyperdriveConfig, password, pool.PublicEgress == "direct", pool.PrivateEgress == "direct", err
-}
-
-func (s *Service) ResolveHyperdriveOrigin(ctx context.Context, org, id string) (domain.HyperdriveConfig, string, error) {
-	origin, err := s.Store.GetHyperdriveOrigin(ctx, org, id)
-	if err != nil {
-		return domain.HyperdriveConfig{}, "", err
-	}
-	password, err := DecryptWorkerSecret(s.Config.Workers, origin.Secret)
-	return origin.HyperdriveConfig, password, err
-}
-
-func hyperdriveMAC(key []byte, claims string) []byte {
-	mac := hmac.New(sha256.New, key)
-	_, _ = mac.Write([]byte("krun-hyperdrive-binding-v1\x00" + claims))
-	return mac.Sum(nil)
 }
 
 func (s *Service) validateHyperdriveBindings(ctx context.Context, org string, bindings map[string]string) error {
 	if len(bindings) == 0 {
 		return nil
 	}
-	if s.Config.Workers == nil || s.Config.Workers.Hyperdrive == nil {
-		return domain.Unavailable("HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive proxy is not configured on this control plane; workers.hyperdrive is required in the server config (see config/example.yaml)")
+	if s.Config.Workers == nil || s.Config.Workers.SecretsActiveKey == "" {
+		return domain.Unavailable("HYPERDRIVE_NOT_CONFIGURED", "Hyperdrive requires worker secret encryption")
 	}
 	if len(bindings) > 32 {
 		return domain.Invalid("WORKER_BINDINGS_INVALID", "Too many Hyperdrive bindings")
