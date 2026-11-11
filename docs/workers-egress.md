@@ -1,48 +1,45 @@
 # Workers 出网与 PostgreSQL 托管接入
 
-业务可通过 [控制台和 Wrangler 指南](../user-docs/src/content/docs/guides/workers-hyperdrive.md)
-创建 Hyperdrive 配置并绑定到 Worker。源库可位于公网或内网，当前只支持 PostgreSQL。
-Wrangler 接受以 `postgres://` 或 `postgresql://` 开头的源库连接串，控制台按字段填写。
-业务驱动使用平台生成的代理连接串。
+用 [控制台或 Wrangler](../user-docs/src/content/docs/guides/workers-hyperdrive.md)
+创建 Hyperdrive 配置，并绑定到 Worker 版本。workerd 将源库连接串交给绑定了数据库的
+Worker。Worker 使用 PostgreSQL 驱动直接连接源库，连接串要求 `sslmode=verify-full`。
+数据库域名和证书必须匹配，驱动须信任证书链。使用私有 CA 时，可在渲染 workerd
+配置的机器上通过 `workers.database_origin_ca_file` 指定 CA PEM 文件的绝对路径。
 
 ## 池级出网
 
 池省略 `public_egress` 和 `private_egress` 时默认 `deny`。显式 `public_egress: direct`
-给 serving Worker 开放公网 HTTP、HTTPS 和 TCP。独立 validator 与 serving 中的候选校验仍关闭出网。
+给 serving Worker 开放公网 HTTP、HTTPS 和 TCP。显式 `private_egress: direct`
+给同池**绑定了 Hyperdrive 的版本**开放私网 HTTP、HTTPS 和 TCP。workerd 按连接目的地址
+执行池规则，含域名解析后的地址。私网规则覆盖允许的网段，超出已绑定数据库的单个地址。
+独立 validator 和 serving 中的候选校验均关闭出网，使用占位连接串。
 
-Hyperdrive 使用同一组池字段判断代理能拨号的范围。公网需要 `public_egress: direct`，
-内网需要 `private_egress: direct`。业务 Worker 的全局内网直连出口保持关闭。代理在建连时
-解析源库域名，过滤实际拨号地址，使用源库域名验证 TLS。DNS 缓存及 TTL 由宿主机解析器负责。
-平台保护地址通过 `workers.protected_egress_cidrs` 配置。未来的域名规则可接在代理的目标地址检查处。
+`workers.protected_egress_cidrs` 禁止访问部署方指定的网段。启用私网出网时，将控制面、
+集群管理端点、对象存储管理端点和其他平台专用网段列入该配置。workerd 还拒绝
+回环、链路本地和其他保留地址。Kubernetes 部署的 Runtime NetworkPolicy
+也须允许目标网段及 PostgreSQL 端口。本地开发见 [local-first 配置](local-dev.md)。
 
-## 代理部署
+## 升级与凭据
 
-PostgreSQL 托管接入是 Workers 的内置能力：配置 `workers:` 时必须配置 `workers.hyperdrive`，
-没有单独的启用开关。主机部署中 `listen` 使用独立私有 IP 和 TCP 端口；Kubernetes 渲染部署
-（含 `deployment:` 段）暂不承载代理，会在加载配置时显式报错。
-HTTP `listen` 和 `internal_listen` 使用不同的明确 IP，代理专用地址上只运行 PostgreSQL
-监听。`address` 使用 Worker 可解析到该专用 IP 的 DNS 名称与同一端口，TLS 证书应匹配此名称，
-且证书链须受 serving workerd 的浏览器 CA 根证书信任。源库若使用内部 CA，可配置
-`origin_ca_file`。
+控制面使用 Workers 密钥环加密源库密码。只有负责该版本的 serving pool 可以读取连接串。
+连接串含源库账号和密码。请将可绑定该配置和可发布绑定版本的成员视为拥有该源库账号的权限。
+为 Worker 使用单独的数据库账号，并在数据库侧限制权限和连接数。
+轮换密码时先在源库修改，再更新 Hyperdrive 配置并发布新版本，使 workerd 重新加载连接串。
+删除配置会停止签发连接串。已发放凭据及已建连接需在数据库侧撤销。
+仍有效的旧部署 URL 可能在冷启动时读取更新后的密码。要撤销旧版本的访问，需停用相应部署，
+或为新版本使用单独的配置及数据库凭据。
 
-~~~yaml
-workers:
-  hyperdrive:
-    listen: ${KRUN_HYPERDRIVE_LISTEN}
-    address: ${KRUN_HYPERDRIVE_ADDRESS}
-    tls_cert_file: ${KRUN_HYPERDRIVE_CERT_FILE}
-    tls_key_file: ${KRUN_HYPERDRIVE_KEY_FILE}
-    origin_ca_file: ${KRUN_HYPERDRIVE_ORIGIN_CA_FILE:-}
-~~~
-
-代理在 `krun-server` 进程中运行。只向持有 Hyperdrive 绑定的业务 Version 放行代理地址。
-启用时先滚动更新 serving 和 validator 的 workerd 镜像与配置，再发布带绑定的版本。
-每个客户端会话直接占用一条源库连接。首版每个源库地址最多 16 条代理会话，代理进程最多
-256 条并发连接。源库凭据使用现有 Workers 密钥环加密，Worker 只获得签名的版本绑定凭据。
+升级时从主配置删除 `workers.hyperdrive` 旧代理段。曾配置 `origin_ca_file` 时，将其路径移至
+`workers.database_origin_ca_file`。更新控制面、serving 和 validator 镜像，
+并重新生成 workerd 配置。旧 runtime 与新控制面之间的 Hyperdrive 数据接口不兼容，
+应在同一维护窗口更新。发布依赖运行时报告 `hyperdrive_protocol: 2`。
+发布检查验证绑定和 runtime 能力，源库连通性由 serving Worker 的数据库请求验证。
 
 ## 验证
 
-- 重新渲染 serving workerd，确认公网 HTTP、HTTPS、TCP 和受保护地址的拒绝行为。
-- 用原版 Wrangler 创建并绑定配置，用实际 Worker 验证 TLS 登录、参数化查询和事务。
-- 分别用公网池、内网池验证源库范围，在新连接上检查密码轮换和配置删除。
-- 在同一环境比较直连源库与经代理连接的 P95/P99、超时率和源库连接峰值。
+- 用 [PostgreSQL 示例](../user-docs/src/content/docs/guides/examples-postgres-todo.md) 完成
+  部署，确认 TODO 查询返回 HTTP 200，新增条目后刷新仍存在。
+- 如果发布状态显示 `Hyperdrive is unavailable in the serving pool`，为数据库所在网段
+  选择启用相应出网策略的池。如果状态显示 `Waiting for a runtime image supporting Hyperdrive`，
+  检查 validator 和 serving 是否已滚动到支持直连的镜像及配置。
+- 如果数据库请求连接失败，检查池出网、运行时 NetworkPolicy、源库防火墙、凭据和 TLS 信任链。

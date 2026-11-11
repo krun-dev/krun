@@ -66,7 +66,7 @@ Wrangler 端到端用例使用仓库固定的 Wrangler 4.155.0，将 Worker 发�
 | 版本元数据（`version_metadata`） | 部署后读取 `id`、`tag` 和 `timestamp`，只上传版本时生产流量保持在旧版本。控制面拒绝重复 binding 名称和多个版本元数据 binding。 | [Wrangler kind E2E](../deploy/workers-kind/cloudflare.e2e.mjs) · [控制面测试](../internal/control/cloudflare_bindings_test.go) |
 | 静态资产（`assets`） | `env.ASSETS.fetch()`、纯静态 Worker、SPA 回退、挂载路径、重定向和响应头规则。回滚恢复旧版本的资产规则。 | [Wrangler kind E2E](../deploy/workers-kind/cloudflare.e2e.mjs) · [运行时资产测试](../workers/runtime/test/assets.test.mjs) |
 | R2（`r2_bucket`） | 控制面解析桶名、隔离组织并冻结版本绑定。运行时覆盖对象读写、Range、条件请求、列表分页、元数据和分片续传。真实 TOS 上还覆盖五个固定 commit 的开源 Worker 项目。 | [控制面测试](../internal/control/workers_buckets_test.go) · [R2 API 契约测试](../workers/runtime/test/r2-contract.test.mjs) · [分片测试](../workers/runtime/test/multipart.test.mjs) · [TOS 与开源项目验收](workers-r2.md#运行与验证) |
-| Hyperdrive（`hyperdrive`） | 原版 Wrangler 创建、列出、读取、更新和删除配置，创建时写入项目 binding。控制面验证组织隔离、版本绑定、代理连接串、密码轮换、出网限制和配置删除后的拒绝行为。 | [PostgreSQL 集成测试](../internal/control/hyperdrive_postgres_test.go) |
+| Hyperdrive（`hyperdrive`） | 原版 Wrangler 创建、列出、读取、更新和删除配置，创建时写入项目 binding。控制面验证组织隔离、版本绑定、直连连接串、密码轮换、凭据读取权限和配置删除后的拒绝行为。 | [PostgreSQL 集成测试](../internal/control/hyperdrive_postgres_test.go) |
 | Cache API（`caches`） | 运行时覆盖 `put`、`match`、`delete`、缓存策略、`Vary`、条件和 Range 请求，以及不同组织和命名缓存之间的隔离。 | [运行时缓存测试](../workers/runtime/test/cache.test.mjs) |
 
 Wrangler 部署用例按上方[端到端步骤](#端到端与-ui)运行。运行时用例使用 `npm ci --prefix workers/runtime` 安装依赖，再执行 `npm test --prefix workers/runtime`。Hyperdrive 集成测试需要专用 PostgreSQL 测试库，原版 Wrangler 用例还需要 `npm ci --prefix workers/builder`。

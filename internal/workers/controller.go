@@ -27,13 +27,12 @@ import (
 type WorkerPutObject func(ctx context.Context, bucket, object string, reader io.Reader, size int64, opts objectstore.PutObjectOptions) (objectstore.UploadInfo, error)
 
 type Controller struct {
-	ValidateHyperdrive func(context.Context, domain.WorkerVersion, appconfig.WorkerRuntimePool) error
-	ReadCredentials    ReadCredentialSource
-	Service            *Service
-	Config             *appconfig.WorkersConfig
-	S3                 objectstore.Client
-	S3LogRead          objectstore.Client
-	PutObject          WorkerPutObject
+	ReadCredentials ReadCredentialSource
+	Service         *Service
+	Config          *appconfig.WorkersConfig
+	S3              objectstore.Client
+	S3LogRead       objectstore.Client
+	PutObject       WorkerPutObject
 	// Builder uploads can use a different network view of the same bucket.
 	S3Builder objectstore.Client
 	Kube      *kubernetes.Client

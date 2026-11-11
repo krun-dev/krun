@@ -57,6 +57,19 @@ func (o renderOptions) renderNetworkPolicies(outputDirectory string, replacement
 				needsDNS = needsDNS || net.ParseIP(target.storageHost) == nil
 			}
 		}
+		if labels["role"] == "krun-runtime" && (o.pool.PublicEgress == "direct" || o.pool.PrivateEgress == "direct") {
+			for _, destination := range o.workers.LocalDatabaseEgress {
+				spec["egress"] = append(spec["egress"].([]any), map[string]any{
+					"to": []any{
+						map[string]any{"ipBlock": map[string]any{"cidr": destination.CIDR}},
+					},
+					"ports": []any{
+						map[string]any{"protocol": "TCP", "port": destination.Port},
+					},
+				})
+				needsDNS = true
+			}
+		}
 		if needsDNS {
 			spec["egress"] = append(spec["egress"].([]any), dnsEgressRule())
 		}

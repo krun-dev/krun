@@ -144,7 +144,7 @@ Wrangler 的报错来自 krun 的 Cloudflare 兼容接口，错误码与平台�
 | `code 10000 没有访问权限` | Token 无效，或 API Key 策略未覆盖该接口所需动作（见上文通配符展开规则） | 核对 `CLOUDFLARE_API_TOKEN`；用 `krun check --kind worker --id ORG/WORKER --action worker.publish --env production` 验证策略 |
 | `code 10007 资源不存在` | 目标 Worker 尚不存在，或当前身份无权访问该组织 | 先创建 Worker（`krun workers create --name NAME`）或核对 `CLOUDFLARE_ACCOUNT_ID` 组织短名 |
 | `code 10021`（创建 R2 桶等资源） | 兼容接口不会按 `wrangler.jsonc` 自动创建桶等资源 | 先在 krun 创建资源并绑定，再把配置中的 `bucket_name` 指向实际桶名 |
-| `HYPERDRIVE_NOT_CONFIGURED` | 控制面未配置 PostgreSQL 代理 | 属于服务端部署配置，联系平台管理员；应用侧无法绕过 |
+| `HYPERDRIVE_NOT_CONFIGURED` | 控制面未配置 Workers 密钥环 | 请平台管理员配置 Workers 密钥环 |
 
 ## 7. 无浏览器自动化部署（Agent / CI）
 

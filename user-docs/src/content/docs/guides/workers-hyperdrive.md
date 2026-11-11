@@ -3,7 +3,7 @@ title: PostgreSQL 托管接入
 description: 用控制台或原版 Wrangler 配置 Hyperdrive，让 Worker 通过标准驱动访问 PostgreSQL。
 ---
 
-Hyperdrive 由 krun 保存源库凭据。代理按 Worker 所在池的出网设置直接连接源库。
+Hyperdrive 由 krun 加密保存源库凭据。绑定了数据库的 Worker 获取源库连接串，通过 workerd 按池的出网规则直接连接 PostgreSQL。请为 Worker 使用最小权限的数据库账号。
 公网和内网数据库使用同一套流程。**当前只支持 PostgreSQL**，创建配置时须填写源库域名。
 
 | 用途 | 怎么填 |
@@ -13,8 +13,8 @@ Hyperdrive 由 krun 保存源库凭据。代理按 Worker 所在池的出网设�
 | 在 Worker 中连接数据库 | 把 `env.DB.connectionString` 交给 `postgres.js` 或 `pg` |
 
 源库连接串含有源库用户名和密码。Wrangler 在创建配置时解析它，再把源库字段提交给 krun。
-`env.DB.connectionString` 由平台生成，包含代理地址和绑定凭据。Worker 项目保存绑定名和配置 ID。
-源库须支持 TLS，并使用与源库域名匹配的证书。
+`env.DB.connectionString` 由平台生成，包含源库地址和凭据。Worker 项目保存绑定名和配置 ID。
+源库须支持 TLS，并使用与源库域名匹配、由 workerd 信任的 CA 签发的证书。
 
 ## 申请临时 PostgreSQL
 
@@ -56,9 +56,9 @@ Neon 正逐步停用 `neon.new`。如果接口已下线，可在 [Claimable Neon
 2. 填写配置名称、源库域名、端口、库名和登录凭据。
 3. 打开目标 Worker，选择环境，在「配置版本 → 管理环境草稿 → Hyperdrive 绑定」选择刚创建的配置。
    填写绑定名 `DB`，保存后发布新版本。
-4. 需要更换源库密码时，在 Hyperdrive 列表点击「轮换源库密码」。新连接使用更新后的密码。
+4. 需要更换源库密码时，在 Hyperdrive 列表点击「轮换源库密码」。先在源库修改密码，再更新 Hyperdrive 配置并发布新版本，使 Worker 获取新连接串。
 
-配置属于当前组织。删除配置会拒绝以后使用该配置建立的连接。需要更换源库地址、库名或用户名时，
+配置属于当前组织。删除配置会停止发放连接串。撤销已发放的凭据和已建连接需要在源库操作。需要更换源库地址、库名或用户名时，
 创建一个新配置，更新 Worker 绑定并发布。
 
 ## 使用 Wrangler
@@ -90,7 +90,7 @@ id = "<hyperdrive-config-id>"
 ~~~
 
 配置可以用 `wrangler hyperdrive list`、`get`、`update` 和 `delete` 管理。使用 `update` 轮换密码时，
-传 `--password`。源库凭据只提交到 Hyperdrive 配置接口。
+传 `--password`。请通过 Hyperdrive 配置接口管理源库凭据。连接串仅交付给运行相应版本的 Worker。
 
 ## 使用数据库驱动
 
@@ -114,4 +114,4 @@ export default {
 ~~~
 
 一个客户端会话对应一条源库连接。应用用完连接后应及时关闭。krun 的 Wrangler 兼容范围覆盖配置管理
-和 Worker 绑定，代理提供会话转发，首版不提供 Hyperdrive 查询缓存或跨会话连接复用。
+和 Worker 绑定。Worker 直连源库，查询缓存与平台连接池超出兼容范围。

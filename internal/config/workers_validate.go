@@ -195,6 +195,12 @@ func (c *WorkersConfig) Validate() error {
 	if err := c.validateProtectedEgressCIDRs(); err != nil {
 		return err
 	}
+	if c.DatabaseOriginCAFile != "" && !path.IsAbs(c.DatabaseOriginCAFile) {
+		return fmt.Errorf("workers.database_origin_ca_file must be an absolute path")
+	}
+	if err := c.validateLocalDatabaseEgress(); err != nil {
+		return err
+	}
 	if err := c.ValidateRuntimePools(dns); err != nil {
 		return err
 	}

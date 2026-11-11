@@ -127,10 +127,10 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 			return w.NoteOperation(ctx, op.ID, "Waiting for a runtime image supporting isolated validation")
 		}
 		if len(version.HyperdriveBindings) != 0 {
-			if w.ValidateHyperdrive == nil || (pool.PublicEgress != "direct" && pool.PrivateEgress != "direct") {
+			if pool.PublicEgress != "direct" && pool.PrivateEgress != "direct" {
 				return w.FailOperation(ctx, op.ID, "Hyperdrive is unavailable in the serving pool")
 			}
-			if ready["hyperdrive_protocol"] != float64(1) {
+			if ready["hyperdrive_protocol"] != float64(2) {
 				return w.NoteOperation(ctx, op.ID, "Waiting for a runtime image supporting Hyperdrive")
 			}
 			for _, pod := range pods {
@@ -140,12 +140,12 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 				serving, status, err := w.Management(ctx, pool, pod, "", "/ready", nil)
 				if err != nil || status != 200 ||
 					serving["role"] != "runtime" || serving["pool"] != pool.ID ||
-					serving["pod_uid"] != pod.UID || serving["hyperdrive_protocol"] != float64(1) {
+					serving["pod_uid"] != pod.UID || serving["hyperdrive_protocol"] != float64(2) {
 					return w.NoteOperation(ctx, op.ID, "Waiting for all serving members to support Hyperdrive")
 				}
 			}
-			if w.ValidateHyperdrive(ctx, version, pool) != nil {
-				return w.FailOperation(ctx, op.ID, "Hyperdrive database is unavailable in the serving pool")
+			if w.Service.validateHyperdriveBindings(ctx, version.Organization, version.HyperdriveBindings) != nil {
+				return w.FailOperation(ctx, op.ID, "Hyperdrive configuration is unavailable")
 			}
 		}
 		secrets, err := w.validationSecrets(ctx, version, pool.ID)

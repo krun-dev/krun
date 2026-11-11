@@ -64,9 +64,8 @@ func TestRenderedServingAndValidatorStartInRealWorkerd(t *testing.T) {
 			if validator {
 				cfg.RuntimeAPIURL = "https://runtime.example.test"
 			}
-			cfg.ProtectedEgressCIDRs = []string{"192.0.2.0/24"}
-			cfg.Hyperdrive = &config.WorkerHyperdriveConfig{Listen: "127.0.0.2:6432"}
-			pool := config.WorkerRuntimePool{ID: "internal-a", Access: []string{"private"}, PublicEgress: "direct"}
+			cfg.ProtectedEgressCIDRs = []string{"192.0.2.0/24", "192.0.0.0/8"}
+			pool := config.WorkerRuntimePool{ID: "internal-a", Access: []string{"private"}, PublicEgress: "direct", PrivateEgress: "direct"}
 			text, err := Render(cfg, pool, strings.TrimPrefix(backend.URL, "http://"), []string{
 				"127.0.0.1/32",
 			}, validator)
@@ -76,14 +75,14 @@ func TestRenderedServingAndValidatorStartInRealWorkerd(t *testing.T) {
 			if strings.Contains(text, `name = "PUBLIC_EGRESS"`) == validator {
 				t.Fatal("public egress must be available only in serving workerd")
 			}
-			if strings.Contains(text, `name = "HYPERDRIVE_EGRESS"`) == validator {
-				t.Fatal("database proxy egress must be available only in serving workerd")
+			if strings.Contains(text, `name = "HYPERDRIVE_DIRECT_EGRESS"`) == validator {
+				t.Fatal("database egress must be available only in serving workerd")
 			}
-			if !validator && !strings.Contains(text, `allow = ["127.0.0.2/32","public"]`) {
-				t.Fatal("database proxy egress must allow only the dedicated proxy address and public destinations")
+			if !validator && !strings.Contains(text, `allow = ["public","10.0.0.0/8","100.64.0.0/10","172.16.0.0/12","fc00::/7"]`) {
+				t.Fatal("database egress must match the pool policy")
 			}
-			if !validator && !strings.Contains(text, `deny = ["192.0.2.0/24"]`) {
-				t.Fatal("public egress does not block deployment-owned addresses")
+			if !validator && (!strings.Contains(text, `deny = ["192.0.2.0/24","192.0.0.0/8"]`) || !strings.Contains(text, `deny = ["192.0.2.0/24","192.0.0.0/8","local"`)) {
+				t.Fatal("egress does not block deployment-owned or local addresses")
 			}
 			directory := t.TempDir()
 			for _, name := range []string{

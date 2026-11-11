@@ -15,15 +15,18 @@ import (
 	"time"
 
 	"github.com/krun-dev/krun/internal/adapters/cfcompat"
-	appconfig "github.com/krun-dev/krun/internal/config"
 )
 
 func TestHyperdriveControlAndRuntimeBindings(t *testing.T) {
 	s, store, workerPath := cfTestServer(t)
 	enableWorkerSecrets(s.Config.Workers)
-	s.Config.Workers.Hyperdrive = &appconfig.WorkerHyperdriveConfig{Address: "proxy.example.test:6432"}
+	otherPool := s.Config.Workers.RuntimePools[0]
+	otherPool.ID = "other-pool"
+	otherPool.RuntimeToken = "fixture-other-runtime-credential"
+	otherPool.PrivateEgress = "direct"
+	s.Config.Workers.RuntimePools = append(s.Config.Workers.RuntimePools, otherPool)
 	pool := &s.Config.Workers.RuntimePools[0]
-	pool.PublicEgress = "direct"
+	pool.PrivateEgress = "direct"
 	ctx := t.Context()
 	configs := cfPrefix + "/accounts/org-a/hyperdrive/configs"
 	response := request(s, http.MethodPost, configs, "krun_cli_admin", `{
@@ -95,6 +98,7 @@ func TestHyperdriveControlAndRuntimeBindings(t *testing.T) {
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		worker := st.Workers.Workers[version.Worker]
 		env := worker.Environments[version.Environment]
+		env.Enabled = true
 		env.Version = version.ID
 		env.HyperdriveBindings = version.HyperdriveBindings
 		worker.Environments[version.Environment] = env
@@ -113,42 +117,71 @@ func TestHyperdriveControlAndRuntimeBindings(t *testing.T) {
 		t.Fatalf("Wrangler Version binding was lost: %d %s", read.Code, read.Body.String())
 	}
 
-	app := s.workerApplication(nil)
-	dsns, err := app.HyperdriveConnectionStrings(version)
-	if err != nil || strings.Contains(dsns["DB"], "fixture-origin-password") {
-		t.Fatalf("invalid runtime connection string: %v", err)
+	path := "/api/internal/workers/versions/" + version.ID + "/hyperdrive-direct"
+	call := func(path, token, poolID string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("X-Runtime-Pool", poolID)
+		out := httptest.NewRecorder()
+		s.serveInternal(out, req)
+		return out
 	}
-	dsn, err := url.Parse(dsns["DB"])
-	if err != nil || dsn.Host != "proxy.example.test:6432" {
-		t.Fatal("runtime connection string does not target the proxy")
+	for _, test := range []struct {
+		path, token, poolID string
+		status              int
+	}{
+		{path, pool.ValidatorToken, pool.ID, http.StatusForbidden},
+		{path, pool.RuntimeToken, otherPool.ID, http.StatusForbidden},
+		{path, otherPool.RuntimeToken, otherPool.ID, http.StatusNotFound},
+		{strings.TrimSuffix(path, "-direct"), pool.RuntimeToken, pool.ID, http.StatusNotFound},
+		{strings.Replace(path, version.ID, "missing-version", 1), pool.RuntimeToken, pool.ID, http.StatusNotFound},
+	} {
+		if out := call(test.path, test.token, test.poolID); out.Code != test.status {
+			t.Fatalf("credential authorization: status %d, want %d", out.Code, test.status)
+		}
 	}
-	token, _ := dsn.User.Password()
-	target, password, public, _, err := app.ResolveHyperdriveSession(ctx, dsn.User.Username(), token)
-	if err != nil || target.ID != id || password != "fixture-origin-password" || !public {
-		t.Fatalf("could not authorize the persisted Version binding: %v", err)
+
+	checkDSN := func(wantPassword string) {
+		t.Helper()
+		out := call(path, pool.RuntimeToken, pool.ID)
+		if out.Code != http.StatusOK || out.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("expected an uncached credential response, status %d", out.Code)
+		}
+		var dsns map[string]string
+		if err := json.Unmarshal(out.Body.Bytes(), &dsns); err != nil {
+			t.Fatal("invalid credential response")
+		}
+		dsn, err := url.Parse(dsns["DB"])
+		if err != nil || dsn.User == nil {
+			t.Fatal("invalid PostgreSQL connection string")
+		}
+		password, _ := dsn.User.Password()
+		if dsn.Scheme != "postgresql" || dsn.Host != "orders.example.test:5432" ||
+			dsn.Path != "/orders" || dsn.User.Username() != "app" || password != wantPassword ||
+			dsn.Query().Get("sslmode") != "verify-full" {
+			t.Fatal("connection string must target the source database with verified TLS")
+		}
 	}
+	checkDSN("fixture-origin-password")
 
 	updated := request(s, http.MethodPatch, configs+"/"+id, "krun_cli_admin", `{"origin":{"password":"fixture-new-password"}}`)
 	if updated.Code != 200 || strings.Contains(updated.Body.String(), "fixture-new-password") {
-		t.Fatalf("rotate origin credential: %d %s", updated.Code, updated.Body.String())
+		t.Fatalf("rotate origin credential: %d", updated.Code)
 	}
-	_, password, _, _, err = app.ResolveHyperdriveSession(ctx, dsn.User.Username(), token)
-	if err != nil || password != "fixture-new-password" {
-		t.Fatalf("new sessions must use the rotated credential: %v", err)
-	}
+	checkDSN("fixture-new-password")
 
 	pool.PublicEgress = "deny"
 	pool.PrivateEgress = "deny"
-	if _, _, _, _, err := app.ResolveHyperdriveSession(ctx, dsn.User.Username(), token); err == nil {
-		t.Fatal("closing both pool egress modes should deny the active binding")
+	if out := call(path, pool.RuntimeToken, pool.ID); out.Code != http.StatusForbidden {
+		t.Fatalf("pool without egress received credentials, status %d", out.Code)
 	}
-	pool.PublicEgress = "direct"
+	pool.PrivateEgress = "direct"
 	deleted := request(s, http.MethodDelete, configs+"/"+id, "krun_cli_admin", "")
 	if deleted.Code != 200 {
-		t.Fatalf("revoke configuration: %d %s", deleted.Code, deleted.Body.String())
+		t.Fatalf("delete configuration: %d", deleted.Code)
 	}
-	if _, _, _, _, err := app.ResolveHyperdriveSession(ctx, dsn.User.Username(), token); err == nil {
-		t.Fatal("deleted configuration still authorizes connections")
+	if out := call(path, pool.RuntimeToken, pool.ID); out.Code != http.StatusNotFound {
+		t.Fatalf("deleted configuration still issued credentials, status %d", out.Code)
 	}
 }
 
@@ -162,7 +195,6 @@ func TestOriginalWranglerHyperdrive(t *testing.T) {
 	}
 	s, store, _ := cfTestServer(t)
 	enableWorkerSecrets(s.Config.Workers)
-	s.Config.Workers.Hyperdrive = &appconfig.WorkerHyperdriveConfig{Address: "proxy.example.test:6432"}
 	server := httptest.NewServer(s)
 	defer server.Close()
 	dir := t.TempDir()
