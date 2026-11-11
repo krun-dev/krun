@@ -45,8 +45,8 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 	case scopeOrganizationWide:
 		scope.OrganizationWide = true
 		scope.Summary = true
-	case scopeWorker:
-		scope.Summary = false
+	case scopeWorkerActivity:
+		scope.WorkerActivityOnly = true
 	case scopeWorkerSummary:
 		scope.Summary = true
 	case scopeCloudflareOrganization:

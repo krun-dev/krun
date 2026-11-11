@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type Resource } from "./api";
 import { errorMessage } from "./i18n";
-import { nextWorkerPollDelay } from "./worker-polling";
+import {
+  nextWorkerPollDelay,
+  pollWorkerOverview,
+  WORKER_OVERVIEW_REFRESH_MS,
+  type WorkerActivity,
+} from "./worker-polling";
 import type { R2Binding } from "./object-storage";
 
 export type RepositoryBinding = {
@@ -131,6 +136,7 @@ export type WorkerData = {
   domainsRevision: number;
 };
 type WorkerOverview = {
+  activity?: WorkerActivity;
   builds: Build[];
   environments: {
     environment: Environment;
@@ -155,6 +161,9 @@ export function useWorkerData(base: string, revision: number) {
     let inFlight = false;
     let failures = 0;
     let reloadAfterFlight = false;
+    let hasPendingWork = false;
+    let activity: WorkerActivity | undefined;
+    let lastOverview = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let request: AbortController | undefined;
 
@@ -164,28 +173,39 @@ export function useWorkerData(base: string, revision: number) {
       setError("");
     }
 
-    function schedule(delay: number) {
+    function schedule(delay: number, forceOverview = false) {
       if (timer) clearTimeout(timer);
-      if (!disposed && !document.hidden) timer = setTimeout(load, delay);
+      if (!disposed && !document.hidden) {
+        timer = setTimeout(() => void load(forceOverview), delay);
+      }
     }
 
-    async function load() {
+    async function load(forceOverview = false) {
       if (disposed || document.hidden || inFlight) return;
       inFlight = true;
       const currentRequest = new AbortController();
       request = currentRequest;
-      let hasPendingWork = false;
       try {
-        const overview = await api<WorkerOverview>(
-          base + "/overview",
-          "GET",
-          undefined,
-          currentRequest.signal,
+        // Keep a periodic full refresh for metadata changes that do not affect active work.
+        const refreshOverview =
+          forceOverview || performance.now() - lastOverview >= WORKER_OVERVIEW_REFRESH_MS;
+        const signal = currentRequest.signal;
+        const overview = await pollWorkerOverview(
+          refreshOverview ? undefined : activity,
+          () => api<WorkerActivity>(base + "/activity", "GET", undefined, signal),
+          () => api<WorkerOverview>(base + "/overview", "GET", undefined, signal),
         );
-        if (disposed || currentRequest.signal.aborted) return;
+        if (disposed || signal.aborted) return;
+        setError("");
+        failures = 0;
+        if (!overview) return;
+
+        lastOverview = performance.now();
+        activity = overview.activity;
         hasPendingWork =
-          overview.builds.some((build) => pending(build.state)) ||
-          overview.operations.some((operation) => pending(operation.state));
+          activity?.active ??
+          (overview.builds.some((build) => pending(build.state)) ||
+            overview.operations.some((operation) => pending(operation.state)));
         setData({
           builds: overview.builds,
           environments: overview.environments.map((entry) => entry.environment),
@@ -196,8 +216,6 @@ export function useWorkerData(base: string, revision: number) {
           versions: overview.versions,
           domainsRevision: overview.domains_revision,
         });
-        setError("");
-        failures = 0;
       } catch (cause) {
         if (!disposed && !currentRequest.signal.aborted) {
           failures++;
@@ -208,7 +226,7 @@ export function useWorkerData(base: string, revision: number) {
         if (request === currentRequest) request = undefined;
         if (reloadAfterFlight && !document.hidden) {
           reloadAfterFlight = false;
-          schedule(0);
+          schedule(0, true);
         } else {
           schedule(nextWorkerPollDelay(hasPendingWork, failures));
         }
@@ -225,7 +243,7 @@ export function useWorkerData(base: string, revision: number) {
         reloadAfterFlight = true;
         return;
       }
-      void load();
+      void load(true);
     }
 
     document.addEventListener("visibilitychange", visibilityChanged);

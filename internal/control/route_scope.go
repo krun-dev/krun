@@ -25,6 +25,8 @@ const (
 	scopeOrganizationWide
 	// scopeWorker bounds workers and subordinate rows to one Worker.
 	scopeWorker
+	// scopeWorkerActivity reads only the environments and unfinished work used by polling.
+	scopeWorkerActivity
 	// scopeWorkerSummary bounds the Worker list and its search/cursor options.
 	scopeWorkerSummary
 	// scopeCloudflareOrganization is the Cloudflare API's organization scope.

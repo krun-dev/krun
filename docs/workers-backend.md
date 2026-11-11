@@ -208,6 +208,8 @@ controller 默认对业务 pool 的 Ready serving Pod 调用 `/validate`，配�
 | `GET /operations` | 当前 Worker可见环境的发布操作，最多 100 条 |
 | `GET /versions/{id}` | 不可变 Version 配置与制品引用 |
 | `POST /environments/{env}/invoke` | 鉴权后经 Gateway 调用业务 Worker，返回文本响应封装 |
+| `GET /overview` | 控制台详情数据，包含当前可见活动的 `activity` |
+| `GET /activity` | 返回 HTTP 200 和 `active`、`token`，用于轮询可见的未完成构建和发布 |
 | `GET /operations/{id}` | 步骤、错误、提交与生效状态 |
 
 内部 runtime 接口只监听 `internal_listen`，不进公开 mux，使用池级身份

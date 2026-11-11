@@ -735,6 +735,37 @@ await check(
     assert.match(await response.text(), /root/);
   },
 );
+await check("both asset routes reject corrupt bytes and can retry the download", async () => {
+  const env = makeEnv(config, fileList);
+  const mod = await freshEntry();
+  const platform = env.PLATFORM.fetch;
+  env.STATIC_DOMAINS = JSON.stringify({ "static.workers.test": "int" });
+  env.PLATFORM.fetch = async (request) => {
+    if (new URL(request.url).pathname.includes("/static-assets/")) {
+      return Response.json(fixtureRead("http://assets.test/index.html").storage);
+    }
+    return platform(request);
+  };
+  const entry = new mod.Private(env, {});
+  const urls = [
+    "http://w-test.workers.test/",
+    "http://static.workers.test/org/svc/" + "a".repeat(64) + "/index.html",
+  ];
+  const original = files["index.html"];
+  try {
+    files["index.html"] = original.replace("root", "oops");
+    for (const url of urls) {
+      assert.equal((await entry.fetch(new Request(url))).status, 503);
+    }
+  } finally {
+    files["index.html"] = original;
+  }
+  for (const url of urls) {
+    const response = await entry.fetch(new Request(url));
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), original);
+  }
+});
 await check("prototype-magic asset binding names are rejected before WorkerLoader", async () => {
   const module = 'export default {fetch(){return new Response("ok")}}';
   const moduleDigest = await digest(module);

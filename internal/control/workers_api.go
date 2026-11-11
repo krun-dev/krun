@@ -64,6 +64,8 @@ func (s *Server) workersRoutes(m *recordingMux) {
 	m.useScope(scopeNone)
 	m.HandleFunc("GET /api/v1/workers/repository/{provider}/callback", s.workerRepositoryCallback)
 	m.HandleFunc("POST /api/v1/workers/repository/{provider}/callback", s.workerRepositoryCallback)
+	m.useScope(scopeWorkerActivity)
+	m.HandleFunc("GET "+base+"/activity", protect(false, s.workerActivity))
 	m.useScope(scopeWorker)
 	m.HandleFunc("GET "+base+"/domains", protect(false, s.workerRoutingDomains))
 	m.HandleFunc("PUT "+base+"/domains", protect(false, s.workerRoutingDomainsUpdate))
@@ -168,7 +170,12 @@ func (s *Server) workerEnvironments(st *State, p Principal, r *http.Request) (an
 	return out, workerHTTPStatus(outcome), err
 }
 
-// workerOverview is the console polling read model. It deliberately contains
+func (s *Server) workerActivity(st *State, p Principal, r *http.Request) (any, int, error) {
+	out, err := s.workerApplication(r).WorkerActivity(st, p, workerRef(r))
+	return out, http.StatusOK, err
+}
+
+// workerOverview is the full console detail read model. It deliberately contains
 // only public Workers fields and applies the same per-environment permissions
 // as the individual collection endpoints.
 func (s *Server) workerOverview(st *State, p Principal, r *http.Request) (any, int, error) {

@@ -399,6 +399,8 @@
   "Worker 名称": "Worker name",
   "网络环境": "Network environment",
   "Worker 已创建。": "Worker created.",
+  "Worker 已创建，网络配置尚未确认。": "Worker created. Its network configuration has not been confirmed.",
+  "重试网络配置": "Retry network configuration",
   "Worker 归属于当前组织，环境和版本分别管理。": "Workers belong to this organization; environments and versions are managed separately.",
   "不可用": "Unavailable",
   "保存配置": "Save configuration",
