@@ -20,6 +20,9 @@ const (
 	scopeActorAudit
 	// scopeOrganization bounds workers and IAM rows to one organization.
 	scopeOrganization
+	// scopeOrganizationWide loads every user, group and grant in one
+	// organization for its administration lists.
+	scopeOrganizationWide
 	// scopeWorker bounds workers and subordinate rows to one Worker.
 	scopeWorker
 	// scopeWorkerSummary bounds the Worker list and its search/cursor options.

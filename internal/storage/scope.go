@@ -15,6 +15,7 @@ type ReadScope struct {
 	Limit                                        int
 	Summary                                      bool
 	ActorOnly, AllOrganizations                  bool
+	OrganizationWide                             bool
 }
 
 type ReadScopeKey struct{}
@@ -50,6 +51,9 @@ func queueStateRead(ctx context.Context, b *pgx.Batch, table, query string) {
 }
 
 func scopePredicate(table string, scope ReadScope) string {
+	if scope.OrganizationWide {
+		return organizationWidePredicate(table)
+	}
 	resources := `SELECT resource_id FROM krun_resources WHERE org_id=$2 AND kind=$5 AND ($3='' OR resource_id=$3) AND ($3<>'' OR resource_id COLLATE "C">$6 COLLATE "C") AND ($8='' OR strpos(lower(name),lower($8))>0 OR strpos(lower(resource_id),lower($8))>0 OR strpos(lower(locator),lower($8))>0) ORDER BY resource_id COLLATE "C" LIMIT $7`
 	workers := `worker_id IN (` + resources + `)`
 	pred := "false"
@@ -131,6 +135,37 @@ func scopePredicate(table string, scope ReadScope) string {
 		}
 	}
 	return pred
+}
+
+func organizationWidePredicate(table string) string {
+	actor := `(subject_kind='user' AND subject_id=$1 OR subject_kind='group' AND subject_id IN(SELECT group_id FROM krun_group_members WHERE user_id=$1))`
+	actorOrgs := `SELECT org_id FROM krun_members WHERE user_id=$1`
+	actorGroups := `SELECT group_id FROM krun_group_members WHERE user_id=$1`
+	actorResources := `SELECT scope_id FROM krun_assignments WHERE ` + actor + ` AND scope_kind IN ('worker','model')`
+	orgGroups := `SELECT group_id FROM krun_groups WHERE scope_kind='system' OR scope_id=$2`
+	orgResources := `SELECT resource_id FROM krun_resources WHERE org_id=$2`
+	switch table {
+	case "krun_users":
+		return `user_id=$1 OR user_id IN (SELECT user_id FROM krun_members WHERE org_id=$2)`
+	case "krun_organizations", "krun_org_sources":
+		return `org_id=$2 OR org_id IN (` + actorOrgs + `)`
+	case "krun_members":
+		return `org_id=$2 OR user_id=$1`
+	case "krun_resources":
+		return `org_id=$2 OR resource_id IN (` + actorResources + `)`
+	case "krun_api_keys":
+		return `org_id=$2`
+	case "krun_groups":
+		return `group_id IN (` + actorGroups + `) OR scope_kind='system' OR scope_id=$2`
+	case "krun_group_members":
+		return `group_id IN (` + orgGroups + `) OR user_id=$1`
+	case "krun_assignments":
+		return `(` + actor + `) OR scope_kind='system' OR scope_kind='organization' AND scope_id=$2 OR scope_id IN (` + orgResources + `)`
+	case "krun_identity_sources", "krun_identity_providers", "krun_meta":
+		return `true`
+	default:
+		return "false"
+	}
 }
 
 type LoginScope struct{ Source, Subject string }
