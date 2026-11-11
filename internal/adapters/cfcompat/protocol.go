@@ -262,7 +262,7 @@ func isProblem(err error, code string) bool {
 
 // Routes returns the Cloudflare-compatible endpoint catalog. objects and
 // hyperdrive are native krun endpoints wrapped in the Cloudflare envelope.
-func (s *Server) Routes(objects Endpoint, hyperdrive Endpoint) []Route {
+func (s *Server) Routes(objects Endpoint) []Route {
 	base := Prefix + "/accounts/{account}"
 	routes := []Route{}
 	add := func(pattern string, handler http.HandlerFunc, accountScope bool) {
@@ -270,10 +270,10 @@ func (s *Server) Routes(objects Endpoint, hyperdrive Endpoint) []Route {
 	}
 	configs := base + "/hyperdrive/configs"
 	for _, method := range []string{"GET", "POST"} {
-		add(method+" "+configs, s.cfProtected(hyperdrive), false)
+		add(method+" "+configs, s.cfProtected(s.cfHyperdrive), false)
 	}
 	for _, method := range []string{"GET", "PATCH", "DELETE"} {
-		add(method+" "+configs+"/{hyperdrive}", s.cfProtected(hyperdrive), false)
+		add(method+" "+configs+"/{hyperdrive}", s.cfProtected(s.cfHyperdrive), false)
 	}
 	add("GET "+base+"/r2/buckets", s.cfProtected(s.cfBucketList), false)
 	add("POST "+base+"/r2/buckets", s.cfProtected(s.cfBucketCreate), false)

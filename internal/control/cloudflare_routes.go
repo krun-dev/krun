@@ -39,10 +39,7 @@ func (s *Server) cloudflareRoutes(m *recordingMux) {
 	objects := func(st *State, p Principal, r *http.Request) (any, int, error) {
 		return s.workerObjects(st, p, r)
 	}
-	hyperdrive := func(st *State, p Principal, r *http.Request) (any, int, error) {
-		return s.hyperdriveRequest(st, p, r, true)
-	}
-	for _, route := range s.cf.Routes(objects, hyperdrive) {
+	for _, route := range s.cf.Routes(objects) {
 		if route.AccountScope {
 			m.useScope(scopeCloudflareAccounts)
 		} else {
