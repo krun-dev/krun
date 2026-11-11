@@ -8,7 +8,8 @@ CREATE SEQUENCE IF NOT EXISTS krun_revision_seq;
 INSERT INTO krun_meta (key, value) VALUES
 	('revision','0'),
 	('bootstrapped','0'),
-	('worker_config_head','0')
+	('worker_config_head','0'),
+	('worker_config_epoch',replace(gen_random_uuid()::text,'-',''))
 ON CONFLICT (key) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS krun_audits (
@@ -705,10 +706,12 @@ BEGIN
 END $$;
 CREATE OR REPLACE TRIGGER resource_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_resources FOR EACH ROW EXECUTE FUNCTION krun_mark_resource_config_dirty();
 CREATE TABLE IF NOT EXISTS worker_runtime_acks (
-	pod_uid    text PRIMARY KEY,
+	pod_uid    text NOT NULL,
+	config_epoch text NOT NULL,
 	pool       text NOT NULL,
 	revision   bigint NOT NULL,
-	updated_at timestamptz NOT NULL
+	updated_at timestamptz NOT NULL,
+	PRIMARY KEY (pod_uid,config_epoch)
 );
 
 CREATE OR REPLACE TRIGGER deployment_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_deployments FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();

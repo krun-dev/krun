@@ -10,6 +10,15 @@ import (
 	"github.com/krun-dev/krun/internal/domain"
 )
 
+func confirmOperationAtCurrentEpoch(store *Store, ctx context.Context, id, pool string, revision int64) error {
+	cursor, err := store.ConfigPosition(ctx)
+	if err != nil {
+		return err
+	}
+	cursor.Revision = revision
+	return store.ConfirmOperation(ctx, id, pool, cursor)
+}
+
 func addOperationTestPlacement(st *State, op WorkerOperation) {
 	st.Workers.Placements[workerPlacementKey(op.Worker, "default")] = WorkerPlacement{
 		Worker: op.Worker, Organization: op.Organization, Pool: "default",
@@ -97,14 +106,14 @@ func TestPostgresOperationRejectsExpiredClaimAfterTakeover(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE krun_worker_operations SET edge_revision=$2,edge_pool='default' WHERE operation_id=$1`, op.ID, edge); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ConfirmOperation(ctx, op.ID, "default", 4); err != nil {
+	if err := confirmOperationAtCurrentEpoch(store, ctx, op.ID, "default", 4); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `SELECT state FROM krun_worker_operations WHERE operation_id=$1`, op.ID).Scan(&state); err != nil || state != "committed" {
 		t.Fatalf("wrong edge revision or late failure changed state: state=%q err=%v", state, err)
 	}
 	for range 2 {
-		if err := store.ConfirmOperation(ctx, op.ID, "default", edge); err != nil {
+		if err := confirmOperationAtCurrentEpoch(store, ctx, op.ID, "default", edge); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -140,7 +149,7 @@ func TestPostgresOperationConfirmationRequiresCurrentDeployment(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE krun_worker_operations SET edge_pool='default' WHERE operation_id=$1`, op.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ConfirmOperation(ctx, op.ID, "default", int64(op.EdgeRevision)); err != nil {
+	if err := confirmOperationAtCurrentEpoch(store, ctx, op.ID, "default", int64(op.EdgeRevision)); err != nil {
 		t.Fatal(err)
 	}
 	var state string
@@ -202,10 +211,10 @@ func TestPostgresRollbackSupersedesUnconfirmedPublish(t *testing.T) {
 	if scheduled, err := store.ScheduleCommittedOperation(ctx, rollback.ID); err != nil || !scheduled {
 		t.Fatalf("resume committed rollback: scheduled=%t err=%v", scheduled, err)
 	}
-	if err := store.ConfirmOperation(ctx, publish.ID, "default", 11); err != nil {
+	if err := confirmOperationAtCurrentEpoch(store, ctx, publish.ID, "default", 11); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ConfirmOperation(ctx, rollback.ID, "default", 12); err != nil {
+	if err := confirmOperationAtCurrentEpoch(store, ctx, rollback.ID, "default", 12); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, err := store.Open(ctx, PartitionWorkers)
@@ -270,7 +279,7 @@ func TestPostgresEnvironmentRemovalSupersedesCommittedDeployment(t *testing.T) {
 				setEnabled(false)
 				setEnabled(true)
 			}
-			if err := store.ConfirmOperation(ctx, op.ID, "default", 5); err != nil {
+			if err := confirmOperationAtCurrentEpoch(store, ctx, op.ID, "default", 5); err != nil {
 				t.Fatal(err)
 			}
 			state, err := store.Open(ctx, PartitionWorkers)
@@ -358,7 +367,7 @@ func TestPostgresOperationPinsPublishedEdgeRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	ackCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
-	err = store.ConfirmOperation(ackCtx, "op-edge", "default", 11)
+	err = confirmOperationAtCurrentEpoch(store, ackCtx, "op-edge", "default", 11)
 	cancel()
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("confirmation did not wait for the in-flight placement move: err=%v", err)
@@ -372,7 +381,7 @@ func TestPostgresOperationPinsPublishedEdgeRevision(t *testing.T) {
 	if got, err := store.PinOperationEdgeRevision(ctx, "op-edge", "pool-b"); err != nil || got != 0 {
 		t.Fatalf("new pool accepted the old pool's revision: revision=%d err=%v", got, err)
 	}
-	if err := store.ConfirmOperation(ctx, "op-edge", "default", 11); err != nil {
+	if err := confirmOperationAtCurrentEpoch(store, ctx, "op-edge", "default", 11); err != nil {
 		t.Fatal(err)
 	}
 	dirty, err = store.DirtyWorkers(ctx)
@@ -390,14 +399,14 @@ func TestPostgresOperationPinsPublishedEdgeRevision(t *testing.T) {
 	if got, err := store.PinOperationEdgeRevision(ctx, "op-edge", "pool-b"); err != nil || got != 38 {
 		t.Fatalf("new pool did not pin its projection: revision=%d err=%v", got, err)
 	}
-	if err := store.ConfirmOperation(ctx, "op-edge", "pool-b", 37); err != nil {
+	if err := confirmOperationAtCurrentEpoch(store, ctx, "op-edge", "pool-b", 37); err != nil {
 		t.Fatal(err)
 	}
 	var state string
 	if err := pool.QueryRow(ctx, `SELECT state FROM krun_worker_operations WHERE operation_id='op-edge'`).Scan(&state); err != nil || state != "committed" {
 		t.Fatalf("older ACK confirmed the move: state=%q err=%v", state, err)
 	}
-	if err := store.ConfirmOperation(ctx, "op-edge", "pool-b", 38); err != nil {
+	if err := confirmOperationAtCurrentEpoch(store, ctx, "op-edge", "pool-b", 38); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `SELECT state FROM krun_worker_operations WHERE operation_id='op-edge'`).Scan(&state); err != nil || state != "available" {

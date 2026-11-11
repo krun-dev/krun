@@ -146,16 +146,24 @@ func (w *Controller) CollectWorkerObjects(ctx context.Context) error {
 	_, floor, err := w.Service.Store.ConfigState(ctx)
 	if err != nil {
 		failures = append(failures, err)
-	} else if floor > 0 {
+	} else {
+		position, e := w.Service.Store.ConfigPosition(ctx)
+		if e != nil {
+			return e
+		}
 		protected := map[string]bool{}
 		checkpoints, e := w.Service.Store.PublishedConfigCheckpoints(ctx)
 		if e != nil {
 			return e
 		}
 		for _, checkpoint := range checkpoints {
-			protected[WorkerPoolConfigPrefix(checkpoint.Pool)+"shards/"+checkpoint.Shard+"/"+strconv.FormatInt(checkpoint.PublishedRevision, 10)+".json.gz"] = true
+			protected[WorkerPoolConfigPrefix(checkpoint.Pool, position.Epoch)+"shards/"+checkpoint.Shard+"/"+strconv.FormatInt(checkpoint.PublishedRevision, 10)+".json.gz"] = true
 		}
-		if err := w.RemoveWorkerObjects(ctx, WorkerConfigPoolsDir, func(key string, _ time.Time) bool {
+		if err := w.RemoveWorkerObjects(ctx, WorkerConfigPoolsDir, func(key string, modified time.Time) bool {
+			parts := strings.SplitN(strings.TrimPrefix(key, WorkerConfigPoolsDir), "/", 4)
+			if len(parts) < 4 || parts[1] != "epochs" || parts[2] != position.Epoch {
+				return !modified.IsZero() && modified.Before(time.Now().UTC().Add(-storage.WorkerUploadRetain))
+			}
 			if protected[key] {
 				return false
 			}

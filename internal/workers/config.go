@@ -16,20 +16,22 @@ import (
 )
 
 type EdgeConfigSnapshot struct {
-	ConfigRevision int64                           `json:"config_revision"`
-	Pool           string                          `json:"pool"`
-	Routes         []domain.EdgeConfigRoute        `json:"routes"`
-	Versions       map[string]domain.WorkerVersion `json:"versions"`
+	domain.EdgeConfigCursor
+	Pool     string                          `json:"pool"`
+	Routes   []domain.EdgeConfigRoute        `json:"routes"`
+	Versions map[string]domain.WorkerVersion `json:"versions"`
 }
 
 const (
 	WorkerConfigPoolsDir = "config/pools/"
 )
 
-func WorkerPoolConfigPrefix(pool string) string { return WorkerConfigPoolsDir + pool + "/" }
+func WorkerPoolConfigPrefix(pool, epoch string) string {
+	return WorkerConfigPoolsDir + pool + "/epochs/" + epoch + "/"
+}
 
-func WorkerPoolConfigLatestKey(pool string) string {
-	return WorkerPoolConfigPrefix(pool) + "latest.json"
+func WorkerPoolConfigLatestKey(pool, epoch string) string {
+	return WorkerPoolConfigPrefix(pool, epoch) + "latest.json"
 }
 
 // workerConfigFromState includes the baseline and preview environments of every
@@ -244,8 +246,8 @@ func DiffWorkerConfig(prev *domain.EdgeConfigProjection, next domain.EdgeConfigP
 	return ops
 }
 
-func EncodeWorkerConfigSnapshot(pool string, revision int64, p domain.EdgeConfigProjection) ([]byte, error) {
-	snapshot := EdgeConfigSnapshot{ConfigRevision: revision, Pool: pool, Routes: p.Routes, Versions: p.Versions}
+func EncodeWorkerConfigSnapshot(pool string, position domain.EdgeConfigCursor, p domain.EdgeConfigProjection) ([]byte, error) {
+	snapshot := EdgeConfigSnapshot{EdgeConfigCursor: position, Pool: pool, Routes: p.Routes, Versions: p.Versions}
 	raw, err := json.Marshal(snapshot)
 	if err != nil {
 		return nil, err
@@ -262,6 +264,7 @@ func EncodeWorkerConfigSnapshot(pool string, revision int64, p domain.EdgeConfig
 }
 
 type EdgeConfigLatest struct {
+	Epoch          string `json:"config_epoch"`
 	LazyRoutes     bool   `json:"lazy_routes,omitempty"`
 	ConfigRevision int64  `json:"config_revision"`
 	Snapshot       string `json:"snapshot"`

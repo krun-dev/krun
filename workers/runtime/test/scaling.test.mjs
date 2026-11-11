@@ -3,13 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import assert from "node:assert/strict";
-import { loadRuntimeSource } from "./entry-source.mjs";
+import { fixtureConfigEpoch, loadRuntimeSource } from "./entry-source.mjs";
 const directory = mkdtempSync(join(tmpdir(), "krun-scaling-"));
 const source = loadRuntimeSource();
 writeFileSync(
   join(directory, "entry.mjs"),
   source +
-    `export { bootstrap, bootstrapFromControl, applyBatch, resolveRoute, assetManifest };
+    `export { bootstrapFromControl, applyBatch, resolveRoute, assetManifest, requireFreshConfig };
 export const inspect = () => ({ view, versionRefs, routeVersions, manifests });
 `,
 );
@@ -28,6 +28,7 @@ try {
     if (path.endsWith("/config/snapshot")) {
       return Response.json({
         pool: "default",
+        config_epoch: fixtureConfigEpoch,
         config_revision: 1,
         lazy_routes: true,
         routes: [{ host: "cold.test", version: "stale" }],
@@ -38,6 +39,7 @@ try {
     const host = decodeURIComponent(path.split("/").at(-1));
     return Response.json({
       pool: "default",
+      config_epoch: fixtureConfigEpoch,
       config_revision: 2,
       routes: [{ host, version: host, enabled: true }],
       versions: { [host]: { id: host } },
@@ -51,6 +53,7 @@ try {
   assert.equal(requests, 1);
   // A cold lookup can observe a newer revision than the following delta feed.
   lazy.applyBatch({
+    config_epoch: fixtureConfigEpoch,
     from: 1,
     to: 2,
     ops: [
@@ -84,6 +87,7 @@ try {
   const uncachedHost = "never-visited.test";
   assert(
     lazy.applyBatch({
+      config_epoch: fixtureConfigEpoch,
       from: 2,
       to: 3,
       ops: [
@@ -112,6 +116,7 @@ try {
   assert.throws(
     () =>
       lazy.applyBatch({
+        config_epoch: fixtureConfigEpoch,
         from: 3,
         to: 4,
         ops: [{ type: "route_delete", host: cachedHost }, { type: "broken" }],
@@ -146,38 +151,64 @@ try {
   const fallback = await fresh();
   const snapshot = {
     pool: "default",
+    config_epoch: fixtureConfigEpoch,
     config_revision: 7,
     routes: [{ host: "fallback.test", version: "fallback", enabled: true }],
     versions: { fallback: { id: "fallback" } },
   };
-  const compressed = gzipSync(JSON.stringify(snapshot));
-  const digest = Buffer.from(await crypto.subtle.digest("SHA-256", compressed)).toString("hex");
+  let controlEpoch = fixtureConfigEpoch;
+  let controlRevision = 7;
+  const shard = Buffer.from(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode("fallback.test")),
+  )
+    .toString("hex")
+    .slice(0, 2);
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input) => {
     const path = new URL(input instanceof Request ? input.url : input).pathname;
-    if (path === "/latest.json") {
-      return Response.json({ config_revision: 7, lazy_routes: true });
-    }
+    assert(path.startsWith("/epochs/" + controlEpoch + "/"));
+    const compressed = gzipSync(JSON.stringify(snapshot));
     if (path.endsWith("/latest.json")) {
       return Response.json({
-        snapshot: "shards/fixture/7.json.gz",
-        sha256: digest,
-        config_revision: 7,
+        snapshot: `shards/${shard}/${snapshot.config_revision}.json.gz`,
+        sha256: Buffer.from(await crypto.subtle.digest("SHA-256", compressed)).toString("hex"),
+        config_epoch: snapshot.config_epoch,
+        config_revision: snapshot.config_revision,
       });
     }
     return new Response(compressed);
   };
   try {
-    const env = environment(async () => {
+    const env = environment(async (request) => {
+      if (new URL(request.url).pathname.endsWith("/config/snapshot")) {
+        return Response.json({
+          pool: "default",
+          config_epoch: controlEpoch,
+          config_revision: controlRevision,
+          lazy_routes: true,
+        });
+      }
       throw new Error("control down");
     });
     env.CONFIG_BASE = "http://config.test";
-    await fallback.bootstrap(env);
+    await fallback.bootstrapFromControl(env);
     assert.equal((await fallback.resolveRoute(env, "fallback.test")).version, "fallback");
+    controlEpoch = "b".repeat(32);
+    controlRevision = 3;
+    await fallback.bootstrapFromControl(env);
+    assert.equal(fallback.inspect().view.routes.size, 0);
+    assert.equal(fallback.inspect().view.revision, 3);
+    await assert.rejects(fallback.resolveRoute(env, "fallback.test"), /cursor mismatch/);
+    snapshot.config_epoch = controlEpoch;
+    snapshot.config_revision = 2;
+    await assert.rejects(fallback.resolveRoute(env, "fallback.test"), /cursor mismatch/);
+    snapshot.config_revision = 3;
+    snapshot.routes[0].enabled = false;
+    assert.equal((await fallback.resolveRoute(env, "fallback.test")).enabled, false);
   } finally {
     globalThis.fetch = originalFetch;
   }
-  console.log("PASS immutable shard fallback while control plane is unavailable");
+  console.log("PASS shard fallback is restricted to the current epoch and revision");
 } finally {
   rmSync(directory, { recursive: true, force: true });
 }

@@ -26,7 +26,7 @@ func (w *Controller) PublishConfigDelta(ctx context.Context) (int64, error) {
 			return head, err
 		}
 		if len(dirty) == 0 {
-			return head, w.WritePendingCheckpoints(ctx, head)
+			return head, w.WritePendingCheckpoints(ctx)
 		}
 		ids := make([]string, 0, len(dirty))
 		for _, d := range dirty {
@@ -49,12 +49,12 @@ func (w *Controller) PublishConfigDelta(ctx context.Context) (int64, error) {
 			continue
 		}
 		w.Service.Store.SignalConfig()
-		return revision, w.WritePendingCheckpoints(ctx, revision)
+		return revision, w.WritePendingCheckpoints(ctx)
 	}
 	return 0, errors.New("edge config publisher CAS contention")
 }
 
-func (w *Controller) WritePendingCheckpoints(ctx context.Context, head int64) error {
+func (w *Controller) WritePendingCheckpoints(ctx context.Context) error {
 	if w.S3 == nil && w.PutObject == nil {
 		return nil
 	}
@@ -64,22 +64,29 @@ func (w *Controller) WritePendingCheckpoints(ctx context.Context, head int64) er
 		}
 		w.configBucket = true
 	}
+	head, err := w.Service.Store.ConfigPosition(ctx)
+	if err != nil {
+		return err
+	}
 	pending, err := w.Service.Store.PendingConfigCheckpoints(ctx, 32)
 	if err != nil {
 		return err
 	}
 	for _, p := range pending {
-		projection, snapshotRevision, e := w.Service.Store.EdgeConfigShard(ctx, p.Pool, p.Shard)
+		projection, position, e := w.Service.Store.EdgeConfigShard(ctx, p.Pool, p.Shard)
 		if e != nil {
 			return e
 		}
-		p.Revision = snapshotRevision
-		raw, e := EncodeWorkerConfigSnapshot(p.Pool, p.Revision, projection)
+		if position.Epoch != head.Epoch {
+			return errors.New("configuration epoch changed during checkpoint publication")
+		}
+		raw, e := EncodeWorkerConfigSnapshot(p.Pool, position, projection)
 		if e != nil {
 			return e
 		}
-		relative := "shards/" + p.Shard + "/" + strconv.FormatInt(p.Revision, 10) + ".json.gz"
-		key := WorkerPoolConfigPrefix(p.Pool) + relative
+		relative := "shards/" + p.Shard + "/" + strconv.FormatInt(position.Revision, 10) + ".json.gz"
+		prefix := WorkerPoolConfigPrefix(p.Pool, position.Epoch)
+		key := prefix + relative
 		if w.S3 != nil {
 			e = w.PutImmutable(ctx, key, raw)
 		} else {
@@ -88,18 +95,20 @@ func (w *Controller) WritePendingCheckpoints(ctx context.Context, head int64) er
 		if e != nil {
 			return e
 		}
-		latest := EdgeConfigLatest{ConfigRevision: p.Revision, Snapshot: relative, SHA256: workerartifact.BytesDigest(raw)}
-		if e = w.WriteConfigLatest(ctx, WorkerPoolConfigPrefix(p.Pool)+"shards/"+p.Shard+"/latest.json", latest); e != nil {
+		latest := EdgeConfigLatest{Epoch: position.Epoch, ConfigRevision: position.Revision, Snapshot: relative, SHA256: workerartifact.BytesDigest(raw)}
+		if e = w.WriteConfigLatest(ctx, prefix+"shards/"+p.Shard+"/latest.json", latest); e != nil {
 			return e
 		}
-		if e = w.Service.Store.MarkConfigCheckpointPublished(ctx, p.Pool, p.Shard, p.Revision); e != nil {
+		if e = w.Service.Store.MarkConfigCheckpointPublished(ctx, p.Pool, p.Shard, position); e != nil {
 			return e
 		}
 	}
 	pools := append([]appconfig.WorkerRuntimePool(nil), w.Config.ConfiguredRuntimePools()...)
 	sort.Slice(pools, func(i, j int) bool { return pools[i].ID < pools[j].ID })
 	for _, p := range pools {
-		if err = w.WriteConfigLatest(ctx, WorkerPoolConfigLatestKey(p.ID), EdgeConfigLatest{LazyRoutes: true, ConfigRevision: head, OpsFloor: max(1, head-storage.EdgeConfigOpsRetain+1)}); err != nil {
+		if err = w.WriteConfigLatest(ctx, WorkerPoolConfigLatestKey(p.ID, head.Epoch), EdgeConfigLatest{
+			Epoch: head.Epoch, LazyRoutes: true, ConfigRevision: head.Revision, OpsFloor: max(1, head.Revision-storage.EdgeConfigOpsRetain+1),
+		}); err != nil {
 			return err
 		}
 	}

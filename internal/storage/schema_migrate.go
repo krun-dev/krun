@@ -35,6 +35,16 @@ var schemaMigrations = []schemaMigration{
 			);
 			UPDATE krun_worker_operations SET edge_revision=0 WHERE state='committed' AND edge_revision<>0`,
 	},
+	{
+		from: "f5ddb02a599235f4f87c218e94dcac41afa1212d8f8634f025254e9ab3f80877",
+		to:   "5ec33847b55dc6a84dd405672d22b70ff4c90f5ebd6597ea709cc57e9b13900e",
+		sql: `INSERT INTO krun_meta(key,value) VALUES('worker_config_epoch',replace(gen_random_uuid()::text,'-',''));
+			DELETE FROM worker_runtime_acks;
+			ALTER TABLE worker_runtime_acks ADD COLUMN config_epoch text NOT NULL,
+				DROP CONSTRAINT worker_runtime_acks_pkey, ADD PRIMARY KEY(pod_uid,config_epoch);
+			UPDATE worker_config_checkpoints SET published_revision=0 WHERE published_revision<>0;
+			UPDATE krun_worker_operations SET edge_revision=0,edge_pool='' WHERE state='committed' AND edge_revision<>0`,
+	},
 }
 
 // MigrateSchema upgrades an existing database while the control plane is
@@ -55,15 +65,8 @@ func MigrateSchema(ctx context.Context, dsn string) (bool, error) {
 		return false, err
 	}
 
-	var schema string
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(current_schema(), '')`).Scan(&schema); err != nil {
-		return false, err
-	}
-	if schema == "" {
-		return false, errors.New("PostgreSQL search_path has no existing schema")
-	}
-	// Do not fall through to another schema if a migration table is missing.
-	if _, err := tx.Exec(ctx, `SELECT set_config('search_path', quote_ident($1) || ', pg_temp', true)`, schema); err != nil {
+	schema, err := scopeMaintenanceSchema(ctx, tx)
+	if err != nil {
 		return false, err
 	}
 	var exists bool
@@ -109,6 +112,19 @@ func MigrateSchema(ctx context.Context, dsn string) (bool, error) {
 		return false, fmt.Errorf("commit schema upgrade: %w", err)
 	}
 	return true, nil
+}
+
+func scopeMaintenanceSchema(ctx context.Context, tx pgx.Tx) (string, error) {
+	var schema string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(current_schema(), '')`).Scan(&schema); err != nil {
+		return "", err
+	}
+	if schema == "" {
+		return "", errors.New("PostgreSQL search_path has no existing schema")
+	}
+	// Keep maintenance statements in the selected schema.
+	_, err := tx.Exec(ctx, `SELECT set_config('search_path', quote_ident($1) || ', pg_temp', true)`, schema)
+	return schema, err
 }
 
 func planSchemaMigration(current, target string) ([]schemaMigration, error) {

@@ -151,10 +151,8 @@ async function storageGrant(env, props) {
   if (env.VALIDATOR_ONLY === "true" || props.validation === true) {
     throw new Error("Storage access is unavailable during validation");
   }
-  if (Date.now() - lastSync > 60000) {
-    throw new Error("Storage authorization feed is stale");
-  }
-  const key = props.version_id + "\0" + props.binding + "\0" + props.bucket_id;
+  requireFreshConfig();
+  const key = view.epoch + "\0" + props.version_id + "\0" + props.binding + "\0" + props.bucket_id;
   const cached = storageGrants.get(key);
   if (
     cached &&
@@ -317,13 +315,14 @@ function storageResponse(request, response) {
 
 // Bootstrap reads the configuration revision. Routes load on demand, and a
 // long-poll applies incremental updates to the cached routes.
-let view = { revision: 0, routes: new Map(), versions: new Map() };
+let view = { epoch: "", revision: 0, routes: new Map(), versions: new Map() };
 const versionRefs = new Map();
 const routeDescriptors = new WeakMap();
 const routeVersions = new Map();
 const routeFlights = new Map();
 const routeMisses = new Map();
 const ROUTE_CACHE_MAX = 4096;
+const CONFIG_MAX_STALE_MS = 60_000;
 let viewLoaded = false;
 let booting = null;
 let started = false;
@@ -736,9 +735,23 @@ function applyConfigHead(head, pool) {
   if (pool && head.pool && head.pool !== pool) {
     throw new Error("snapshot pool mismatch");
   }
+  if (
+    !/^[0-9a-f]{32}$/.test(head.config_epoch) ||
+    !Number.isSafeInteger(head.config_revision) ||
+    head.config_revision < 0
+  ) {
+    throw new Error("invalid config cursor");
+  }
 
+  if (head.config_epoch !== view.epoch) {
+    servingWorkers.clear();
+    storageGrants.clear();
+    readGrants.clear();
+    manifests.clear();
+  }
   view = {
-    revision: Number(head.config_revision || 0),
+    epoch: head.config_epoch,
+    revision: head.config_revision,
     routes: new Map(),
     versions: new Map(),
   };
@@ -746,26 +759,23 @@ function applyConfigHead(head, pool) {
   routeVersions.clear();
   routeMisses.clear();
   viewLoaded = true;
-  lastSync = Date.now();
+  lastSync = performance.now();
 
   return view;
 }
 
-// Bootstrap prefers object storage so a new Pod starts even while the control
-// plane is unavailable; the control plane is the fallback.
-async function bootstrap(env) {
-  if (env.CONFIG_BASE) {
-    try {
-      const latest = await requestJSON(env, env.CONFIG_BASE + "/latest.json", 5000);
+function invalidateConfig() {
+  viewLoaded = false;
+  lastSync = 0;
+}
 
-      // CONFIG_BASE already identifies the pool.
-      return applyConfigHead(latest);
-    } catch (e) {
-      console.error("config bootstrap from storage failed", e.message);
-    }
+function requireFreshConfig(epoch = view.epoch) {
+  if (!viewLoaded || performance.now() - lastSync >= CONFIG_MAX_STALE_MS) {
+    throw new Error("platform configuration feed is stale");
   }
-
-  return bootstrapFromControl(env);
+  if (view.epoch !== epoch) {
+    throw new Error("platform configuration epoch changed");
+  }
 }
 
 async function bootstrapFromControl(env) {
@@ -780,7 +790,7 @@ function ensureBootstrap(env) {
   }
 
   if (!booting) {
-    booting = bootstrap(env).finally(() => {
+    booting = bootstrapFromControl(env).finally(() => {
       booting = null;
     });
   }
@@ -789,6 +799,9 @@ function ensureBootstrap(env) {
 }
 
 function applyBatch(batch) {
+  if (batch.config_epoch !== view.epoch) {
+    return false;
+  }
   if (!viewLoaded || Number(batch.from) !== view.revision) {
     return false;
   }
@@ -880,7 +893,7 @@ function applyBatch(batch) {
   }
 
   view.revision = revision;
-  lastSync = Date.now();
+  lastSync = performance.now();
 
   return true;
 }
@@ -916,10 +929,16 @@ async function resolveRoute(env, host) {
     return null;
   }
 
-  return coalesce(routeFlights, host, async () => {
+  const epoch = view.epoch;
+  return coalesce(routeFlights, epoch + "\0" + host, async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const before = view.revision;
+      if (!viewLoaded || view.epoch !== epoch) {
+        throw new Error("route lookup epoch changed");
+      }
+      const before = view;
+      const revision = before.revision;
       let snapshot;
+      let fromStorage = false;
 
       try {
         const response = await platformResponse(
@@ -930,6 +949,21 @@ async function resolveRoute(env, host) {
         );
 
         if (response.status === 404) {
+          if (before !== view || revision !== view.revision || !viewLoaded) {
+            continue;
+          }
+          if (response.headers.get("x-krun-config-epoch") !== epoch) {
+            invalidateConfig();
+            throw new Error("route lookup epoch mismatch");
+          }
+          const reported = response.headers.get("x-krun-config-revision");
+          if (
+            reported === null ||
+            !Number.isSafeInteger(Number(reported)) ||
+            Number(reported) < revision
+          ) {
+            throw new Error("route lookup revision is stale");
+          }
           lruPut(routeMisses, host, Date.now() + 2000, 1024);
 
           return null;
@@ -941,38 +975,57 @@ async function resolveRoute(env, host) {
 
         snapshot = await response.json();
       } catch (e) {
-        if (!env.CONFIG_BASE) {
+        if (!env.CONFIG_BASE || before !== view || !viewLoaded) {
           throw e;
         }
 
         const shard = (await sha256(host)).slice(0, 2);
+        const prefix = env.CONFIG_BASE + "/epochs/" + epoch + "/";
         let latest;
 
         try {
-          latest = await requestJSON(
-            env,
-            env.CONFIG_BASE + "/shards/" + shard + "/latest.json",
-            2000,
-          );
+          latest = await requestJSON(env, prefix + "shards/" + shard + "/latest.json", 2000);
         } catch {
           throw e;
         }
 
-        const raw = await requestBytes(env, env.CONFIG_BASE + "/" + latest.snapshot, 5000);
+        const expected = "shards/" + shard + "/" + latest.config_revision + ".json.gz";
+        if (
+          latest.config_epoch !== epoch ||
+          !Number.isSafeInteger(latest.config_revision) ||
+          latest.config_revision < revision ||
+          latest.snapshot !== expected
+        ) {
+          throw new Error("route shard cursor mismatch");
+        }
+        const raw = await requestBytes(env, prefix + expected, 5000);
 
         if ((await sha256(raw)) !== latest.sha256) {
           throw new Error("route shard digest mismatch");
         }
 
         snapshot = JSON.parse(decoder.decode(await gunzip(raw)));
+        if (snapshot.config_revision !== latest.config_revision) {
+          throw new Error("route shard revision mismatch");
+        }
+        fromStorage = true;
       }
 
       if (snapshot.pool !== (env.RUNTIME_POOL || "default")) {
         throw new Error("route lookup pool mismatch");
       }
 
-      if (before !== view.revision) {
+      if (before !== view || revision !== view.revision || !viewLoaded) {
         continue;
+      }
+      if (snapshot.config_epoch !== epoch || view.epoch !== epoch) {
+        if (!fromStorage && view.epoch === epoch) {
+          invalidateConfig();
+        }
+        throw new Error("route lookup epoch mismatch");
+      }
+      if (!Number.isSafeInteger(snapshot.config_revision) || snapshot.config_revision < revision) {
+        throw new Error("route lookup revision is stale");
       }
 
       const route = (snapshot.routes || []).find((r) => r.host === host);
@@ -1012,6 +1065,7 @@ async function resolveRoute(env, host) {
 }
 
 async function sendAck(env) {
+  const acknowledged = view;
   try {
     await platform(env, "/ack", {
       method: "POST",
@@ -1019,10 +1073,15 @@ async function sendAck(env) {
         pod: env.POD_NAME,
         pod_uid: env.POD_UID,
         pool: env.RUNTIME_POOL || "default",
-        revision: view.revision,
+        config_epoch: acknowledged.epoch,
+        revision: acknowledged.revision,
       }),
     });
-  } catch {}
+  } catch (e) {
+    if (e.status === 409 && acknowledged === view) {
+      invalidateConfig();
+    }
+  }
 }
 
 // One long-poll per Pod. 5s waits keep ack heartbeats fresh without the old
@@ -1040,25 +1099,36 @@ async function follow(env) {
       if (Date.now() - lastAck > 5000) {
         await sendAck(env);
         lastAck = Date.now();
+        if (!viewLoaded) {
+          continue;
+        }
       }
 
+      const polled = view;
       const response = await platformResponse(
         env,
-        `/config/changes?since=${view.revision}&wait=5s`,
+        `/config/changes?since=${polled.revision}&epoch=${polled.epoch}&wait=5s`,
         {},
         30000,
       );
+      if (polled !== view || !viewLoaded) {
+        continue;
+      }
 
       if (response.status === 204) {
-        lastSync = Date.now();
+        if (response.headers.get("x-krun-config-epoch") !== polled.epoch) {
+          invalidateConfig();
+          continue;
+        }
+        lastSync = performance.now();
         await sleep(250);
         backoff = 1000;
         continue;
       }
 
       if (response.status === 409) {
-        viewLoaded = false;
-        await bootstrapFromControl(env);
+        invalidateConfig();
+        await ensureBootstrap(env);
         lastAck = 0;
         backoff = 1000;
         continue;
@@ -1069,18 +1139,22 @@ async function follow(env) {
       }
 
       const batch = await response.json();
+      if (polled !== view || !viewLoaded) {
+        continue;
+      }
+
       let applied = false;
 
       try {
         applied = applyBatch(batch);
       } catch (e) {
-        viewLoaded = false;
+        invalidateConfig();
         throw e;
       }
 
       if (!applied) {
-        viewLoaded = false;
-        await bootstrapFromControl(env);
+        invalidateConfig();
+        await ensureBootstrap(env);
       }
 
       backoff = 1000;
@@ -1123,6 +1197,7 @@ function usableReadGrant(grant) {
 }
 
 async function readGrant(env, key, endpoint, initial) {
+  key = view.epoch + "\0" + key;
   const cached = readGrants.get(key);
   if (usableReadGrant(cached)) {
     lruPut(readGrants, key, cached, 1024);
@@ -1192,21 +1267,22 @@ function coalesce(cache, key, load) {
 }
 
 async function assetManifest(env, version) {
-  const cached = manifests.get(version.id);
+  const key = view.epoch + "\0" + version.id;
+  const cached = manifests.get(key);
 
   if (cached) {
-    lruPut(manifests, version.id, cached, 512);
+    lruPut(manifests, key, cached, 512);
 
     return cached;
   }
 
-  return coalesce(manifestFlights, version.id, async () => {
+  return coalesce(manifestFlights, key, async () => {
     const m = await platform(env, "/versions/" + encodeURIComponent(version.id) + "/assets");
     // Build the path index once per immutable manifest, including ASSETS binding.
     m.index = new Map((m.files || []).map((file) => ["/" + file.path, file.path]));
     m.rules = compileRules(m.config || {});
     m.metadata = new Map((m.files || []).map((file) => [file.path, file]));
-    lruPut(manifests, version.id, m, 512);
+    lruPut(manifests, key, m, 512);
 
     return m;
   });
@@ -1593,7 +1669,7 @@ function trackWorkerSource(entry, prepare) {
   };
 }
 
-async function worker(env, ctx, d, { artifact, validation, entry } = {}) {
+async function worker(env, ctx, d, { artifact, validation, entry, epoch } = {}) {
   const validating = validation !== undefined;
   return env.LOADER.get(
     // Validation and serving must have distinct keys even on the same Pod.
@@ -1818,6 +1894,7 @@ for(const name of ${JSON.stringify(Object.keys(d.r2_buckets))}) {
       }
 
       if (!validating) {
+        requireFreshConfig(epoch);
         let suffix = 0;
         let retirementModule = RETIRE_MODULE;
         let wrapper = RETIRE_WRAPPER;
@@ -1883,7 +1960,7 @@ async function validate(env, ctx, d, artifact, secrets) {
   await stub.getEntrypoint("KrunValidation").ping();
 }
 
-async function staticDomainResponse(env, request, prefix) {
+async function staticDomainResponse(env, request, prefix, epoch) {
   const path = normalizePath(new URL(request.url).pathname);
   const parts = (path || "").slice(1).split("/");
   const [organization, service, digest] = parts;
@@ -1904,7 +1981,7 @@ async function staticDomainResponse(env, request, prefix) {
     return new Response(null, { status: 405 });
   }
 
-  const key = "static/" + prefix + path;
+  const key = epoch + "/static/" + prefix + path;
   let value = cacheGet(key);
 
   if (!value) {
@@ -1975,13 +2052,23 @@ export class Private extends WorkerEntrypoint {
       const url = new URL(request.url);
       const staticDomains = JSON.parse(this.env.STATIC_DOMAINS || "{}");
 
-      if (Object.hasOwn(staticDomains, url.hostname)) {
-        return await staticDomainResponse(this.env, request, staticDomains[url.hostname]);
-      }
-
       ensureStarted(this.env, this.ctx);
       await ensureBootstrap(this.env);
+      requireFreshConfig();
+      const epoch = view.epoch;
+      if (Object.hasOwn(staticDomains, url.hostname)) {
+        const response = await staticDomainResponse(
+          this.env,
+          request,
+          staticDomains[url.hostname],
+          epoch,
+        );
+        requireFreshConfig(epoch);
+        return response;
+      }
+
       const route = await resolveRoute(this.env, url.hostname.toLowerCase());
+      requireFreshConfig(epoch);
 
       if (!route) {
         return json({ error: "unknown route" }, 404);
@@ -2008,6 +2095,7 @@ export class Private extends WorkerEntrypoint {
       }
 
       const forward = async () => {
+        requireFreshConfig(epoch);
         const forwarded = new Request(request, { headers, signal: request.signal });
         const entry = recordWorkerRequest(d, this.ctx);
         let finished = false;
@@ -2022,7 +2110,8 @@ export class Private extends WorkerEntrypoint {
         let stub;
         let statusClass = "5xx";
         try {
-          stub = await worker(this.env, this.ctx, d, { entry });
+          stub = await worker(this.env, this.ctx, d, { entry, epoch });
+          requireFreshConfig(epoch);
           const response = await stub.getEntrypoint().fetch(forwarded);
           const responseClass = `${Math.floor(response.status / 100)}xx`;
           statusClass = Object.hasOwn(requestsByStatusClass, responseClass)
@@ -2040,11 +2129,17 @@ export class Private extends WorkerEntrypoint {
       };
       let response;
       const manifest = await assetManifest(this.env, d);
+      requireFreshConfig(epoch);
 
       if (!manifest.config) {
         response = await forward();
       } else {
-        response = (await staticAssetResponse(this.env, d, request, manifest)) || (await forward());
+        response = await staticAssetResponse(this.env, d, request, manifest);
+        if (response) {
+          requireFreshConfig(epoch);
+        } else {
+          response = await forward();
+        }
       }
 
       const out = Object.keys(d.r2_buckets || {}).length
@@ -2117,6 +2212,7 @@ export class Management extends WorkerEntrypoint {
       // Readiness means the config view is loaded; versions are lazy-loaded on
       // first request so Pod start does not scale with the number of services.
       await ensureBootstrap(this.env);
+      requireFreshConfig();
       scheduleWorkerRetirement(this.env, this.ctx);
 
       return json({
@@ -2126,8 +2222,9 @@ export class Management extends WorkerEntrypoint {
         hyperdrive_protocol: this.env.HYPERDRIVE_DIRECT_EGRESS ? 2 : 0,
         pod_uid: this.env.POD_UID,
         pool: this.env.RUNTIME_POOL || "default",
+        config_epoch: view.epoch,
         revision: view.revision,
-        stale_ms: Date.now() - lastSync,
+        stale_ms: performance.now() - lastSync,
       });
     } catch (e) {
       const dependency = String(e.message).startsWith("platform");

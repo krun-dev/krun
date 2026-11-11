@@ -22,27 +22,23 @@ type Service struct {
 	Controller  *workerapp.Controller
 }
 
-func (s *Service) Head(ctx context.Context) (int64, error) {
-	head, _, err := s.Store.ConfigState(ctx)
-	return head, err
-}
-
 type ChangeBatch struct {
-	From int64                 `json:"from"`
-	To   int64                 `json:"to"`
-	Ops  []domain.EdgeConfigOp `json:"ops"`
+	Epoch string                `json:"config_epoch"`
+	From  int64                 `json:"from"`
+	To    int64                 `json:"to"`
+	Ops   []domain.EdgeConfigOp `json:"ops"`
 }
 type Changes struct {
 	Resync bool
 	Batch  *ChangeBatch
 }
 
-func (s *Service) ReadChanges(ctx context.Context, pool string, since int64) (Changes, error) {
+func (s *Service) ReadChanges(ctx context.Context, pool, epoch string, since int64) (Changes, error) {
 	revisions, floor, head, err := s.Store.ConfigRevisionsSince(context.WithValue(ctx, storage.WorkerRuntimeFeedPoolKey{}, pool), since, 100)
 	if err != nil {
 		return Changes{}, err
 	}
-	if since > head || since > 0 && since < floor {
+	if epoch != head.Epoch || since > head.Revision || since > 0 && since < floor {
 		return Changes{Resync: true}, nil
 	}
 	if len(revisions) == 0 {
@@ -62,7 +58,7 @@ func (s *Service) ReadChanges(ctx context.Context, pool string, since int64) (Ch
 	if len(ops) > 2000 {
 		return Changes{Resync: true}, nil
 	}
-	return Changes{Batch: &ChangeBatch{From: since, To: revisions[len(revisions)-1].Revision, Ops: ops}}, nil
+	return Changes{Batch: &ChangeBatch{Epoch: head.Epoch, From: since, To: revisions[len(revisions)-1].Revision, Ops: ops}}, nil
 }
 
 type Artifact struct {
@@ -114,13 +110,6 @@ func (s *Service) Ack(ctx context.Context, pool string, in domain.WorkerAck) err
 	if in.Pool != pool || in.Pod == "" || in.UID == "" {
 		return domain.Invalid("ACK_INVALID", "Pod UID and pool required")
 	}
-	head, err := s.Head(ctx)
-	if err != nil {
-		return err
-	}
-	if in.Revision < 0 || int64(in.Revision) > head {
-		return domain.Invalid("ACK_INVALID", "Config revision is outside the published range")
-	}
 	in.Time = time.Now().UTC()
 	return s.Store.RecordAck(ctx, in)
 }
@@ -170,11 +159,8 @@ func (s *Service) Route(ctx context.Context, host, pool string) (workerapp.EdgeC
 	if len(host) > 253 || strings.ContainsAny(host, "/\\: ") {
 		return workerapp.EdgeConfigSnapshot{}, domain.NotFound()
 	}
-	projection, revision, err := s.Store.RuntimeConfigRoute(ctx, host, pool)
-	if err != nil {
-		return workerapp.EdgeConfigSnapshot{}, err
-	}
-	return workerapp.EdgeConfigSnapshot{Pool: pool, ConfigRevision: revision, Routes: projection.Routes, Versions: projection.Versions}, nil
+	projection, position, err := s.Store.RuntimeConfigRoute(ctx, host, pool)
+	return workerapp.EdgeConfigSnapshot{Pool: pool, EdgeConfigCursor: position, Routes: projection.Routes, Versions: projection.Versions}, err
 }
 
 // StaticAssetCredentials authorizes the same pub/int visibility as the static

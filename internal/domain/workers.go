@@ -241,6 +241,7 @@ type WorkerAck struct {
 	Pod      string    `json:"pod"`
 	UID      string    `json:"pod_uid"`
 	Pool     string    `json:"pool"`
+	Epoch    string    `json:"config_epoch"`
 	Revision int       `json:"revision"`
 	Time     time.Time `json:"time"`
 }

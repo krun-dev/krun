@@ -1,3 +1,4 @@
+import { fixtureConfigEpoch } from "./entry-source.mjs";
 import { fixtureRead, readObjectURL } from "./read-grant.mjs";
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
@@ -544,13 +545,21 @@ const platform = http.createServer((request, response) => {
     return;
   }
   if (url.pathname.endsWith("/config/snapshot")) {
-    response.end(JSON.stringify({ pool: "default", config_revision: 1, lazy_routes: true }));
+    response.end(
+      JSON.stringify({
+        pool: "default",
+        config_epoch: fixtureConfigEpoch,
+        config_revision: 1,
+        lazy_routes: true,
+      }),
+    );
     return;
   }
   if (url.pathname.includes("/config/routes/")) {
     response.end(
       JSON.stringify({
         pool: "default",
+        config_epoch: fixtureConfigEpoch,
         config_revision: 1,
         routes: [{ host: "fixture.test", enabled: true, version: descriptor.id }],
         versions: { [descriptor.id]: descriptor },
@@ -560,7 +569,7 @@ const platform = http.createServer((request, response) => {
   }
   if (url.pathname.endsWith("/config/changes")) {
     setTimeout(() => {
-      response.writeHead(204);
+      response.writeHead(204, { "x-krun-config-epoch": fixtureConfigEpoch });
       response.end();
     }, 200);
     return;

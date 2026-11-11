@@ -26,21 +26,20 @@ func (s *Server) workerRuntimePool(r *http.Request) (appconfig.WorkerRuntimePool
 	return pool, true
 }
 
-// workerRuntimeConfigSnapshot is the bootstrap fallback. Runtimes normally read
-// the immutable snapshot from object storage; this endpoint keeps a new Pod
-// bootstrappable when object storage is unreachable but the control plane is up.
+// workerRuntimeConfigSnapshot confirms the epoch and revision for bootstrap.
+// Routes are loaded on demand after the Runtime establishes that cursor.
 func (s *Server) workerRuntimeConfigSnapshot(w http.ResponseWriter, r *http.Request) {
 	pool, allowed := s.workerRuntimePool(r)
 	if !allowed {
 		s.writeError(w, r, forbidden())
 		return
 	}
-	head, _, err := s.Store.ConfigState(r.Context())
+	head, err := s.Store.ConfigPosition(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	s.json(w, 200, map[string]any{"pool": pool.ID, "config_revision": head, "lazy_routes": true, "routes": []workerConfigRoute{}, "versions": map[string]WorkerVersion{}})
+	s.json(w, 200, map[string]any{"pool": pool.ID, "config_epoch": head.Epoch, "config_revision": head.Revision, "lazy_routes": true, "routes": []workerConfigRoute{}, "versions": map[string]WorkerVersion{}})
 }
 
 // workerRuntimeConfigChanges is the incremental feed. since=0 means bootstrap
@@ -56,6 +55,7 @@ func (s *Server) workerRuntimeConfigChanges(w http.ResponseWriter, r *http.Reque
 		s.writeError(w, r, problem(422, "CONFIG_SINCE_INVALID", "since must be a non-negative revision"))
 		return
 	}
+	epoch := r.URL.Query().Get("epoch")
 	wait := 5 * time.Second
 	if raw := r.URL.Query().Get("wait"); raw != "" {
 		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 && parsed <= 25*time.Second {
@@ -64,7 +64,7 @@ func (s *Server) workerRuntimeConfigChanges(w http.ResponseWriter, r *http.Reque
 	}
 	deadline := time.Now().Add(wait)
 	for {
-		changes, err := s.runtimeApplication().ReadChanges(r.Context(), pool.ID, since)
+		changes, err := s.runtimeApplication().ReadChanges(r.Context(), pool.ID, epoch, since)
 		if err != nil {
 			s.writeError(w, r, err)
 			return
@@ -78,6 +78,7 @@ func (s *Server) workerRuntimeConfigChanges(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		if time.Now().After(deadline) {
+			w.Header().Set("X-Krun-Config-Epoch", epoch)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -87,6 +88,7 @@ func (s *Server) workerRuntimeConfigChanges(w http.ResponseWriter, r *http.Reque
 			tick = remaining
 		}
 		if tick <= 0 {
+			w.Header().Set("X-Krun-Config-Epoch", epoch)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -100,12 +102,12 @@ func (s *Server) workerRuntimeConfigChanges(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) workerConfigResync(w http.ResponseWriter, r *http.Request) {
-	latest, _, e := s.Store.ConfigState(r.Context())
+	latest, e := s.Store.ConfigPosition(r.Context())
 	if e != nil {
 		s.writeError(w, r, e)
 		return
 	}
-	s.json(w, 409, map[string]any{"code": "RESYNC", "config_revision": latest})
+	s.json(w, 409, map[string]any{"code": "RESYNC", "config_epoch": latest.Epoch, "config_revision": latest.Revision})
 }
 
 func (s *Server) workerRuntimeArtifact(w http.ResponseWriter, r *http.Request) {
@@ -212,6 +214,10 @@ func (s *Server) workerRuntimeConfigRoute(w http.ResponseWriter, r *http.Request
 		return
 	}
 	out, err := s.runtimeApplication().Route(r.Context(), r.PathValue("host"), pool.ID)
+	if out.Epoch != "" {
+		w.Header().Set("X-Krun-Config-Epoch", out.Epoch)
+		w.Header().Set("X-Krun-Config-Revision", strconv.FormatInt(out.Revision, 10))
+	}
 	if err != nil {
 		s.writeError(w, r, err)
 		return

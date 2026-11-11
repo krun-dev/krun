@@ -36,3 +36,8 @@ type EdgeConfigRevision struct {
 	Ops      []byte
 	Created  time.Time
 }
+
+type EdgeConfigCursor struct {
+	Epoch    string `json:"config_epoch"`
+	Revision int64  `json:"config_revision"`
+}

@@ -8,7 +8,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import assert from "node:assert/strict";
-import { loadRuntimeSource } from "./entry-source.mjs";
+import { fixtureConfigEpoch, loadRuntimeSource } from "./entry-source.mjs";
 const here = dirname(fileURLToPath(import.meta.url));
 const patched = loadRuntimeSource();
 const tmp = join(mkdtempSync(join(tmpdir(), "krun-entry-")), "entry.mjs");
@@ -157,6 +157,7 @@ function platformFor(manifestConfig, fileList, rel, options = {}) {
       if (path === "/config/snapshot") {
         return Response.json({
           pool: "default",
+          config_epoch: fixtureConfigEpoch,
           config_revision: revision,
           lazy_routes: true,
           routes: [],
@@ -166,6 +167,7 @@ function platformFor(manifestConfig, fileList, rel, options = {}) {
       if (path.startsWith("/config/routes/")) {
         return Response.json({
           pool: "default",
+          config_epoch: fixtureConfigEpoch,
           config_revision: revision,
           routes: [route],
           versions: Object.fromEntries(versions),
@@ -183,9 +185,12 @@ function platformFor(manifestConfig, fileList, rel, options = {}) {
               route = op.route;
             }
           }
-          return Response.json(batch);
+          return Response.json({ ...batch, config_epoch: fixtureConfigEpoch });
         }
-        return new Response(null, { status: 204 });
+        return new Response(null, {
+          status: 204,
+          headers: { "x-krun-config-epoch": fixtureConfigEpoch },
+        });
       }
       if (path === "/ack") {
         return Response.json({ ok: true });
@@ -371,12 +376,21 @@ await check("expired grants renew only on cache misses and renewal fails closed"
   let renewals = 0;
   let unavailable = false;
   local.PLATFORM.fetch = async (request) => {
-    if (new URL(request.url).pathname.endsWith("/assets/credentials")) {
+    const path = new URL(request.url).pathname;
+    if (path.endsWith("/assets/credentials")) {
       renewals++;
       assert.equal(request.method, "POST");
       if (unavailable) {
         return new Response(null, { status: 503 });
       }
+      const grant = await (await original(request)).json();
+      grant.lease_until = new Date(Date.now() + 10000).toISOString();
+      return Response.json(grant);
+    }
+    if (path.endsWith("/assets")) {
+      const manifest = await (await original(request)).json();
+      manifest.storage.lease_until = new Date(Date.now() + 10000).toISOString();
+      return Response.json(manifest);
     }
     return original(request);
   };
@@ -384,12 +398,12 @@ await check("expired grants renew only on cache misses and renewal fails closed"
   assert.equal((await call(entry, "/")).status, 200);
   const now = Date.now;
   try {
-    Date.now = () => now() + 301000;
+    Date.now = () => now() + 11000;
     assert.equal((await call(entry, "/")).status, 200);
     assert.equal(renewals, 0, "cached bytes should not renew a grant");
     assert.equal((await call(entry, "/about")).status, 200);
     assert.equal(renewals, 1);
-    Date.now = () => now() + 602000;
+    Date.now = () => now() + 22000;
     unavailable = true;
     assert.equal((await call(entry, "/LICENSE")).status, 503);
     assert.equal(renewals, 2);
@@ -492,7 +506,13 @@ await check(
     configObjects.set(
       "latest.json",
       encoder.encode(
-        JSON.stringify({ config_revision: 7, lazy_routes: true, snapshot: "", ops_floor: 1 }),
+        JSON.stringify({
+          config_epoch: fixtureConfigEpoch,
+          config_revision: 7,
+          lazy_routes: true,
+          snapshot: "",
+          ops_floor: 1,
+        }),
       ),
     );
     const env = makeEnv(null, [], relId);
@@ -503,46 +523,126 @@ await check(
     assert.equal(response.status, 200);
     assert.equal((await response.json()).worker, true);
     assert.equal(response.headers.get("x-krun-version"), relId);
-    assert(downloads.includes("config:latest.json"));
+    assert(!downloads.includes("config:latest.json"));
     assert(!downloads.some((key) => key.startsWith("config:snapshots/")));
   },
 );
 for (const pool of [undefined, "internal-a", "office-a", "public-a"]) {
-  await check(
-    `storage bootstrap works without the control plane for ${pool || "default"}`,
-    async () => {
-      configObjects.set(
-        "latest.json",
-        encoder.encode(JSON.stringify({ config_revision: 7, lazy_routes: true })),
-      );
-      const env = makeEnv(null, []);
-      env.CONFIG_BASE = "http://config.test";
-      env.RUNTIME_POOL = pool;
-      let snapshotCalls = 0;
-      env.PLATFORM = {
-        async fetch(request) {
-          if (new URL(request.url).pathname.endsWith("/config/snapshot")) {
-            snapshotCalls++;
-          }
-          return new Response("unavailable", { status: 503 });
-        },
-      };
-      const module = await freshEntry();
-      const response = await new module.Management(env, {}).fetch(new Request("http://pod/ready"));
-      assert.equal(response.status, 200);
-      const ready = await response.json();
-      assert.equal(ready.pool, pool || "default");
-      assert.equal(ready.revision, 7);
-      assert.equal(
-        snapshotCalls,
-        0,
-        "storage bootstrap should not need the control-plane snapshot",
-      );
-    },
-  );
+  await check(`cold bootstrap requires the control plane for ${pool || "default"}`, async () => {
+    configObjects.set(
+      "latest.json",
+      encoder.encode(
+        JSON.stringify({ config_epoch: fixtureConfigEpoch, config_revision: 7, lazy_routes: true }),
+      ),
+    );
+    const env = makeEnv(null, []);
+    env.CONFIG_BASE = "http://config.test";
+    env.RUNTIME_POOL = pool;
+    let snapshotCalls = 0;
+    env.PLATFORM = {
+      async fetch(request) {
+        if (new URL(request.url).pathname.endsWith("/config/snapshot")) {
+          snapshotCalls++;
+        }
+        return new Response("unavailable", { status: 503 });
+      },
+    };
+    const module = await freshEntry();
+    const response = await new module.Management(env, {}).fetch(new Request("http://pod/ready"));
+    assert.equal(response.status, 503);
+    assert.equal(snapshotCalls, 1);
+  });
 }
+await check("cached traffic fails closed 60 seconds after control-plane loss", async () => {
+  const env = makeEnv(null, []);
+  const original = env.PLATFORM.fetch;
+  let connected = true;
+  env.PLATFORM.fetch = async (request) =>
+    connected ? original(request) : new Response("unavailable", { status: 503 });
+
+  const mod = await freshEntry();
+  const handler = new mod.Private(env, {});
+  assert.equal((await call(handler, "/")).status, 200);
+  connected = false;
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const originalNow = performance.now;
+  const disconnectedAt = performance.now();
+  try {
+    performance.now = () => disconnectedAt + 59000;
+    assert.equal((await call(handler, "/")).status, 200);
+    performance.now = () => disconnectedAt + 61000;
+    assert.equal((await call(handler, "/")).status, 503);
+    assert.equal((await call(new mod.Management(env, {}), "/ready")).status, 503);
+  } finally {
+    performance.now = originalNow;
+  }
+});
+await check("a route miss in a new epoch fences pending traffic and static grants", async () => {
+  const env = makeEnv(null, []);
+  const platform = env.PLATFORM.fetch;
+  const nextEpoch = "b".repeat(32);
+  env.STATIC_DOMAINS = JSON.stringify({ "static.workers.test": "pub" });
+  let epoch = fixtureConfigEpoch;
+  let enteredManifest;
+  let releaseManifest;
+  const manifestStarted = new Promise((resolve) => (enteredManifest = resolve));
+  const manifestBlocked = new Promise((resolve) => (releaseManifest = resolve));
+  env.PLATFORM.fetch = async (request) => {
+    const { pathname, searchParams } = new URL(request.url);
+    if (pathname.endsWith("/config/snapshot")) {
+      return Response.json({
+        pool: "default",
+        config_epoch: epoch,
+        config_revision: 1,
+        lazy_routes: true,
+      });
+    }
+    if (pathname.endsWith("/config/changes")) {
+      return new Response(null, {
+        status: 204,
+        headers: { "x-krun-config-epoch": searchParams.get("epoch") },
+      });
+    }
+    if (pathname.endsWith("/config/routes/removed.workers.test")) {
+      return new Response(null, {
+        status: 404,
+        headers: { "x-krun-config-epoch": epoch, "x-krun-config-revision": "1" },
+      });
+    }
+    if (pathname.includes("/static-assets/")) {
+      return epoch === fixtureConfigEpoch
+        ? Response.json(fixtureRead("http://assets.test/index.html").storage)
+        : new Response(null, { status: 404 });
+    }
+    if (pathname.endsWith("/assets")) {
+      enteredManifest();
+      await manifestBlocked;
+    }
+    return platform(request);
+  };
+
+  const mod = await freshEntry();
+  const handler = new mod.Private(env, {});
+  const staticURL = "http://static.workers.test/org/svc/" + "a".repeat(64) + "/index.html";
+  const removedURL = "http://removed.workers.test/";
+  assert.equal((await handler.fetch(new Request(staticURL))).status, 200);
+  const pending = call(handler, "/");
+  await manifestStarted;
+  epoch = nextEpoch;
+  try {
+    assert.equal((await handler.fetch(new Request(removedURL))).status, 503);
+    const ready = await call(new mod.Management(env, {}), "/ready");
+    assert.equal((await ready.json()).config_epoch, nextEpoch);
+    assert.equal((await handler.fetch(new Request(removedURL))).status, 404);
+    assert.equal((await handler.fetch(new Request(staticURL))).status, 404);
+  } finally {
+    releaseManifest();
+  }
+  assert.equal((await pending).status, 503);
+  assert.deepEqual(env.__workerResponses, []);
+});
 await check(
-  "non-default pool falls back to the control plane when storage is unavailable",
+  "non-default pool bootstraps with the control plane when storage is unavailable",
   async () => {
     configObjects.delete("latest.json");
     const env = makeEnv(null, []);
@@ -553,7 +653,12 @@ await check(
       async fetch(request) {
         if (new URL(request.url).pathname.endsWith("/config/snapshot")) {
           snapshotCalls++;
-          return Response.json({ pool: "internal-a", config_revision: 8, lazy_routes: true });
+          return Response.json({
+            pool: "internal-a",
+            config_epoch: fixtureConfigEpoch,
+            config_revision: 8,
+            lazy_routes: true,
+          });
         }
         return new Response("unavailable", { status: 503 });
       },
@@ -742,10 +847,13 @@ await check(
     const mod = await freshEntry();
     const digest = "a".repeat(64);
     env.STATIC_DOMAINS = JSON.stringify({ "static.workers.test": "int" });
+    const platform = env.PLATFORM.fetch;
     env.PLATFORM = {
       fetch: async (request) => {
         assert.equal(request.headers.get("authorization"), "Bearer t");
-        assert.ok(new URL(request.url).pathname.endsWith("/credentials"));
+        if (!new URL(request.url).pathname.endsWith("/credentials")) {
+          return platform(request);
+        }
         assert.equal(request.method, "POST");
         return Response.json(fixtureRead("http://assets.test/index.html").storage);
       },

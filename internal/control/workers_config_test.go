@@ -152,12 +152,13 @@ func TestConfigRevisionStoreAndAcks(t *testing.T) {
 		t.Fatal(err)
 	}
 	appendTestConfigDelta(t, store, head, workerConfigOp{Type: "route_delete", Host: "stale.workers.test", Pool: "default"})
-	items, floor, latest, err := store.ConfigRevisionsSince(ctx, 1, storage.EdgeConfigOpsRetain)
+	items, floor, position, err := store.ConfigRevisionsSince(ctx, 1, storage.EdgeConfigOpsRetain)
+	latest := position.Revision
 	if err != nil || latest != head+1 || floor != 3 || len(items) != storage.EdgeConfigOpsRetain || items[0].Revision != 3 || items[len(items)-1].Revision != latest {
 		t.Fatalf("revisions=%d floor=%d latest=%d err=%v", len(items), floor, latest, err)
 	}
 	for _, revision := range []int64{latest, latest - 1} {
-		if err := store.RecordAck(ctx, WorkerAck{Pod: "pod-1", UID: "uid-1", Pool: "default", Revision: int(revision), Time: time.Now()}); err != nil {
+		if err := store.RecordAck(ctx, WorkerAck{Pod: "pod-1", UID: "uid-1", Pool: "default", Epoch: position.Epoch, Revision: int(revision), Time: time.Now()}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -185,23 +186,28 @@ func TestWorkerRuntimeConfigChanges(t *testing.T) {
 		return c
 	}()
 	s.routes()
-	if response := runtimeConfigRequest(s, token, "/changes?since=117&wait=1s"); response.Code != 409 || !strings.Contains(response.Body.String(), `"config_revision":0`) {
+	position, err := store.ConfigPosition(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	epochQuery := "&epoch=" + position.Epoch
+	if response := runtimeConfigRequest(s, token, "/changes?since=117&wait=1s"+epochQuery); response.Code != 409 || !strings.Contains(response.Body.String(), `"config_revision":0`) {
 		t.Fatalf("runtime ahead of an empty control-plane history must resync: %d %s", response.Code, response.Body.String())
 	}
 	op := workerConfigOp{Type: "route_delete", Pool: "default", Host: "w.workers.test"}
 	appendTestConfigDelta(t, store, 0, op)
-	if r := runtimeConfigRequest(s, token, "/changes?since=0&wait=1s"); r.Code != 409 || !strings.Contains(r.Body.String(), "RESYNC") {
+	if r := runtimeConfigRequest(s, token, "/changes?since=0&wait=1s"+epochQuery); r.Code != 409 || !strings.Contains(r.Body.String(), "RESYNC") {
 		t.Fatalf("since=0 must resync: %d %s", r.Code, r.Body.String())
 	}
-	if response := runtimeConfigRequest(s, token, "/changes?since=117&wait=1s"); response.Code != 409 || !strings.Contains(response.Body.String(), `"config_revision":1`) {
+	if response := runtimeConfigRequest(s, token, "/changes?since=117&wait=1s"+epochQuery); response.Code != 409 || !strings.Contains(response.Body.String(), `"config_revision":1`) {
 		t.Fatalf("runtime ahead of published history must resync: %d %s", response.Code, response.Body.String())
 	}
-	r := runtimeConfigRequest(s, token, "/changes?since=1&wait=1s")
+	r := runtimeConfigRequest(s, token, "/changes?since=1&wait=1s"+epochQuery)
 	if r.Code != 204 {
 		t.Fatalf("no newer revision: %d %s", r.Code, r.Body.String())
 	}
 	appendTestConfigDelta(t, store, 1, op)
-	r = runtimeConfigRequest(s, token, "/changes?since=1&wait=1s")
+	r = runtimeConfigRequest(s, token, "/changes?since=1&wait=1s"+epochQuery)
 	if r.Code != 200 {
 		t.Fatalf("batch: %d %s", r.Code, r.Body.String())
 	}
@@ -223,6 +229,34 @@ func TestWorkerRuntimeConfigChanges(t *testing.T) {
 	}
 }
 
+func TestWorkerRuntimeRejectsPreviousEpochAtSameRevision(t *testing.T) {
+	s, store := testServer(t)
+	token := strings.Repeat("t", 32)
+	s.Config.Workers = testWorkersConfig()
+	s.Config.Workers.RuntimePools[0].RuntimeToken = token
+	s.routes()
+	previous, err := store.ConfigPosition(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch, err := storage.RotateConfigEpoch(t.Context(), postgresTestPool(store).Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := runtimeConfigRequest(s, token, "/changes?since=0&wait=1ms&epoch="+previous.Epoch)
+	if response.Code != 409 || !strings.Contains(response.Body.String(), `"config_epoch":"`+epoch+`"`) {
+		t.Fatalf("old epoch must resync even at the current revision: %d %s", response.Code, response.Body.String())
+	}
+	response = runtimeConfigRequest(s, token, "/changes?since=0&wait=1ms&epoch="+epoch)
+	if response.Code != 204 || response.Header().Get("X-Krun-Config-Epoch") != epoch {
+		t.Fatalf("current epoch must get a matching heartbeat: %d %s", response.Code, response.Body.String())
+	}
+	response = runtimeConfigRequest(s, token, "/routes/removed.workers.test")
+	if response.Code != 404 || response.Header().Get("X-Krun-Config-Epoch") != epoch || response.Header().Get("X-Krun-Config-Revision") != "0" {
+		t.Fatalf("missing route must carry the current cursor: %d %v", response.Code, response.Header())
+	}
+}
+
 func TestMultiPoolRuntimeConfigIsolation(t *testing.T) {
 	s, store := testServer(t)
 	c := testWorkersConfig()
@@ -232,6 +266,11 @@ func TestMultiPoolRuntimeConfigIsolation(t *testing.T) {
 	}
 	s.Config.Workers = c
 	s.routes()
+	position, err := store.ConfigPosition(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	epochQuery := "&epoch=" + position.Epoch
 	appendTestConfigDelta(t, store, 0, workerConfigOp{Type: "route_delete", Pool: "private-a", Host: "old.workers.test"})
 	privateRoute := workerConfigRoute{Worker: "svc-a", Host: "private.workers.test", Enabled: true, Pool: "private-a"}
 	publicRoute := workerConfigRoute{Worker: "svc-a", Host: "public.workers.test", Enabled: true, Pool: "public-b"}
@@ -252,7 +291,7 @@ func TestMultiPoolRuntimeConfigIsolation(t *testing.T) {
 	if privateSnapshot.Code != http.StatusOK || !strings.Contains(privateSnapshot.Body.String(), `"lazy_routes":true`) || strings.Contains(privateSnapshot.Body.String(), "workers.test") {
 		t.Fatalf("private snapshot isolation: %d %s", privateSnapshot.Code, privateSnapshot.Body.String())
 	}
-	privateChanges := requestPool("private-a", "fixture-private-runtime-credential", "/changes?since=1&wait=1s")
+	privateChanges := requestPool("private-a", "fixture-private-runtime-credential", "/changes?since=1&wait=1s"+epochQuery)
 	if privateChanges.Code != http.StatusOK || !strings.Contains(privateChanges.Body.String(), "private.workers.test") || strings.Contains(privateChanges.Body.String(), "public.workers.test") {
 		t.Fatalf("private changes isolation: %d %s", privateChanges.Code, privateChanges.Body.String())
 	}

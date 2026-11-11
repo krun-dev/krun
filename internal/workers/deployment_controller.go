@@ -285,7 +285,9 @@ func (w *Controller) observeOperation(ctx context.Context, op domain.WorkerOpera
 			return nil
 		}
 	}
-	return w.Service.Store.ConfirmOperation(ctx, op.ID, pool.ID, revision)
+	return w.Service.Store.ConfirmOperation(ctx, op.ID, pool.ID, domain.EdgeConfigCursor{
+		Epoch: acks[pods[0].UID].Epoch, Revision: revision,
+	})
 }
 
 // Only this candidate's secrets travel to the selected member; a shared

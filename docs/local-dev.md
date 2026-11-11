@@ -61,10 +61,20 @@ local-first 渲染器对网络地址有以下约束：
 - 存储端点支持公网 HTTPS，或显式 IPv4 地址的私有 HTTP/HTTPS 源站；端口来自 endpoint。
 - 公网域名允许 DNS 和对应 HTTPS 端口；私有存储只放行指定 IP 和端口，不放行私有 DNS 网段。
 
-`dev-runtime-config.sh` 从主配置生成 workerd 配置、Secret 和 NetworkPolicy。更新
-Runtime 镜像或配置后，刷新指向旧 validator Pod 的隧道：
+`dev-runtime-config.sh` 从主配置生成 workerd 配置、Secret 和 NetworkPolicy。Serving
+启动时需要通过本地控制面确认配置代次。先确保 PostgreSQL 已启动，已有旧库按[停写升级](../deploy/production/README.md#停写升级)
+执行显式迁移，本地使用 `.data/dev.yaml`。如果本地控制面还未运行，在独立终端启动它：
 
 ```sh
+mkdir -p bin
+go build -trimpath -o bin/krun-server ./cmd/krun-server
+./scripts/dev-server.sh
+```
+
+控制面就绪后更新 Runtime，并刷新指向旧 validator Pod 的隧道：
+
+```sh
+curl -fsS http://127.0.0.1:8080/api/healthz
 ./scripts/dev-runtime-image.sh --build-only
 ./scripts/dev-runtime-config.sh
 ./scripts/dev-up.sh --refresh-tunnels
@@ -124,14 +134,10 @@ MinIO 由开发者在本机独立启动，凭据只放 `.data/dev.yaml`；`dev-u
 重建库必须先停止后端，并由开发者明确确认清空范围。初始化只创建当前 schema，
 不会导入旧数据。重新登录后，对该本地用户重新执行一次 bootstrap。
 
-若继续复用原来的制品存储 prefix，需要显式清理该 namespace 中高于当前数据库 head
-的旧 `config/pools/<pool>/latest.json` 和 `config/pools/<pool>/shards/<shard>/latest.json`
-指针，再由控制面重新发布；保留不可变制品和业务对象。也可为这次开发环境使用新的
-`s3_prefix` 与 `s3_location_id`，并重新渲染 runtime 配置。不要清空整个对象桶。
-
-Runtime 的旧 revision 高于当前控制面 head 时，增量接口会返回 409，促使它从控制面
-重新 bootstrap。配置指针的单调 CAS 不会自动覆盖更高 revision，因此这一步不替代
-开发者对旧存储 namespace 的显式处理。
+新库初始化时生成新配置代次。复用原来的制品存储 prefix 时，新 checkpoint 发布到
+`config/pools/<pool>/epochs/<epoch>/`，可以保留不可变制品和业务对象。若从备份还原已有库，
+按[备份恢复步骤](../deploy/production/README.md#失败回滚与备份恢复)在启动前轮换恢复库的代次。
+确认 serving 管理端 `/ready` 返回 200，并核对 `config_epoch`。
 
 ## Runtime 镜像与集群配置
 

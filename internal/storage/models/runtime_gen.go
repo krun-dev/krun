@@ -23,6 +23,7 @@ type RetentionScope struct {
 type RuntimeAck struct {
 	bun.BaseModel `bun:"table:worker_runtime_acks,alias:worker_runtime_acks"`
 	PodUID        string    `bun:"pod_uid,pk"`
+	ConfigEpoch   string    `bun:"config_epoch,pk"`
 	Pool          string    `bun:"pool"`
 	Revision      int64     `bun:"revision"`
 	UpdatedAt     time.Time `bun:"updated_at"`
