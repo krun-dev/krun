@@ -4,9 +4,11 @@
 
 # krun
 
+[English](README.en.md) · 简体中文
+
 krun 是一个自托管应用平台，目标是在自己的基础设施上提供类似 Cloudflare Workers、D1 和 R2 的计算与存储能力，并兼容其中部分 API。在这些基础能力之上，krun 希望支持多种类型的应用运行时，让团队能够部署和管理不同形态的应用。
 
-项目尚未上线，目前主要实现 Workers 运行与管理、R2 兼容的对象存储绑定，以及部分 Cloudflare Workers API 和 Wrangler 工作流。D1 和更多类型的应用运行时是项目目标，尚未实现；krun 也不承诺完整兼容 Cloudflare 的产品或 API。具体支持范围见 [Cloudflare 协议适配](docs/cloudflare-api.md)和 [R2 binding](docs/workers-r2.md)。
+项目尚未上线，目前支持 Workers 运行与管理、对象存储、PostgreSQL 托管接入，以及部分 Cloudflare Workers API 和 Wrangler 工作流。更多类型的应用运行时仍是项目目标。管理 API 和 CLI 的支持范围见 [Cloudflare 协议适配](docs/cloudflare-api.md)。
 
 ## 当前能力
 
@@ -14,6 +16,25 @@ krun 是一个自托管应用平台，目标是在自己的基础设施上提供
 - 使用部分兼容的 Cloudflare API 和 Wrangler 工作流部署 Workers。
 - 为 Worker 绑定基于 S3 兼容存储的逻辑桶，并在控制台管理对象。
 - 通过组织、成员、角色和 API Key 管理访问权限，使用 CLI 管理身份和组织。
+
+## Workers bindings 兼容范围
+
+krun 基于 workerd 运行模块格式的 JavaScript 和 TypeScript Worker。下表列出可用的 Cloudflare Workers bindings 及其主要限制。
+
+| Binding | 兼容范围 |
+| --- | --- |
+| 环境变量（`plain_text`、`json`） | 通过 `env` 读取字符串和 JSON 值。值随版本冻结，Wrangler 支持 `--keep-vars`。 |
+| Secret（`secret_text`） | 通过 `env` 读取 Secret 字符串，支持控制台和 Wrangler 管理。管理接口只返回脱敏元数据。 |
+| 版本元数据（`version_metadata`） | 通过指定的 `env` binding 读取 `id`、`tag`、`timestamp`。 |
+| 静态资产（`assets`） | 支持 `env.ASSETS.fetch(request)`（名称可配置）、纯静态部署和常用路由模式，包括 SPA 回退。重写限站内路径。 [资产配置](user-docs/src/content/docs/guides/wrangler-configuration.md#静态资产配置) |
+| R2（`r2_bucket`） | 支持 S3 兼容逻辑桶的 `head`、`get`、`put`、`delete`、`list` 和分片上传，覆盖常用 Range 和条件请求。每页最多 64 项，批量删除最多 1000 项。`startAfter`、SSE-C、PUT checksum 和组合条件超出兼容范围。 [R2 方法与限制](docs/workers-r2.md#已实现的-runtime-api) |
+| Hyperdrive（`hyperdrive`） | 支持 PostgreSQL 配置管理和 `env.DB.connectionString`（名称可配置）。代理为每个客户端会话建立一条源库连接。查询缓存与跨会话连接复用超出兼容范围。 [PostgreSQL 托管接入](user-docs/src/content/docs/guides/workers-hyperdrive.md) |
+
+KV、D1、Durable Objects、Queues 和 Service bindings 目前未实现。全局 Cache API 提供 `caches.default`、`caches.open()` 和 `put`、`match`、`delete`，缓存只在单个运行时进程内生效。 [Cache API](docs/workers-r2.md#cache-api)
+
+控制台从仓库构建时，在 krun 的目标环境里配置变量、Secret、版本元数据、R2 和 Hyperdrive。静态资产随构建产物发布。Wrangler 直接部署支持在上传时提交配置中的绑定，Secret 通过 `wrangler secret put` 管理。 [Wrangler 配置兼容范围](user-docs/src/content/docs/guides/wrangler-configuration.md)
+
+各 binding 的测试用例和验证环境见 [Workers bindings 兼容测试表](docs/verification.md#workers-bindings-兼容测试)。五个真实 R2 项目的测试场景见 [R2 开源项目验证](docs/workers-r2.md#开源项目验证)。
 
 ## 架构与部署
 
