@@ -144,15 +144,12 @@ func (s *Service) WorkerEnvironmentUpdate(ctx context.Context, st *domain.State,
 	if WorkerBusy(st, t.ID, env) {
 		return nil, Read, domain.Conflict("DEPLOYMENT_BUSY", "Wait for the active version operation")
 	}
-	if in.Variables != nil && !appconfig.WorkerVariablesValid(in.Variables) {
-		return nil, Read, domain.Invalid("WORKER_VARIABLES_INVALID", "Use up to 32 non-reserved uppercase variables, at most 16 KiB")
-	}
-	if in.Variables != nil {
-		for name := range in.Variables {
-			if _, exists := current.SecretVersions[name]; exists {
-				return nil, Read, domain.Conflict("WORKER_BINDING_CONFLICT", "A Secret already uses this binding name")
-			}
-		}
+	if err := validateWorkerEnvironmentVariables(
+		in.Variables,
+		current.SecretVersions,
+		"Use up to 32 non-reserved uppercase variables, at most 16 KiB",
+	); err != nil {
+		return nil, Read, err
 	}
 	if in.Enabled != nil {
 		if env == appconfig.WorkerBaseline && !*in.Enabled {
@@ -164,33 +161,57 @@ func (s *Service) WorkerEnvironmentUpdate(ctx context.Context, st *domain.State,
 		current.Variables = in.Variables
 	}
 	s.SyncEnvironmentHosts(&current, t.Organization, t.ID, ws.Domains)
-	if in.VersionMetadata != nil {
-		current.VersionMetadata = *in.VersionMetadata
-	}
-	if in.R2Buckets != nil {
-		if s.Config.Workers == nil || s.Config.Workers.ObjectStorage == nil || s.Config.Workers.ObjectStorage.CursorKey == "" {
-			return nil, Read, domain.Unavailable("OBJECT_STORAGE_NOT_CONFIGURED", "R2 storage must be configured")
-		}
-		resolved, err := resolveR2Bindings(st, t.Organization, *in.R2Buckets)
-		if err != nil {
-			return nil, Read, err
-		}
-		current.R2Bindings = resolved
-	}
-	if in.HyperdriveBindings != nil {
-		if err := s.validateHyperdriveBindings(ctx, t.Organization, *in.HyperdriveBindings); err != nil {
-			return nil, Read, err
-		}
-		current.HyperdriveBindings = cloneHyperdriveBindings(*in.HyperdriveBindings)
-	}
-	if err := ValidateWorkerBindings(current); err != nil {
+	if err := s.applyWorkerEnvironmentBindings(ctx, st, t.Organization, &current, in); err != nil {
 		return nil, Read, err
 	}
 	current.ConfigRevision++
 	ws.Environments[env] = current
 	st.Workers.Workers[t.ID] = ws
 	return current, Read, nil
+}
 
+func validateWorkerEnvironmentVariables(variables map[string]any, secrets map[string]string, invalidMessage string) error {
+	if variables == nil {
+		return nil
+	}
+	if !appconfig.WorkerVariablesValid(variables) {
+		return domain.Invalid("WORKER_VARIABLES_INVALID", invalidMessage)
+	}
+	for name := range variables {
+		if _, exists := secrets[name]; exists {
+			return domain.Conflict("WORKER_BINDING_CONFLICT", "A Secret already uses this binding name")
+		}
+	}
+	return nil
+}
+
+func (s *Service) applyWorkerEnvironmentBindings(
+	ctx context.Context,
+	st *domain.State,
+	organization string,
+	env *domain.WorkerEnvironment,
+	in WorkerEnvironmentUpdateInput,
+) error {
+	if in.VersionMetadata != nil {
+		env.VersionMetadata = *in.VersionMetadata
+	}
+	if in.R2Buckets != nil {
+		if s.Config.Workers == nil || s.Config.Workers.ObjectStorage == nil || s.Config.Workers.ObjectStorage.CursorKey == "" {
+			return domain.Unavailable("OBJECT_STORAGE_NOT_CONFIGURED", "R2 storage must be configured")
+		}
+		resolved, err := resolveR2Bindings(st, organization, *in.R2Buckets)
+		if err != nil {
+			return err
+		}
+		env.R2Bindings = resolved
+	}
+	if in.HyperdriveBindings != nil {
+		if err := s.validateHyperdriveBindings(ctx, organization, *in.HyperdriveBindings); err != nil {
+			return err
+		}
+		env.HyperdriveBindings = cloneHyperdriveBindings(*in.HyperdriveBindings)
+	}
+	return ValidateWorkerBindings(*env)
 }
 
 type WorkerEnvironmentSummary struct {

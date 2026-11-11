@@ -1,7 +1,8 @@
-import { bindingRows, type R2Binding, type R2BindingRow } from "./object-storage.ts";
-import { variableRows, type VariableRow } from "./worker-variables.ts";
+import { bindingInput, bindingRows, type R2Binding, type R2BindingRow } from "./object-storage.ts";
+import { variableInput, variableRows, type VariableRow } from "./worker-variables.ts";
 
 export type HyperdriveBindingRow = { name: string; id: string };
+export type ConfigSection = "variables" | "r2" | "hyperdrive";
 
 export type ConfigDraftSource = {
   variables: Record<string, unknown>;
@@ -37,4 +38,26 @@ export function draftRows(source: ConfigDraftSource): ConfigDraftRows {
     versionMetadata: source.version_metadata || "",
     secretNames: source.secret_names || [],
   };
+}
+
+export function environmentConfigPatch(
+  section: ConfigSection,
+  saved: ConfigDraftSource,
+  draft: Omit<ConfigDraftRows, "secretNames">,
+) {
+  switch (section) {
+    case "variables":
+      return { variables: variableInput(draft.variables), version_metadata: draft.versionMetadata };
+    case "r2":
+      return {
+        r2_buckets: bindingInput(
+          draft.r2Bindings,
+          saved.variables,
+          saved.secret_names || [],
+          saved.version_metadata || "",
+        ),
+      };
+    case "hyperdrive":
+      return { hyperdrive_bindings: hyperdriveInput(draft.hyperdriveBindings) };
+  }
 }

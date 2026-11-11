@@ -11,11 +11,9 @@ import { Field, SelectField } from "@/components/common";
 import { workerURL } from "./shared";
 import { R2BindingsEditor } from "./r2-bindings";
 import { HyperdriveBindingsEditor } from "./hyperdrive-bindings";
-import { bindingInput } from "@/lib/object-storage";
-import { variableInput } from "@/lib/worker-variables";
 import { VariablesEditor, VersionMetadataField } from "./variables";
 import { SecretsEditor } from "./secrets";
-import { hyperdriveInput } from "@/lib/worker-config-draft";
+import { environmentConfigPatch, type ConfigSection } from "@/lib/worker-config-draft";
 import { useConfigDraft } from "@/lib/use-config-draft";
 
 export function EnvironmentSettings({
@@ -37,6 +35,7 @@ export function EnvironmentSettings({
   reload: () => void;
   notify: (s: string) => void;
 }) {
+  const draft = useConfigDraft(env);
   const {
     variables,
     setVariables,
@@ -47,33 +46,18 @@ export function EnvironmentSettings({
     hyperdriveBindings,
     setHyperdriveBindings,
     reset,
-  } = useConfigDraft(env);
+  } = draft;
   const [revision, setRevision] = useState(env.configuration_revision);
   const [busy, setBusy] = useState(false);
   const domainLabel = (id: string) =>
     domains.find((d) => d.id === id)?.label || domains.find((d) => d.id === id)?.domain || id;
   const current = env.version_id ? data.versions[env.version_id] : undefined;
   const stale = revision !== env.configuration_revision;
-  async function save(section: "variables" | "r2" | "hyperdrive") {
+  async function save(section: ConfigSection) {
     setBusy(true);
     try {
-      const input =
-        section === "variables"
-          ? { variables: variableInput(variables), version_metadata: versionMetadata }
-          : section === "hyperdrive"
-            ? {
-                hyperdrive_bindings: hyperdriveInput(hyperdriveBindings),
-              }
-            : {
-                r2_buckets: bindingInput(
-                  r2Bindings,
-                  env.variables,
-                  env.secret_names || [],
-                  env.version_metadata || "",
-                ),
-              };
       const result = await api<Environment>(base + "/environments/" + env.name, "PATCH", {
-        ...input,
+        ...environmentConfigPatch(section, env, draft),
         expected_revision: revision,
       });
       setRevision(result.configuration_revision);
