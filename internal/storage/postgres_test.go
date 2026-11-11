@@ -2,44 +2,20 @@ package storage
 
 import (
 	"context"
-	"net/url"
 	"os"
-	"strconv"
 	"testing"
 	"time"
 
 	"github.com/krun-dev/krun/internal/domain"
+	"github.com/krun-dev/krun/internal/testpgx"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func postgresTestStore(t *testing.T) *Store {
 	t.Helper()
-	dsn := os.Getenv("KRUN_TEST_POSTGRES_URL")
-	if dsn == "" {
-		t.Skip("set KRUN_TEST_POSTGRES_URL for PostgreSQL integration")
-	}
-	ctx := context.Background()
-	admin, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(admin.Close)
-	name := "krun_storage_" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	identifier := pgx.Identifier{name}.Sanitize()
-	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+identifier); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _, _ = admin.Exec(context.Background(), "DROP SCHEMA "+identifier+" CASCADE") })
-	parsed, err := url.Parse(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	query := parsed.Query()
-	query.Set("search_path", name)
-	parsed.RawQuery = query.Encode()
-	store, err := Open(ctx, parsed.String(), RepositoryTokenKeys{})
+	schema := testpgx.NewSchema(t, "krun_storage")
+	store, err := Open(context.Background(), schema.DSN, RepositoryTokenKeys{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,30 +23,9 @@ func postgresTestStore(t *testing.T) *Store {
 	return store
 }
 func TestPostgresUsesSingleSchemaBaseline(t *testing.T) {
-	dsn := os.Getenv("KRUN_TEST_POSTGRES_URL")
-	if dsn == "" {
-		t.Skip("set KRUN_TEST_POSTGRES_URL for PostgreSQL integration")
-	}
+	schema := testpgx.NewSchema(t, "krun_baseline")
 	ctx := context.Background()
-	admin, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
-	schema := "krun_baseline_" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	identifier := pgx.Identifier{schema}.Sanitize()
-	if _, err = admin.Exec(ctx, `CREATE SCHEMA `+identifier); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _, _ = admin.Exec(context.Background(), `DROP SCHEMA `+identifier+` CASCADE`) }()
-	u, err := url.Parse(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	query := u.Query()
-	query.Set("search_path", schema)
-	u.RawQuery = query.Encode()
-	store, err := Open(ctx, u.String(), RepositoryTokenKeys{})
+	store, err := Open(ctx, schema.DSN, RepositoryTokenKeys{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +34,7 @@ func TestPostgresUsesSingleSchemaBaseline(t *testing.T) {
 	if err := store.pool.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='schema_baseline'`).Scan(&baseline); err != nil || baseline != bytesDigest([]byte(schemaSQL)) {
 		t.Fatalf("baseline=%q err=%v", baseline, err)
 	}
-	reopened, err := Open(ctx, u.String(), RepositoryTokenKeys{})
+	reopened, err := Open(ctx, schema.DSN, RepositoryTokenKeys{})
 	if err != nil {
 		t.Fatal(err)
 	}
