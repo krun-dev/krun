@@ -31,8 +31,11 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 
 	rows, err := s.pool.Query(ctx, `SELECT `+workerOperationColumns+`
 		FROM krun_worker_operations
-		WHERE state NOT IN ('succeeded','failed','available','superseded') AND reconcile_after<=now() AND (state IN ('queued','committed') OR claimed_by=$2 OR claimed_at IS NULL OR claimed_at<now()-'60 seconds'::interval)
-		ORDER BY reconcile_after,created_at LIMIT $1`, limit, replica)
+		WHERE state NOT IN ('succeeded','failed','available','superseded') AND reconcile_after<=now()
+			AND (state IN ('queued','committed') OR (state='validating' AND (
+				claim_generation=0 OR claimed_by=$2 OR claimed_at IS NULL OR claimed_at<=now()-$3::interval
+			)))
+		ORDER BY reconcile_after,created_at LIMIT $1`, limit, replica, workerClaimLease)
 	if err != nil {
 		return state, err
 	}
@@ -225,22 +228,14 @@ type WorkerQueueReplicaKey struct{}
 
 // Rescheduling rotates unfinished tasks behind new arrivals instead of keeping
 // the oldest 100 as a global admission window shared by every replica.
-func (s *Store) ScheduleWorkerRetry(ctx context.Context, kind, id string) error {
-	table, column := "krun_worker_builds", "build_id"
-	if kind == "operation" {
-		table, column = "krun_worker_operations", "operation_id"
-	}
-	_, err := s.pool.Exec(ctx, `UPDATE `+table+` SET reconcile_after=now()+'2 seconds'::interval WHERE `+column+`=$1`, id)
+func (s *Store) ScheduleBuildRetry(ctx context.Context, id string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE krun_worker_builds SET reconcile_after=now()+interval '2 seconds' WHERE build_id=$1`, id)
 	return err
 }
 
-func (s *Store) WorkerExecutionStarted(ctx context.Context, kind, id string, fallback time.Time) (time.Time, error) {
-	table, column := "krun_worker_builds", "build_id"
-	if kind == "operation" {
-		table, column = "krun_worker_operations", "operation_id"
-	}
+func (s *Store) BuildExecutionStarted(ctx context.Context, id string, fallback time.Time) (time.Time, error) {
 	var started *time.Time
-	err := s.pool.QueryRow(ctx, `SELECT started_at FROM `+table+` WHERE `+column+`=$1`, id).Scan(&started)
+	err := s.pool.QueryRow(ctx, `SELECT started_at FROM krun_worker_builds WHERE build_id=$1`, id).Scan(&started)
 	if err != nil {
 		return fallback, err
 	}

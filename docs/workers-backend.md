@@ -38,7 +38,9 @@ sequenceDiagram
     A->>A: 当前所有 serving 成员已 ack -> Operation available（可观测性）
 ```
 
-构建和发布都异步处理。Build、源码、Operation、Version、历史、幂等记录和执行者身份都按实体持久化在 PostgreSQL 的 `krun_worker_*` 表中。边缘配置的当前发布头按 route / version 分行保存在 `worker_config_routes` 与 `worker_config_versions`，`worker_config_revisions` 只保存 revision 元数据，增量则是一条 op 一行的 `worker_config_ops`。runtime ack 存在独立的 `worker_runtime_acks`（每个 Pod 一行）。未完成的 Build / Operation 行就是持久化工作队列；控制服务重启后扫描恢复。多个控制服务通过行级 CAS 与超时租约竞争不同工作，配置发布通过 `worker_config_head` CAS 线性推进，不做 advisory-lock 选主。
+构建和发布都异步处理。Build、源码、Operation、Version、历史、幂等记录和执行者身份都按实体持久化在 PostgreSQL 的 `krun_worker_*` 表中。边缘配置的当前发布头按 route / version 分行保存在 `worker_config_routes` 与 `worker_config_versions`，`worker_config_revisions` 只保存 revision 元数据，增量则是一条 op 一行的 `worker_config_ops`。runtime ack 存在独立的 `worker_runtime_acks`（每个 Pod 一行）。未完成的 Build / Operation 行就是持久化工作队列；控制服务重启后扫描恢复。多个控制服务通过行级 CAS 与超时租约竞争不同工作，配置发布通过 `worker_config_head` CAS 线性推进。
+
+Operation 每次认领递增认领代次。验证期间续租，进度、失败和提交都校验执行者、代次及租约。接管后迟到的验证结果由数据库丢弃。提交后由任意控制面副本观察 ACK。边缘 revision 与当前 serving 池的环境路由在同一数据库快照中核对并固定。资源池变更后重新确认新池的发布目标，随后只为匹配的当前部署记录成功历史。禁用或删除环境会在同一事务中结束尚未确认的发布。
 
 Kubernetes、S3 和 runtime HTTP 请求均在 IAM 状态事务外进行。执行者的用户状态、AuthVersion、API Key 和当前权限会在执行及提交前重新检查。
 

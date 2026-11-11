@@ -22,6 +22,19 @@ var schemaMigrations = []schemaMigration{
 		to:   "791bb9ebf10e4652f69918635175574492833a5b55b53db9806f0a604b333a30",
 		sql:  `ALTER TABLE krun_worker_build_private ADD COLUMN config_path text NOT NULL DEFAULT ''`,
 	},
+	{
+		from: "791bb9ebf10e4652f69918635175574492833a5b55b53db9806f0a604b333a30",
+		to:   "f5ddb02a599235f4f87c218e94dcac41afa1212d8f8634f025254e9ab3f80877",
+		sql: `ALTER TABLE krun_worker_operations
+			ADD COLUMN claim_generation bigint NOT NULL DEFAULT 0,
+			ADD COLUMN edge_pool text NOT NULL DEFAULT '';
+			UPDATE krun_worker_operations o SET state='superseded', error='Deployment target is no longer current', finished_at=now()
+			WHERE o.state='committed' AND NOT EXISTS (
+				SELECT 1 FROM krun_worker_environments e WHERE e.worker_id=o.worker_id AND e.env_name=o.env_name
+					AND e.enabled AND e.version_id=o.version_id AND e.deployment_revision=o.deployment_revision
+			);
+			UPDATE krun_worker_operations SET edge_revision=0 WHERE state='committed' AND edge_revision<>0`,
+	},
 }
 
 // MigrateSchema upgrades an existing database while the control plane is

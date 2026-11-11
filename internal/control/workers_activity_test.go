@@ -107,13 +107,18 @@ func TestWorkerActivityTracksVisibleWorkWithoutHistory(t *testing.T) {
 	if after := checkActivity(preview.Key, true); after != previewBefore {
 		t.Fatal("hidden build completion changed the preview token")
 	}
-	if err := store.NoteOperationMessage(t.Context(), "op-preview", "waiting for candidate"); err != nil {
+	claim, owned, err := store.ClaimOperation(t.Context(), "op-preview", "replica")
+	if err != nil || !owned {
+		t.Fatalf("claim: owned=%t err=%v", owned, err)
+	}
+	beforeNote := checkActivity(preview.Key, true)
+	if err := store.NoteClaimedOperation(t.Context(), claim, "waiting for candidate"); err != nil {
 		t.Fatal(err)
 	}
-	if after := checkActivity(preview.Key, true); after.Token == previewBefore.Token {
+	if after := checkActivity(preview.Key, true); after.Token == beforeNote.Token {
 		t.Fatal("progress update did not invalidate the overview")
 	}
-	if err := store.FailOperation(t.Context(), "op-preview", "test failure"); err != nil {
+	if err := store.FailClaimedOperation(t.Context(), claim, "test failure"); err != nil {
 		t.Fatal(err)
 	}
 	checkActivity(preview.Key, false)

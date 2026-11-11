@@ -11,6 +11,7 @@ import (
 
 // The fingerprint of the last schema before local-project upload (e.g. 96b6dd4).
 const uploadPredecessor = "8f802b41ccf74f398f6c4c8ede9c480ad29b7e29ae95d7febda6046baa3842ef"
+const claimPredecessor = "791bb9ebf10e4652f69918635175574492833a5b55b53db9806f0a604b333a30"
 
 func preUploadDatabase(t *testing.T) (string, *pgxpool.Pool) {
 	t.Helper()
@@ -24,8 +25,12 @@ func preUploadDatabase(t *testing.T) (string, *pgxpool.Pool) {
 
 	if _, err := store.pool.Exec(ctx, `
 		ALTER TABLE krun_worker_build_private DROP COLUMN config_path;
+		ALTER TABLE krun_worker_operations DROP COLUMN claim_generation;
+		ALTER TABLE krun_worker_operations DROP COLUMN edge_pool;
 		INSERT INTO krun_worker_build_private(build_id,actor_user_id,actor_auth_version,source_key)
 			VALUES('old-build','old-user',1,'retained-source');
+		INSERT INTO krun_worker_operations(operation_id,kind,org_id,worker_id,env_name,state,claimed_by,claimed_at)
+			VALUES('old-operation','publish','old-org','old-worker','production','validating','old-replica',now());
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -85,6 +90,9 @@ func TestPostgresSchemaUpgradePreservesBuildAndCanRetry(t *testing.T) {
 	if actor != "old-user" || source != "retained-source" || configPath != "" {
 		t.Fatalf("unexpected migrated build: %q %q %q", actor, source, configPath)
 	}
+	if _, owned, err := store.ClaimOperation(ctx, "old-operation", "new-replica"); err != nil || !owned {
+		t.Fatalf("resume a validating operation from the old schema: owned=%t err=%v", owned, err)
+	}
 }
 
 func TestPostgresSchemaUpgradeRollsBackDDLOnFingerprintFailure(t *testing.T) {
@@ -112,8 +120,9 @@ func TestPostgresSchemaUpgradeRollsBackDDLOnFingerprintFailure(t *testing.T) {
 		SELECT
 			(SELECT value FROM krun_meta WHERE key='schema_baseline'),
 			(SELECT source_key FROM krun_worker_build_private WHERE build_id='old-build'),
-			EXISTS (SELECT FROM information_schema.columns WHERE table_schema=current_schema()
-				AND table_name='krun_worker_build_private' AND column_name='config_path')
+			EXISTS (SELECT FROM information_schema.columns WHERE table_schema=current_schema() AND
+				((table_name='krun_worker_build_private' AND column_name='config_path') OR
+				 (table_name='krun_worker_operations' AND column_name IN ('claim_generation','edge_pool'))))
 	`).Scan(&baseline, &source, &configPathExists); err != nil {
 		t.Fatal(err)
 	}
@@ -126,6 +135,44 @@ func TestPostgresSchemaUpgradeRollsBackDDLOnFingerprintFailure(t *testing.T) {
 	}
 	if applied, err := MigrateSchema(ctx, dsn); !applied || err != nil {
 		t.Fatalf("retry after failure: applied=%t err=%v", applied, err)
+	}
+}
+
+func TestPostgresSchemaUpgradeFromClaimPredecessor(t *testing.T) {
+	dsn, pool := preUploadDatabase(t)
+	ctx := t.Context()
+	if _, err := pool.Exec(ctx, `
+		ALTER TABLE krun_worker_build_private ADD COLUMN config_path text NOT NULL DEFAULT '';
+		UPDATE krun_worker_build_private SET config_path='src/wrangler.toml' WHERE build_id='old-build';
+		INSERT INTO krun_workers(worker_id,org_id) VALUES('old-worker','old-org');
+		INSERT INTO krun_worker_environments(worker_id,env_name,enabled,version_id,deployment_revision)
+			VALUES('old-worker','production',true,'rel-existing',4);
+		INSERT INTO krun_worker_operations(operation_id,kind,org_id,worker_id,env_name,state,version_id,deployment_revision,edge_revision)
+			VALUES ('op-current','publish','old-org','old-worker','production','committed','rel-existing',4,20),
+			       ('op-orphan','publish','old-org','old-worker','deleted-preview','committed','rel-orphan',2,19);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE krun_meta SET value=$1 WHERE key='schema_baseline'`, claimPredecessor); err != nil {
+		t.Fatal(err)
+	}
+	if applied, err := MigrateSchema(ctx, dsn); !applied || err != nil {
+		t.Fatalf("upgrade from claim predecessor: applied=%t err=%v", applied, err)
+	}
+	var configPath string
+	if err := pool.QueryRow(ctx, `SELECT config_path FROM krun_worker_build_private
+		WHERE build_id='old-build'`).Scan(&configPath); err != nil || configPath != "src/wrangler.toml" {
+		t.Fatalf("existing config path changed: path=%q err=%v", configPath, err)
+	}
+	var edgeRevision int64
+	var orphanState string
+	if err := pool.QueryRow(ctx, `SELECT
+		(SELECT edge_revision FROM krun_worker_operations WHERE operation_id='op-current'),
+		(SELECT state FROM krun_worker_operations WHERE operation_id='op-orphan')`).Scan(&edgeRevision, &orphanState); err != nil {
+		t.Fatal(err)
+	}
+	if edgeRevision != 0 || orphanState != "superseded" {
+		t.Fatalf("legacy operations were not reconciled: edge=%d orphan state=%q", edgeRevision, orphanState)
 	}
 }
 

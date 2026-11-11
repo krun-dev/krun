@@ -162,7 +162,7 @@ func TestPostgresWorkQueueRotatesPastFirstHundred(t *testing.T) {
 		t.Fatal(err)
 	}
 	for id := range first.Builds {
-		if err = s.ScheduleWorkerRetry(ctx, "build", id); err != nil {
+		if err = s.ScheduleBuildRetry(ctx, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -180,7 +180,7 @@ func TestPostgresWorkQueueRotatesPastFirstHundred(t *testing.T) {
 		if err != nil || !ok {
 			t.Fatal(err)
 		}
-		started, err := s.WorkerExecutionStarted(ctx, "build", id, time.Time{})
+		started, err := s.BuildExecutionStarted(ctx, id, time.Time{})
 		if err != nil || time.Since(started) > time.Second {
 			t.Fatalf("queue age consumed execution timeout: %v %v", started, err)
 		}

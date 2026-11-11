@@ -119,8 +119,11 @@ CF 资产临时对象在写入前登记 `krun_worker_source_uploads`，由现有
 升级。命令锁定该 schema 的 fingerprint 行，将增量 DDL 和 fingerprint 更新提交为一个事务。
 同一目标重复执行会返回已是当前版本。空库、缺少 fingerprint 或没有完整升级路径的库会被拒绝。
 
-当前支持从指纹 `8f802b41ccf74f398f6c4c8ede9c480ad29b7e29ae95d7febda6046baa3842ef`
-升级，该基线包含提交 `96b6dd4`。这一步为已有构建补充 `config_path`，旧行取空字符串默认值。
+当前支持从两份基线升级。指纹 `8f802b41ccf74f398f6c4c8ede9c480ad29b7e29ae95d7febda6046baa3842ef`
+对应提交 `96b6dd4` 所用的 schema，先为已有构建补充 `config_path`，旧行取空字符串默认值。
+指纹 `791bb9ebf10e4652f69918635175574492833a5b55b53db9806f0a604b333a30`
+已包含该列，从此步继续为发布 Operation 增加 `claim_generation` 和 `edge_pool`。已有 `validating` 行在下一次认领时采用新租约。
+仍指向当前部署的 `committed` 行重新确认边缘 revision，失去部署目标的行标记为 `superseded`。
 新增迁移时，在 `schema_migrate.go` 按发布顺序追加增量 SQL 和准确的源、目标文件 SHA-256，
 并更新建库 DDL。维护窗、备份与恢复步骤见[生产部署](../deploy/production/README.md#更新与恢复)。
 

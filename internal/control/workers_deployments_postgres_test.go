@@ -25,7 +25,11 @@ func TestPostgresDeploymentCommitPublishesPinnedRouteAndProtectsVersion(t *testi
 	}); err != nil {
 		t.Fatal(err)
 	}
-	won, err := store.CommitOperation(ctx, op)
+	claim, owned, err := store.ClaimOperation(ctx, op.ID, "replica")
+	if err != nil || !owned {
+		t.Fatalf("claim: owned=%t err=%v", owned, err)
+	}
+	won, err := store.CommitOperation(ctx, claim)
 	if err != nil || !won {
 		t.Fatalf("commit: %t %v", won, err)
 	}
