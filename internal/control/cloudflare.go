@@ -255,9 +255,10 @@ func isProblem(err error, code string) bool {
 	return errors.As(err, &problem) && problem.Code == code
 }
 
-func (s *Server) cloudflareRoutes(m *http.ServeMux) {
+func (s *Server) cloudflareRoutes(m *recordingMux) {
 	base := cfPrefix + "/accounts/{account}"
 	hyperdrive := base + "/hyperdrive/configs"
+	m.useScope(scopeCloudflareOrganization)
 	for _, method := range []string{"GET", "POST"} {
 		m.HandleFunc(method+" "+hyperdrive, s.cfProtected(s.cfHyperdrive))
 	}
@@ -268,10 +269,12 @@ func (s *Server) cloudflareRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST "+base+"/r2/buckets", s.cfProtected(s.cfBucketCreate))
 	m.HandleFunc("GET "+base+"/r2/buckets/{bucket}", s.cfProtected(s.cfBucketList))
 	m.HandleFunc("GET "+base+"/r2/buckets/{bucket}/objects", s.cfProtected(s.workerObjects))
+	m.useScope(scopeCloudflareAccounts)
 	m.HandleFunc("GET "+cfPrefix+"/memberships", s.cfProtected(s.cfMemberships))
 	m.HandleFunc("GET "+cfPrefix+"/user", s.cfProtected(s.cfUser))
 	m.HandleFunc("GET "+cfPrefix+"/accounts", s.cfProtected(s.cfAccounts))
 	m.HandleFunc("GET "+cfPrefix+"/user/tokens/verify", s.cfProtected(s.cfVerifyToken))
+	m.useScope(scopeCloudflareOrganization)
 	m.HandleFunc("GET "+base+"/workers/subdomain", s.cfProtected(s.cfAccountSubdomain))
 	scripts := base + "/workers/scripts"
 	m.HandleFunc("GET "+scripts, s.cfProtected(s.cfScripts))
@@ -304,6 +307,7 @@ func (s *Server) cloudflareRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET "+workers+"/{script}/previews/{preview}/deployments/{deployment}", s.cfProtected(s.cfPreviewDeployments))
 	m.HandleFunc("PATCH "+workers+"/{script}", s.cfProtected(s.cfPreviewBase))
 	m.HandleFunc("PATCH "+workers+"/{script}/previews/{preview}/deployments/{deployment}", s.cfTransport(s.cfSecretChange))
+	m.useScope(scopeCloudflareAccounts)
 	m.HandleFunc(cfPrefix+"/", s.cfTransport(func(w http.ResponseWriter, r *http.Request) { s.writeError(w, r, notFound()) }))
 }
 

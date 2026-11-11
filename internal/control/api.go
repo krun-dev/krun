@@ -6,30 +6,40 @@ import (
 	"github.com/krun-dev/krun/internal/authorization"
 )
 
-func (s *Server) apiRoutes(m *http.ServeMux) {
+func (s *Server) apiRoutes(m *recordingMux) {
 	s.organizationInvitationRoutes(m)
+
+	m.useScope(scopeActor)
 	m.HandleFunc("GET /api/v1/roles", s.protected(false, func(st *State, p Principal, r *http.Request) (any, int, error) {
 		roles, actions, environments := authorization.Catalog()
 		return map[string]any{"roles": roles, "actions": actions, "environments": environments}, 200, nil
 	}))
+	m.useScope(scopeNone)
 	m.HandleFunc("POST /api/v1/authz/check", s.protected(false, s.check))
+	m.useScope(scopeActorAllOrganizations)
 	m.HandleFunc("GET /api/v1/orgs", s.protected(false, s.orgList))
+	m.useScope(scopeActor)
 	m.HandleFunc("POST /api/v1/orgs", s.protected(true, s.orgCreate))
 	m.HandleFunc("GET /api/v1/orgs/{org}", s.protected(false, s.orgDetail))
 	m.HandleFunc("GET /api/v1/orgs/{org}/permissions", s.protected(false, s.orgPermissions))
-	m.HandleFunc("PATCH /api/v1/orgs/{org}", s.protected(true, s.orgUpdate))
 	m.HandleFunc("GET /api/v1/system/config", s.protected(true, s.systemConfig))
 	m.HandleFunc("GET /api/v1/system/inventory/{kind}", s.protected(true, s.systemInventory))
+	m.useScope(scopeNone)
+	m.HandleFunc("PATCH /api/v1/orgs/{org}", s.protected(true, s.orgUpdate))
 	m.HandleFunc("GET /api/v1/system/users", s.protected(false, s.users))
 	m.HandleFunc("PATCH /api/v1/system/users/{user}", s.protected(true, s.userUpdate))
 	m.HandleFunc("POST /api/v1/system/invitations", s.protected(true, s.inviteHandler))
+	m.useScope(scopeActorAudit)
 	m.HandleFunc("GET /api/v1/system/audit", s.protected(false, s.auditList))
 	m.HandleFunc("GET /api/v1/orgs/{org}/audit", s.protected(false, s.auditList))
+	m.useScope(scopeNone)
 	m.HandleFunc("GET /api/v1/orgs/{org}/members", s.protected(false, s.members))
 	m.HandleFunc("POST /api/v1/orgs/{org}/members", s.protected(true, s.memberAdd))
 	m.HandleFunc("DELETE /api/v1/orgs/{org}/members/{user}", s.protected(true, s.memberDelete))
 	for _, base := range []string{"/api/v1/orgs/{org}", "/api/v1/system"} {
+		m.useScope(scopeActorAudit)
 		m.HandleFunc("GET "+base+"/audit/export", s.protected(false, s.auditExport))
+		m.useScope(scopeNone)
 		m.HandleFunc("GET "+base+"/groups", s.protected(false, s.groupList))
 		m.HandleFunc("POST "+base+"/groups", s.protected(true, s.groupCreate))
 		m.HandleFunc("PATCH "+base+"/groups/{group}", s.protected(true, s.groupUpdate))
@@ -48,10 +58,12 @@ func (s *Server) apiRoutes(m *http.ServeMux) {
 	m.HandleFunc("PATCH /api/v1/api-keys/{key}", s.protected(true, s.keyUpdate))
 	m.HandleFunc("DELETE /api/v1/api-keys/{key}", s.protected(false, s.keyDelete))
 	for _, kind := range []string{"workers", "models"} {
+		m.useScope(scopeOrganization)
 		if kind == "models" {
 			m.HandleFunc("GET /api/v1/orgs/{org}/"+kind, s.protected(false, s.resourceList))
 		}
 		m.HandleFunc("POST /api/v1/orgs/{org}/"+kind, s.protected(false, s.resourceCreate))
+		m.useScope(scopeWorker)
 		m.HandleFunc("GET /api/v1/orgs/{org}/"+kind+"/{resource}", s.protected(false, s.resourceDetail))
 		m.HandleFunc("PATCH /api/v1/orgs/{org}/"+kind+"/{resource}", s.protected(false, s.resourceUpdate))
 		m.HandleFunc("DELETE /api/v1/orgs/{org}/"+kind+"/{resource}", s.protected(false, s.resourceDelete))

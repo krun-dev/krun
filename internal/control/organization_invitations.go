@@ -11,7 +11,8 @@ import (
 	"github.com/krun-dev/krun/internal/securetoken"
 )
 
-func (s *Server) organizationInvitationRoutes(m *http.ServeMux) {
+func (s *Server) organizationInvitationRoutes(m *recordingMux) {
+	m.useScope(scopeNone)
 	base := "/api/v1/orgs/{org}/invitation-links"
 	m.HandleFunc("GET "+base, s.organizationInvitationManage)
 	m.HandleFunc("POST "+base, s.organizationInvitationManage)

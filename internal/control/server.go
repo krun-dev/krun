@@ -60,6 +60,7 @@ type Server struct {
 	Config             appconfig.Config
 	Store              *Store
 	mux                *http.ServeMux
+	routeScopes        map[string]readScopeMode
 	internalMux        *http.ServeMux
 	providers          map[string]*identityprovider.Provider
 	trustedProxies     []*net.IPNet
@@ -116,8 +117,9 @@ func NewServer(ctx context.Context, c appconfig.Config, store *Store) (*Server, 
 }
 
 func (s *Server) routes() {
-	m := http.NewServeMux()
-	s.mux = m
+	m := newRecordingMux()
+	s.mux = m.ServeMux
+	m.useScope(scopeNone)
 	m.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if e := s.Store.Ping(r.Context()); e != nil {
 			s.writeError(w, r, e)
@@ -131,13 +133,16 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/auth/{provider}/email/code", s.emailCodeHandler)
 	m.HandleFunc("POST /api/auth/{provider}/email/verify", s.emailVerifyHandler)
 	m.HandleFunc("GET /api/auth/{provider}/callback", s.callbackHandler)
+	m.useScope(scopeActor)
 	m.HandleFunc("GET /api/auth/me", s.protected(false, s.me))
 	m.HandleFunc("POST /api/auth/logout", s.protected(true, s.logout))
 	s.oauthRoutes(m)
 	s.apiRoutes(m)
 	s.workersRoutes(m)
 	s.cloudflareRoutes(m)
+	m.useScope(scopeNone)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { s.writeError(w, r, notFound()) })
+	s.routeScopes = m.scopes
 	s.internalMux = http.NewServeMux()
 	if s.Config.Workers != nil {
 		s.internalMux.HandleFunc("POST /api/internal/workers/static-assets/{prefix}/{organization}/{worker}/{digest}/credentials", s.workerRuntimeStaticAssetCredentials)

@@ -57,6 +57,7 @@ func TestPostgresWorkerSearchBeforePagination(t *testing.T) {
 	}
 	server := &Server{Store: store}
 	server.Config.Workers = testWorkersConfig()
+	server.routes()
 	r := httptest.NewRequest("GET", "/api/v1/orgs/tenant/workers?worker_id=site-000002&q=missing&limit=1&after=zzz", nil)
 	r.Pattern = "GET /api/v1/orgs/{org}/workers"
 	r.SetPathValue("org", "tenant")
