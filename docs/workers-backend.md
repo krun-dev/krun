@@ -175,7 +175,7 @@ serving Pod 在本地按 Version 记录最近一次转发业务请求的时间�
 
 1. **启动**从控制面的 `config/snapshot` 确认 pool、`config_epoch` 和当前 revision，按需加载路由。
 2. **冷路由**通过内部 `config/routes/{host}` 查询 route/Version。控制面短暂不可用时，可以读取同代次的 host shard，前提是 checkpoint 的 revision 至少达到 Runtime 当前进度。Runtime 缓存最多 4096 个 host。
-3. **跟随**通过 `config/changes` 携带 epoch 和 revision。代次变化或游标越界返回 409，Runtime 重新启动配置视图。204 心跳携带 `X-Krun-Config-Epoch`，用于确认配置仍然有效。
+3. **跟随**通过 `config/changes` 携带 epoch 和 revision。增量批次同时包含应用区间和读取时的 `config_head_revision`。代次变化或游标越界返回 409，Runtime 重新启动配置视图。204 心跳携带 `X-Krun-Config-Epoch`，用于确认配置仍然有效。
 4. **ACK** 每约 5 秒上报 epoch 和 revision。过期代次返回 409 `CONFIG_EPOCH_CHANGED`，Runtime 通过配置流重新同步。
 
 `config/` 前缀与 `pub/`、`int/` 一样通过签名授权读取，只能通过集群内 endpoint 访问（`config_base_url` 必须指向私有地址）；生产应使用独立桶或带 VPC 条件的桶策略。对象存储快照只含 host → version 指针和不可变 Version 描述符，不含 Build、Operation、日志或 IAM 数据。PostgreSQL 不保存每个 revision 的全量投影，只保存一份归一化当前头和最近 512 个 revision 的逐实体 ops；Pod 的 revision 落后于保留窗口，或高于当前发布 head 时，通过 409 重置为紧凑 head，再按需读取 host。客户端 revision 超前不会被当作无更新而一直返回 204。
@@ -184,7 +184,7 @@ serving Pod 在本地按 Version 记录最近一次转发业务请求的时间�
 
 短暂断连时，热路由可在最后一次控制面确认后的 60 秒内继续服务。尚未缓存的代码、资产或 Secret 仍需各自的读取授权。超过 60 秒后，新请求和 serving readiness 返回 503。新 Pod 在控制面确认代次后开始服务。
 
-controller 默认对业务 pool 的 Ready serving Pod 调用 `/validate`，配置 `validator_pool` 后改用独立 validator。该接口总是在校验专用的 WorkerLoader 实例中加载并运行 `KrunValidation`；commit 后由配置流传播，controller 通过 `worker_runtime_acks` 观察收敛，`available` 表示当前 serving 成员都已上报该 revision。serving readiness 只要求配置视图已加载；Version 在首次请求时懒加载，避免 Pod 启动成本随Worker 数量线性增长。validator readiness 不启动配置跟随或 Ack，也没有业务 socket。
+controller 默认对业务 pool 的 Ready serving Pod 调用 `/validate`，配置 `validator_pool` 后改用独立 validator。该接口总是在校验专用的 WorkerLoader 实例中加载并运行 `KrunValidation`；commit 后由配置流传播，controller 通过 `worker_runtime_acks` 观察收敛，`available` 表示当前 serving 成员都已上报该 revision。Serving readiness 要求配置视图已加载且处于有效期，Version 在首次请求时懒加载。Validator readiness 不启动配置跟随或 ACK，也没有业务 socket。业务域名的实际可达性由独立 HTTPS 探测记录，见[运行指标](../deploy/observability/README.md#配置收敛与业务入口)。
 
 资源池和 Network Profile 来自主 YAML，使用有效 placement 限定路由和内部数据访问；
 当前模型见 [资源池配置](workers-pools.md)。Secret binding 已支持，Service/DB binding 不在当前范围。

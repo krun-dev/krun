@@ -553,6 +553,65 @@ for (const pool of [undefined, "internal-a", "office-a", "public-a"]) {
     assert.equal(snapshotCalls, 1);
   });
 }
+await check("configuration metrics distinguish applied revision from accepted ACK", async () => {
+  const env = makeEnv(null, []);
+  const platform = env.PLATFORM.fetch;
+  let nextPoll;
+  let releasePoll;
+  env.PLATFORM.fetch = async (request) => {
+    if (new URL(request.url).pathname.endsWith("/config/changes")) {
+      return new Promise((resolve) => {
+        releasePoll = resolve;
+        nextPoll();
+      });
+    }
+    return platform(request);
+  };
+  const poll = () => new Promise((resolve) => (nextPoll = resolve));
+  const mod = await freshEntry();
+  const metrics = new mod.Metrics(env, {});
+  const read = async () => (await call(metrics, "/metrics")).text();
+  assert.match(await read(), /^krun_runtime_config_converged 0$/m);
+
+  const firstPoll = poll();
+  assert.equal((await call(new mod.Management(env, {}), "/ready")).status, 200);
+  await firstPoll;
+  const synchronized = await read();
+  assert.match(synchronized, /^krun_runtime_config_ack_current 1$/m);
+  assert.match(synchronized, /^krun_runtime_config_converged 1$/m);
+
+  const secondPoll = poll();
+  releasePoll(
+    Response.json({
+      config_epoch: fixtureConfigEpoch,
+      config_head_revision: 4,
+      from: 1,
+      to: 2,
+      ops: [],
+    }),
+  );
+  await secondPoll;
+  const catchingUp = await read();
+  assert.match(catchingUp, /^krun_runtime_config_fresh 1$/m);
+  assert.match(catchingUp, /^krun_runtime_config_revision_lag 2$/m);
+  assert.match(catchingUp, /^krun_runtime_config_converged 0$/m);
+
+  const thirdPoll = poll();
+  releasePoll(
+    Response.json({
+      config_epoch: fixtureConfigEpoch,
+      config_head_revision: 4,
+      from: 2,
+      to: 4,
+      ops: [],
+    }),
+  );
+  await thirdPoll;
+  const awaitingACK = await read();
+  assert.match(awaitingACK, /^krun_runtime_config_revision_lag 0$/m);
+  assert.match(awaitingACK, /^krun_runtime_config_ack_current 0$/m);
+  assert.match(awaitingACK, /^krun_runtime_config_converged 0$/m);
+});
 await check("cached traffic fails closed 60 seconds after control-plane loss", async () => {
   const env = makeEnv(null, []);
   const original = env.PLATFORM.fetch;
@@ -573,6 +632,9 @@ await check("cached traffic fails closed 60 seconds after control-plane loss", a
     performance.now = () => disconnectedAt + 61000;
     assert.equal((await call(handler, "/")).status, 503);
     assert.equal((await call(new mod.Management(env, {}), "/ready")).status, 503);
+    const metrics = await (await call(new mod.Metrics(env, {}), "/metrics")).text();
+    assert.match(metrics, /^krun_runtime_config_fresh 0$/m);
+    assert.match(metrics, /^krun_runtime_config_converged 0$/m);
   } finally {
     performance.now = originalNow;
   }

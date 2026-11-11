@@ -4,6 +4,7 @@ global:
 
 scrape_config_files:
   - runtime-scrape.yaml
+  - ingress-scrape.yaml
 
 scrape_configs:
   - job_name: vmagent

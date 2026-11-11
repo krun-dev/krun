@@ -214,9 +214,10 @@ func TestWorkerRuntimeConfigChanges(t *testing.T) {
 	var batch struct {
 		From int64             `json:"from"`
 		To   int64             `json:"to"`
+		Head int64             `json:"config_head_revision"`
 		Ops  []json.RawMessage `json:"ops"`
 	}
-	if err := json.Unmarshal(r.Body.Bytes(), &batch); err != nil || batch.From != 1 || batch.To != 2 || len(batch.Ops) != 1 {
+	if err := json.Unmarshal(r.Body.Bytes(), &batch); err != nil || batch.From != 1 || batch.To != 2 || batch.Head != 2 || len(batch.Ops) != 1 {
 		t.Fatalf("batch: %+v %v", batch, err)
 	}
 	snapshot := httptest.NewRecorder()

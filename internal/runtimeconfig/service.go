@@ -23,10 +23,11 @@ type Service struct {
 }
 
 type ChangeBatch struct {
-	Epoch string                `json:"config_epoch"`
-	From  int64                 `json:"from"`
-	To    int64                 `json:"to"`
-	Ops   []domain.EdgeConfigOp `json:"ops"`
+	Epoch        string                `json:"config_epoch"`
+	HeadRevision int64                 `json:"config_head_revision"`
+	From         int64                 `json:"from"`
+	To           int64                 `json:"to"`
+	Ops          []domain.EdgeConfigOp `json:"ops"`
 }
 type Changes struct {
 	Resync bool
@@ -58,7 +59,13 @@ func (s *Service) ReadChanges(ctx context.Context, pool, epoch string, since int
 	if len(ops) > 2000 {
 		return Changes{Resync: true}, nil
 	}
-	return Changes{Batch: &ChangeBatch{Epoch: head.Epoch, From: since, To: revisions[len(revisions)-1].Revision, Ops: ops}}, nil
+	return Changes{Batch: &ChangeBatch{
+		Epoch:        head.Epoch,
+		HeadRevision: head.Revision,
+		From:         since,
+		To:           revisions[len(revisions)-1].Revision,
+		Ops:          ops,
+	}}, nil
 }
 
 type Artifact struct {

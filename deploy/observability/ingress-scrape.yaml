@@ -1,0 +1,20 @@
+- job_name: krun-worker-ingress
+  metrics_path: /probe
+  params:
+    module: [krun_worker_ingress]
+  file_sd_configs:
+    - files: [/etc/vmagent/ingress-targets.yaml]
+  relabel_configs:
+    - source_labels: [__address__]
+      regex: 'https://.+'
+      action: keep
+    - source_labels: [__address__]
+      target_label: __param_target
+    - source_labels: [__param_target]
+      target_label: instance
+    - target_label: __address__
+      replacement: 127.0.0.1:9115
+  metric_relabel_configs:
+    - source_labels: [__name__]
+      regex: 'probe_(success|http_status_code|duration_seconds)'
+      action: keep

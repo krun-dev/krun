@@ -13,12 +13,20 @@ configMapGenerator:
     files:
       - scrape.yaml
       - runtime-scrape.yaml
+      - ingress-scrape.yaml
+      - ingress-targets.yaml
+  - name: vmagent-probe
+    files:
+      - blackbox.yaml
   - name: grafana-datasources
     files:
       - datasources.yaml
   - name: grafana-dashboards
     files:
       - dashboards.yaml
+  - name: grafana-alerting
+    files:
+      - alerts.yaml
   - name: grafana-workers-runtime
     files:
       - workers-runtime.json

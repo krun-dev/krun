@@ -96,6 +96,7 @@ export class Metrics extends WorkerEntrypoint {
     }
 
     const samples = [
+      ...configMetricSamples(),
       "# HELP krun_worker_requests_total Completed HTTP dispatches to business Workers.",
       "# TYPE krun_worker_requests_total counter",
     ];
@@ -315,7 +316,7 @@ function storageResponse(request, response) {
 
 // Bootstrap reads the configuration revision. Routes load on demand, and a
 // long-poll applies incremental updates to the cached routes.
-let view = { epoch: "", revision: 0, routes: new Map(), versions: new Map() };
+let view = { epoch: "", revision: 0, headRevision: null, routes: new Map(), versions: new Map() };
 const versionRefs = new Map();
 const routeDescriptors = new WeakMap();
 const routeVersions = new Map();
@@ -323,10 +324,12 @@ const routeFlights = new Map();
 const routeMisses = new Map();
 const ROUTE_CACHE_MAX = 4096;
 const CONFIG_MAX_STALE_MS = 60_000;
+const CONFIG_ACK_MAX_STALE_MS = 10_000;
 let viewLoaded = false;
 let booting = null;
 let started = false;
 let lastSync = 0;
+let lastAcceptedAck = null;
 let lastLoop = 0;
 const servingWorkers = new Map();
 const loadedWorkers = new Map();
@@ -752,6 +755,7 @@ function applyConfigHead(head, pool) {
   view = {
     epoch: head.config_epoch,
     revision: head.config_revision,
+    headRevision: head.config_revision,
     routes: new Map(),
     versions: new Map(),
   };
@@ -760,6 +764,7 @@ function applyConfigHead(head, pool) {
   routeMisses.clear();
   viewLoaded = true;
   lastSync = performance.now();
+  lastAcceptedAck = null;
 
   return view;
 }
@@ -769,8 +774,49 @@ function invalidateConfig() {
   lastSync = 0;
 }
 
+function configFresh(now) {
+  return viewLoaded && now - lastSync < CONFIG_MAX_STALE_MS;
+}
+
+function configMetricSamples() {
+  const now = performance.now();
+  const fresh = configFresh(now);
+  const lag = view.headRevision === null ? null : view.headRevision - view.revision;
+  const currentACK =
+    viewLoaded &&
+    lastAcceptedAck?.revision === view.revision &&
+    now - lastAcceptedAck.time <= CONFIG_ACK_MAX_STALE_MS;
+  const converged = fresh && lag === 0 && currentACK;
+  const samples = [
+    "# HELP krun_runtime_config_fresh Whether the local configuration is within the serving freshness limit.",
+    "# TYPE krun_runtime_config_fresh gauge",
+    `krun_runtime_config_fresh ${Number(fresh)}`,
+    "# HELP krun_runtime_config_ack_current Whether the control plane recently accepted an ACK for the applied revision.",
+    "# TYPE krun_runtime_config_ack_current gauge",
+    `krun_runtime_config_ack_current ${Number(currentACK)}`,
+    "# HELP krun_runtime_config_converged Whether the head reported by the configuration feed is applied and recently acknowledged.",
+    "# TYPE krun_runtime_config_converged gauge",
+    `krun_runtime_config_converged ${Number(converged)}`,
+  ];
+  if (viewLoaded) {
+    samples.push(
+      "# HELP krun_runtime_config_sync_age_seconds Time since the last successful configuration sync.",
+      "# TYPE krun_runtime_config_sync_age_seconds gauge",
+      `krun_runtime_config_sync_age_seconds ${(now - lastSync) / 1000}`,
+    );
+  }
+  if (fresh && lag !== null) {
+    samples.push(
+      "# HELP krun_runtime_config_revision_lag Revisions remaining to the head last reported by the configuration feed.",
+      "# TYPE krun_runtime_config_revision_lag gauge",
+      `krun_runtime_config_revision_lag ${lag}`,
+    );
+  }
+  return samples;
+}
+
 function requireFreshConfig(epoch = view.epoch) {
-  if (!viewLoaded || performance.now() - lastSync >= CONFIG_MAX_STALE_MS) {
+  if (!configFresh(performance.now())) {
     throw new Error("platform configuration feed is stale");
   }
   if (view.epoch !== epoch) {
@@ -805,6 +851,15 @@ function applyBatch(batch) {
   if (!viewLoaded || Number(batch.from) !== view.revision) {
     return false;
   }
+  const revision = Number(batch.to);
+  const headRevision = batch.config_head_revision ?? null;
+  if (
+    !Number.isSafeInteger(revision) ||
+    revision <= view.revision ||
+    (headRevision !== null && (!Number.isSafeInteger(headRevision) || headRevision < revision))
+  ) {
+    return false;
+  }
 
   // Validate before mutating: a malformed batch must never leave a partial view.
   const ops = batch.ops || [];
@@ -829,7 +884,6 @@ function applyBatch(batch) {
   // before yielding; updating the indexes cannot change an in-flight version.
   const prune = new Set();
   const needed = new Set();
-  const revision = Number(batch.to);
 
   for (const op of ops) {
     if (
@@ -893,6 +947,7 @@ function applyBatch(batch) {
   }
 
   view.revision = revision;
+  view.headRevision = headRevision;
   lastSync = performance.now();
 
   return true;
@@ -1066,6 +1121,7 @@ async function resolveRoute(env, host) {
 
 async function sendAck(env) {
   const acknowledged = view;
+  const revision = acknowledged.revision;
   try {
     await platform(env, "/ack", {
       method: "POST",
@@ -1074,9 +1130,12 @@ async function sendAck(env) {
         pod_uid: env.POD_UID,
         pool: env.RUNTIME_POOL || "default",
         config_epoch: acknowledged.epoch,
-        revision: acknowledged.revision,
+        revision,
       }),
     });
+    if (viewLoaded && acknowledged === view && revision >= (lastAcceptedAck?.revision ?? 0)) {
+      lastAcceptedAck = { revision, time: performance.now() };
+    }
   } catch (e) {
     if (e.status === 409 && acknowledged === view) {
       invalidateConfig();
@@ -1105,13 +1164,14 @@ async function follow(env) {
       }
 
       const polled = view;
+      const since = polled.revision;
       const response = await platformResponse(
         env,
-        `/config/changes?since=${polled.revision}&epoch=${polled.epoch}&wait=5s`,
+        `/config/changes?since=${since}&epoch=${polled.epoch}&wait=5s`,
         {},
         30000,
       );
-      if (polled !== view || !viewLoaded) {
+      if (polled !== view || since !== view.revision || !viewLoaded) {
         continue;
       }
 
@@ -1120,6 +1180,7 @@ async function follow(env) {
           invalidateConfig();
           continue;
         }
+        polled.headRevision = polled.revision;
         lastSync = performance.now();
         await sleep(250);
         backoff = 1000;
@@ -1139,7 +1200,7 @@ async function follow(env) {
       }
 
       const batch = await response.json();
-      if (polled !== view || !viewLoaded) {
+      if (polled !== view || since !== view.revision || !viewLoaded) {
         continue;
       }
 
