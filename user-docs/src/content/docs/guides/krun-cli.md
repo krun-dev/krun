@@ -110,6 +110,24 @@ krun login --endpoint {{KRUN_ORIGIN}} --device --browser=false
 
 CLI 接受 HTTPS 控制台地址，本地开发允许 loopback HTTP。登录多个账号时，可用 `--profile NAME` 分开保存。
 
+升级 CLI 大版本后如果所有命令（包括 `login`）都报 `invalid CLI config`，是旧版本保存的凭据格式不再兼容。删掉或移走系统用户配置目录下的 `krun/config.yaml`（macOS 在 `~/Library/Application Support/krun/`，Linux 在 `~/.config/krun/`）后重新 `krun login` 即可恢复。
+
+### 自动化与非交互登录
+
+无人值守环境（CI、编码 Agent）不需要浏览器，两种方式任选：
+
+```sh
+# 方式一：环境变量注入已有 API Key
+export KRUN_ENDPOINT={{KRUN_ORIGIN}}
+export KRUN_TOKEN=replace-with-krun-api-key
+krun workers list
+
+# 方式二：从标准输入读入 API Key 并保存为 CLI 会话
+printf '%s\n' "$KRUN_TOKEN" | krun login --endpoint {{KRUN_ORIGIN}} --token-stdin
+```
+
+`KRUN_TOKEN` 的权限受 Key 策略与创建者权限双重约束。需要用该 Key 驱动 Wrangler 部署时，策略写法见 [Wrangler 部署指南](/docs/guides/cloudflare-workers.html#创建可部署的-api-key)。
+
 ## 管理组织和邀请
 
 ```sh
@@ -424,6 +442,33 @@ krun secret list --org ORG_ID --worker WORKER_ID --env production
 `secret put` 读取标准输入或 `--file` 的内容。已有发布版本时，Secret 修改默认创建并提交新版本，可用 `--stage` 创建版本后暂缓部署。使用 `--previews-base` 修改新建预览环境的默认 Secret。
 
 构建和发布等写操作支持 `--idempotency-key`。遇到响应丢失时，复用标准错误流中打印的键和原始参数重试。如果命令还打印了 revision，重试时传入相应的 `--revision`、`--configuration-revision` 或 `--repository-revision`，以重放同一请求。自动构建的 `deploy` 或 `versions upload` 重试时，复用同一个发布键和原始 Git ref、仓库 revision；CLI 会由该键计算相同的构建键。已经拿到成功的 Build ID 时，也可以用 `--build BUILD_ID` 跳过构建。提交成功并拿到 ID 后，用对应的 `wait` 命令继续检查。
+
+## 管理 API Key
+
+```sh
+krun keys list --org ORG_ID
+krun keys create --org ORG_ID --name NAME --expires 24h --policy policy.yaml
+krun keys show --id KEY_ID
+krun keys revoke --id KEY_ID
+```
+
+`keys create` 的 `--policy` 文件是**策略对象本身**（不含 `name`、`expires_in`，这两个由 `--name`、`--expires` 传入），结构与控制台「API Keys」页一致：
+
+```yaml
+schema_version: 1
+statements:
+  - effect: allow
+    actions: ['*']            # 只展开到 resource.kind 匹配的动作
+    resource:
+      kind: '*'              # 组织内全量；最小授权用 kind: worker + ids
+      organization_id: ORG_ID
+      all_in_organization: true
+    conditions: {}            # 可选 environments: [production] 限制目标环境
+```
+
+**通配规则**：`actions: ['*']` 按选择器的 `kind` 展开到注册动作。`kind: organization` 的 `*` 不包含 `worker.create`、`worker.publish` 等 Worker 级动作；要覆盖部署流程，用 `kind: '*'` + `all_in_organization: true`，或 `kind: worker` + `ids: [WORKER 定位符]` 精确授权。策略始终与创建者权限取交集。最小授权与跨系统通配的完整样例见仓库 [config/key-policy.example.yaml](https://github.com/krun-dev/krun/blob/dev/config/key-policy.example.yaml) 与 [config/key-policy.wildcard.example.yaml](https://github.com/krun-dev/krun/blob/dev/config/key-policy.wildcard.example.yaml)。
+
+`expires` 接受如 `24h` 的时长，或 `0` / `never` 表示永不过期。Key 明文只在创建输出中出现一次，用于 `KRUN_TOKEN` 或 [Wrangler 部署](/docs/guides/cloudflare-workers.html#创建可部署的-api-key)。
 
 ## 对象存储
 

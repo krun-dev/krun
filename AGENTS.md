@@ -215,3 +215,16 @@ fingerprint；已有库与基线不一致时拒绝启动，由开发者显式重
 
 - 根目录的 [README.md](README.md) 为简体中文版，[README.en.md](README.en.md) 为英文版。每次修改任一版本的内容，都在同一个 PR 中同步更新另一版，保持功能、兼容范围、限制和文档入口一致。
 - 调整 Workers binding 的支持范围时，同步更新两版 README 的概览与[兼容测试表](docs/verification.md#workers-bindings-兼容测试)中对应的覆盖范围。
+
+## 15. 文档对 Agent 友好（硬约束）
+
+krun 文档会同时被人类和编码 Agent / LLM 阅读（用户常把文档页直接投喂给 Agent 执行部署）。
+写 `user-docs/`、`docs/` 与 README 时遵守：
+
+- **每条指令都要可复制执行**：命令块给出完整可运行的形式，占位符集中声明（如「将 `ORG_ID` 替换为 `krun org list` 输出中的组织 ID」）；不写「按提示操作」「参考控制台」这类需要人肉探索的步骤，除非确实没有等价 CLI/API。
+- **错误要能对照排查**：文档描述的每个失败路径都写清现象（HTTP 状态、错误码、错误消息原文）→ 原因 → 修复动作。平台错误码（如 cfcompat 的 `10000`/`10007`/`10021`）与 `UPPER_SNAKE` 码在文档中至少出现一次对照表。
+- **凭据与权限写最小可用样例**：涉及 API Key / token 的流程必须给出策略（policy）等结构化配置的完整样例文件，并标注通配符陷阱（例如 `actions: ['*']` 按 `resource.kind` 展开的规则）。「在控制台创建一个 Key」不构成完整指令。
+- **无人值守路径与交互路径并列**：凡是需要浏览器/OAuth 的流程（控制台操作、GitHub 授权、`krun login`），同时给出非交互替代（`--token-stdin`、`KRUN_TOKEN`、CLI 命令序列），供 CI 与 Agent 使用。
+- **依赖前置条件显式列出**：命令需要的工具（`psql`、`jq`、Node 版本）在命令出现前声明；工具缺失时给出替代方案（如用 `node` + `pg` 替代 `psql` 建表）。
+- **Markdown 原文可直读**：文档站为每页提供 `<页面路径>.md.txt` 端点；新增指南时保持该能力可用，并在合适位置链接（参考 [Workers 代码兼容范围](user-docs/src/content/docs/guides/workers-runtime-compatibility.md) 的「给编码 Agent 的列表」小节的写法）。
+- **验证即清单**：部署类文档以可判定的验证步骤收尾（预期 HTTP 状态、预期 JSON 字段、预期页面标题），让 Agent 能自检部署结果。
