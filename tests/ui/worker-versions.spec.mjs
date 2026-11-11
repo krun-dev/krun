@@ -112,6 +112,7 @@ async function fixture(page) {
     failDeploy: false,
     omitCreatedFromOverview: false,
     waitForCreate: null,
+    repository: null,
   };
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -169,7 +170,9 @@ async function fixture(page) {
         domains_revision: 1,
       };
     } else if (path === workerBase + "/repository") {
-      data = { source: null, revision: 1 };
+      data = { source: state.repository, revision: 1 };
+    } else if (path.endsWith("/workers/repository-providers")) {
+      data = { items: [] };
     } else if (path === workerBase + "/domains") {
       data = { selected: [], catalog: [], revision: 1, network_profile: {} };
     } else if (
@@ -477,6 +480,39 @@ test("a failed request can be retried without creating a new idempotency key", a
   await confirm.getByRole("button", { name: "取消", exact: true }).click();
   expect(state.environments[0].version_id).toBe("version-current");
   expect(errors).toEqual([]);
+});
+
+test("project deployment keeps local upload available alongside Git builds", async ({ page }) => {
+  const { state } = await fixture(page);
+  await page.goto(origin + location);
+  const deployment = page.getByRole("region", { name: "部署项目", exact: true });
+  const git = deployment.getByRole("region", { name: "Git 仓库", exact: true });
+  const upload = deployment.getByRole("region", { name: "上传部署", exact: true });
+  await expect(upload.getByRole("button", { name: "选择 ZIP" })).toBeEnabled();
+  await git.getByRole("button", { name: "绑定代码仓库" }).click();
+  await expect(page.getByText(/管理员尚未配置 Git 仓库来源/)).toBeVisible();
+  await page.getByRole("tab", { name: "构建与发布", exact: true }).click();
+  await expect(upload.getByRole("button", { name: "选择文件夹" })).toBeEnabled();
+
+  state.repository = {
+    provider_id: "github",
+    repository: "example/worker",
+    ref: "main",
+    root_directory: ".",
+  };
+  await page.reload();
+  await expect(upload.getByRole("button", { name: "选择 ZIP" })).toBeEnabled();
+  await git.getByRole("button", { name: "从仓库构建" }).click();
+  await expect(page.getByRole("dialog", { name: "从仓库构建" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "分支 / Tag / Commit" })).toHaveValue("main");
+  await page.keyboard.press("Escape");
+
+  await page.setViewportSize({ width: 430, height: 900 });
+  await expect
+    .poll(() => deployment.evaluate((el) => Math.ceil(el.getBoundingClientRect().right)), {
+      timeout: 3000,
+    })
+    .toBeLessThanOrEqual(430);
 });
 
 test("direct publishing stays available without creating an undeployed version first", async ({

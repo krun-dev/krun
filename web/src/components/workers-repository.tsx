@@ -149,8 +149,13 @@ export function RepositorySettings({
       setBusy(false);
     }
   }
-  if (providers !== null && providers.length === 0)
-    return <p className="text-sm text-muted-foreground">{t("管理员尚未启用代码仓库来源。")}</p>;
+  if (providers !== null && providers.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        {t("管理员尚未配置 Git 仓库来源。你仍可在「构建与发布」上传本地项目。")}
+      </p>
+    );
+  }
   return (
     <div className="grid gap-4">
       {authorizationStatus === "reconnect_required" && (

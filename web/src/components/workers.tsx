@@ -816,7 +816,6 @@ function WorkerDetail({
           >
             <RefreshCw size={16} />
           </Button>
-          <Button onClick={() => setEditor(true)}>{t("构建新版本")}</Button>
         </div>
       </div>
       {error ? (
@@ -962,40 +961,62 @@ function WorkerDetail({
           <TabsContent
             value="delivery"
             forceMount
-            className="mt-5 grid gap-5 data-[state=inactive]:hidden"
+            className="mt-5 grid grid-cols-1 gap-5 data-[state=inactive]:hidden"
           >
-            <LocalUpload
-              base={base}
-              worker={worker.name}
-              env={env}
-              builds={data.builds}
-              canPublish={(name) =>
-                !busy &&
-                !deploymentPending(name) &&
-                data.environments.some((e) => e.name === name && e.enabled)
-              }
-              onQueued={reload}
-              onPublish={(build, name) => {
-                setEnvironment(name);
-                setPublish(build);
-              }}
-            />
+            <section
+              aria-label={t("部署项目")}
+              className="grid gap-3"
+            >
+              <h3 className="font-medium">{t("部署项目")}</h3>
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                <section
+                  aria-label={t("Git 仓库")}
+                  className="grid min-w-0 content-start gap-3 rounded-lg border bg-card p-4"
+                >
+                  <div className="flex min-w-0 items-start gap-3">
+                    <GitBranch className="mt-0.5 size-5 shrink-0 text-primary" />
+                    <div className="grid min-w-0 gap-1">
+                      <h4 className="text-sm font-medium">{t("Git 仓库")}</h4>
+                      <p className="text-xs text-muted-foreground">
+                        {t("适合在 GitHub 或 GitLab 持续维护的项目，可从分支、Tag 或提交构建。")}
+                      </p>
+                      {binding?.source ? (
+                        <p className="break-all text-xs text-muted-foreground">
+                          {binding.source.repository} · {binding.source.ref}
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="justify-self-start"
+                    onClick={() => (binding?.source ? setEditor(true) : setTab("source"))}
+                  >
+                    {t(binding?.source ? "从仓库构建" : "绑定代码仓库")}
+                  </Button>
+                </section>
+                <LocalUpload
+                  base={base}
+                  worker={worker.name}
+                  env={env}
+                  builds={data.builds}
+                  canPublish={(name) =>
+                    !busy &&
+                    !deploymentPending(name) &&
+                    data.environments.some((e) => e.name === name && e.enabled)
+                  }
+                  onQueued={reload}
+                  onPublish={(build, name) => {
+                    setEnvironment(name);
+                    setPublish(build);
+                  }}
+                />
+              </div>
+            </section>
             {tab === "delivery" ? (
               <>
-                {!binding?.source ? (
-                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-primary/25 bg-primary/5 px-4 py-3 text-sm">
-                    <p className="text-muted-foreground">
-                      {t("此Worker尚未绑定代码仓库；绑定后可直接从分支或 Tag 构建版本。")}
-                    </p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setTab("source")}
-                    >
-                      {t("绑定代码仓库")}
-                    </Button>
-                  </div>
-                ) : null}
                 <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
                   {Object.entries(artifactIcons).map(([label, Icon]) => (
                     <span

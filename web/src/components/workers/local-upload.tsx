@@ -137,7 +137,7 @@ export function LocalUpload({
     <section
       aria-labelledby={titleID}
       className={cn(
-        "grid gap-3 rounded-lg border border-dashed bg-card p-4",
+        "grid min-w-0 content-start gap-3 rounded-lg border border-dashed bg-card p-4",
         dragging && "border-primary bg-primary/5",
       )}
       onDragOver={(event) => {
@@ -160,14 +160,14 @@ export function LocalUpload({
         <div className="flex min-w-0 items-start gap-3">
           <Upload className="mt-0.5 size-5 shrink-0 text-primary" />
           <div className="grid min-w-0 gap-1">
-            <h3
+            <h4
               id={titleID}
               className="text-sm font-medium"
             >
-              {t("上传本地项目")}
-            </h3>
+              {t("上传部署")}
+            </h4>
             <p className="text-xs text-muted-foreground">
-              {t("将项目文件夹或 ZIP 压缩包拖到这里。")}
+              {t("适合发布本地静态产物或 Worker 项目。将文件夹或 ZIP 拖到这里。")}
             </p>
             <p className="break-all text-xs text-muted-foreground">
               {t("上传目标")} · {worker} / {target}
