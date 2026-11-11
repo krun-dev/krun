@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/krun-dev/krun/internal/adapters/upstream"
 	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/configfile"
 	"github.com/krun-dev/krun/internal/domain"
@@ -31,7 +32,7 @@ type Provider struct {
 
 type Identity = domain.ExternalIdentity
 
-var ErrUpstreamRedirect = errors.New("upstream redirects disabled")
+var ErrUpstreamRedirect = upstream.ErrRedirect
 
 // Keep diagnostics independent of upstream bodies, URLs and credential values.
 type ProviderFailure struct {
@@ -56,27 +57,21 @@ func NewHTTPClient(c appconfig.Config) *http.Client {
 			}
 		}
 	}
-	transport := &http.Transport{TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 5 * time.Second, MaxResponseHeaderBytes: 32 << 10, Proxy: nil, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-		host, port, e := net.SplitHostPort(address)
-		if e != nil || !allowed[host] {
-			return nil, errors.New("upstream host not allowed")
-		}
-		ips, e := net.DefaultResolver.LookupIPAddr(ctx, host)
-		if e != nil {
-			return nil, e
-		}
-		for _, ip := range ips {
-			if ip.IP.IsLoopback() || ip.IP.IsUnspecified() || ip.IP.IsLinkLocalUnicast() || ip.IP.IsLinkLocalMulticast() {
-				return nil, errors.New("unsafe upstream address")
+	transport := upstream.NewTransport(upstream.Policy{
+		CheckHost: func(host, port string) error {
+			if !allowed[host] {
+				return errors.New("upstream host not allowed")
 			}
-		}
-		if len(ips) == 0 {
-			return nil, errors.New("no upstream addresses")
-		}
-		d := net.Dialer{Timeout: 5 * time.Second}
-		return d.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
-	}}
-	return &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return ErrUpstreamRedirect }}
+			return nil
+		},
+		CheckIP: func(ip net.IP) error {
+			if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+				return errors.New("unsafe upstream address")
+			}
+			return nil
+		},
+	})
+	return &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: upstream.RejectRedirect}
 }
 
 func New(ctx context.Context, c appconfig.Config, p appconfig.ProviderConfig, client *http.Client) (*Provider, error) {

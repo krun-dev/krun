@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	identityprovider "github.com/krun-dev/krun/internal/adapters/identity"
+	upstreamhttp "github.com/krun-dev/krun/internal/adapters/upstream"
 	appconfig "github.com/krun-dev/krun/internal/config"
 	"golang.org/x/oauth2"
 )
@@ -66,41 +66,27 @@ func (s *Client) repositoryHTTPContext(parent context.Context, provider appconfi
 			expectedPort = "80"
 		}
 	}
-	transport := &http.Transport{
-		Proxy:                  nil,
-		TLSHandshakeTimeout:    5 * time.Second,
-		ResponseHeaderTimeout:  5 * time.Second,
-		MaxResponseHeaderBytes: 32 << 10,
-		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			host, port, splitErr := net.SplitHostPort(address)
-			if splitErr != nil || strings.ToLower(host) != expectedHost || port != expectedPort {
-				return nil, errors.New("repository OAuth upstream host not allowed")
+	transport := upstreamhttp.NewTransport(upstreamhttp.Policy{
+		CheckHost: func(host, port string) error {
+			if strings.ToLower(host) != expectedHost || port != expectedPort {
+				return errors.New("repository OAuth upstream host not allowed")
 			}
-			ips, resolveErr := net.DefaultResolver.LookupIPAddr(ctx, host)
-			if resolveErr != nil {
-				return nil, resolveErr
-			}
-			if len(ips) == 0 {
-				return nil, errors.New("repository OAuth upstream has no addresses")
-			}
-			for _, candidate := range ips {
-				private := candidate.IP.IsLoopback() || candidate.IP.IsPrivate()
-				alwaysUnsafe := candidate.IP.IsUnspecified() || candidate.IP.IsLinkLocalUnicast() || candidate.IP.IsLinkLocalMulticast()
-				loopbackTest := s.Config.Development && candidate.IP.IsLoopback() && loopbackHost
-				if alwaysUnsafe || private && !loopbackTest && !provider.AllowPrivateNetwork {
-					return nil, errors.New("unsafe repository OAuth upstream address")
-				}
-			}
-			dialer := net.Dialer{Timeout: 5 * time.Second}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+			return nil
 		},
-	}
+		CheckIP: func(ip net.IP) error {
+			private := ip.IsLoopback() || ip.IsPrivate()
+			alwaysUnsafe := ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
+			loopbackTest := s.Config.Development && ip.IsLoopback() && loopbackHost
+			if alwaysUnsafe || private && !loopbackTest && !provider.AllowPrivateNetwork {
+				return errors.New("unsafe repository OAuth upstream address")
+			}
+			return nil
+		},
+	})
 	client := &http.Client{
-		Transport: RepositoryOAuthResponseLimit{base: transport, limit: limit},
-		Timeout:   15 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return identityprovider.ErrUpstreamRedirect
-		},
+		Transport:     RepositoryOAuthResponseLimit{base: transport, limit: limit},
+		Timeout:       15 * time.Second,
+		CheckRedirect: upstreamhttp.RejectRedirect,
 	}
 	ctx, stop := context.WithTimeout(parent, 15*time.Second)
 	cancel := func() {
