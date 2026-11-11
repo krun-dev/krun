@@ -1,8 +1,6 @@
 package domain
 
 import (
-	"encoding/json"
-	"errors"
 	"sort"
 	"time"
 )
@@ -101,72 +99,6 @@ func SameWorkerSecretVersion(a, b WorkerSecretVersion) bool {
 	return a.ID == b.ID && a.Organization == b.Organization && a.Worker == b.Worker &&
 		a.Environment == b.Environment && a.Name == b.Name && a.ValueDigest == b.ValueDigest &&
 		a.KeyVersion == b.KeyVersion && a.CreatedBy == b.CreatedBy && a.Created.Equal(b.Created)
-}
-
-// cloneState deep-copies through JSON, matching the snapshot semantics the
-// previous whole-document store provided.
-func CloneState(src *State) (*State, error) {
-	if src == nil {
-		return nil, errors.New("state is not initialized")
-	}
-	raw, err := json.Marshal(src)
-	if err != nil {
-		return nil, err
-	}
-	dst := NewState()
-	if err = json.Unmarshal(raw, dst); err != nil {
-		return nil, err
-	}
-	// Secret version references are internal and therefore excluded from JSON.
-	for id, source := range src.Workers.Buckets {
-		target := dst.Workers.Buckets[id]
-		target.Store = source.Store
-		dst.Workers.Buckets[id] = target
-	}
-	// Preserve only the identifiers; ciphertext is never part of State.
-	for worker, source := range src.Workers.Workers {
-		target, ok := dst.Workers.Workers[worker]
-		if !ok {
-			continue
-		}
-		for name, sourceEnv := range source.Environments {
-			targetEnv, ok := target.Environments[name]
-			if !ok {
-				continue
-			}
-			targetEnv.SecretVersions = CloneStringsMap(sourceEnv.SecretVersions)
-			target.Environments[name] = targetEnv
-		}
-		if source.PreviewBase != nil && target.PreviewBase != nil {
-			target.PreviewBase.SecretVersions = CloneStringsMap(source.PreviewBase.SecretVersions)
-		}
-		dst.Workers.Workers[worker] = target
-	}
-	for id, source := range src.Workers.Versions {
-		target, ok := dst.Workers.Versions[id]
-		if !ok {
-			continue
-		}
-		target.SecretVersions = CloneStringsMap(source.SecretVersions)
-		dst.Workers.Versions[id] = target
-	}
-	for id, source := range src.Workers.Configurations {
-		target := dst.Workers.Configurations[id]
-		target.SecretVersions = CloneStringsMap(source.SecretVersions)
-		dst.Workers.Configurations[id] = target
-	}
-	// Build lease metadata is also storage-private, but the diff writer needs
-	// the exact pre-image for its state/owner CAS.
-	for id, source := range src.Workers.Builds {
-		build, ok := dst.Workers.Builds[id]
-		if !ok {
-			continue
-		}
-		build.ClaimedBy = source.ClaimedBy
-		build.ClaimedAt = source.ClaimedAt
-		dst.Workers.Builds[id] = build
-	}
-	return dst, nil
 }
 
 // PreviewBaseName is an internal configuration scope, never a routable environment.
