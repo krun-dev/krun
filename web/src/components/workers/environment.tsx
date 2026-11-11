@@ -11,10 +11,12 @@ import { Field, SelectField } from "@/components/common";
 import { workerURL } from "./shared";
 import { R2BindingsEditor } from "./r2-bindings";
 import { HyperdriveBindingsEditor } from "./hyperdrive-bindings";
-import { bindingRows, bindingInput } from "@/lib/object-storage";
-import { variableRows, variableInput } from "@/lib/worker-variables";
+import { bindingInput } from "@/lib/object-storage";
+import { variableInput } from "@/lib/worker-variables";
 import { VariablesEditor, VersionMetadataField } from "./variables";
 import { SecretsEditor } from "./secrets";
+import { hyperdriveInput } from "@/lib/worker-config-draft";
+import { useConfigDraft } from "@/lib/use-config-draft";
 
 export function EnvironmentSettings({
   base,
@@ -35,12 +37,17 @@ export function EnvironmentSettings({
   reload: () => void;
   notify: (s: string) => void;
 }) {
-  const [variables, setVariables] = useState(() => variableRows(env.variables));
-  const [versionMetadata, setVersionMetadata] = useState(env.version_metadata || "");
-  const [r2Bindings, setR2Bindings] = useState(() => bindingRows(env.r2_buckets));
-  const [hyperdriveBindings, setHyperdriveBindings] = useState(() =>
-    Object.entries(env.hyperdrive_bindings || {}).map(([name, id]) => ({ name, id })),
-  );
+  const {
+    variables,
+    setVariables,
+    versionMetadata,
+    setVersionMetadata,
+    r2Bindings,
+    setR2Bindings,
+    hyperdriveBindings,
+    setHyperdriveBindings,
+    reset,
+  } = useConfigDraft(env);
   const [revision, setRevision] = useState(env.configuration_revision);
   const [busy, setBusy] = useState(false);
   const domainLabel = (id: string) =>
@@ -55,9 +62,7 @@ export function EnvironmentSettings({
           ? { variables: variableInput(variables), version_metadata: versionMetadata }
           : section === "hyperdrive"
             ? {
-                hyperdrive_bindings: Object.fromEntries(
-                  hyperdriveBindings.map((row) => [row.name.trim(), row.id]),
-                ),
+                hyperdrive_bindings: hyperdriveInput(hyperdriveBindings),
               }
             : {
                 r2_buckets: bindingInput(
@@ -202,12 +207,7 @@ export function EnvironmentSettings({
             variant="outline"
             disabled={busy || active}
             onClick={() => {
-              setVariables(variableRows(env.variables));
-              setVersionMetadata(env.version_metadata || "");
-              setR2Bindings(bindingRows(env.r2_buckets));
-              setHyperdriveBindings(
-                Object.entries(env.hyperdrive_bindings || {}).map(([name, id]) => ({ name, id })),
-              );
+              reset(env);
               setRevision(env.configuration_revision);
             }}
           >

@@ -3,8 +3,8 @@ import { api } from "@/lib/api";
 import { t, errorMessage } from "@/lib/i18n";
 import type { Environment, Version } from "@/lib/workers";
 import type { WorkerConfiguration } from "@/lib/worker-configurations";
-import { variableRows, variableInput } from "@/lib/worker-variables";
-import { bindingRows, bindingInput } from "@/lib/object-storage";
+import { variableInput } from "@/lib/worker-variables";
+import { bindingInput } from "@/lib/object-storage";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -18,8 +18,10 @@ import {
 } from "@/components/ui/dialog";
 import { VariablesEditor, VersionMetadataField } from "./variables";
 import { R2BindingsEditor } from "./r2-bindings";
-import { HyperdriveBindingsEditor, type HyperdriveBindingRow } from "./hyperdrive-bindings";
+import { HyperdriveBindingsEditor } from "./hyperdrive-bindings";
 import { SecretsEditor } from "./secrets";
+import { hyperdriveInput } from "@/lib/worker-config-draft";
+import { useConfigDraft } from "@/lib/use-config-draft";
 
 export type ConfigurationSource = { configuration?: WorkerConfiguration; version?: Version };
 
@@ -43,15 +45,16 @@ export function ConfigurationEditor({
     source.configuration ? source.configuration.name + " · " + t("调整") : "",
   );
   const [message, setMessage] = useState("");
-  const [variables, setVariables] = useState(() => variableRows(original.variables));
-  const [bindings, setBindings] = useState(() => bindingRows(original.r2_buckets));
-  const [hyperdriveBindings, setHyperdriveBindings] = useState<HyperdriveBindingRow[]>(() =>
-    Object.entries(original.hyperdrive_bindings || {}).map(([name, id]) => ({
-      name,
-      id,
-    })),
-  );
-  const [metadata, setMetadata] = useState(original.version_metadata || "");
+  const {
+    variables,
+    setVariables,
+    r2Bindings,
+    setR2Bindings,
+    hyperdriveBindings,
+    setHyperdriveBindings,
+    versionMetadata: metadata,
+    setVersionMetadata: setMetadata,
+  } = useConfigDraft(original);
   const [secrets, setSecrets] = useState<Record<string, string | null>>({});
   const [revision] = useState(env.configuration_revision);
   const [busy, setBusy] = useState(false);
@@ -68,16 +71,12 @@ export function ConfigurationEditor({
     setError("");
     try {
       const values = variableInput(variables);
-      const hyperdrive = Object.fromEntries(
-        hyperdriveBindings
-          .filter((row) => row.name.trim() && row.id)
-          .map((row) => [row.name.trim(), row.id]),
-      );
+      const hyperdrive = hyperdriveInput(hyperdriveBindings);
       const payload = {
         name: name.trim(),
         message: message.trim(),
         variables: values,
-        r2_buckets: bindingInput(bindings, values, secretNames, metadata),
+        r2_buckets: bindingInput(r2Bindings, values, secretNames, metadata),
         hyperdrive_bindings: hyperdrive,
         version_metadata: metadata,
         secrets,
@@ -179,8 +178,8 @@ export function ConfigurationEditor({
           </section>
           <R2BindingsEditor
             organizationBase={organizationBase}
-            rows={bindings}
-            onChange={setBindings}
+            rows={r2Bindings}
+            onChange={setR2Bindings}
             disabled={busy}
           />
           <HyperdriveBindingsEditor

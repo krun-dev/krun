@@ -1,4 +1,4 @@
-import { t } from "./i18n";
+import { t } from "./i18n.ts";
 
 export type WorkerBucket = {
   resource_path?: string;
