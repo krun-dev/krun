@@ -30,8 +30,17 @@ func (h *WorkerHyperdriveConfig) CIDR() string {
 }
 
 func (c *Config) validateHyperdrive() error {
-	if c.Workers == nil || c.Workers.Hyperdrive == nil {
+	if c.Workers == nil {
 		return nil
+	}
+	if c.Deployment != nil {
+		if c.Workers.Hyperdrive != nil {
+			return errors.New("workers.hyperdrive is not supported by the Kubernetes deployment render yet; remove the section or use a host deployment")
+		}
+		return nil
+	}
+	if c.Workers.Hyperdrive == nil {
+		return errors.New("workers.hyperdrive is required when workers are configured; PostgreSQL access is a built-in capability, see config/example.yaml")
 	}
 	h := c.Workers.Hyperdrive
 	host, port, err := net.SplitHostPort(h.Listen)

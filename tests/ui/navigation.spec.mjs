@@ -85,7 +85,6 @@ async function fixture(page, options = {}) {
         credential_kind: "session",
         revision: 1,
         workers_configured: true,
-        hyperdrive_configured: state.hyperdriveConfigured === true,
       };
     } else if (path === "/api/v1/roles" && state.permissionCatalog) {
       data = state.permissionCatalog;
@@ -766,7 +765,7 @@ test("system administrators can read runtime pool configuration without an organ
 for (const theme of ["light", "dark"]) {
   test(`Hyperdrive can create a configuration in ${theme} mode`, async ({ page }) => {
     await page.addInitScript((value) => localStorage.setItem("krun.theme", value), theme);
-    await fixture(page, { actions: { "org-a": admin }, hyperdriveConfigured: true });
+    await fixture(page, { actions: { "org-a": admin } });
     const items = [];
     await page.route(new RegExp("/api/v1/orgs/org-a/hyperdrive$"), async (route) => {
       if (route.request().method() === "POST") {

@@ -27,9 +27,11 @@ providers:
   # 本地构建在同一 workers: 段设置 builder_mode: local，仅用于可信仓库。
   # runtime_api_url: https://console.example.com # 可选；空值使用现有 Service/本地控制面地址。
   # protected_egress_cidrs: [] # 禁止业务访问的部署侧地址段。
+  # PostgreSQL 托管接入（Hyperdrive）是 Workers 的内置能力，配置 workers: 时必填。
+  # 开发模式允许回环 IP 作为代理监听地址（如 127.0.0.2:6432）。
   # hyperdrive:
-  #   listen: ${KRUN_HYPERDRIVE_LISTEN} # 代理专用 IP:port，与 HTTP 监听地址隔离。
-  #   address: ${KRUN_HYPERDRIVE_ADDRESS} # Worker 可解析的代理 DNS 名称:port。
+  #   listen: 127.0.0.2:6432 # 代理专用 IP:port，与 HTTP 监听地址隔离。
+  #   address: hyperdrive.localhost:6432 # Worker 可解析的代理 DNS 名称:port。
   #   tls_cert_file: ${KRUN_HYPERDRIVE_CERT_FILE}
   #   tls_key_file: ${KRUN_HYPERDRIVE_KEY_FILE}
   #   origin_ca_file: ${KRUN_HYPERDRIVE_ORIGIN_CA_FILE:-}
