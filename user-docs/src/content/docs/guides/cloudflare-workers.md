@@ -7,6 +7,8 @@ sidebar:
 
 krun 支持使用 Cloudflare Wrangler 部署模块格式的 JavaScript 和 TypeScript Worker。下面的示例使用已验证的 Wrangler 4.155.0，将 Worker 发布到 krun。
 
+Wrangler 是 Cloudflare 提供的 Workers 开发和部署命令行工具；它读取项目的 Wrangler 配置并处理构建。本指南将 Wrangler 的 API 地址指向 krun，因此发布目标是 krun。krun CLI 是另一个工具，用于管理 krun 的组织、环境、对象存储和仓库构建发布；两者如何选择见[基础概念](/docs/guides/concepts.html#wrangler-和-krun-cli)。
+
 **仅兼容本文列出的 Wrangler 用法和[组件文档](/docs/guides/component-workers.html)列出的 API；很多 Cloudflare API 和产品不支持。**
 
 迁移已有项目时，先检查 [Wrangler 配置兼容范围](/docs/guides/wrangler-configuration.html)，确认配置文件、构建字段、binding 和环境配置是否适用于所选发布方式。

@@ -9,6 +9,16 @@ sidebar:
 一个控制台，连接你的团队与资源。跟随下面的步骤，几分钟内完成设置。
 :::
 
+## krun 是什么
+
+krun 是一个自托管应用平台，帮助团队在自己的基础设施上部署和管理应用。你可以通过控制台或 CLI 管理组织和权限，构建、发布 Worker，并为应用配置对象存储和 PostgreSQL 等资源。
+
+krun 的 Workers 运行时基于 [Cloudflare 开源的 workerd](https://github.com/cloudflare/workerd)：workerd 负责执行 Worker 代码，krun 提供构建、发布、环境、资源和权限管理。krun 支持部分 Cloudflare Workers API 与 Wrangler 工作流；具体支持范围见 [Workers 代码兼容范围](/docs/guides/workers-runtime-compatibility.html)和 [Wrangler 配置兼容范围](/docs/guides/wrangler-configuration.html)。
+
+## 我们的目标
+
+我们的目标是让团队在自己的基础设施上获得类似 Cloudflare Workers 的应用开发和交付体验：编写应用、连接资源、构建发布，再通过统一入口管理环境和访问权限。长期来看，krun 希望支持更多类型的应用运行时和计算、存储能力。当前提供的能力以本文档列出的功能和兼容范围为准。
+
 ## 开始之前
 
 准备好团队提供的 krun 控制台地址和登录方式。登录后，如果没有看到组织或需要的资源，请联系组织管理员邀请你并分配权限。创建组织、加入团队和分配权限的操作见[组织与权限](/docs/guides/organizations.html)。
@@ -75,6 +85,8 @@ krun login --endpoint {{KRUN_ORIGIN}} --device --browser=false
 - **API Key**：为自动化场景创建的凭据，权限受其策略和创建者权限限制。请妥善保管。
 
 ## 接下来
+
+不熟悉 Workers、Wrangler 或 krun CLI？先阅读[基础概念](/docs/guides/concepts.html)，了解工具的作用和发布路径。
 
 从[示例总览](/docs/guides/worker-examples.html)选择一个项目，或直接查看 [Workers + R2](/docs/guides/examples-r2-workers.html)、[Workers + PG](/docs/guides/examples-postgres-todo.html)、[Hono](/docs/guides/examples-hono.html)、[Astro](/docs/guides/examples-astro.html)和[静态页面](/docs/guides/examples-static-site.html)的部署指南。
 
