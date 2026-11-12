@@ -1,0 +1,17 @@
+modules:
+  krun_worker_ingress:
+    prober: http
+    timeout: 5s
+    http:
+      valid_status_codes: [200]
+      follow_redirects: false
+      fail_if_not_ssl: true
+      preferred_ip_protocol: ip4
+      body_size_limit: 4KB
+      headers:
+        Cache-Control: no-cache
+      fail_if_header_not_matches:
+        - header: X-Krun-Version
+          regexp: '^[A-Za-z0-9_-]+$'
+      fail_if_body_not_matches_regexp:
+        - '^krun-ingress-ok$'

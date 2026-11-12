@@ -18,6 +18,83 @@ VictoriaMetrics 单节点版同时提供写入、存储和查询，集群版的 
 
 选择环境、比较版本和解读面板的步骤见 [Workers 观测](../../user-docs/src/content/docs/guides/workers-observability.md)。
 
+## 配置收敛与业务入口
+
+**Runtime configuration convergence** 按 serving Pod 显示本地配置是否在有效期内、是否应用了
+配置流最近报告的 head，以及当前 revision 的 ACK 是否在最近 10 秒内被控制面接受。
+`krun_runtime_config_revision_lag` 是已应用 revision 与配置流最近报告的 head 的差值。
+`krun_runtime_config_fresh` 和 `krun_runtime_config_sync_age_seconds` 用于定位配置断连。
+`krun_runtime_config_ack_current` 表示当前已应用 revision 的 ACK 是否仍有效。
+发布操作的 `available` 记录该次发布的 Runtime 确认。
+
+**Worker ingress probes** 每 30 秒通过配置的业务 HTTPS URL 请求专用 canary Worker。
+探测验证 DNS 和 TLS、HTTP 200、`X-Krun-Version` 及响应正文 `krun-ingress-ok`。
+出口视角取决于 vmagent 所在网络。为内网、办公网和公网分别验证时，在对应客户端网络运行采集器，
+使用该网络用户实际访问的域名。目标用 HTTPS URL 配置，保留标准证书验证。
+[Blackbox Exporter 探测配置](https://github.com/prometheus/blackbox_exporter/blob/v0.28.0/CONFIGURATION.md)
+
+Grafana 预置两条独立的告警。已发现的 Runtime Pod 持续 2 分钟未收敛或采集失败时告警。
+已配置的入口探测持续 1 分钟失败或采集失败时告警。若 vmagent 整体停采，面板会缺少新样本。
+采集链路存活和数据新鲜度由部署侧监控。外部通知使用部署方配置的
+[Grafana 联系点与通知策略](https://grafana.com/docs/grafana/latest/alerting/configure-notifications/)。
+
+### 配置业务 HTTPS 探测
+
+准备一个专用 Worker，选择代表待测客户端网络的网络配置和域名。需要已配置并有该 Worker 发布权限的
+krun CLI 会话。把 `ORG_ID`、`WORKER_ID` 和 `WORKER_INGRESS_URL` 换成目标组织、Worker ID
+和已绑定域名下的 HTTPS 路径。将 Worker 的响应声明为 `no-store`，使探测经过实际入口。
+
+```sh
+ORG_ID='replace-with-organization-id'
+WORKER_ID='replace-with-worker-id'
+WORKER_INGRESS_URL='https://canary.workers.example.com/health'
+CANARY_DIR="$(mktemp -d)"
+cat >"$CANARY_DIR/wrangler.json" <<'JSON'
+{"name":"ingress-canary","main":"index.js","compatibility_date":"2026-09-28"}
+JSON
+cat >"$CANARY_DIR/index.js" <<'JS'
+export default {
+  fetch(request) {
+    if (new URL(request.url).pathname !== "/health") {
+      return new Response("not found", { status: 404 });
+    }
+    return new Response("krun-ingress-ok", {
+      headers: { "Cache-Control": "no-store" },
+    });
+  },
+};
+JS
+krun deploy --org "$ORG_ID" --worker "$WORKER_ID" --env production --path "$CANARY_DIR"
+curl -fsS -D - "$WORKER_INGRESS_URL"
+```
+
+预期是 HTTP 200、响应头包含 `X-Krun-Version`、正文为 `krun-ingress-ok`。将该 URL 加入
+监控部署的 Kustomize overlay。以下命令从仓库根目录执行，需要 kubectl，并沿用上一步的
+`WORKER_INGRESS_URL`。将 `CONTEXT` 换成监控所在集群的 context。
+
+```sh
+CONTEXT='replace-context'
+OVERLAY="$(mktemp -d deploy/.observability-site-XXXXXX)"
+cat >"$OVERLAY/kustomization.yaml" <<'YAML'
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: krun-observability
+resources:
+  - ../observability
+configMapGenerator:
+  - name: vmagent-scrape
+    behavior: merge
+    files:
+      - ingress-targets.yaml
+YAML
+printf '%s\n' '- targets:' "    - '$WORKER_INGRESS_URL'" >"$OVERLAY/ingress-targets.yaml"
+kubectl --context "$CONTEXT" apply -k "$OVERLAY"
+kubectl --context "$CONTEXT" -n krun-observability rollout status deployment/vmagent --timeout=180s
+```
+
+在部署侧保存目标列表和 overlay，用于后续更新。目标 URL 会出现在指标标签中，使用无凭据的专用路径。
+默认目标列表为空，部署方填入目标后才开始探测。探测器只在 vmagent Pod 的 loopback 上监听。
+
 ## 在控制台嵌入 Worker 指标
 
 在 krun 主配置启用以下设置，并滚动重启控制面以加载配置。将 `https://grafana.example.com`
@@ -137,3 +214,20 @@ unset GRAFANA_PASSWORD
 
 直开 Grafana 成功而嵌入区域显示拒绝连接时，检查 Grafana 响应的 `X-Frame-Options` 和
 `frame-ancestors`，以及控制台响应的 `frame-src`。
+
+已配置业务探测时，从业务网络执行以下检查。第一条应返回 HTTP 200、`X-Krun-Version` 和
+`krun-ingress-ok`。第二条在两个采集周期后应输出 `1`。另开终端运行
+`kubectl --context "$CONTEXT" -n krun-observability port-forward service/victoria-metrics 8428:8428`。
+
+```sh
+curl -fsS -D - "$WORKER_INGRESS_URL"
+curl -fsSG http://127.0.0.1:8428/api/v1/query \
+  --data-urlencode "query=probe_success{job=\"krun-worker-ingress\",instance=\"$WORKER_INGRESS_URL\"}" |
+  jq -er '.data.result[0].value[1] | select(. == "1")'
+```
+
+| 指标现象 | 排查 |
+| --- | --- |
+| 配置收敛为 `0`，入口探测为 `1` | 检查 `krun_runtime_config_fresh`、`krun_runtime_config_revision_lag` 和 `krun_runtime_config_ack_current`。热路由可能仍处于短时断连窗口。 |
+| 配置收敛为 `1`，入口探测为 `0` | 检查 `probe_http_status_code`。值为 `0` 时查探测侧 DNS、TLS 和网络，HTTP 404 查业务域名与 Gateway 路由，HTTP 503 查 Gateway 后端和 Runtime。HTTP 200 时核对正文、响应头和 CDN 缓存。 |
+| 入口探测为空 | 检查 overlay 是否为 vmagent 配置了目标，并查询 `up{job="krun-worker-ingress"}`。有目标且为 `0` 时查同 Pod 的 blackbox-exporter 容器。 |

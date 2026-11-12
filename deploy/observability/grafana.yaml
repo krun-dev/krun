@@ -86,6 +86,9 @@ spec:
             - name: dashboards
               mountPath: /etc/grafana/provisioning/dashboards
               readOnly: true
+            - name: alerting
+              mountPath: /etc/grafana/provisioning/alerting
+              readOnly: true
             - name: workers-runtime
               mountPath: /etc/grafana/krun-dashboards
               readOnly: true
@@ -101,6 +104,9 @@ spec:
         - name: dashboards
           configMap:
             name: grafana-dashboards
+        - name: alerting
+          configMap:
+            name: grafana-alerting
         - name: workers-runtime
           configMap:
             name: grafana-workers-runtime

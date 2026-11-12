@@ -87,6 +87,26 @@ spec:
               readOnly: true
             - name: queue
               mountPath: /queue
+        - name: blackbox-exporter
+          image: prom/blackbox-exporter:v0.28.0
+          args:
+            - --config.file=/etc/krun-blackbox/blackbox.yaml
+            - --web.listen-address=127.0.0.1:9115
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: probe
+              mountPath: /etc/krun-blackbox
+              readOnly: true
       volumes:
         - name: scrape
           configMap:
@@ -94,6 +114,9 @@ spec:
         - name: queue
           emptyDir:
             sizeLimit: 1Gi
+        - name: probe
+          configMap:
+            name: vmagent-probe
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

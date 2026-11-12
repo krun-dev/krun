@@ -36,13 +36,45 @@
   },
   "panels": [
     {
+      "id": 12,
+      "title": "Runtime configuration convergence",
+      "description": "1 means the Pod applied the last configuration feed head and has a recent accepted ACK. 0 means it has yet to converge.",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "victoria-metrics" },
+      "fieldConfig": { "defaults": { "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "krun_runtime_config_converged{job=\"krun-worker-runtime\",namespace=~\"$namespace\",pod=~\"$pod\"}",
+          "legendFormat": "{{namespace}}/{{pod}}"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Worker ingress probes",
+      "description": "1 means the configured business HTTPS URL returned the expected canary response from the probe network.",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "victoria-metrics" },
+      "fieldConfig": { "defaults": { "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "probe_success{job=\"krun-worker-ingress\"}",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
       "id": 6,
       "title": "Business requests",
       "description": "Completed HTTP calls forwarded to business Workers, grouped by runtime pool. Direct static assets are excluded.",
       "type": "timeseries",
       "gridPos": {
         "x": 0,
-        "y": 0,
+        "y": 8,
         "w": 12,
         "h": 8
       },
@@ -72,7 +104,7 @@
       "type": "timeseries",
       "gridPos": {
         "x": 12,
-        "y": 0,
+        "y": 8,
         "w": 12,
         "h": 8
       },
@@ -103,7 +135,7 @@
       "type": "timeseries",
       "gridPos": {
         "x": 0,
-        "y": 8,
+        "y": 16,
         "w": 12,
         "h": 8
       },
@@ -143,7 +175,7 @@
       "type": "timeseries",
       "gridPos": {
         "x": 12,
-        "y": 8,
+        "y": 16,
         "w": 12,
         "h": 8
       },
@@ -173,7 +205,7 @@
       "type": "timeseries",
       "gridPos": {
         "x": 0,
-        "y": 16,
+        "y": 24,
         "w": 12,
         "h": 8
       },
@@ -203,7 +235,7 @@
       "type": "timeseries",
       "gridPos": {
         "x": 12,
-        "y": 16,
+        "y": 24,
         "w": 12,
         "h": 8
       },
@@ -231,7 +263,7 @@
       "title": "CPU usage",
       "description": "CPU time per second across the workerd container's cores.",
       "type": "timeseries",
-      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 32, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "victoria-metrics" },
       "fieldConfig": { "defaults": { "unit": "cores", "min": 0 }, "overrides": [] },
       "targets": [
@@ -247,7 +279,7 @@
       "title": "CPU throttled periods",
       "description": "Percentage of CFS periods in which the container was throttled. Requires a CPU quota.",
       "type": "timeseries",
-      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 32, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "victoria-metrics" },
       "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
       "targets": [
@@ -262,7 +294,7 @@
       "id": 3,
       "title": "Memory working set",
       "type": "timeseries",
-      "gridPos": { "x": 0, "y": 32, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 40, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "victoria-metrics" },
       "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 }, "overrides": [] },
       "targets": [
@@ -277,7 +309,7 @@
       "id": 4,
       "title": "Memory working set / limit",
       "type": "timeseries",
-      "gridPos": { "x": 12, "y": 32, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 40, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "victoria-metrics" },
       "fieldConfig": { "defaults": { "unit": "percent", "min": 0 }, "overrides": [] },
       "targets": [
@@ -293,7 +325,7 @@
       "title": "Scrape health",
       "description": "1 means the last scrape succeeded. Kubelet targets appear when node discovery succeeds.",
       "type": "timeseries",
-      "gridPos": { "x": 0, "y": 40, "w": 24, "h": 6 },
+      "gridPos": { "x": 0, "y": 48, "w": 24, "h": 6 },
       "datasource": { "type": "prometheus", "uid": "victoria-metrics" },
       "fieldConfig": { "defaults": { "min": 0, "max": 1, "decimals": 0 }, "overrides": [] },
       "targets": [
