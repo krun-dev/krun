@@ -9,7 +9,7 @@ const source = loadRuntimeSource();
 writeFileSync(
   join(directory, "entry.mjs"),
   source +
-    `export { bootstrapFromControl, applyBatch, resolveRoute, assetManifest, requireFreshConfig };
+    `export { bootstrapFromControl, applyBatch, resolveRoute, assetManifest, recordWorkerRequest };
 export const inspect = () => ({ view, versionRefs, routeVersions, manifests });
 `,
 );
@@ -139,6 +139,9 @@ try {
     Array.from({ length: 20 }, () => assets.assetManifest(assetEnv, { id: "hot" })),
   );
   assert.equal(assetCalls, 1);
+  const loadedVersion = { id: "loaded" };
+  const loadedManifest = await assets.assetManifest(assetEnv, loadedVersion);
+  assets.recordWorkerRequest(loadedVersion, {}, loadedManifest);
   for (let i = 0; i < 600; i++) {
     await assets.assetManifest(assetEnv, { id: `version-${i}` });
     await assets.assetManifest(assetEnv, { id: "hot" });
@@ -147,6 +150,10 @@ try {
   const callsBefore = assetCalls;
   await assets.assetManifest(assetEnv, { id: "hot" });
   assert.equal(assetCalls, callsBefore);
+  assert.equal(assets.inspect().manifests.has("\0loaded"), false);
+  assetEnv.PLATFORM.fetch = async () => new Response("unavailable", { status: 503 });
+  assert.equal(await assets.assetManifest(assetEnv, loadedVersion), loadedManifest);
+  await assert.rejects(assets.assetManifest(assetEnv, { id: "cold" }), /platform 503/);
   console.log("PASS single-flight manifest loading and LRU without whole-cache invalidation");
   const fallback = await fresh();
   const snapshot = {

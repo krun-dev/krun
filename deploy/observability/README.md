@@ -228,6 +228,6 @@ curl -fsSG http://127.0.0.1:8428/api/v1/query \
 
 | 指标现象 | 排查 |
 | --- | --- |
-| 配置收敛为 `0`，入口探测为 `1` | 检查 `krun_runtime_config_fresh`、`krun_runtime_config_revision_lag` 和 `krun_runtime_config_ack_current`。热路由可能仍处于短时断连窗口。 |
+| 配置收敛为 `0`，入口探测为 `1` | 检查 `krun_runtime_config_fresh`、`krun_runtime_config_revision_lag` 和 `krun_runtime_config_ack_current`。已加载的版本可以继续使用最后已确认的配置。 |
 | 配置收敛为 `1`，入口探测为 `0` | 检查 `probe_http_status_code`。值为 `0` 时查探测侧 DNS、TLS 和网络，HTTP 404 查业务域名与 Gateway 路由，HTTP 503 查 Gateway 后端和 Runtime。HTTP 200 时核对正文、响应头和 CDN 缓存。 |
 | 入口探测为空 | 检查 overlay 是否为 vmagent 配置了目标，并查询 `up{job="krun-worker-ingress"}`。有目标且为 `0` 时查同 Pod 的 blackbox-exporter 容器。 |
