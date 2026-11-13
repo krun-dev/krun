@@ -171,7 +171,8 @@ function platformFor(manifestConfig, fileList, rel, options = {}) {
           pool: "default",
           config_epoch: fixtureConfigEpoch,
           config_revision: revision,
-          routes: [override?.route ?? route],
+          routes: options.managedRoutes ? [] : [override?.route ?? route],
+          managed_routes: options.managedRoutes,
           versions: override?.versions ?? Object.fromEntries(versions),
         });
       }
@@ -292,6 +293,48 @@ async function check(name, run) {
     console.log("  FAIL " + name + " :: " + e.stack);
   }
 }
+await check(
+  "shared host dispatches to one Worker and preserves the request URL and response",
+  async () => {
+    const host = "shop.apps.test";
+    const web = { ...version, id: "rel-web", worker_id: "web" };
+    const api = { ...version, id: "rel-api", worker_id: "api" };
+    const rule = (target, path, enabled = true) => ({
+      host,
+      match: "prefix",
+      path,
+      worker_id: target.worker_id,
+      environment: "production",
+      enabled,
+      version: target.id,
+    });
+    const managedEnv = makeEnv(null, [], web.id, {
+      version: web,
+      versions: { [api.id]: api },
+      managedRoutes: [rule(web, "/"), rule(api, "/api"), rule(api, "/api/paused", false)],
+      workerResponse: (request) =>
+        Response.json(
+          { url: request.url },
+          { status: new URL(request.url).pathname.endsWith("/missing") ? 404 : 200 },
+        ),
+    });
+    const handler = new (await freshEntry()).Private(managedEnv, {});
+    const invoke = (path) => handler.fetch(new Request("https://" + host + path));
+    const original = "/api/orders?limit=1";
+    const result = await invoke(original);
+    assert.equal(result.headers.get("x-krun-version"), api.id);
+    assert.equal((await result.json()).url, "https://" + host + original);
+    const fallback = await invoke("/apix");
+    assert.equal(fallback.headers.get("x-krun-version"), web.id);
+    const missing = await invoke("/api/missing");
+    assert.equal(missing.status, 404);
+    assert.equal(missing.headers.get("x-krun-version"), api.id);
+    assert.equal((await invoke("/api/paused")).status, 410);
+    assert.equal((await invoke("/api%2fpaused")).status, 400);
+    assert.deepEqual(managedEnv.__workerResponses, ["/api/orders", "/apix", "/api/missing"]);
+  },
+);
+
 await check("run_worker_first positive hits the worker", async () => {
   const r = await call(handler, "/api/hello");
   assert.equal(r.status, 200);

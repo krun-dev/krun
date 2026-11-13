@@ -332,6 +332,24 @@ type RetainedAsset struct {
 	ExpiresAt      time.Time `bun:"expires_at"`
 }
 
+type Hostname struct {
+	bun.BaseModel `bun:"table:krun_worker_hostnames,alias:krun_worker_hostnames"`
+	Host          string `bun:"host,pk"`
+	OrgID         string `bun:"org_id"`
+	SuffixID      string `bun:"suffix_id"`
+	Revision      int    `bun:"revision"`
+	Retired       bool   `bun:"retired"`
+}
+
+type HostnameRoute struct {
+	bun.BaseModel `bun:"table:krun_worker_hostname_routes,alias:krun_worker_hostname_routes"`
+	Host          string `bun:"host,pk"`
+	MatchType     string `bun:"match_type,pk"`
+	Path          string `bun:"path,pk"`
+	WorkerID      string `bun:"worker_id"`
+	Enabled       bool   `bun:"enabled"`
+}
+
 type Bucket struct {
 	bun.BaseModel `bun:"table:krun_worker_buckets,alias:krun_worker_buckets"`
 	BucketID      string    `bun:"bucket_id,pk"`

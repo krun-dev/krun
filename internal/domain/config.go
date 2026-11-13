@@ -22,9 +22,17 @@ type EdgeConfigRoute struct {
 	Worker      string                  `json:"worker_id,omitempty"`
 	Host        string                  `json:"host"`
 	Path        string                  `json:"path,omitempty"`
+	Match       string                  `json:"match,omitempty"`
 	Enabled     bool                    `json:"enabled"`
 	Version     string                  `json:"version"`
 	Pool        string                  `json:"pool"`
+}
+
+func (r EdgeConfigRoute) Key() string {
+	if r.Match == "" {
+		return ""
+	}
+	return r.Match + ":" + r.Path
 }
 
 func (r EdgeConfigRoute) VersionIDs() []string {
@@ -47,11 +55,12 @@ type EdgeConfigProjection struct {
 }
 
 type EdgeConfigOp struct {
-	Type    string           `json:"type"`
-	Pool    string           `json:"pool"`
-	Host    string           `json:"host,omitempty"`
-	Route   *EdgeConfigRoute `json:"route,omitempty"`
-	Version *WorkerVersion   `json:"version,omitempty"`
+	Type     string           `json:"type"`
+	Pool     string           `json:"pool"`
+	Host     string           `json:"host,omitempty"`
+	RouteKey string           `json:"route_key,omitempty"`
+	Route    *EdgeConfigRoute `json:"route,omitempty"`
+	Version  *WorkerVersion   `json:"version,omitempty"`
 }
 
 type EdgeConfigRevision struct {

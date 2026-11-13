@@ -84,6 +84,7 @@ export default defineConfig({
                     "guides/workers-gradual-deployments",
                   ],
                 },
+                "guides/workers-hostnames",
                 "guides/workers-runtime-compatibility",
                 "guides/workers-observability",
               ],

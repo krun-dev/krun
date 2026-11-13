@@ -159,7 +159,9 @@ type WorkerDomain struct {
 	Default bool `json:"default"`
 	// StaticDomain overrides the static-asset host served through this domain's
 	// Gateway. Empty derives "static." + Domain.
-	StaticDomain string `json:"static_domain"`
+	StaticDomain      string   `json:"static_domain"`
+	ManagedSubdomains bool     `json:"managed_subdomains,omitempty"`
+	ReservedHosts     []string `json:"reserved_hosts,omitempty"`
 }
 
 type WorkerDatabaseEgress struct {

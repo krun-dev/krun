@@ -276,21 +276,23 @@ type WorkerAck struct {
 }
 
 type WorkerState struct {
-	Configurations   map[string]WorkerConfiguration
-	Buckets          map[string]WorkerBucket
-	Revision         int
-	Workers          map[string]Worker
-	Placements       map[string]WorkerPlacement
-	Builds           map[string]WorkerBuild
-	BuildPrivate     map[string]WorkerBuildPrivate
-	Artifacts        map[string]WorkerArtifact
-	Deployments      map[string]WorkerDeployment
-	Versions         map[string]WorkerVersion
-	Operations       map[string]WorkerOperation
-	OperationPrivate map[string]WorkerOperationPrivate
-	Histories        map[string][]WorkerHistory
-	Idempotency      map[string]WorkerIdempotency
-	SecretVersions   map[string]WorkerSecretVersion
+	ManagedHostnames  []ManagedHostname
+	ProjectionWorkers []string
+	Configurations    map[string]WorkerConfiguration
+	Buckets           map[string]WorkerBucket
+	Revision          int
+	Workers           map[string]Worker
+	Placements        map[string]WorkerPlacement
+	Builds            map[string]WorkerBuild
+	BuildPrivate      map[string]WorkerBuildPrivate
+	Artifacts         map[string]WorkerArtifact
+	Deployments       map[string]WorkerDeployment
+	Versions          map[string]WorkerVersion
+	Operations        map[string]WorkerOperation
+	OperationPrivate  map[string]WorkerOperationPrivate
+	Histories         map[string][]WorkerHistory
+	Idempotency       map[string]WorkerIdempotency
+	SecretVersions    map[string]WorkerSecretVersion
 }
 
 // WorkerScript is a protocol identity, not a mutable resource display name.

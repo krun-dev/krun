@@ -24,6 +24,12 @@ func preUploadDatabase(t *testing.T) (string, *pgxpool.Pool) {
 	t.Cleanup(store.Close)
 
 	if _, err := store.pool.Exec(ctx, `
+		DROP TABLE krun_worker_hostname_routes, krun_worker_hostnames;
+		ALTER TABLE worker_config_routes DROP CONSTRAINT worker_config_routes_pkey,
+			DROP COLUMN route_key, DROP COLUMN match_type, ADD PRIMARY KEY(host);
+		ALTER TABLE worker_config_ops DROP COLUMN route_key;
+		INSERT INTO worker_config_routes(host,pool,worker_id,shard,enabled,path)
+			VALUES('w-old-production.workers.example.com','default','old-worker','aa',true,'/');
 		ALTER TABLE krun_worker_build_private DROP COLUMN config_path;
 		ALTER TABLE krun_worker_operations DROP COLUMN claim_generation;
 		ALTER TABLE krun_worker_operations DROP COLUMN edge_pool;
@@ -91,6 +97,11 @@ func TestPostgresSchemaUpgradePreservesBuildAndCanRetry(t *testing.T) {
 	}
 	if actor != "old-user" || source != "retained-source" || configPath != "" {
 		t.Fatalf("unexpected migrated build: %q %q %q", actor, source, configPath)
+	}
+	var routeKey, path string
+	if err := pool.QueryRow(ctx, `SELECT route_key,path FROM worker_config_routes
+		WHERE host='w-old-production.workers.example.com'`).Scan(&routeKey, &path); err != nil || routeKey != "" || path != "/" {
+		t.Fatalf("system hostname changed: key=%q path=%q err=%v", routeKey, path, err)
 	}
 	if _, owned, err := store.ClaimOperation(ctx, "old-operation", "new-replica"); err != nil || !owned {
 		t.Fatalf("resume a validating operation from the old schema: owned=%t err=%v", owned, err)

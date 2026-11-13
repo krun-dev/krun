@@ -21,6 +21,7 @@ func (s *Store) ConfigRevisionsSince(ctx context.Context, since int64, limit int
 			revision.config_revision, revision.digest,
 			COALESCE((SELECT jsonb_agg((jsonb_build_object('type',op.op_type,'pool',op.pool)
                 || CASE WHEN op.host<>'' THEN jsonb_build_object('host',op.host) ELSE '{}'::jsonb END
+                || CASE WHEN op.route_key<>'' THEN jsonb_build_object('route_key',op.route_key) ELSE '{}'::jsonb END
                 || CASE op.op_type WHEN 'route_upsert' THEN jsonb_build_object('route',op.payload)
                    WHEN 'version_put' THEN jsonb_build_object('version',op.payload) ELSE '{}'::jsonb END
 			) ORDER BY op.ordinal) FROM worker_config_ops op

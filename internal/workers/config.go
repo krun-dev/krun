@@ -20,9 +20,10 @@ import (
 
 type EdgeConfigSnapshot struct {
 	domain.EdgeConfigCursor
-	Pool     string                          `json:"pool"`
-	Routes   []domain.EdgeConfigRoute        `json:"routes"`
-	Versions map[string]domain.WorkerVersion `json:"versions"`
+	ManagedRoutes []domain.EdgeConfigRoute        `json:"managed_routes,omitempty"`
+	Pool          string                          `json:"pool"`
+	Routes        []domain.EdgeConfigRoute        `json:"routes"`
+	Versions      map[string]domain.WorkerVersion `json:"versions"`
 }
 
 const (
@@ -55,6 +56,7 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 			placements[p.Worker] = p
 		}
 	}
+	managedTargets := map[string]domain.EdgeConfigRoute{}
 	for id, ws := range st.Workers.Workers {
 		resource, ok := st.Resources[id]
 		if !ok || resource.Kind != "worker" || resource.Organization != ws.Organization {
@@ -76,17 +78,22 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 			if name == "" {
 				continue
 			}
-			// One route per selected domain. The runtime matches purely on Host;
-			// the Gateway instance already decided which entry a request used.
-			for _, host := range hosts {
-				if expanded := EnvHostName(host, name); expanded != "" {
-					route := domain.EdgeConfigRoute{
-						WorkerGradualRelease: env.WorkerGradualRelease,
-						Worker:               id, Host: expanded, Path: "/", Enabled: env.Enabled,
-						Version: env.Version, Pool: pool, Environment: name, ScriptName: resource.Locator,
-						Public: publicWorkerHost(config, expanded), Retained: env.RetainedAssets,
+			systemRoute := domain.EdgeConfigRoute{
+				WorkerGradualRelease: env.WorkerGradualRelease,
+				Worker:               id, Path: "/", Enabled: env.Enabled, Version: env.Version, Pool: pool,
+				Environment: name, ScriptName: resource.Locator, Retained: env.RetainedAssets,
+			}
+			if name == appconfig.WorkerBaseline {
+				managedTargets[id] = systemRoute
+			}
+			if st.Workers.ProjectionWorkers == nil || slices.Contains(st.Workers.ProjectionWorkers, id) {
+				for _, host := range hosts {
+					if expanded := EnvHostName(host, name); expanded != "" {
+						route := systemRoute
+						route.Host = expanded
+						route.Public = publicWorkerHost(config, expanded)
+						out.Routes = append(out.Routes, route)
 					}
-					out.Routes = append(out.Routes, route)
 				}
 			}
 			if env.Version == "" {
@@ -104,7 +111,36 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 		}
 	}
 
+	for _, hostname := range st.Workers.ManagedHostnames {
+		suffix, ok := config.DomainForHost(hostname.Host)
+		if !ok || suffix.ID != hostname.SuffixID || hostname.Retired || config.ManagedHostReserved(hostname.Host) {
+			continue
+		}
+		pool, err := config.DomainRuntimePool(suffix.ID)
+		if err != nil {
+			continue
+		}
+		for _, rule := range hostname.Routes {
+			target := managedTargets[rule.Worker]
+			worker := st.Workers.Workers[rule.Worker]
+			if target.Pool != pool.ID || worker.Organization != hostname.Organization || !config.ManagedDomainAllowsWorker(suffix.ID, worker.NetworkProfile) {
+				// Retain the path when its target disappears; a broader route must
+				// not start handling this path just because a Worker was deleted.
+				target = domain.EdgeConfigRoute{Worker: rule.Worker, Pool: pool.ID}
+			}
+			target.Host = hostname.Host
+			target.Public = suffix.Access == "public"
+			target.Match = rule.Match
+			target.Path = rule.Path
+			target.Enabled = target.Enabled && rule.Enabled
+			out.Routes = append(out.Routes, target)
+		}
+	}
+
 	for _, deployment := range st.Workers.Deployments {
+		if st.Workers.ProjectionWorkers != nil && !slices.Contains(st.Workers.ProjectionWorkers, deployment.Worker) {
+			continue
+		}
 		if deployment.Committed == nil || !deployment.Expires.After(time.Now()) || deployment.Candidate != "" {
 			continue
 		}
@@ -129,7 +165,7 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 		}
 		out.Versions[version.ID] = runtimeVersionDescriptor(version)
 	}
-	sort.Slice(out.Routes, func(i, j int) bool { return out.Routes[i].Host < out.Routes[j].Host })
+	sort.Slice(out.Routes, func(i, j int) bool { return edgeRouteLess(out.Routes[i], out.Routes[j]) })
 	return out
 }
 
@@ -205,29 +241,45 @@ func SameWorkerConfigRoute(a, b domain.EdgeConfigRoute) bool {
 		return false
 	}
 	return a.WorkerGradualRelease == b.WorkerGradualRelease &&
-		a.Worker == b.Worker && a.Host == b.Host && a.Path == b.Path &&
+		a.Worker == b.Worker && a.Host == b.Host && a.Path == b.Path && a.Match == b.Match &&
 		a.Enabled == b.Enabled && a.Version == b.Version && a.Pool == b.Pool &&
 		a.ScriptName == b.ScriptName && a.Environment == b.Environment && a.Public == b.Public &&
 		reflect.DeepEqual(a.Expires, b.Expires)
+}
+
+func edgeRouteLess(a, b domain.EdgeConfigRoute) bool {
+	if a.Host != b.Host {
+		return a.Host < b.Host
+	}
+	return a.Key() < b.Key()
+}
+
+type configRouteKey struct {
+	host string
+	rule string
+}
+
+func routeIdentity(route domain.EdgeConfigRoute) configRouteKey {
+	return configRouteKey{host: route.Host, rule: route.Key()}
 }
 
 // diffWorkerConfig emits the ops needed to move a runtime from prev to next.
 // Version descriptors referenced by changed routes are always included, so a
 // runtime that pruned an unreferenced version can still apply a rollback.
 func DiffWorkerConfig(prev *domain.EdgeConfigProjection, next domain.EdgeConfigProjection) []domain.EdgeConfigOp {
-	prevRoutes := map[string]domain.EdgeConfigRoute{}
+	prevRoutes := map[configRouteKey]domain.EdgeConfigRoute{}
 	prevVersions := map[string]domain.WorkerVersion{}
 	if prev != nil {
 		for _, route := range prev.Routes {
-			prevRoutes[route.Host] = route
+			prevRoutes[routeIdentity(route)] = route
 		}
 		for id, version := range prev.Versions {
 			prevVersions[id] = version
 		}
 	}
-	nextRoutes := map[string]domain.EdgeConfigRoute{}
+	nextRoutes := map[configRouteKey]domain.EdgeConfigRoute{}
 	for _, route := range next.Routes {
-		nextRoutes[route.Host] = route
+		nextRoutes[routeIdentity(route)] = route
 	}
 	changedRoutes := []domain.EdgeConfigRoute{}
 	type PooledVersion struct {
@@ -241,7 +293,7 @@ func DiffWorkerConfig(prev *domain.EdgeConfigProjection, next domain.EdgeConfigP
 		}
 	}
 	for _, route := range next.Routes {
-		old, ok := prevRoutes[route.Host]
+		old, ok := prevRoutes[routeIdentity(route)]
 		if ok && SameWorkerConfigRoute(old, route) {
 			continue
 		}
@@ -259,37 +311,56 @@ func DiffWorkerConfig(prev *domain.EdgeConfigProjection, next domain.EdgeConfigP
 			}
 		}
 	}
-	deleted := []string{}
-	for host := range prevRoutes {
-		if _, ok := nextRoutes[host]; !ok {
-			deleted = append(deleted, host)
+	deleted := []domain.EdgeConfigRoute{}
+	for key, previous := range prevRoutes {
+		if current, ok := nextRoutes[key]; !ok || current.Pool != previous.Pool {
+			deleted = append(deleted, previous)
 		}
 	}
-	sort.Strings(deleted)
+	sort.Slice(deleted, func(i, j int) bool { return edgeRouteLess(deleted[i], deleted[j]) })
 	versionKeys := make([]string, 0, len(neededVersions))
 	for key := range neededVersions {
 		versionKeys = append(versionKeys, key)
 	}
 	sort.Strings(versionKeys)
-	sort.Slice(changedRoutes, func(i, j int) bool { return changedRoutes[i].Host < changedRoutes[j].Host })
+	sort.Slice(changedRoutes, func(i, j int) bool { return edgeRouteLess(changedRoutes[i], changedRoutes[j]) })
 	ops := make([]domain.EdgeConfigOp, 0, len(versionKeys)+len(changedRoutes)+len(deleted))
 	for _, key := range versionKeys {
 		item := neededVersions[key]
 		version := item.version
 		ops = append(ops, domain.EdgeConfigOp{Type: "version_put", Pool: item.pool, Version: &version})
 	}
+	for _, route := range deleted {
+		ops = append(ops, domain.EdgeConfigOp{Type: "route_delete", Pool: route.Pool, Host: route.Host, RouteKey: route.Key()})
+	}
 	for i := range changedRoutes {
 		route := changedRoutes[i]
-		ops = append(ops, domain.EdgeConfigOp{Type: "route_upsert", Pool: route.Pool, Host: route.Host, Route: &route})
-	}
-	for _, host := range deleted {
-		ops = append(ops, domain.EdgeConfigOp{Type: "route_delete", Pool: prevRoutes[host].Pool, Host: host})
+		ops = append(ops, domain.EdgeConfigOp{Type: "route_upsert", Pool: route.Pool, Host: route.Host, RouteKey: route.Key(), Route: &route})
 	}
 	return ops
 }
 
+// Keep managed rules separate on the wire. An older Runtime that only reads
+// routes cannot accidentally treat the first managed rule as a whole-host route.
+func NewEdgeConfigSnapshot(pool string, position domain.EdgeConfigCursor, projection domain.EdgeConfigProjection) EdgeConfigSnapshot {
+	snapshot := EdgeConfigSnapshot{
+		EdgeConfigCursor: position,
+		Pool:             pool,
+		Routes:           []domain.EdgeConfigRoute{},
+		Versions:         projection.Versions,
+	}
+	for _, route := range projection.Routes {
+		if route.Match == "" {
+			snapshot.Routes = append(snapshot.Routes, route)
+		} else {
+			snapshot.ManagedRoutes = append(snapshot.ManagedRoutes, route)
+		}
+	}
+	return snapshot
+}
+
 func EncodeWorkerConfigSnapshot(pool string, position domain.EdgeConfigCursor, p domain.EdgeConfigProjection) ([]byte, error) {
-	snapshot := EdgeConfigSnapshot{EdgeConfigCursor: position, Pool: pool, Routes: p.Routes, Versions: p.Versions}
+	snapshot := NewEdgeConfigSnapshot(pool, position, p)
 	raw, err := json.Marshal(snapshot)
 	if err != nil {
 		return nil, err

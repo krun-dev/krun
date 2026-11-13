@@ -59,14 +59,19 @@ func (s *Store) RuntimeConfigRoute(ctx context.Context, host, pool string) (doma
 	if err = tx.QueryRow(ctx, readConfigPosition).Scan(&position.Epoch, &position.Revision); err != nil {
 		return out, position, err
 	}
-	route, err := scanEdgeRoute(tx.QueryRow(ctx, "SELECT "+edgeRouteColumns+" FROM worker_config_routes r WHERE r.host=$1 AND r.pool=$2", host, pool))
-	if err == pgx.ErrNoRows {
-		return out, position, domain.NotFound()
-	}
+	rows, err := tx.Query(ctx, "SELECT "+edgeRouteColumns+" FROM worker_config_routes r WHERE r.host=$1 AND r.pool=$2 ORDER BY r.route_key", host, pool)
 	if err != nil {
 		return out, position, err
 	}
-	out.Routes = []domain.EdgeConfigRoute{route}
+	out.Routes, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.EdgeConfigRoute, error) {
+		return scanEdgeRoute(row)
+	})
+	if err != nil {
+		return out, position, err
+	}
+	if len(out.Routes) == 0 {
+		return out, position, domain.NotFound()
+	}
 	if err = readEdgeRouteVersions(ctx, tx, pool, out.Routes, out.Versions); err != nil {
 		return out, position, err
 	}

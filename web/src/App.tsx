@@ -998,6 +998,7 @@ export default function App() {
                 base={resourceBase}
                 detail={detailNavigation}
                 canCreate={permissions?.actions["worker.create"] === true}
+                canReadHostnames={permissions?.actions["worker.hostname.read"] === true}
                 notify={notify}
               />
             )

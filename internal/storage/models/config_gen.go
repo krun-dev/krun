@@ -17,6 +17,8 @@ type ConfigRevision struct {
 
 type ConfigRoute struct {
 	bun.BaseModel      `bun:"table:worker_config_routes,alias:worker_config_routes"`
+	RouteKey           string          `bun:"route_key,pk"`
+	MatchType          string          `bun:"match_type"`
 	ScriptName         string          `bun:"script_name"`
 	EnvName            string          `bun:"env_name"`
 	Public             bool            `bun:"public"`
@@ -47,6 +49,7 @@ type ConfigOp struct {
 	Pool           string          `bun:"pool"`
 	OpType         string          `bun:"op_type"`
 	Host           string          `bun:"host"`
+	RouteKey       string          `bun:"route_key"`
 	VersionID      string          `bun:"version_id"`
 	Payload        json.RawMessage `bun:"payload,type:jsonb"`
 }

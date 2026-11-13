@@ -21,6 +21,81 @@ const environment = (fetch) => ({
   PLATFORM: { fetch },
 });
 try {
+  const shared = await fresh();
+  const sharedHost = "shop.apps.test";
+  let revision = 1;
+  let reads = 0;
+  const sharedEnv = environment(async (request) => {
+    const url = new URL(request.url);
+    const head = { pool: "default", config_epoch: fixtureConfigEpoch, config_revision: revision };
+    if (url.pathname.endsWith("/config/snapshot")) {
+      return Response.json({ ...head, lazy_routes: true });
+    }
+    reads++;
+    const rules = [
+      { match: "prefix", path: "/", version: "web" },
+      { match: "prefix", path: "/api", version: "api" },
+      { match: "prefix", path: "/api/admin", version: "admin" },
+      { match: "exact", path: "/api/health", version: "health" },
+    ];
+    return Response.json({
+      ...head,
+      managed_routes: rules.map((rule) => ({
+        ...rule,
+        host: sharedHost,
+        enabled: !(revision === 2 && rule.version === "api"),
+      })),
+      versions: Object.fromEntries(rules.map(({ version }) => [version, { id: version }])),
+    });
+  });
+  await shared.bootstrapFromControl(sharedEnv);
+  const match = (path) =>
+    shared.resolveRoute(sharedEnv, sharedHost, new URL("https://" + sharedHost + path));
+  assert.equal((await match("/apix")).version, "web");
+  assert.equal((await match("/api")).version, "api");
+  assert.equal((await match("/api/")).version, "api");
+  assert.equal((await match("/api/orders?active=1")).version, "api");
+  assert.equal((await match("/api/admin/users")).version, "admin");
+  assert.equal((await match("/%61pi/health?full=1")).version, "health");
+  assert.equal((await match("/api/health/")).version, "api");
+  assert.deepEqual(await match("/api%2Forders"), { invalidPath: true });
+  assert.equal(
+    await shared.resolveRoute(sharedEnv, sharedHost),
+    null,
+    "internal service uses only generated hosts",
+  );
+  assert.equal(reads, 1, "all paths share a single cache key");
+  revision = 2;
+  assert(
+    shared.applyBatch({
+      config_epoch: fixtureConfigEpoch,
+      from: 1,
+      to: 2,
+      ops: [
+        {
+          type: "route_upsert",
+          host: sharedHost,
+          route_key: "prefix:/api",
+          route: {
+            host: sharedHost,
+            match: "prefix",
+            path: "/api",
+            enabled: false,
+            version: "api",
+          },
+        },
+      ],
+    }),
+  );
+  assert.equal(
+    (await match("/api/orders")).enabled,
+    false,
+    "a disabled rule still wins over the root",
+  );
+  assert.equal((await match("/")).version, "web");
+  assert.equal(reads, 2, "a managed delta replaces the entire cached hostname");
+  console.log("PASS managed host path selection and revision refresh");
+
   const lazy = await fresh();
   let requests = 0;
   const env = environment(async (request) => {

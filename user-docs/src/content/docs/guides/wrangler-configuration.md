@@ -72,7 +72,7 @@ Secret 通过 krun 控制台或 `wrangler secret put` 设置，不写入配置�
 | --- | --- |
 | `kv_namespaces`、`d1_databases`、`durable_objects`、`queues` | 不支持相应 binding；构建能保留类导出不代表提供 Durable Objects 服务 |
 | `triggers.crons` | 不支持定时触发器，Worker 当前以 HTTP 请求入口运行 |
-| `route`、`routes`、Cloudflare Zone / 自定义域名 | 不调用 Cloudflare 路由或域名接口；通过 krun 管理 Worker 域名 |
+| `route`、`routes`、Cloudflare Zone / 自定义域名 | 不调用 Cloudflare 路由或域名接口；参见 [自定义子域名与路径路由](/docs/guides/workers-hostnames.html) |
 | `workers_dev`、`preview_urls` | 不作为 krun 托管地址的开关；使用 krun 返回的部署或预览地址，当前不支持通过兼容接口关闭托管 URL |
 | `observability`、`tail_consumers` | 不提供 Cloudflare 日志、tail 或观测服务 |
 | Python、Rust 构建、legacy Service Worker、Containers | 不在当前模块 Worker 构建与运行范围内 |

@@ -265,5 +265,17 @@
   "Repository listing is temporarily unavailable; retry": "仓库列表暂时不可用，请重试。",
   "Repository authorization changed; retry the request": "仓库授权已变更，请重试。",
   "krun retention cleanup failed:": "krun 数据保留期清理失败：",
-  "Use a relative project directory": "请填写相对项目目录"
+  "Use a relative project directory": "请填写相对项目目录",
+  "Hostname is unavailable": "该域名不可用",
+  "Hostname configuration changed": "域名配置已变更",
+  "Choose a suffix that supports managed subdomains": "请选择已开放自定义子域名的后缀",
+  "Use a single DNS label of 1–63 ASCII letters, digits or hyphens": "前缀必须是 1–63 个 ASCII 字母、数字或连字符组成的单个 DNS 标签",
+  "Use an exact or prefix match and an absolute path with unreserved characters": "请选择精确或前缀匹配，并填写仅含非保留字符的绝对路径",
+  "Dot segments are not allowed": "路径不能包含 . 或 .. 路径段",
+  "A route already uses this match and path": "同一匹配方式与路径已存在",
+  "The Worker network cannot use this suffix": "目标 Worker 的网络无法使用此后缀",
+  "Choose a Worker in this organization": "请选择本组织的 Worker",
+  "A positive expected_revision is required": "必须提供正整数 expected_revision",
+  "A hostname supports at most 64 routes": "一个域名最多支持 64 条路由",
+  "Provide routes explicitly; use [] to remove all routes": "请提供 routes；移除所有规则时传入 []"
 }

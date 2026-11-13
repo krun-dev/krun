@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/krun-dev/krun/internal/domain"
 )
 
@@ -101,16 +102,22 @@ func applyWorkerConfigOps(ctx context.Context, tx pgx.Tx, revision int64, ops []
 			versionID = route.Version
 			payload, err = json.Marshal(route)
 			batch.Queue(`
-				INSERT INTO worker_config_routes(host, pool, path, enabled, version_id, worker_id, shard, expires_at, candidate_version_id, candidate_weight, script_name, env_name, public, retained_versions)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE(NULLIF($14::jsonb,'null'::jsonb),'[]'::jsonb))
-				ON CONFLICT (host) DO UPDATE SET
+				INSERT INTO worker_config_routes(host, pool, path, enabled, version_id, worker_id, shard, expires_at, candidate_version_id, candidate_weight, script_name, env_name, public, retained_versions, route_key, match_type)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE(NULLIF($14::jsonb,'null'::jsonb),'[]'::jsonb), $15, $16)
+				ON CONFLICT (host, route_key) DO UPDATE SET
 					pool=excluded.pool, path=excluded.path, enabled=excluded.enabled,
 					version_id=excluded.version_id, worker_id=excluded.worker_id, shard=excluded.shard, expires_at=excluded.expires_at,
 					candidate_version_id=excluded.candidate_version_id, candidate_weight=excluded.candidate_weight,
-					script_name=excluded.script_name, env_name=excluded.env_name, public=excluded.public, retained_versions=excluded.retained_versions`,
-				op.Host, op.Pool, route.Path, route.Enabled, versionID, route.Worker, bytesDigest([]byte(op.Host))[:2], route.Expires, route.Candidate, route.CandidateWeight, route.ScriptName, route.Environment, route.Public, route.Retained)
+					script_name=excluded.script_name, env_name=excluded.env_name, public=excluded.public, retained_versions=excluded.retained_versions
+				WHERE worker_config_routes.worker_id=excluded.worker_id OR excluded.route_key<>''`,
+				op.Host, op.Pool, route.Path, route.Enabled, versionID, route.Worker, bytesDigest([]byte(op.Host))[:2], route.Expires, route.Candidate, route.CandidateWeight, route.ScriptName, route.Environment, route.Public, route.Retained, op.RouteKey, route.Match).Exec(func(tag pgconn.CommandTag) error {
+				if tag.RowsAffected() != 1 {
+					return fmt.Errorf("host %s is already assigned to another system target", op.Host)
+				}
+				return nil
+			})
 		case "route_delete":
-			batch.Queue(`DELETE FROM worker_config_routes WHERE host=$1`, op.Host)
+			batch.Queue(`DELETE FROM worker_config_routes WHERE host=$1 AND route_key=$2 AND pool=$3`, op.Host, op.RouteKey, op.Pool)
 		default:
 			return fmt.Errorf("config op %d: unknown type %q", ordinal, op.Type)
 		}
@@ -118,9 +125,9 @@ func applyWorkerConfigOps(ctx context.Context, tx pgx.Tx, revision int64, ops []
 			return fmt.Errorf("encode config op %d: %w", ordinal, err)
 		}
 		batch.Queue(`
-			INSERT INTO worker_config_ops(config_revision, ordinal, pool, op_type, host, version_id, payload)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-			revision, ordinal, op.Pool, op.Type, op.Host, versionID, payload)
+			INSERT INTO worker_config_ops(config_revision, ordinal, pool, op_type, host, version_id, payload, route_key)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			revision, ordinal, op.Pool, op.Type, op.Host, versionID, payload, op.RouteKey)
 	}
 	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
 		return fmt.Errorf("apply config operations: %w", err)

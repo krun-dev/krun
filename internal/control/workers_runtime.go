@@ -206,7 +206,7 @@ func (s *Server) workerRuntimeAssetCredentials(w http.ResponseWriter, r *http.Re
 	s.json(w, 200, runtimeclient.ReadGrantPayload(grant))
 }
 
-// A cold host resolves exactly one normalized route and immutable version.
+// A cold host resolves its complete set of rules and version descriptors.
 func (s *Server) workerRuntimeConfigRoute(w http.ResponseWriter, r *http.Request) {
 	pool, allowed := s.workerRuntimePool(r)
 	if !allowed {

@@ -929,7 +929,9 @@ function applyBatch(batch) {
     } else if (
       (op.type !== "route_upsert" && op.type !== "route_delete") ||
       !op.host ||
-      (op.type === "route_upsert" && op.route?.host !== op.host)
+      (op.type === "route_upsert" &&
+        (op.route?.host !== op.host ||
+          (op.route.match ? op.route.match + ":" + op.route.path : "") !== (op.route_key || "")))
     ) {
       throw new Error("invalid config op " + op.type);
     }
@@ -943,7 +945,7 @@ function applyBatch(batch) {
     if (!view.routes.has(host) || (routeVersions.get(host) || 0) > revision) {
       continue;
     }
-    if (op.type === "route_upsert") {
+    if (!op.route_key && op.type === "route_upsert") {
       updates.set(
         op,
         routeVersionDescriptors(op.route, (id) => supplied.get(id) || view.versions.get(id)),
@@ -962,6 +964,11 @@ function applyBatch(batch) {
     const old = view.routes.get(host);
     routeMisses.delete(host);
     if (!old || (routeVersions.get(host) || 0) > revision) {
+      continue;
+    }
+    if (op.route_key) {
+      // Reload the complete host at one revision, including unchanged paths.
+      forgetRoute(host);
       continue;
     }
     unreferenceRoute(old);
@@ -987,12 +994,48 @@ function forgetRoute(host) {
   view.routes.delete(host);
   routeVersions.delete(host);
 
-  if (route) {
-    unreferenceRoute(route);
+  for (const entry of Array.isArray(route) ? route : route ? [route] : []) {
+    unreferenceRoute(entry);
   }
 }
 
-async function resolveRoute(env, host) {
+function matchManagedPath(routes, url) {
+  const raw = url.pathname;
+  if (/\/\/|%(?![0-9a-f]{2})|%(?:2f|5c|25|0[0-9a-f]|1[0-9a-f]|7f)/i.test(raw)) {
+    return { invalidPath: true };
+  }
+  const path = raw.replace(/%([0-9a-f]{2})/gi, (escape, hex) => {
+    const character = String.fromCharCode(parseInt(hex, 16));
+    return /^[a-z0-9._~-]$/i.test(character) ? character : escape.toUpperCase();
+  });
+  if (path.split("/").some((segment) => segment === "." || segment === "..")) {
+    return { invalidPath: true };
+  }
+  let best = null;
+  for (const route of routes) {
+    if (route.match === "exact" && path === route.path) {
+      return route;
+    }
+    if (
+      route.match === "prefix" &&
+      (route.path === "/" || path === route.path || path.startsWith(route.path + "/")) &&
+      (!best || route.path.length > best.path.length)
+    ) {
+      best = route;
+    }
+  }
+  return best;
+}
+
+async function resolveRoute(env, host, url) {
+  const routes = await resolveHostRoutes(env, host);
+  if (!Array.isArray(routes)) {
+    return routes;
+  }
+  return url ? matchManagedPath(routes, url) : null;
+}
+
+async function resolveHostRoutes(env, host) {
   const cached = view.routes.get(host);
 
   if (cached) {
@@ -1105,26 +1148,38 @@ async function resolveRoute(env, host) {
         throw new Error("route lookup revision is stale");
       }
 
-      const route = (snapshot.routes || []).find((r) => r.host === host);
+      const routes = [...(snapshot.routes || []), ...(snapshot.managed_routes || [])].filter(
+        (route) => route.host === host,
+      );
 
-      if (!route) {
+      if (routes.length === 0) {
         lruPut(routeMisses, host, Date.now() + 2000, 1024);
 
         return null;
       }
 
-      const descriptors = routeVersionDescriptors(route, (id) => snapshot.versions?.[id]);
+      const managed = routes.every(
+        (route) =>
+          (route.match === "exact" || route.match === "prefix") && route.path?.startsWith("/"),
+      );
+      if (!managed && (routes.length !== 1 || routes[0].match)) {
+        throw new Error("invalid host route set");
+      }
+      const descriptors = routes.map((route) =>
+        routeVersionDescriptors(route, (id) => snapshot.versions?.[id]),
+      );
+      const value = managed ? routes : routes[0];
 
       forgetRoute(host);
-      view.routes.set(host, route);
+      view.routes.set(host, value);
       routeVersions.set(host, snapshot.config_revision);
-      referenceRoute(route, descriptors);
+      routes.forEach((route, index) => referenceRoute(route, descriptors[index]));
 
       while (view.routes.size > ROUTE_CACHE_MAX) {
         forgetRoute(view.routes.keys().next().value);
       }
 
-      return route;
+      return value;
     }
 
     throw new Error("route changed during cold lookup");
@@ -2331,7 +2386,13 @@ async function historicalAssetResponse(env, route, selected, request, url, epoch
   ) {
     return null;
   }
-  const updated = latest.routes?.find((item) => item.host === route.host);
+  const matching =
+    (route.match ? latest.managed_routes : latest.routes)?.filter(
+      (item) => item.host === route.host,
+    ) || [];
+  const updated = route.match
+    ? matchManagedPath(matching, url)
+    : matching.find((item) => !item.match);
   if (
     !updated?.enabled ||
     updated.worker_id !== route.worker_id ||
@@ -2363,7 +2424,7 @@ async function serveWorkerRequest(
   const verification = request.headers.get(verifyAuthorization);
   if (override !== null) {
     const credential = verification ?? request.headers.get("authorization");
-    if (!credential) {
+    if (!credential || route.match) {
       return withoutSharedCache(json({ error: "version override denied" }, 403));
     }
     const result = await platformResponse(env, "/version-overrides/authorize", {
@@ -2526,9 +2587,12 @@ export class Private extends WorkerEntrypoint {
         return response;
       }
 
-      const route = await resolveRoute(this.env, url.hostname.toLowerCase());
+      const route = await resolveRoute(this.env, url.hostname.toLowerCase(), url);
       requireFreshConfig(epoch);
 
+      if (route?.invalidPath) {
+        return json({ error: "invalid path" }, 400);
+      }
       if (!route) {
         return json({ error: "unknown route" }, 404);
       }
