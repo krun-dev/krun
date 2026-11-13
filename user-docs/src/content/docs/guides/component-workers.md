@@ -28,8 +28,9 @@ export default {
 | 版本元数据 | `env.VERSION` | 配置后可读取 `id`、`tag`、`timestamp` |
 | 静态资产 | `env.ASSETS.fetch(request)` | 读取当前版本打包的静态文件；需配置 `assets.binding` |
 | R2 桶 | `env.BUCKET` | 需配置 `r2_buckets` 并绑定已启用的逻辑桶；方法见 [对象存储](/docs/guides/component-object-storage.html) |
+| 服务绑定 | `env.SERVICE.fetch(request)` | 调用同一组织内目标 Worker 的默认 HTTP 入口。Wrangler 使用 `services` 配置并跟随目标部署。 [Wrangler 配置兼容范围](/docs/guides/wrangler-configuration.html) |
 
-这些名称只是示例，实际名称由项目或环境配置决定。不要使用 KV、D1、Durable Objects、Queue 或 Service binding，也不要假设未列出的 binding 可用。
+这些名称只是示例，实际名称由项目或环境配置决定。
 
 ## Cache API
 
@@ -39,9 +40,13 @@ export default {
 
 ## 构建和发布
 
-支持 Wrangler 配置、JavaScript/TypeScript 模块、静态资产和已配置的自定义构建。在 **构建与发布 → 部署项目** 选择 **Git 仓库** 或 **上传部署**。指南包含适用场景、控制台与 CLI 步骤，以及验证发布的方法。[部署项目](/docs/guides/deploy-project.html)
+支持 Wrangler 配置、JavaScript/TypeScript 模块、静态资产和已配置的自定义构建。在 **构建 → 部署项目** 选择 **Git 仓库** 或 **上传部署**。指南包含适用场景、控制台与 CLI 步骤，以及验证发布的方法。[部署项目](/docs/guides/deploy-project.html)
 
 如需限定编码 Agent 的使用范围，参照 [Workers 代码兼容范围](/docs/guides/workers-runtime-compatibility.html)。
+
+### 灰度发布
+
+同一个 Worker 环境可以让两个版本按百分比分担同一域名的流量。先保存候选版本，再从 0% 定向验证开始，确认后逐步加量。控制台、krun CLI 和 Wrangler 共用发布记录。[灰度发布操作指南](/docs/guides/workers-gradual-deployments.html)
 
 发布后可以从 Worker 详情的「指标」页查看请求数、HTTP 5xx 比例和响应延迟，并比较不同环境及版本。操作步骤见 [Workers 观测](/docs/guides/workers-observability.html)。
 
@@ -52,7 +57,7 @@ export default {
 Secret 引用一起保存；保存不会改变当前运行。
 
 选择配置后点击「发布并生效」，复用当前代码制品并确认发布。恢复旧配置也使用当前代码；
-要连同代码回滚，请使用「版本与部署」。首次部署需先完成一次构建，再选择该构建发布。
+要连同代码回滚，请使用「版本与流量」。首次部署需先完成一次构建，再选择该构建发布。
 当前生效标记会在运行时确认后更新。非活动配置历史保留 30 天，当前和发布中的配置继续保留。
 
 「环境管理 → 创建预览环境 → 新建预览默认配置」只决定之后新建 Preview 的初始值，已有环境各自独立。

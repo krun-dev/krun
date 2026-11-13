@@ -16,15 +16,21 @@ type ConfigRevision struct {
 }
 
 type ConfigRoute struct {
-	bun.BaseModel `bun:"table:worker_config_routes,alias:worker_config_routes"`
-	ExpiresAt     *time.Time `bun:"expires_at"`
-	WorkerID      string     `bun:"worker_id"`
-	Shard         string     `bun:"shard"`
-	Host          string     `bun:"host,pk"`
-	Pool          string     `bun:"pool"`
-	Path          string     `bun:"path"`
-	Enabled       bool       `bun:"enabled"`
-	VersionID     string     `bun:"version_id"`
+	bun.BaseModel      `bun:"table:worker_config_routes,alias:worker_config_routes"`
+	ScriptName         string          `bun:"script_name"`
+	EnvName            string          `bun:"env_name"`
+	Public             bool            `bun:"public"`
+	RetainedVersions   json.RawMessage `bun:"retained_versions,type:jsonb"`
+	CandidateVersionID string          `bun:"candidate_version_id"`
+	CandidateWeight    int             `bun:"candidate_weight"`
+	ExpiresAt          *time.Time      `bun:"expires_at"`
+	WorkerID           string          `bun:"worker_id"`
+	Shard              string          `bun:"shard"`
+	Host               string          `bun:"host,pk"`
+	Pool               string          `bun:"pool"`
+	Path               string          `bun:"path"`
+	Enabled            bool            `bun:"enabled"`
+	VersionID          string          `bun:"version_id"`
 }
 
 type ConfigVersion struct {

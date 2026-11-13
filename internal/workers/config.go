@@ -6,8 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"reflect"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	objectstore "github.com/krun-dev/krun/internal/adapters/objectstore"
@@ -77,20 +80,32 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 			// the Gateway instance already decided which entry a request used.
 			for _, host := range hosts {
 				if expanded := EnvHostName(host, name); expanded != "" {
-					out.Routes = append(out.Routes, domain.EdgeConfigRoute{Worker: id, Host: expanded, Path: "/", Enabled: env.Enabled, Version: env.Version, Pool: pool})
+					route := domain.EdgeConfigRoute{
+						WorkerGradualRelease: env.WorkerGradualRelease,
+						Worker:               id, Host: expanded, Path: "/", Enabled: env.Enabled,
+						Version: env.Version, Pool: pool, Environment: name, ScriptName: resource.Locator,
+						Public: publicWorkerHost(config, expanded), Retained: env.RetainedAssets,
+					}
+					out.Routes = append(out.Routes, route)
 				}
 			}
 			if env.Version == "" {
 				continue
 			}
-			if version, ok := st.Workers.Versions[env.Version]; ok && version.Worker == id && version.Organization == ws.Organization {
-				out.Versions[version.ID] = version
+			targets := []string{env.Version, env.Candidate}
+			for _, item := range env.RetainedAssets {
+				targets = append(targets, item.Version)
+			}
+			for _, target := range targets {
+				if version, ok := st.Workers.Versions[target]; ok && version.Worker == id && version.Organization == ws.Organization {
+					out.Versions[version.ID] = runtimeVersionDescriptor(version)
+				}
 			}
 		}
 	}
 
 	for _, deployment := range st.Workers.Deployments {
-		if deployment.Committed == nil || !deployment.Expires.After(time.Now()) {
+		if deployment.Committed == nil || !deployment.Expires.After(time.Now()) || deployment.Candidate != "" {
 			continue
 		}
 		worker, ok := st.Workers.Workers[deployment.Worker]
@@ -112,10 +127,19 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 		for _, host := range DeploymentHosts(config, worker, deployment.ID) {
 			out.Routes = append(out.Routes, domain.EdgeConfigRoute{Worker: worker.Worker, Host: host, Path: "/", Expires: &deployment.Expires, Enabled: env.Enabled, Version: version.ID, Pool: placement.Pool})
 		}
-		out.Versions[version.ID] = version
+		out.Versions[version.ID] = runtimeVersionDescriptor(version)
 	}
 	sort.Slice(out.Routes, func(i, j int) bool { return out.Routes[i].Host < out.Routes[j].Host })
 	return out
+}
+
+func runtimeVersionDescriptor(version domain.WorkerVersion) domain.WorkerVersion {
+	version.ServiceBindings = maps.Clone(version.ServiceBindings)
+	for name, binding := range version.ServiceBindings {
+		binding.GrantedBy = nil
+		version.ServiceBindings[name] = binding
+	}
+	return version
 }
 
 func EdgeConfigOpsForPool(in []domain.EdgeConfigOp, pool string) []domain.EdgeConfigOp {
@@ -167,7 +191,25 @@ func EnvHostName(pattern, env string) string {
 	return ""
 }
 
-func SameWorkerConfigRoute(a, b domain.EdgeConfigRoute) bool { return a == b }
+func publicWorkerHost(config *appconfig.WorkersConfig, host string) bool {
+	for _, d := range config.Domains {
+		if _, suffix, ok := strings.Cut(host, "."); ok && suffix == d.Domain {
+			return d.Access == "public"
+		}
+	}
+	return false
+}
+
+func SameWorkerConfigRoute(a, b domain.EdgeConfigRoute) bool {
+	if !slices.Equal(a.Retained, b.Retained) {
+		return false
+	}
+	return a.WorkerGradualRelease == b.WorkerGradualRelease &&
+		a.Worker == b.Worker && a.Host == b.Host && a.Path == b.Path &&
+		a.Enabled == b.Enabled && a.Version == b.Version && a.Pool == b.Pool &&
+		a.ScriptName == b.ScriptName && a.Environment == b.Environment && a.Public == b.Public &&
+		reflect.DeepEqual(a.Expires, b.Expires)
+}
 
 // diffWorkerConfig emits the ops needed to move a runtime from prev to next.
 // Version descriptors referenced by changed routes are always included, so a
@@ -204,14 +246,14 @@ func DiffWorkerConfig(prev *domain.EdgeConfigProjection, next domain.EdgeConfigP
 			continue
 		}
 		changedRoutes = append(changedRoutes, route)
-		if route.Version != "" {
-			addVersion(route.Pool, route.Version)
+		for _, id := range route.VersionIDs() {
+			addVersion(route.Pool, id)
 		}
 	}
 	for id, version := range next.Versions {
 		if old, ok := prevVersions[id]; !ok || !reflect.DeepEqual(old, version) {
 			for _, route := range next.Routes {
-				if route.Version == id {
+				if slices.Contains(route.VersionIDs(), id) {
 					addVersion(route.Pool, id)
 				}
 			}

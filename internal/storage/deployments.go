@@ -18,9 +18,10 @@ func writeDeployments(ctx context.Context, tx pgx.Tx, before, after *domain.Work
 			}
 			continue
 		}
-		tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_deployments(deployment_id,org_id,worker_id,env_name,version_id,operation_id,created_at,expires_at)
-   SELECT $1,$2,$3,$4,$5,$6,$7,$8 WHERE EXISTS(SELECT 1 FROM krun_worker_versions WHERE version_id=$5 AND org_id=$2 AND worker_id=$3 AND env_name=$4)
-   ON CONFLICT(deployment_id) DO NOTHING`, id, d.Organization, d.Worker, d.Environment, d.Version, d.Operation, d.Created, d.Expires)
+		tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_deployments(deployment_id,org_id,worker_id,env_name,version_id,operation_id,created_at,expires_at,candidate_version_id,candidate_weight,message)
+   SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11 WHERE EXISTS(SELECT 1 FROM krun_worker_versions WHERE version_id=$5 AND org_id=$2 AND worker_id=$3 AND env_name=$4)
+   AND ($9='' OR EXISTS(SELECT 1 FROM krun_worker_versions WHERE version_id=$9 AND org_id=$2 AND worker_id=$3 AND env_name=$4))
+   ON CONFLICT(deployment_id) DO NOTHING`, id, d.Organization, d.Worker, d.Environment, d.Version, d.Operation, d.Created, d.Expires, d.Candidate, d.CandidateWeight, d.Message)
 		if err != nil {
 			return err
 		}
@@ -41,7 +42,7 @@ func readWorkerDeployments(results pgx.BatchResults, st *domain.State) error {
 func readDeploymentRows(rows pgx.Rows, state *domain.WorkerState) error {
 	for rows.Next() {
 		var d domain.WorkerDeployment
-		if err := rows.Scan(&d.ID, &d.Organization, &d.Worker, &d.Environment, &d.Version, &d.Operation, &d.Created, &d.Expires, &d.Committed); err != nil {
+		if err := rows.Scan(&d.ID, &d.Organization, &d.Worker, &d.Environment, &d.Version, &d.Operation, &d.Created, &d.Expires, &d.Committed, &d.Candidate, &d.CandidateWeight, &d.Message); err != nil {
 			return err
 		}
 		state.Deployments[d.ID] = d
@@ -56,5 +57,5 @@ func sameDeployment(a, b domain.WorkerDeployment) bool {
 	if a.Committed != nil && !a.Committed.Equal(*b.Committed) {
 		return false
 	}
-	return a.ID == b.ID && a.Organization == b.Organization && a.Worker == b.Worker && a.Environment == b.Environment && a.Version == b.Version && a.Operation == b.Operation && a.Created.Equal(b.Created) && a.Expires.Equal(b.Expires)
+	return a.WorkerGradualRelease == b.WorkerGradualRelease && a.Message == b.Message && a.ID == b.ID && a.Organization == b.Organization && a.Worker == b.Worker && a.Environment == b.Environment && a.Version == b.Version && a.Operation == b.Operation && a.Created.Equal(b.Created) && a.Expires.Equal(b.Expires)
 }

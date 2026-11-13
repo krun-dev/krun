@@ -3,7 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts --omit=dev
-COPY entry.js assets.js storage.js cache.js ./
+COPY entry.js assets.js storage.js cache.js service.js ./
 COPY storage ./storage
 USER 1000:1000
 # The workerd launcher selects the optional native package for the image

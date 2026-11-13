@@ -30,6 +30,9 @@ import { VersionConfiguration } from "./version-configuration";
 type Deployment = {
   id: string;
   version_id: string;
+  candidate_version?: string;
+  candidate_weight?: number;
+  message?: string;
   environment: string;
   state: string;
   hosts: string[];
@@ -45,6 +48,9 @@ function versionState(
   data: WorkerData,
   operations: Operation[],
 ) {
+  if (version.id === env.candidate_version) {
+    return t("灰度版本");
+  }
   if (version.id === env.version_id) {
     return version.id === env.confirmed_version_id ? t("当前部署") : t("生效中");
   }
@@ -96,6 +102,7 @@ export function VersionsPanel({
   const progress = useRef<HTMLDivElement>(null);
   const focusedVersion = useRef("");
   const [busy, setBusy] = useState(false);
+  const [percentage, setPercentage] = useState("100");
   const [confirmation, setConfirmation] = useState<{
     version: Version;
     revision: number;
@@ -133,6 +140,13 @@ export function VersionsPanel({
     versions.unshift(createdVersion);
   }
   const environmentVersions = versions.slice(0, versionPage.pageSize);
+  const weight = Math.round(Number(percentage) * 1000);
+  const validPercentage =
+    /^\d{1,3}(?:\.\d{1,3})?$/.test(percentage) &&
+    weight >= 0 &&
+    weight <= 100000 &&
+    (weight === 0 || weight === 100000 || (weight >= 10 && weight <= 99990));
+  const canSplit = !!env.version_id && confirmation?.version.id !== env.version_id;
 
   useEffect(() => {
     if (!createdVersion || focusedVersion.current === createdVersion.id) return;
@@ -147,7 +161,7 @@ export function VersionsPanel({
   }, [createdVersion?.id, versionPage.items]);
 
   async function deploy() {
-    if (!confirmation || submitting.current || stale) {
+    if (!confirmation || submitting.current || stale || !validPercentage) {
       return;
     }
     submitting.current = true;
@@ -161,7 +175,14 @@ export function VersionsPanel({
           "/deployments",
         "POST",
         {
-          version_id: confirmation.version.id,
+          ...(canSplit && weight !== 100000
+            ? {
+                versions: [
+                  { version_id: env.version_id, percentage: (100000 - weight) / 1000 },
+                  { version_id: confirmation.version.id, percentage: weight / 1000 },
+                ],
+              }
+            : { version_id: confirmation.version.id }),
           expected_revision: confirmation.revision,
           idempotency_key: deploymentKey.current,
         },
@@ -215,6 +236,21 @@ export function VersionsPanel({
           )}
           {!env.enabled ? <Badge variant="outline">{t("已禁用")}</Badge> : null}
         </div>
+        {env.candidate_version ? (
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span>
+              {t("灰度版本")} · {(env.candidate_weight ?? 0) / 1000}%
+            </span>
+            <Button
+              variant="link"
+              size="sm"
+              className="h-auto min-w-0 shrink whitespace-normal break-all p-0 text-left font-mono"
+              onClick={() => setSelectedVersion(env.candidate_version!)}
+            >
+              {env.candidate_version}
+            </Button>
+          </div>
+        ) : null}
         {env.version_id && env.version_id !== env.confirmed_version_id ? (
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <LoaderCircle
@@ -259,7 +295,7 @@ export function VersionsPanel({
             )}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            {t("需要提前准备版本时，在“构建与发布”的更多操作中选择“创建待部署版本”。")}
+            {t("需要提前准备版本时，在“构建”的更多操作中选择“创建待部署版本”。")}
           </p>
         </div>
         <CollectionToolbar
@@ -363,11 +399,21 @@ export function VersionsPanel({
                     </div>
                     <Button
                       size="sm"
-                      disabled={busy || active || !env.enabled || version.id === env.version_id}
+                      disabled={
+                        busy ||
+                        active ||
+                        !env.enabled ||
+                        (version.id === env.version_id && !env.candidate_version)
+                      }
                       onClick={() => {
                         deploymentKey.current = crypto.randomUUID();
                         setError("");
                         setStale(false);
+                        setPercentage(
+                          version.id === env.candidate_version
+                            ? String((env.candidate_weight ?? 0) / 1000)
+                            : "100",
+                        );
                         setConfirmation({
                           version,
                           revision: env.deployment_revision,
@@ -480,6 +526,22 @@ export function VersionsPanel({
                 {shortID(deployment.version_id)}
               </Button>
             </div>
+            {deployment.candidate_version ? (
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span>
+                  {t("灰度版本")} · {(deployment.candidate_weight ?? 0) / 1000}%
+                </span>
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="h-auto p-0 font-mono"
+                  onClick={() => setSelectedVersion(deployment.candidate_version!)}
+                >
+                  {shortID(deployment.candidate_version)}
+                </Button>
+              </div>
+            ) : null}
+            {deployment.message ? <p className="break-words">{deployment.message}</p> : null}
             <span className="text-xs text-muted-foreground">
               {t("部署时间")} ·{" "}
               <time dateTime={deployment.created_at}>
@@ -564,6 +626,20 @@ export function VersionsPanel({
               {confirmation.version.tag ? (
                 <p className="break-all text-sm font-medium">{confirmation.version.tag}</p>
               ) : null}
+              {canSplit ? (
+                <label className="grid gap-2 text-sm">
+                  {t("此版本流量百分比")}
+                  <input
+                    className="w-32 rounded-md border bg-background px-3 py-2"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.001"
+                    value={percentage}
+                    onChange={(event) => setPercentage(event.target.value)}
+                  />
+                </label>
+              ) : null}
               <VersionConfiguration config={confirmation.version} />
             </>
           ) : null}
@@ -584,7 +660,7 @@ export function VersionsPanel({
               {t("取消")}
             </Button>
             <Button
-              disabled={busy || active || stale || !env.enabled}
+              disabled={busy || active || stale || !env.enabled || !validPercentage}
               onClick={() => void deploy()}
             >
               {busy ? (

@@ -20,7 +20,7 @@ func (s *Store) RuntimeBucket(ctx context.Context, versionID, binding, pool stri
  JOIN krun_resources r ON r.resource_id=v.worker_id AND r.org_id=v.org_id AND r.kind='worker'
  JOIN krun_organizations o ON o.org_id=v.org_id
  WHERE b.version_id=$1 AND b.name=$2 AND EXISTS(SELECT 1 FROM krun_worker_placements p WHERE p.worker_id=v.worker_id AND p.org_id=v.org_id AND p.pool_id=$3 AND p.state IN ('preparing','ready','active'))
- AND (e.version_id=v.version_id OR EXISTS(SELECT 1 FROM krun_worker_deployments d WHERE d.version_id=v.version_id AND d.committed_at IS NOT NULL AND d.expires_at>now()))`, versionID, binding, pool).Scan(&bucket.ID, &bucket.Organization, &bucket.Name, &bucket.Store, &bucket.Enabled, &bucket.Revision, &bucket.Created)
+ AND (v.version_id IN (e.version_id,e.candidate_version_id) OR EXISTS(SELECT 1 FROM krun_worker_deployments d WHERE v.version_id IN (d.version_id,d.candidate_version_id) AND d.committed_at IS NOT NULL AND d.expires_at>now()))`, versionID, binding, pool).Scan(&bucket.ID, &bucket.Organization, &bucket.Name, &bucket.Store, &bucket.Enabled, &bucket.Revision, &bucket.Created)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = domain.NotFound()
 	}

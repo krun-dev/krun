@@ -359,7 +359,7 @@ test("create, find after refresh, inspect and deploy a frozen version", async ({
   await expect.poll(() => state.creates.length).toBe(1);
   release();
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole("tab", { name: "版本与部署", exact: true })).toHaveAttribute(
+  await expect(page.getByRole("tab", { name: "版本与流量", exact: true })).toHaveAttribute(
     "data-state",
     "active",
   );
@@ -384,7 +384,7 @@ test("create, find after refresh, inspect and deploy a frozen version", async ({
   state.environments[0].variables.MODE = "changed-after-creation";
   state.environments[0].configuration_revision = 5;
   await page.reload();
-  await expect(page.getByRole("tab", { name: "版本与部署", exact: true })).toHaveAttribute(
+  await expect(page.getByRole("tab", { name: "版本与流量", exact: true })).toHaveAttribute(
     "data-state",
     "active",
   );
@@ -491,7 +491,7 @@ test("project deployment keeps local upload available alongside Git builds", asy
   await expect(upload.getByRole("button", { name: "选择 ZIP" })).toBeEnabled();
   await git.getByRole("button", { name: "绑定代码仓库" }).click();
   await expect(page.getByText(/管理员尚未配置 Git 仓库来源/)).toBeVisible();
-  await page.getByRole("tab", { name: "构建与发布", exact: true }).click();
+  await page.getByRole("tab", { name: "构建", exact: true }).click();
   await expect(upload.getByRole("button", { name: "选择文件夹" })).toBeEnabled();
 
   state.repository = {
@@ -527,7 +527,7 @@ test("direct publishing stays available without creating an undeployed version f
     .getByRole("button", { name: /production/ })
     .first()
     .click();
-  await page.getByRole("tab", { name: "构建与发布", exact: true }).click();
+  await page.getByRole("tab", { name: "构建", exact: true }).click();
   const draft = await openCreate(page);
   await draft.getByRole("button", { name: "取消", exact: true }).click();
   expect(state.creates).toHaveLength(0);
@@ -726,4 +726,31 @@ test("configuration publication preserves code and updates the active marker onl
   await expect(active).toContainText("XXX 测试");
   await expect(detail.getByRole("button", { name: "当前已生效", exact: true })).toBeDisabled();
   expect(errors).toEqual([]);
+});
+
+test("deploys a saved version at a fractional canary percentage", async ({ page }) => {
+  const { state } = await fixture(page);
+  state.versions["version-canary"] = {
+    ...state.versions["version-current"],
+    id: "version-canary",
+    tag: "canary",
+  };
+  await page.goto(origin + location);
+  await page.getByRole("tab", { name: "版本与流量", exact: true }).click();
+  await page
+    .getByLabel("版本 version-canary", { exact: true })
+    .getByRole("button", { name: "部署此版本" })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "部署已保存版本" });
+  await dialog.getByLabel("此版本流量百分比").fill("5.125");
+  await dialog.getByRole("button", { name: "确认部署" }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(state.deploys).toHaveLength(1);
+  expect(state.deploys[0]).toMatchObject({
+    expected_revision: 3,
+    versions: [
+      { version_id: "version-current", percentage: 94.875 },
+      { version_id: "version-canary", percentage: 5.125 },
+    ],
+  });
 });

@@ -27,6 +27,10 @@ func (s *Store) RetainExpired(ctx context.Context) error {
 		sql  string
 		args []any
 	}{
+		{`DELETE FROM krun_worker_retained_assets a WHERE (a.worker_id,a.env_name,a.version_id) IN (
+			SELECT worker_id,env_name,version_id FROM krun_worker_retained_assets r
+			WHERE r.expires_at <= now() OR NOT EXISTS(SELECT 1 FROM krun_worker_environments e WHERE e.worker_id=r.worker_id AND e.env_name=r.env_name)
+			ORDER BY expires_at LIMIT 1000)`, nil},
 		{`DELETE FROM krun_worker_hyperdrive_configs WHERE config_id IN (
 			SELECT h.config_id FROM krun_worker_hyperdrive_configs h
 			WHERE NOT EXISTS (SELECT 1 FROM krun_organizations o WHERE o.org_id=h.org_id)
@@ -50,11 +54,14 @@ func (s *Store) RetainExpired(ctx context.Context) error {
 		{`DELETE FROM krun_worker_operations WHERE state IN ('succeeded','failed','available','superseded') AND created_at <= $1`, []any{at.Add(-workerOperationRetain)}},
 		{`UPDATE krun_worker_build_private SET log_key='' WHERE build_id IN (SELECT p.build_id FROM krun_worker_build_private p JOIN krun_worker_builds b ON b.build_id=p.build_id WHERE b.created_at<=$1 AND length(p.log_key)>0 ORDER BY b.created_at LIMIT 1000)`, []any{at.Add(-workerBuildLogRetain)}},
 		{`WITH victims AS MATERIALIZED (SELECT version_id FROM krun_worker_versions rel WHERE rel.created_at<=$1
- AND NOT EXISTS(SELECT 1 FROM krun_worker_environments e WHERE e.version_id=rel.version_id)
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_environments e WHERE rel.version_id IN (e.version_id,e.candidate_version_id))
  AND NOT EXISTS(SELECT 1 FROM krun_worker_environments e WHERE e.confirmed_version_id=rel.version_id)
- AND NOT EXISTS(SELECT 1 FROM krun_worker_deployments d WHERE d.version_id=rel.version_id)
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_deployments d WHERE rel.version_id IN (d.version_id,d.candidate_version_id))
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_retained_assets a WHERE a.version_id=rel.version_id AND a.expires_at>now())
  AND NOT EXISTS(SELECT 1 FROM krun_worker_history h WHERE h.version_id=rel.version_id)
- AND NOT EXISTS(SELECT 1 FROM krun_worker_operations o WHERE o.version_id=rel.version_id)
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_versions src CROSS JOIN LATERAL jsonb_each(src.service_bindings) b WHERE b.value->>'version_id'=rel.version_id)
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_environments src CROSS JOIN LATERAL jsonb_each(src.service_bindings) b WHERE b.value->>'version_id'=rel.version_id)
+ AND NOT EXISTS(SELECT 1 FROM krun_worker_operations o WHERE rel.version_id IN (o.version_id,o.candidate_version_id))
  ORDER BY rel.created_at LIMIT 1000), bindings AS(DELETE FROM krun_worker_version_secrets WHERE version_id IN(SELECT version_id FROM victims)), r2 AS(DELETE FROM krun_worker_version_r2 WHERE version_id IN(SELECT version_id FROM victims))
  DELETE FROM krun_worker_versions WHERE version_id IN(SELECT version_id FROM victims)`, []any{at.Add(-WorkerArtifactRetain)}},
 		{`DELETE FROM krun_worker_secret_versions WHERE secret_version_id IN (SELECT secret.secret_version_id FROM krun_worker_secret_versions secret WHERE secret.created_at<=$1

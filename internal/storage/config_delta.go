@@ -37,13 +37,13 @@ func (s *Store) DirtyWorkers(ctx context.Context) ([]DirtyWorker, error) {
 
 func (s *Store) PublishedWorkers(ctx context.Context, ids []string) (domain.EdgeConfigProjection, error) {
 	out := domain.EdgeConfigProjection{Routes: []domain.EdgeConfigRoute{}, Versions: map[string]domain.WorkerVersion{}}
-	rows, err := s.pool.Query(ctx, `SELECT worker_id,host,pool,path,enabled,version_id,expires_at FROM worker_config_routes WHERE worker_id=ANY($1) ORDER BY host`, ids)
+	rows, err := s.pool.Query(ctx, "SELECT "+edgeRouteColumns+" FROM worker_config_routes r WHERE r.worker_id=ANY($1) ORDER BY r.host", ids)
 	if err != nil {
 		return out, err
 	}
 	for rows.Next() {
-		var r domain.EdgeConfigRoute
-		if err = rows.Scan(&r.Worker, &r.Host, &r.Pool, &r.Path, &r.Enabled, &r.Version, &r.Expires); err != nil {
+		r, err := scanEdgeRoute(rows)
+		if err != nil {
 			rows.Close()
 			return out, err
 		}
@@ -54,7 +54,7 @@ func (s *Store) PublishedWorkers(ctx context.Context, ids []string) (domain.Edge
 	if err != nil {
 		return out, err
 	}
-	rows, err = s.pool.Query(ctx, `SELECT DISTINCT c.version_id,c.payload FROM worker_config_versions c JOIN worker_config_routes r ON r.version_id=c.version_id AND r.pool=c.pool WHERE r.worker_id=ANY($1)`, ids)
+	rows, err = s.pool.Query(ctx, `SELECT DISTINCT c.version_id,c.payload FROM worker_config_versions c JOIN worker_config_routes r ON r.pool=c.pool AND (`+edgeRouteReferencesVersion+`) WHERE r.worker_id=ANY($1)`, ids)
 	if err != nil {
 		return out, err
 	}
@@ -162,30 +162,25 @@ func (s *Store) EdgeConfigShard(ctx context.Context, pool, shard string) (domain
 	if err = tx.QueryRow(ctx, readConfigPosition).Scan(&position.Epoch, &position.Revision); err != nil {
 		return out, position, err
 	}
-	rows, err := tx.Query(ctx, `SELECT r.worker_id,r.host,r.pool,r.path,r.enabled,r.version_id,r.expires_at,c.payload FROM worker_config_routes r LEFT JOIN worker_config_versions c ON c.version_id=r.version_id AND c.pool=r.pool WHERE r.pool=$1 AND r.shard=$2 ORDER BY r.host`, pool, shard)
+	rows, err := tx.Query(ctx, "SELECT "+edgeRouteColumns+" FROM worker_config_routes r WHERE r.pool=$1 AND r.shard=$2 ORDER BY r.host", pool, shard)
 	if err != nil {
 		return out, position, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var r domain.EdgeConfigRoute
-		var raw []byte
-		if err = rows.Scan(&r.Worker, &r.Host, &r.Pool, &r.Path, &r.Enabled, &r.Version, &r.Expires, &raw); err != nil {
+		r, err := scanEdgeRoute(rows)
+		if err != nil {
 			return out, position, err
 		}
 		out.Routes = append(out.Routes, r)
-		if len(raw) > 0 {
-			var rel domain.WorkerVersion
-			if err = json.Unmarshal(raw, &rel); err != nil {
-				return out, position, err
-			}
-			out.Versions[rel.ID] = rel
-		}
 	}
 	if err = rows.Err(); err != nil {
 		return out, position, err
 	}
 	rows.Close()
+	if err = readEdgeRouteVersions(ctx, tx, pool, out.Routes, out.Versions); err != nil {
+		return out, position, err
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return out, position, err
 	}

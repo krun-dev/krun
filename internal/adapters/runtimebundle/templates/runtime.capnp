@@ -8,6 +8,7 @@ const config :W.Config = (
         modules = [
           (name = "entry.js", esModule = embed "/app/entry.js"),
           (name = "assets.js", esModule = embed "/app/assets.js"),
+          (name = "service.js", esModule = embed "/app/service.js"),
           (name = "cache.js", esModule = embed "/app/cache.js"),
           (name = "storage.js", esModule = embed "/app/storage.js"),
           (name = "storage/signature.js", esModule = embed "/app/storage/signature.js"),

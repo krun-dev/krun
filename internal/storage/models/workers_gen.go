@@ -60,19 +60,23 @@ type HyperdriveConfig struct {
 }
 
 type Environment struct {
-	bun.BaseModel      `bun:"table:krun_worker_environments,alias:krun_worker_environments"`
-	HyperdriveBindings json.RawMessage `bun:"hyperdrive_bindings,type:jsonb"`
-	VersionMetadata    string          `bun:"version_metadata"`
-	AssetsBinding      string          `bun:"assets_binding"`
-	WorkerID           string          `bun:"worker_id,pk"`
-	EnvName            string          `bun:"env_name,pk"`
-	Enabled            bool            `bun:"enabled"`
-	ConfigRevision     int             `bun:"config_revision"`
-	Variables          json.RawMessage `bun:"variables,type:jsonb"`
-	DeploymentRevision int             `bun:"deployment_revision"`
-	VersionID          string          `bun:"version_id"`
-	ConfirmedVersionID string          `bun:"confirmed_version_id"`
-	UpdatedAt          time.Time       `bun:"updated_at"`
+	bun.BaseModel                `bun:"table:krun_worker_environments,alias:krun_worker_environments"`
+	GradualAssetRetentionSeconds *int            `bun:"gradual_asset_retention_seconds"`
+	ServiceBindings              json.RawMessage `bun:"service_bindings,type:jsonb"`
+	CandidateVersionID           string          `bun:"candidate_version_id"`
+	CandidateWeight              int             `bun:"candidate_weight"`
+	HyperdriveBindings           json.RawMessage `bun:"hyperdrive_bindings,type:jsonb"`
+	VersionMetadata              string          `bun:"version_metadata"`
+	AssetsBinding                string          `bun:"assets_binding"`
+	WorkerID                     string          `bun:"worker_id,pk"`
+	EnvName                      string          `bun:"env_name,pk"`
+	Enabled                      bool            `bun:"enabled"`
+	ConfigRevision               int             `bun:"config_revision"`
+	Variables                    json.RawMessage `bun:"variables,type:jsonb"`
+	DeploymentRevision           int             `bun:"deployment_revision"`
+	VersionID                    string          `bun:"version_id"`
+	ConfirmedVersionID           string          `bun:"confirmed_version_id"`
+	UpdatedAt                    time.Time       `bun:"updated_at"`
 }
 
 type AssetSession struct {
@@ -221,6 +225,7 @@ type ConfigurationR2 struct {
 
 type Version struct {
 	bun.BaseModel      `bun:"table:krun_worker_versions,alias:krun_worker_versions"`
+	ServiceBindings    json.RawMessage `bun:"service_bindings,type:jsonb"`
 	ConfigurationID    string          `bun:"configuration_id"`
 	CreatedBy          string          `bun:"created_by"`
 	CreatedByName      string          `bun:"created_by_name"`
@@ -253,20 +258,25 @@ type VersionSecret struct {
 }
 
 type Deployment struct {
-	bun.BaseModel `bun:"table:krun_worker_deployments,alias:krun_worker_deployments"`
-	DeploymentID  string     `bun:"deployment_id,pk"`
-	OrgID         string     `bun:"org_id"`
-	WorkerID      string     `bun:"worker_id"`
-	EnvName       string     `bun:"env_name"`
-	VersionID     string     `bun:"version_id"`
-	OperationID   string     `bun:"operation_id"`
-	CreatedAt     time.Time  `bun:"created_at"`
-	ExpiresAt     time.Time  `bun:"expires_at"`
-	CommittedAt   *time.Time `bun:"committed_at"`
+	bun.BaseModel      `bun:"table:krun_worker_deployments,alias:krun_worker_deployments"`
+	Message            string     `bun:"message"`
+	CandidateVersionID string     `bun:"candidate_version_id"`
+	CandidateWeight    int        `bun:"candidate_weight"`
+	DeploymentID       string     `bun:"deployment_id,pk"`
+	OrgID              string     `bun:"org_id"`
+	WorkerID           string     `bun:"worker_id"`
+	EnvName            string     `bun:"env_name"`
+	VersionID          string     `bun:"version_id"`
+	OperationID        string     `bun:"operation_id"`
+	CreatedAt          time.Time  `bun:"created_at"`
+	ExpiresAt          time.Time  `bun:"expires_at"`
+	CommittedAt        *time.Time `bun:"committed_at"`
 }
 
 type Operation struct {
 	bun.BaseModel      `bun:"table:krun_worker_operations,alias:krun_worker_operations"`
+	CandidateVersionID string          `bun:"candidate_version_id"`
+	CandidateWeight    int             `bun:"candidate_weight"`
 	OperationID        string          `bun:"operation_id,pk"`
 	Kind               string          `bun:"kind"`
 	OrgID              string          `bun:"org_id"`
@@ -311,6 +321,15 @@ type Idempotency struct {
 	Digest        string    `bun:"digest"`
 	TargetID      string    `bun:"target_id"`
 	CreatedAt     time.Time `bun:"created_at"`
+}
+
+type RetainedAsset struct {
+	bun.BaseModel  `bun:"table:krun_worker_retained_assets,alias:krun_worker_retained_assets"`
+	PendingSeconds int       `bun:"pending_seconds"`
+	WorkerID       string    `bun:"worker_id,pk"`
+	EnvName        string    `bun:"env_name,pk"`
+	VersionID      string    `bun:"version_id,pk"`
+	ExpiresAt      time.Time `bun:"expires_at"`
 }
 
 type Bucket struct {

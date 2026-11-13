@@ -190,6 +190,9 @@ func (s *Server) routes() {
 		s.internalMux.HandleFunc("POST /api/internal/workers/versions/{version}/bindings/{binding}/credentials", s.workerRuntimeStorageCredentials)
 		s.internalMux.HandleFunc("GET /api/internal/workers/artifacts/{artifact}", s.workerRuntimeArtifact)
 		s.internalMux.HandleFunc("POST /api/internal/workers/ack", s.workerRuntimeAck)
+		s.internalMux.HandleFunc("POST /api/internal/workers/version-overrides/authorize", s.workerRuntimeAuthorizeOverride)
+		s.internalMux.HandleFunc("/api/internal/workers/service-invoke/{caller}/{binding}", s.workerRuntimeServiceInvoke)
+		s.internalMux.HandleFunc("GET /api/internal/workers/service-descriptor/{version}", s.workerRuntimeServiceDescriptor)
 	}
 	s.internalMux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { s.writeError(w, r, notFound()) })
 	if s.Config.MergedDeployment {

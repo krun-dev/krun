@@ -71,3 +71,57 @@ func TestPostgresDeploymentCommitPublishesPinnedRouteAndProtectsVersion(t *testi
 	_ = domain.WorkerDeployment{}
 
 }
+
+func TestPostgresGradualDeploymentQueueAndProjection(t *testing.T) {
+	store := postgresTestStore(t)
+	ctx := t.Context()
+	seedPerformanceSites(t, store, 2)
+	const worker = "site-000002"
+	op := WorkerOperation{
+		ID: "op-gradual", Kind: "publish", Organization: "tenant", Worker: worker,
+		Environment: "production", Version: "stable", State: "queued", Created: now(),
+		Steps:                []domain.WorkerStep{{Name: "artifact"}, {Name: "candidate"}, {Name: "commit"}, {Name: "synchronize"}},
+		WorkerGradualRelease: domain.WorkerGradualRelease{Candidate: "candidate", CandidateWeight: 125},
+	}
+	err := store.Update(ctx, PartitionWorkers, func(st *State) error {
+		for _, id := range []string{"stable", "candidate"} {
+			st.Workers.Artifacts[id] = WorkerArtifact{ID: id, Organization: "tenant", State: "finalized", Created: now()}
+			st.Workers.Versions[id] = WorkerVersion{ID: id, Organization: "tenant", Worker: worker, Environment: "production", Artifact: id, Created: now(), Variables: map[string]any{}}
+		}
+		st.Workers.Operations[op.ID] = op
+		workerapp.RememberDeployment(st, op, "Canary")
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.PendingWork(ctx, 10)
+	if err != nil || pending.Versions["candidate"].ID != "candidate" || pending.Artifacts["candidate"].ID != "candidate" {
+		t.Fatalf("candidate cannot be validated: %v, versions=%v", err, pending.Versions)
+	}
+	claim, owned, err := store.ClaimOperation(ctx, op.ID, "replica")
+	if err != nil || !owned {
+		t.Fatalf("claim = %v, %v", owned, err)
+	}
+	if committed, err := store.CommitOperation(ctx, claim); err != nil || !committed {
+		t.Fatalf("commit = %v, %v", committed, err)
+	}
+	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}})
+	projection, err := workerapp.LoadWorkerConfigProjection(ctx, store, []string{worker}, config)
+	if err != nil || len(projection.Routes) != 1 || projection.Routes[0].CandidateWeight != 125 {
+		t.Fatalf("wrong split route: %+v %v", projection.Routes, err)
+	}
+	if _, ok := projection.Versions["candidate"]; !ok {
+		t.Fatal("projection is missing the candidate descriptor")
+	}
+	ops := workerapp.DiffWorkerConfig(nil, projection)
+	if _, ok, err := store.AppendConfigDelta(ctx, 0, nil, ops); err != nil || !ok {
+		t.Fatalf("publish: %v %v", ok, err)
+	}
+	route := projection.Routes[0]
+	loaded, _, err := store.RuntimeConfigRoute(ctx, route.Host, route.Pool)
+	if err != nil || len(loaded.Routes) != 1 || loaded.Routes[0].Candidate != "candidate" ||
+		loaded.Versions["candidate"].ID != "candidate" {
+		t.Fatalf("cold route lost candidate: %+v %v", loaded, err)
+	}
+}

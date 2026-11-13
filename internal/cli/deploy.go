@@ -6,13 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"strings"
 	"time"
 )
 
 const deploymentHelp = `Usage: krun deployments COMMAND [--org ID] --worker ID
   list    List deployments
-  status  Show the active and confirmed version for an environment
+  status  Show the environment's traffic percentages and confirmed version
   view    Inspect a deployment by deployment ID
   wait    Wait for a deployment by operation ID
 `
@@ -21,7 +20,7 @@ const versionHelp = `Usage: krun versions COMMAND [--org ID] --worker ID
   list    List versions
   view    Inspect a version
   upload  Build the bound repository and upload a version without changing traffic
-  deploy  Deploy VERSION_ID[@100%] at 100% traffic
+  deploy  Deploy one or two versions using VERSION_ID[@PERCENTAGE%]
 `
 
 func (c *Client) deploy(ctx context.Context, action string, args []string, loadSession func() error) error {
@@ -34,8 +33,15 @@ func (c *Client) deploy(ctx context.Context, action string, args []string, loadS
 	timeout := f.Duration("timeout", 10*time.Minute, "Maximum wait time")
 	var build releaseBuild
 	var version string
+	var versions []versionPercentage
+	var message string
 	var dryRun bool
 	var outdir string
+	if action != "deploy" {
+		f.StringVar(&message, "message", "", "Description of this deployment")
+		f.Bool("yes", false, "Accept defaults (the krun CLI does not prompt)")
+		f.Bool("y", false, "Alias for --yes")
+	}
 	if action == "deploy" {
 		build.flags(f)
 		f.StringVar(&build.localPath, "path", "", "Upload a local directory or ZIP for deployment")
@@ -47,19 +53,31 @@ func (c *Client) deploy(ctx context.Context, action string, args []string, loadS
 			fmt.Fprintln(c.Err, "       krun deploy --dry-run [--config WRANGLER_FILE] [--outdir DIR]")
 			f.PrintDefaults()
 		}
+	} else if action == "versions deploy" {
+		f.Usage = func() {
+			fmt.Fprintln(c.Err, "Usage: krun versions deploy VERSION_ID[@PERCENTAGE%] [VERSION_ID[@PERCENTAGE%]] [options]")
+			fmt.Fprintln(c.Err, "Omitted percentages share the remaining traffic.")
+			f.PrintDefaults()
+		}
+		specs, err := versionDeployArgs(f, args)
+		if err != nil {
+			return err
+		}
+		versions, err = versionDeployPercentages(specs)
+		if err != nil {
+			return err
+		}
 	} else {
 		version, args = operand(args)
 		f.Usage = func() {
-			operand := "VERSION_ID"
-			if action == "versions deploy" {
-				operand += "[@100%]"
-			}
-			fmt.Fprintf(c.Err, "Usage: krun %s %s [options]\n", action, operand)
+			fmt.Fprintf(c.Err, "Usage: krun %s VERSION_ID [options]\n", action)
 			f.PrintDefaults()
 		}
 	}
-	if err := parseFlags(f, args); err != nil {
-		return err
+	if action != "versions deploy" {
+		if err := parseFlags(f, args); err != nil {
+			return err
+		}
 	}
 	if dryRun {
 		return c.deployDryRun(ctx, f, outdir)
@@ -71,16 +89,9 @@ func (c *Client) deploy(ctx context.Context, action string, args []string, loadS
 		if err := build.validate(f); err != nil {
 			return err
 		}
-	} else {
+	} else if action == "rollback" {
 		if err := requireOperand(version, "VERSION_ID"); err != nil {
 			return err
-		}
-		if action == "versions deploy" {
-			id, ratio, hasRatio := strings.Cut(version, "@")
-			if hasRatio && (id == "" || ratio != "100%") {
-				return errors.New("versions deploy supports one version at 100%; use VERSION_ID@100%")
-			}
-			version = id
 		}
 	}
 	if *timeout <= 0 || (!*wait && flagSet(f, "timeout")) {
@@ -115,14 +126,22 @@ func (c *Client) deploy(ctx context.Context, action string, args []string, loadS
 	fmt.Fprintln(c.Err, "Deployment revision:", current)
 	releaseKey := c.submissionKey(*key)
 	input := map[string]any{"expected_revision": current, "idempotency_key": releaseKey}
-	if action == "deploy" {
+	switch {
+	case action == "deploy":
 		buildID, err := build.resolve(ctx, c, action, base, *env, releaseKey)
 		if err != nil {
 			return err
 		}
 		input["build_id"] = buildID
-	} else {
+	case len(versions) == 2:
+		input["versions"] = versions
+	case len(versions) == 1:
+		input["version_id"] = versions[0].ID
+	default:
 		input["version_id"] = version
+	}
+	if message != "" {
+		input["message"] = message
 	}
 	path := scope + "/deployments"
 	if action == "rollback" {
@@ -176,6 +195,7 @@ func (c *Client) deployments(ctx context.Context, args []string) error {
 		return c.outputJSON(map[string]any{
 			"environment": current.Name, "version_id": current.Version,
 			"confirmed_version_id": current.Confirmed, "deployment_revision": current.Revision,
+			"versions": releasePercentages(current.Version, current.WorkerGradualRelease),
 		})
 	case "wait":
 		id := f.String("operation", "", "Operation ID returned by deployment or rollback")
@@ -282,7 +302,15 @@ func (c *Client) releaseRead(ctx context.Context, group, action string, args []s
 		if err := requireOperand(id, "ID"); err != nil {
 			return err
 		}
-		return c.call(ctx, "GET", base+"/"+group+"/"+url.PathEscape(id), nil)
+		path := base + "/" + group + "/" + url.PathEscape(id)
+		if group == "deployments" {
+			deployment, err := c.readDeployment(ctx, path)
+			if err != nil {
+				return err
+			}
+			return c.outputJSON(deployment)
+		}
+		return c.call(ctx, "GET", path, nil)
 	}
 	env := f.String("env", "", "Filter by environment")
 	after := f.String("after", "", "Pagination token from next_after")
@@ -301,7 +329,21 @@ func (c *Client) releaseRead(ctx context.Context, group, action string, args []s
 	if *after != "" {
 		query.Set("after", *after)
 	}
-	return c.call(ctx, "GET", base+"/"+group+"?"+query.Encode(), nil)
+	path := base + "/" + group + "?" + query.Encode()
+	if group != "deployments" {
+		return c.call(ctx, "GET", path, nil)
+	}
+	var page struct {
+		Items []deploymentView `json:"items"`
+		Next  string           `json:"next_after"`
+	}
+	if err := c.request(ctx, "GET", path, nil, &page, false); err != nil {
+		return err
+	}
+	for i := range page.Items {
+		page.Items[i].setPercentages()
+	}
+	return c.outputJSON(page)
 }
 
 func validateReleaseKey(key string) error {

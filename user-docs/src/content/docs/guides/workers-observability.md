@@ -9,7 +9,7 @@ description: 在 Worker 详情中查看请求数、HTTP 5xx 比例和响应延�
 
 <figure class="krun-metrics-figure krun-metrics-overview">
   <div class="krun-metrics-screenshot">
-    <img src="/docs/screenshots/workers-observability/workers-metrics-production.png" alt="Worker 详情的指标页，展示两个生产版本的三项指标" width="2220" height="2085" loading="lazy" />
+    <img src="/docs/screenshots/workers-observability/workers-metrics-production.png" alt="Worker 详情的指标页，展示两个生产版本的三项指标" width="1164" height="780" loading="lazy" />
     <span class="krun-metrics-tab" aria-hidden="true">1</span>
     <span class="krun-metrics-filters" aria-hidden="true">2</span>
     <span class="krun-metrics-time" aria-hidden="true">3</span>

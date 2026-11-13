@@ -17,6 +17,9 @@ import (
 )
 
 type Binding struct {
+	Service          string          `json:"service,omitempty"`
+	Environment      string          `json:"environment,omitempty"`
+	Entrypoint       string          `json:"entrypoint,omitempty"`
 	ID               string          `json:"id,omitempty"`
 	Password         *string         `json:"password,omitempty"`
 	ConnectionString *string         `json:"connection_string,omitempty"`
@@ -112,6 +115,8 @@ func ReadUpload(r *http.Request) (UploadMetadata, []workerartifact.UploadedModul
 func BindingInput(meta UploadMetadata, preview bool) (workerapp.BindingsInput, error) {
 	in := workerapp.BindingsInput{Variables: map[string]any{}, Secrets: map[string]*string{}, ReplaceVariables: !preview, KeepSecrets: preview}
 	if !preview {
+		service := map[string]domain.WorkerServiceBinding{}
+		in.ServiceBindings = &service
 		values := map[string]string{}
 		in.R2Buckets = &values
 		hyperdrive := map[string]string{}
@@ -128,6 +133,8 @@ func BindingInput(meta UploadMetadata, preview bool) (workerapp.BindingsInput, e
 			in.KeepJSONVariables = true
 		} else if kind == "r2_bucket" {
 			in.KeepR2Buckets = true
+		} else if kind == "service" {
+			in.KeepServiceBindings = true
 		} else if kind == "hyperdrive" {
 			in.KeepHyperdrive = true
 		} else if kind != "secret_key" {
@@ -154,6 +161,15 @@ func BindingInput(meta UploadMetadata, preview bool) (workerapp.BindingsInput, e
 				in.R2Buckets = &values
 			}
 			(*in.R2Buckets)[name] = b.BucketName
+		case "service":
+			if b.Service == "" || (b.Entrypoint != "" && b.Entrypoint != "default") {
+				return domain.Invalid("UNSUPPORTED_BINDING", "Service binding requires a Worker and its default HTTP entrypoint")
+			}
+			if in.ServiceBindings == nil {
+				service := map[string]domain.WorkerServiceBinding{}
+				in.ServiceBindings = &service
+			}
+			(*in.ServiceBindings)[name] = domain.WorkerServiceBinding{Service: b.Service, Environment: b.Environment}
 		case "hyperdrive":
 			if b.ID == "" || b.Password != nil || b.ConnectionString != nil {
 				return domain.Problem(422, "UNSUPPORTED_BINDING", "Hyperdrive binding requires a configuration ID")

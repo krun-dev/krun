@@ -27,12 +27,14 @@ func affectedWorkerConfig(ctx context.Context, tx pgx.Tx, ops []domain.EdgeConfi
 		if op.Version != nil && op.Version.ID != "" {
 			versions[op.Version.ID] = true
 		}
-		if op.Route != nil && op.Route.Version != "" {
-			versions[op.Route.Version] = true
+		if op.Route != nil {
+			for _, id := range op.Route.VersionIDs() {
+				versions[id] = true
+			}
 		}
 	}
 	rows, err := tx.Query(ctx, `
-		SELECT pool, shard, version_id FROM worker_config_routes
+		SELECT pool, shard, version_id, candidate_version_id, retained_versions FROM worker_config_routes
 		WHERE host=ANY($1)`, hosts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read affected config routes: %w", err)
@@ -40,13 +42,13 @@ func affectedWorkerConfig(ctx context.Context, tx pgx.Tx, ops []domain.EdgeConfi
 	defer rows.Close()
 	for rows.Next() {
 		var key workerConfigShardKey
-		var version string
-		if err = rows.Scan(&key.pool, &key.shard, &version); err != nil {
+		var route domain.EdgeConfigRoute
+		if err = rows.Scan(&key.pool, &key.shard, &route.Version, &route.Candidate, &route.Retained); err != nil {
 			return nil, nil, fmt.Errorf("read affected config route: %w", err)
 		}
 		shards[key] = true
-		if version != "" {
-			versions[version] = true
+		for _, id := range route.VersionIDs() {
+			versions[id] = true
 		}
 	}
 	if err = rows.Err(); err != nil {
@@ -99,12 +101,14 @@ func applyWorkerConfigOps(ctx context.Context, tx pgx.Tx, revision int64, ops []
 			versionID = route.Version
 			payload, err = json.Marshal(route)
 			batch.Queue(`
-				INSERT INTO worker_config_routes(host, pool, path, enabled, version_id, worker_id, shard, expires_at)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+				INSERT INTO worker_config_routes(host, pool, path, enabled, version_id, worker_id, shard, expires_at, candidate_version_id, candidate_weight, script_name, env_name, public, retained_versions)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE(NULLIF($14::jsonb,'null'::jsonb),'[]'::jsonb))
 				ON CONFLICT (host) DO UPDATE SET
 					pool=excluded.pool, path=excluded.path, enabled=excluded.enabled,
-					version_id=excluded.version_id, worker_id=excluded.worker_id, shard=excluded.shard, expires_at=excluded.expires_at`,
-				op.Host, op.Pool, route.Path, route.Enabled, versionID, route.Worker, bytesDigest([]byte(op.Host))[:2], route.Expires)
+					version_id=excluded.version_id, worker_id=excluded.worker_id, shard=excluded.shard, expires_at=excluded.expires_at,
+					candidate_version_id=excluded.candidate_version_id, candidate_weight=excluded.candidate_weight,
+					script_name=excluded.script_name, env_name=excluded.env_name, public=excluded.public, retained_versions=excluded.retained_versions`,
+				op.Host, op.Pool, route.Path, route.Enabled, versionID, route.Worker, bytesDigest([]byte(op.Host))[:2], route.Expires, route.Candidate, route.CandidateWeight, route.ScriptName, route.Environment, route.Public, route.Retained)
 		case "route_delete":
 			batch.Queue(`DELETE FROM worker_config_routes WHERE host=$1`, op.Host)
 		default:
@@ -152,7 +156,7 @@ func pruneWorkerConfig(ctx context.Context, tx pgx.Tx, revision int64, versions 
 	if _, err := tx.Exec(ctx, `
 		DELETE FROM worker_config_versions c
 		WHERE version_id=ANY($1) AND NOT EXISTS (
-			SELECT 1 FROM worker_config_routes r WHERE r.version_id=c.version_id AND r.pool=c.pool
+			SELECT 1 FROM worker_config_routes r WHERE r.pool=c.pool AND (`+edgeRouteReferencesVersion+`)
 		)`, versions); err != nil {
 		return fmt.Errorf("prune unreferenced config versions: %w", err)
 	}

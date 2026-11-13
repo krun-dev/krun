@@ -2,6 +2,7 @@ package workers
 
 import (
 	context "context"
+	"maps"
 
 	authorization "github.com/krun-dev/krun/internal/authorization"
 	appconfig "github.com/krun-dev/krun/internal/config"
@@ -14,12 +15,14 @@ type WorkerEnvironmentCreateInput struct {
 }
 
 type WorkerEnvironmentUpdateInput struct {
-	HyperdriveBindings *map[string]string `json:"hyperdrive_bindings,omitempty"`
-	R2Buckets          *map[string]string `json:"r2_buckets,omitempty"`
-	VersionMetadata    *string            `json:"version_metadata,omitempty"`
-	Revision           int                `json:"expected_revision"`
-	Enabled            *bool              `json:"enabled"`
-	Variables          map[string]any     `json:"variables"`
+	AssetRetentionSeconds *int                                    `json:"gradual_asset_retention_seconds,omitempty"`
+	ServiceBindings       *map[string]domain.WorkerServiceBinding `json:"service_bindings,omitempty"`
+	HyperdriveBindings    *map[string]string                      `json:"hyperdrive_bindings,omitempty"`
+	R2Buckets             *map[string]string                      `json:"r2_buckets,omitempty"`
+	VersionMetadata       *string                                 `json:"version_metadata,omitempty"`
+	Revision              int                                     `json:"expected_revision"`
+	Enabled               *bool                                   `json:"enabled"`
+	Variables             map[string]any                          `json:"variables"`
 }
 
 func (s *Service) WorkerEnvironments(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
@@ -72,6 +75,7 @@ func (s *Service) WorkerEnvironmentCreate(ctx context.Context, st *domain.State,
 		env.Variables = domain.CloneWorkerVariables(ws.PreviewBase.Variables)
 		env.R2Bindings = domain.CloneR2Bindings(ws.PreviewBase.R2Bindings)
 		env.HyperdriveBindings = cloneHyperdriveBindings(ws.PreviewBase.HyperdriveBindings)
+		env.ServiceBindings = maps.Clone(ws.PreviewBase.ServiceBindings)
 		env.VersionMetadata = ws.PreviewBase.VersionMetadata
 		env.SecretVersions = domain.CloneStringsMap(ws.PreviewBase.SecretVersions)
 		env.SecretNames = domain.WorkerSecretNames(env.SecretVersions)
@@ -143,6 +147,19 @@ func (s *Service) WorkerEnvironmentUpdate(ctx context.Context, st *domain.State,
 		current.Variables = in.Variables
 	}
 	s.SyncEnvironmentHosts(&current, t.Organization, t.ID, ws.Domains)
+	if in.AssetRetentionSeconds != nil {
+		if *in.AssetRetentionSeconds < 0 || *in.AssetRetentionSeconds > 90*24*60*60 {
+			return nil, Read, domain.Invalid("ENVIRONMENT_INVALID", "Invalid asset retention window")
+		}
+		current.AssetRetentionSeconds = in.AssetRetentionSeconds
+	}
+	if in.ServiceBindings != nil {
+		bindings, err := s.resolveServiceBindings(ctx, p, t, *in.ServiceBindings)
+		if err != nil {
+			return nil, Read, err
+		}
+		current.ServiceBindings = bindings
+	}
 	if err := s.applyWorkerEnvironmentBindings(ctx, st, t.Organization, &current, in); err != nil {
 		return nil, Read, err
 	}

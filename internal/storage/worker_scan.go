@@ -10,10 +10,10 @@ import (
 // queue reads and projection reads all go through these so a new column cannot
 // be added to one path and forgotten in another.
 const (
-	workerBuildColumns = "build_id, org_id, worker_id, env_name, state, entrypoint, source_digest, profile, compatibility_date, compatibility_flags, job, artifact_id, error, repository, assets, created_at, finished_at, claimed_by, claimed_at"
-	workerArtifactColumns = "artifact_id, org_id, state, profile, archive_digest, manifest_digest, module_digest, compatibility_date, compatibility_flags, size_bytes, object_key, storage_location, bucket, created_at"
-	workerVersionColumns = "version_id, org_id, worker_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message, created_by, created_by_name, configuration_id, hyperdrive_bindings"
-	workerOperationColumns = "operation_id, kind, org_id, worker_id, env_name, state, build_id, version_id, expected_revision, config_revision, edge_revision, deployment_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at"
+	workerBuildColumns     = "build_id, org_id, worker_id, env_name, state, entrypoint, source_digest, profile, compatibility_date, compatibility_flags, job, artifact_id, error, repository, assets, created_at, finished_at, claimed_by, claimed_at"
+	workerArtifactColumns  = "artifact_id, org_id, state, profile, archive_digest, manifest_digest, module_digest, compatibility_date, compatibility_flags, size_bytes, object_key, storage_location, bucket, created_at"
+	workerVersionColumns   = "version_id, org_id, worker_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message, created_by, created_by_name, configuration_id, hyperdrive_bindings, service_bindings"
+	workerOperationColumns = "operation_id, kind, org_id, worker_id, env_name, state, build_id, version_id, expected_revision, config_revision, edge_revision, deployment_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at, candidate_version_id, candidate_weight"
 )
 
 type rowScanner interface {
@@ -61,7 +61,7 @@ func scanWorkerArtifact(row rowScanner) (domain.WorkerArtifact, error) {
 func scanWorkerVersion(row rowScanner) (domain.WorkerVersion, error) {
 	var version domain.WorkerVersion
 	var variables, flags []byte
-	if err := row.Scan(&version.ID, &version.Organization, &version.Worker, &version.Environment, &version.Artifact, &version.Profile, &version.ArchiveDigest, &version.ModuleDigest, &version.CompatibilityDate, &flags, &version.ConfigRevision, &variables, &version.SecretDigest, &version.Created, &version.VersionMetadata, &version.AssetsBinding, &version.Tag, &version.Message, &version.CreatedBy, &version.CreatedByName, &version.Configuration, &version.HyperdriveBindings); err != nil {
+	if err := row.Scan(&version.ID, &version.Organization, &version.Worker, &version.Environment, &version.Artifact, &version.Profile, &version.ArchiveDigest, &version.ModuleDigest, &version.CompatibilityDate, &flags, &version.ConfigRevision, &variables, &version.SecretDigest, &version.Created, &version.VersionMetadata, &version.AssetsBinding, &version.Tag, &version.Message, &version.CreatedBy, &version.CreatedByName, &version.Configuration, &version.HyperdriveBindings, &version.ServiceBindings); err != nil {
 		return domain.WorkerVersion{}, err
 	}
 	if err := json.Unmarshal(flags, &version.CompatibilityFlags); err != nil {
@@ -81,7 +81,7 @@ func scanWorkerOperation(row rowScanner) (domain.WorkerOperation, domain.WorkerA
 	var operation domain.WorkerOperation
 	var actor domain.WorkerActor
 	var steps []byte
-	if err := row.Scan(&operation.ID, &operation.Kind, &operation.Organization, &operation.Worker, &operation.Environment, &operation.State, &operation.Build, &operation.Version, &operation.ExpectedRevision, &operation.ConfigRevision, &operation.EdgeRevision, &operation.DeploymentRevision, &operation.Error, &steps, &actor.User, &actor.Key, &actor.AuthVersion, &operation.Created, &operation.Finished); err != nil {
+	if err := row.Scan(&operation.ID, &operation.Kind, &operation.Organization, &operation.Worker, &operation.Environment, &operation.State, &operation.Build, &operation.Version, &operation.ExpectedRevision, &operation.ConfigRevision, &operation.EdgeRevision, &operation.DeploymentRevision, &operation.Error, &steps, &actor.User, &actor.Key, &actor.AuthVersion, &operation.Created, &operation.Finished, &operation.Candidate, &operation.CandidateWeight); err != nil {
 		return domain.WorkerOperation{}, domain.WorkerActor{}, err
 	}
 	if len(steps) > 0 {

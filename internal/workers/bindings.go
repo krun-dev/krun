@@ -14,19 +14,21 @@ import (
 // StageBindings changes desired configuration; callers explicitly snapshot and
 // deploy afterward. A nil secret deletes it, while omitted secrets are retained.
 type BindingsInput struct {
-	R2Buckets          *map[string]string
-	KeepR2Buckets      bool
-	HyperdriveBindings *map[string]string
-	KeepHyperdrive     bool
-	VersionMetadata    *string
-	AssetsBinding      *string
-	Variables          map[string]any
-	Secrets            map[string]*string
-	ReplaceVariables   bool
-	KeepPlainVariables bool
-	KeepJSONVariables  bool
-	KeepSecrets        bool
-	Inherit            []string
+	ServiceBindings     *map[string]domain.WorkerServiceBinding
+	KeepServiceBindings bool
+	R2Buckets           *map[string]string
+	KeepR2Buckets       bool
+	HyperdriveBindings  *map[string]string
+	KeepHyperdrive      bool
+	VersionMetadata     *string
+	AssetsBinding       *string
+	Variables           map[string]any
+	Secrets             map[string]*string
+	ReplaceVariables    bool
+	KeepPlainVariables  bool
+	KeepJSONVariables   bool
+	KeepSecrets         bool
+	Inherit             []string
 }
 
 func (s *Service) StageBindings(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, in BindingsInput) error {
@@ -57,6 +59,14 @@ func (s *Service) StageBindings(ctx context.Context, st *domain.State, p authori
 		return domain.Conflict("DEPLOYMENT_BUSY", "Wait for the active deployment")
 	}
 	for _, name := range in.Inherit {
+		if binding, exists := current.ServiceBindings[name]; exists {
+			if in.ServiceBindings == nil {
+				bindings := map[string]domain.WorkerServiceBinding{}
+				in.ServiceBindings = &bindings
+			}
+			(*in.ServiceBindings)[name] = binding
+			continue
+		}
 		if id, exists := current.HyperdriveBindings[name]; exists {
 			if in.HyperdriveBindings == nil {
 				bindings := map[string]string{}
@@ -162,6 +172,20 @@ func (s *Service) StageBindings(ctx context.Context, st *domain.State, p authori
 	if err := s.applyBindingPatch(ctx, st, target.Organization, &current, in.R2Buckets, in.HyperdriveBindings, in.VersionMetadata); err != nil {
 		return err
 	}
+	if in.ServiceBindings != nil {
+		if in.KeepServiceBindings {
+			for name, binding := range current.ServiceBindings {
+				if _, ok := (*in.ServiceBindings)[name]; !ok {
+					(*in.ServiceBindings)[name] = binding
+				}
+			}
+		}
+		bindings, err := s.resolveServiceBindings(ctx, p, target, *in.ServiceBindings)
+		if err != nil {
+			return err
+		}
+		current.ServiceBindings = bindings
+	}
 	if in.AssetsBinding != nil {
 		current.AssetsBinding = *in.AssetsBinding
 	}
@@ -238,6 +262,15 @@ func ValidateWorkerBindings(env domain.WorkerEnvironment) error {
 	for name, binding := range env.R2Bindings {
 		if !workerartifact.WorkerAssetBindingName.MatchString(name) || strings.HasPrefix(name, "KRUN_") || workerartifact.WorkerReservedBindings[name] || seen[name] || binding.BucketID == "" || binding.BucketName == "" {
 			return domain.Invalid("WORKER_BINDING_CONFLICT", "Invalid or duplicate R2 binding")
+		}
+		seen[name] = true
+	}
+	if len(env.ServiceBindings) > 16 {
+		return domain.Invalid("WORKER_BINDINGS_INVALID", "Too many service bindings")
+	}
+	for name := range env.ServiceBindings {
+		if !workerartifact.WorkerAssetBindingName.MatchString(name) || strings.HasPrefix(name, "KRUN_") || workerartifact.WorkerReservedBindings[name] || seen[name] {
+			return domain.Invalid("WORKER_BINDING_CONFLICT", "Invalid or duplicate service binding")
 		}
 		seen[name] = true
 	}

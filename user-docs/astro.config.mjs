@@ -83,6 +83,7 @@ export default defineConfig({
                     "guides/deploy-local-project",
                   ],
                 },
+                "guides/workers-gradual-deployments",
                 "guides/workers-runtime-compatibility",
                 "guides/workers-observability",
               ],

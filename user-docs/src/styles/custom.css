@@ -428,18 +428,18 @@ html[data-has-toc] {
 }
 
 .krun-metrics-tab {
-  --marker-top: 42.1%;
-  --marker-left: 47.2%;
+  --marker-top: 3.8%;
+  --marker-left: 37.8%;
 }
 
 .krun-metrics-filters {
-  --marker-top: 53.1%;
-  --marker-left: 50.8%;
+  --marker-top: 19.3%;
+  --marker-left: 39.8%;
 }
 
 .krun-metrics-time {
-  --marker-top: 50%;
-  --marker-left: 70%;
+  --marker-top: 19.3%;
+  --marker-left: 80%;
 }
 
 .krun-metrics-requests {

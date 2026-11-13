@@ -5,6 +5,7 @@
 !entry.js
 !assets.js
 !cache.js
+!service.js
 !storage.js
 !storage/
 !storage/**

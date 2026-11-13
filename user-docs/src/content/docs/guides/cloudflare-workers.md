@@ -117,6 +117,16 @@ npx wrangler@4.155.0 versions deploy VERSION_ID@100% --yes
 
 上传版本不会改变当前生产流量；部署命令将流量全部切换到指定版本。
 
+用 `versions list` 查询已上传版本。将下面的 `STABLE_VERSION` 和 `CANDIDATE_VERSION` 换成同一 Worker 的两个版本 ID：
+
+```sh
+npx wrangler@4.155.0 versions deploy "STABLE_VERSION@100%" "CANDIDATE_VERSION@0%" --yes
+npx wrangler@4.155.0 versions deploy "STABLE_VERSION@95%" "CANDIDATE_VERSION@5%" --yes
+npx wrangler@4.155.0 deployments status
+```
+
+控制台与两种 CLI 共用发布记录。0% 定向验证、会话分桶和回滚步骤见 [Workers 灰度发布](/docs/guides/workers-gradual-deployments.html)。
+
 也可以创建独立预览，检查修改：
 
 ```sh

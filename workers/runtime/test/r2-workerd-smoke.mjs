@@ -605,6 +605,7 @@ const port = await freePort();
 const moduleNames = [
   "entry.js",
   "assets.js",
+  "service.js",
   "cache.js",
   "storage.js",
   ...["binding", "metadata", "xml", "signature", "signer"].map((name) => "storage/" + name + ".js"),

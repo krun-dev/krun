@@ -68,11 +68,11 @@ func TestCloudflarePreviewsBaseCopiesAndMasksSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-func TestCloudflareRejectsUnsupportedTrafficAndBindings(t *testing.T) {
+func TestCloudflareRejectsInvalidTrafficAndBindings(t *testing.T) {
 	s, _, base := cfTestServer(t)
-	r := request(s, "POST", base+"/deployments", "krun_cli_admin", `{"strategy":"percentage","versions":[{"version_id":"a","percentage":50},{"version_id":"b","percentage":50}]}`)
+	r := request(s, "POST", base+"/deployments", "krun_cli_admin", `{"strategy":"percentage","versions":[{"version_id":"a","percentage":50},{"version_id":"b","percentage":49}]}`)
 	if r.Code != 422 {
-		t.Fatalf("traffic split accepted: %d %s", r.Code, r.Body.String())
+		t.Fatalf("invalid weights accepted: %d %s", r.Code, r.Body.String())
 	}
 	if _, err := cfcompat.BindingInput(cfcompat.UploadMetadata{Bindings: []cfcompat.Binding{{Name: "DB", Type: "d1"}}}, false); err == nil {
 		t.Fatal("D1 binding accepted")

@@ -37,6 +37,9 @@ async function api(route,method='GET',body,expected=200,options={}){
  const retryable=method==='GET'||idempotentMutation;
  let r,attempt=0;
  for(;;attempt++){
+  if (forward && (forward.exitCode !== null || forward.signalCode !== null)) {
+   await startForward();
+  }
   try{
    r=await request(route,method,body,options);
    const unavailableGET=method==='GET'&&expected===200&&r.status===503&&r.body==='';
@@ -45,8 +48,14 @@ async function api(route,method='GET',body,expected=200,options={}){
    if(attempt>=3)break;
    transportRetries.push({route,method,status:r.status,attempt:attempt+1});writeFileSync(evidencePath('transport-retries.json'),JSON.stringify(transportRetries,null,2));await sleep(1000);
   }catch(error){
-   if(!retryable||attempt>=3)throw error;
-   transportRetries.push({route,method,error:error.message,attempt:attempt+1});writeFileSync(evidencePath('transport-retries.json'),JSON.stringify(transportRetries,null,2));await sleep(1000);
+   const disconnected = error.cause?.code === 'ECONNREFUSED';
+   if ((!retryable && !disconnected) || attempt >= 3) throw error;
+   transportRetries.push({route,method,error:error.message,attempt:attempt+1});writeFileSync(evidencePath('transport-retries.json'),JSON.stringify(transportRetries,null,2));
+   if (disconnected || forward.exitCode !== null || forward.signalCode !== null) {
+    await startForward();
+   } else {
+    await sleep(1000);
+   }
   }
  }
  // A retried idempotent create may observe the already-committed operation.
@@ -58,29 +67,32 @@ async function poll(route,states,timeout=150000){const until=Date.now()+timeout;
 let forward;
 process.on('exit',()=>forward?.kill());
 async function startForward(){
- if (forward && forward.exitCode === null && forward.signalCode === null) {
-  const stopped = once(forward, 'exit');
-  forward.ref();
-  forward.kill();
-  await stopped;
- }
- const log = openSync(evidencePath('port-forward.log'), 'w');
+ const deadline = Date.now() + 30000;
  const port = consoleURL.port || '80';
- forward = spawn('kubectl', [
-  '--kubeconfig', kubeconfig, '-n', 'workers-mvp', 'port-forward',
-  'deployment/backend', port + ':9000', '--address=127.0.0.1',
- ], {
-  stdio: ['ignore', log, log],
-  env: { ...process.env, KUBECTL_PORT_FORWARD_WEBSOCKETS: 'false' },
- });
- closeSync(log);
- forward.unref();
- for (let attempt = 0; attempt < 60; attempt++) {
-  if (forward.exitCode !== null || forward.signalCode !== null) break;
-  if (readFileSync(evidencePath('port-forward.log'), 'utf8').includes('Forwarding from 127.0.0.1:' + port + ' -> 9000')) {
-   try {
-    if ((await request('/api/healthz')).status === 200) return;
-   } catch {}
+ while (Date.now() < deadline) {
+  if (forward && forward.exitCode === null && forward.signalCode === null) {
+   const stopped = once(forward, 'exit');
+   forward.ref();
+   forward.kill();
+   await stopped;
+  }
+  const log = openSync(evidencePath('port-forward.log'), 'w');
+  forward = spawn('kubectl', [
+   '--kubeconfig', kubeconfig, '-n', 'workers-mvp', 'port-forward',
+   'deployment/backend', port + ':9000', '--address=127.0.0.1',
+  ], {
+   stdio: ['ignore', log, log],
+   env: { ...process.env, KUBECTL_PORT_FORWARD_WEBSOCKETS: 'false' },
+  });
+  closeSync(log);
+  forward.unref();
+  while (Date.now() < deadline && forward.exitCode === null && forward.signalCode === null) {
+   if (readFileSync(evidencePath('port-forward.log'), 'utf8').includes('Forwarding from 127.0.0.1:' + port + ' -> 9000')) {
+    try {
+     if ((await request('/api/healthz')).status === 200) return;
+    } catch {}
+   }
+   await sleep(500);
   }
   await sleep(500);
  }
@@ -110,7 +122,7 @@ const credential=await api('/api/v1/system/api-keys','POST',{name:'Workers kind 
 writeFileSync(generatedPath('api-key.json'),JSON.stringify({key,expires_at:credential.expires_at}),{mode:0o600});chmodSync(generatedPath('api-key.json'),0o600);
 const run=randomUUID().slice(0,8);
 const org=await api('/api/v1/orgs','POST',{name:'Workers '+run},201,{session:true});const service=await api('/api/v1/orgs/'+org.id+'/workers','POST',{name:'orders-'+run},201);const base='/api/v1/orgs/'+org.id+'/workers/'+service.id;
-const initialPods=JSON.parse(kubectl('get','pods','-n','workers-mvp','-l','role=krun-runtime','-o','json')).items.filter(p=>!p.metadata.deletionTimestamp).map(p=>({name:p.metadata.name,uid:p.metadata.uid,restarts:p.status.containerStatuses[0].restartCount}));
+const initialPods=JSON.parse(kubectl('get','pods','-n','workers-mvp','-l','role=krun-runtime,pool=default','-o','json')).items.filter(p=>!p.metadata.deletionTimestamp).map(p=>({name:p.metadata.name,uid:p.metadata.uid,restarts:p.status.containerStatuses[0].restartCount}));
 await check('candidate validator is isolated from the serving Service',async()=>{
  const validators=JSON.parse(kubectl('get','pods','-n','workers-mvp','-l','role=krun-validator,pool=default','-o','json')).items.filter(p=>!p.metadata.deletionTimestamp);
  assert.equal(validators.length,1);
@@ -146,6 +158,20 @@ function testerPut(url,base64){
 function testerGet(url){
  const script=`const http=require('http');const u=new URL(process.argv[1]);http.get({hostname:u.hostname,port:u.port,path:u.pathname+u.search},res=>{let s='';res.on('data',x=>s+=x);res.on('end',()=>{let body;try{body=JSON.parse(s)}catch{body=s.slice(0,4096)};console.log(JSON.stringify({status:res.statusCode,body}))});}).on('error',e=>{console.error(e.message);process.exitCode=1;});`;
  return JSON.parse(kubectl('exec','-n','workers-mvp','deploy/tester','--','node','-e',script,url));
+}
+// Config and artifact objects are private. Read the exact object with the control-plane
+// fixture identity, while testerGet continues to exercise anonymous access.
+function controlStorageGet(url){
+ const script=`curl --silent --show-error --max-time 10 --aws-sigv4 'aws:amz:us-east-1:s3' --config - --write-out '\n%{http_code}' "$1" <<EOF
+user = "\${KRUN_S3_ACCESS}:\${KRUN_S3_SECRET}"
+EOF`;
+ const raw=kubectl('exec','-n','workers-mvp','deploy/backend','-c','backend','--','sh','-ec',script,'sh',url);
+ const split=raw.lastIndexOf('\n');
+ assert(split>=0,'signed storage response is missing its status');
+ const status=Number(raw.slice(split+1));
+ let body;
+ try{body=JSON.parse(raw.slice(0,split));}catch{body=undefined;}
+ return {status,body};
 }
 function sourceBundle(code,assets){
  const tarFile=(name,bytes)=>{const h=Buffer.alloc(512);h.write(name,0,100,'utf8');const o=(off,len,n)=>h.write(n.toString(8).padStart(len-1,'0')+'\0',off,len,'ascii');o(100,8,0o644);o(108,8,0);o(116,8,0);o(124,12,bytes.length);o(136,12,0);h.fill(32,148,156);h[156]=48;h.write('ustar\0',257,6,'ascii');h.write('00',263,2,'ascii');const sum=h.reduce((n,b)=>n+b,0);h.write(sum.toString(8).padStart(6,'0')+'\0 ',148,8,'ascii');return Buffer.concat([h,bytes,Buffer.alloc((512-bytes.length%512)%512)]);};
@@ -183,7 +209,7 @@ async function readBuildLog(buildID) {
   assert.equal(typeof result.log, 'string');
   return result.log;
 }
-let b1,b2,prodFirst,hostTest,hostProd,repositoryBuild,repositoryVersion,repositoryHost;
+let b1,b2,prodFirst,prodSecond,hostTest,hostProd,repositoryBuild,repositoryVersion,repositoryHost;
 await check('authenticated real Kubernetes build finalizes S3 archive', async () => {
   b1 = await build(source('v1-' + run));
   const artifact = await api(base + '/artifacts/' + b1.artifact_id);
@@ -213,7 +239,7 @@ await check('repository build uses TLS Git and the Wrangler build-pack Job',asyn
  return {provider:'kind-git',build:repositoryBuild.id,commit:repositoryBuild.repository_source.commit,artifact:repositoryBuild.artifact_id,version:repositoryVersion.version_id,response:response.body};
 });
 await check('same Artifact publishes with production configuration',async()=>{await api(base+'/environments/production','PATCH',{expected_revision:1,variables:{GREETING:'production-value'}});prodFirst=await publish(b1.id,'production',0);const r=await invoke(hostProd);assert.equal(r.body.greeting,'production-value');assert.equal(r.body.environment,'production');return {version:prodFirst.version_id,response:r.body};});
-await check('v2 build and publish changes production without changing test',async()=>{b2=await build(source('v2-'+run));await publish(b2.id,'production',1);assert.equal((await invoke(hostProd)).body.version,'v2-'+run);assert.equal((await invoke(hostTest)).body.version,'v1-'+run);return {build_id:b2.id};});
+await check('v2 build and publish changes production without changing test',async()=>{b2=await build(source('v2-'+run));prodSecond=await publish(b2.id,'production',1);assert.equal((await invoke(hostProd)).body.version,'v2-'+run);assert.equal((await invoke(hostTest)).body.version,'v1-'+run);return {build_id:b2.id};});
 await check('stale Version revision rejected',async()=>{const r=await request(base+'/environments/production/deployments','POST',{build_id:b1.id,expected_revision:1,idempotency_key:randomUUID()});assert.equal(r.status,409);return r.body.error.code;});
 await check('historical version rollback restores code and immutable configuration',async()=>{await api(base+'/environments/production','PATCH',{expected_revision:2,variables:{GREETING:'future-config'}});const op=await api(base+'/environments/production/rollbacks','POST',{version_id:prodFirst.version_id,expected_revision:2,idempotency_key:randomUUID()},202);await poll(base+'/operations/'+op.id,['available']);const r=await invoke(hostProd);assert.equal(r.body.version,'v1-'+run);assert.equal(r.body.greeting,'production-value');assert.equal((await api(base+'/environments/production/history')).items.length,3);return r.body;});
 await check('syntax error fails build and retains production', async () => {
@@ -252,7 +278,7 @@ await check('preview lifecycle: create, publish with own variables, then delete'
 await check('business network and platform credentials are absent',async()=>{const r=await invoke(hostTest,'/probe');assert.equal(r.status,200);assert.equal(r.body.blocked,true);assert.equal(r.body.tcpBlocked,true);assert(!r.body.bindings.some(n=>['PLATFORM','LOADER','RUNTIME_TOKEN','MANAGEMENT_TOKEN'].includes(n)));return r.body;});
 await check('build idempotency and content addressed Artifact deduplication',async()=>{const data={environment:'fix-auth',...source('v1-'+run),idempotency_key:randomUUID()};const a=await api(base+'/builds','POST',data,202);const b=await api(base+'/builds','POST',data);assert.equal(a.id,b.id);const done=await poll(base+'/builds/'+a.id,['succeeded']);assert.equal(done.artifact_id,b1.artifact_id);const conflict=await request(base+'/builds','POST',{...data,...source('different')});assert.equal(conflict.status,409);return {same_build:a.id,artifact:done.artifact_id};});
 await check('invalid paths and cross-service Artifact access rejected',async()=>{const r=await request(base+'/builds','POST',{environment:'fix-auth',entrypoint:'../bad.ts',files:{'../bad.ts':'x'},idempotency_key:randomUUID()});assert.equal(r.status,422);const other=await api('/api/v1/orgs/'+org.id+'/workers','POST',{name:'unrelated'},201);const x=await request('/api/v1/orgs/'+org.id+'/workers/'+other.id+'/artifacts/'+b1.artifact_id);assert.equal(x.status,404);return {path:r.status,other_service:x.status};});
-await check('publishing never restarted the runtime Pods',async()=>{const now=JSON.parse(kubectl('get','pods','-n','workers-mvp','-l','role=krun-runtime','-o','json')).items.filter(p=>!p.metadata.deletionTimestamp);assert.deepEqual(now.map(p=>p.metadata.uid).sort(),initialPods.map(p=>p.uid).sort());assert(now.every(p=>p.status.containerStatuses[0].restartCount===initialPods.find(x=>x.uid===p.metadata.uid).restarts));return initialPods;});
+await check('publishing never restarted the runtime Pods',async()=>{const now=JSON.parse(kubectl('get','pods','-n','workers-mvp','-l','role=krun-runtime,pool=default','-o','json')).items.filter(p=>!p.metadata.deletionTimestamp);assert.deepEqual(now.map(p=>p.metadata.uid).sort(),initialPods.map(p=>p.uid).sort());assert(now.every(p=>p.status.containerStatuses[0].restartCount===initialPods.find(x=>x.uid===p.metadata.uid).restarts));return initialPods;});
 writeFileSync(generatedPath('test-service.json'),JSON.stringify({org:org.id,service:service.id,base,hostTest,hostProd,b1:b1.id,prodFirst:prodFirst.version_id},null,2));
 await check('control restart recovers durable state and object-backed code',async()=>{kubectl('rollout','restart','deployment/backend','-n','workers-mvp');kubectl('rollout','status','deployment/backend','-n','workers-mvp','--timeout=120s');await startForward();const history=await api(base+'/environments/production/history');assert.equal(history.items.length,3);assert.equal((await invoke(hostProd)).body.version,'v1-'+run);return {history:history.items.length};});
 let recoveryBuild;
@@ -300,7 +326,7 @@ await check('rollback recovers a committed version with stalled runtime adoption
  const previous=await api(base+'/operations/'+queued.id);assert(['superseded','available'].includes(previous.state));assert.equal((await invoke(hostProd)).body.version,'v1-'+run);
  return {previous:queued.id,previous_state:previous.state,recovery:rollback.id};
 });
-await check('replacement runtime Pod cold-loads the current object-backed Version',async()=>{const old=initialPods[0];kubectl('delete','pod',old.name,'-n','workers-mvp');kubectl('rollout','status','deployment/runtime-default','-n','workers-mvp','--timeout=120s');const pods=JSON.parse(kubectl('get','pods','-n','workers-mvp','-l','role=krun-runtime','-o','json')).items.filter(p=>!p.metadata.deletionTimestamp);const replacement=pods.find(p=>!initialPods.some(x=>x.uid===p.metadata.uid));assert(replacement);let r;for(let i=0;i<16;i++){r=await invoke(hostProd);if(r.headers['x-krun-pod']===replacement.metadata.uid)break;}assert.equal(r.headers['x-krun-pod'],replacement.metadata.uid);assert.equal(r.body.version,'v1-'+run);return {replaced:old.uid,replacement:replacement.metadata.uid,response:r.body};});
+await check('replacement runtime Pod cold-loads the current object-backed Version',async()=>{const old=initialPods[0];kubectl('delete','pod',old.name,'-n','workers-mvp');kubectl('rollout','status','deployment/runtime-default','-n','workers-mvp','--timeout=120s');const pods=JSON.parse(kubectl('get','pods','-n','workers-mvp','-l','role=krun-runtime,pool=default','-o','json')).items.filter(p=>!p.metadata.deletionTimestamp);const replacement=pods.find(p=>!initialPods.some(x=>x.uid===p.metadata.uid));assert(replacement);let r;for(let i=0;i<16;i++){r=await invoke(hostProd);if(r.headers['x-krun-pod']===replacement.metadata.uid)break;}assert.equal(r.headers['x-krun-pod'],replacement.metadata.uid);assert.equal(r.body.version,'v1-'+run);return {replaced:old.uid,replacement:replacement.metadata.uid,response:r.body};});
 let assetBuild,assetVersion,assetArtifact;
 await check('full-stack example source and static assets build as one Artifact',async()=>{
  const upload=await api(base+'/source-uploads','POST',{},201);
@@ -446,10 +472,10 @@ await check('site pagination is complete and shared Gateway routes stay bounded'
 await check('runtime checkpoints use a compact head and immutable host shards scoped to the epoch',async()=>{
  const epoch=sql("SELECT value FROM krun_meta WHERE key='worker_config_epoch'");assert.match(epoch,/^[0-9a-f]{32}$/);
  const configRoot=storage+'/config/pools/default/epochs/'+epoch+'/';
- const latest=testerGet(configRoot+'latest.json');assert.equal(latest.status,200);assert.equal(latest.body.lazy_routes,true);assert.equal(latest.body.config_epoch,epoch);assert.equal(latest.body.snapshot,'');
+ const latest=controlStorageGet(configRoot+'latest.json');assert.equal(latest.status,200);assert.equal(latest.body.lazy_routes,true);assert.equal(latest.body.config_epoch,epoch);assert.equal(latest.body.snapshot,'');
  const {createHash}=await import('node:crypto');const shard=createHash('sha256').update(hostProd).digest('hex').slice(0,2);
- const pointer=testerGet(configRoot+'shards/'+shard+'/latest.json');assert.equal(pointer.status,200);assert.equal(pointer.body.config_epoch,epoch);assert(pointer.body.snapshot.endsWith('.json.gz'));assert(pointer.body.sha256);
- const snapshot=testerGet(configRoot+pointer.body.snapshot);assert.equal(snapshot.status,200);
+ const pointer=controlStorageGet(configRoot+'shards/'+shard+'/latest.json');assert.equal(pointer.status,200);assert.equal(pointer.body.config_epoch,epoch);assert(pointer.body.snapshot.endsWith('.json.gz'));assert(pointer.body.sha256);
+ const snapshot=controlStorageGet(configRoot+pointer.body.snapshot);assert.equal(snapshot.status,200);
  return {lazy_routes:true,shard,checkpoint_revision:pointer.body.config_revision};
 });
 await check('background GC removes indexed artifact files and preserves live assets',async()=>{
@@ -459,7 +485,7 @@ await check('background GC removes indexed artifact files and preserves live ass
  const upload=await api(target+'/source-uploads','POST',{},201);testerPut(upload.upload_url,input.toString('base64'));
  const b=await buildAt(target,{source_type:'upload',entrypoint:'index.ts',source_upload:upload.source_upload,assets:{directory:'public',run_worker_first:[],not_found_handling:'none',html_handling:'none'}});
  const artifact=await api(target+'/artifacts/'+b.artifact_id);
- const objectURL=storage+'/pub/'+org.id+'/'+doomed.id+'/'+artifact.archive_sha256+'/index.html';assert.equal(testerGet(objectURL).status,200);
+ const objectURL=storage+'/pub/'+org.id+'/'+doomed.id+'/'+artifact.archive_sha256+'/index.html';assert.equal(controlStorageGet(objectURL).status,200);
  assert.equal(Number(sql(`SELECT count(*) FROM worker_asset_objects WHERE artifact_id='${artifact.id}'`)),2);
  sql(`WITH private AS(DELETE FROM krun_worker_build_private WHERE build_id='${b.id}') DELETE FROM krun_worker_builds WHERE build_id='${b.id}'`);
  sql(`UPDATE krun_worker_artifacts SET created_at=now()-interval '31 days' WHERE artifact_id='${artifact.id}'`);
@@ -467,8 +493,8 @@ await check('background GC removes indexed artifact files and preserves live ass
  for(let i=0;i<60;i++){
   if(Number(sql(`SELECT count(*) FROM krun_worker_artifacts WHERE artifact_id='${artifact.id}'`))===0){removed=true;break}await sleep(1000);
  }
- assert(removed,'artifact GC did not converge');assert.equal(Number(sql(`SELECT count(*) FROM worker_asset_objects WHERE artifact_id='${artifact.id}'`)),0);assert.equal(testerGet(objectURL).status,404);
- const live=testerGet(storage+'/pub/'+org.id+'/'+service.id+'/'+assetArtifact.archive_sha256+'/index.html');assert.equal(live.status,200);
+ assert(removed,'artifact GC did not converge');assert.equal(Number(sql(`SELECT count(*) FROM worker_asset_objects WHERE artifact_id='${artifact.id}'`)),0);assert.equal(controlStorageGet(objectURL).status,404);
+ const live=await invoke('static.workers.test','/'+org.id+'/'+service.id+'/'+assetArtifact.archive_sha256+'/index.html');assert.equal(live.status,200);
  return {removed_artifact:artifact.id,removed_files:2,live_assets:live.status};
 });
 let savedVersion,previewDeployment,pinnedHost;
@@ -499,6 +525,127 @@ await check('pinned deployment URL retains its version after another deployment'
 await check('deleting a Preview revokes its pinned deployment URLs',async()=>{
  await api(base+'/environments/cf-model-preview','DELETE',undefined,204);
  let revoked=false;for(let i=0;i<40;i++){const response=await invoke(pinnedHost);if([404,410].includes(response.status)){revoked=true;break}await sleep(1000)}assert(revoked);return {revoked:true};
+});
+
+const runtimePods = () => JSON.parse(kubectl(
+ '-n', 'workers-mvp', 'get', 'pods', '-l', 'role=krun-runtime,pool=default', '-o', 'json',
+)).items.filter(pod => !pod.metadata.deletionTimestamp);
+const servingRoutes = () => JSON.parse(kubectl(
+ '-n', 'workers-mvp', 'get', 'httproutes', '-o', 'json',
+)).items.map(route => ({ uid: route.metadata.uid, spec: route.spec }))
+ .sort((a, b) => a.uid.localeCompare(b.uid));
+const production = () => api(base + '/environments')
+ .then(({ items }) => items.find(environment => environment.name === 'production'));
+const publishPair = (revision, percentage) => api(base + '/environments/production/deployments', 'POST', {
+ versions: [
+  { version_id: prodFirst.version_id, percentage: 100 - percentage },
+  { version_id: prodSecond.version_id, percentage },
+ ],
+ expected_revision: revision,
+ idempotency_key: randomUUID(),
+}, 202);
+
+await check('dual-version publish stays committed while one serving Pod lags', async () => {
+ const before = await production();
+ const routes = servingRoutes();
+ const pods = runtimePods();
+ assert.equal(pods.length, 2);
+ const slow = pods[0];
+ let warm = false;
+ for (let attempt = 0; attempt < 16 && !warm; attempt++) {
+  const response = await invoke(hostProd, '/api/health');
+  warm = response.headers['x-krun-pod'] === slow.metadata.uid &&
+   response.body?.service === 'krun-workers-fullstack';
+ }
+ assert(warm, 'old version must be loaded on the delayed Pod before blocking its config connection');
+ const container = slow.status.containerStatuses.find(status => status.name === 'workerd')
+  .containerID.replace('containerd://', '');
+ const docker = (...args) => execFileSync('docker', ['exec', clusterName + '-control-plane', ...args], {
+  encoding: 'utf8',
+  timeout: 20000,
+ });
+ const pid = JSON.parse(docker('crictl', 'inspect', container)).info.pid;
+ assert(Number.isInteger(pid) && pid > 1);
+ const firewall = (verb, direction, port) => docker('nsenter', '-t', String(pid), '-n', 'iptables', verb,
+  direction, '-p', 'tcp', port, '9001', '-j', 'DROP');
+ let operation;
+ firewall('-I', 'OUTPUT', '--dport');
+ let inboundBlocked = false;
+ try {
+  firewall('-I', 'INPUT', '--sport');
+  inboundBlocked = true;
+  operation = await publishPair(before.deployment_revision, 0);
+  await poll(base + '/operations/' + operation.id, ['committed']);
+  let oldResponse;
+  let newResponse;
+  for (let attempt = 0; attempt < 20 && (!oldResponse || !newResponse); attempt++) {
+   const response = await invoke(hostProd, '/api/health');
+   if (response.headers['x-krun-pod'] === slow.metadata.uid && response.body?.service === 'krun-workers-fullstack') {
+    oldResponse = response;
+   }
+   if (response.headers['x-krun-pod'] !== slow.metadata.uid && response.body?.version === 'v1-' + run) {
+    newResponse = response;
+   }
+   if (!oldResponse || !newResponse) await sleep(300);
+  }
+  assert(oldResponse, 'lagging Pod should still serve its previous version');
+  assert(newResponse, 'healthy Pod should adopt the new release');
+  assert.equal((await api(base + '/operations/' + operation.id)).state, 'committed');
+ } finally {
+  try {
+   if (inboundBlocked) firewall('-D', 'INPUT', '--sport');
+  } finally {
+   firewall('-D', 'OUTPUT', '--dport');
+  }
+ }
+ await poll(base + '/operations/' + operation.id, ['available']);
+ const after = await production();
+ assert.equal(environmentHost(after), hostProd);
+ assert.deepEqual(servingRoutes(), routes);
+ assert.deepEqual(runtimePods().map(pod => pod.metadata.uid).sort(), pods.map(pod => pod.metadata.uid).sort());
+ assert.equal((await invoke(hostProd)).body.version, 'v1-' + run);
+ return { operation: operation.id, delayed_pod: slow.metadata.uid };
+});
+
+await check('scaling a serving pool keeps the split and weight changes reuse the Gateway route', async () => {
+ const routes = servingRoutes();
+ const initial = runtimePods().map(pod => pod.metadata.uid);
+ const scale = replicas => {
+  kubectl('-n', 'workers-mvp', 'scale', 'deployment/runtime-default', '--replicas=' + replicas);
+  kubectl('-n', 'workers-mvp', 'rollout', 'status', 'deployment/runtime-default', '--timeout=120s');
+ };
+ const observed = new Set();
+ try {
+  scale(initial.length + 1);
+  const added = runtimePods().find(pod => !initial.includes(pod.metadata.uid));
+  assert(added, 'scale-up must add a runtime Pod');
+  const current = await production();
+  const weighted = await publishPair(current.deployment_revision, 100);
+  await poll(base + '/operations/' + weighted.id, ['available']);
+  for (let attempt = 0; attempt < 24 && observed.size < initial.length + 1; attempt++) {
+   const response = await invoke(hostProd);
+   assert.equal(response.status, 200);
+   assert.equal(response.body.version, 'v2-' + run);
+   observed.add(response.headers['x-krun-pod']);
+  }
+  assert(observed.has(added.metadata.uid), 'Gateway must send traffic to the added Pod');
+  assert.equal(observed.size, initial.length + 1);
+ } finally {
+  scale(initial.length);
+ }
+ const remaining = new Set(runtimePods().map(pod => pod.metadata.uid));
+ assert.equal(remaining.size, initial.length);
+ const environment = await production();
+ const weighted = await publishPair(environment.deployment_revision, 0);
+ await poll(base + '/operations/' + weighted.id, ['available']);
+ for (let attempt = 0; attempt < 8; attempt++) {
+  const response = await invoke(hostProd);
+  assert.equal(response.body.version, 'v1-' + run);
+  assert(remaining.has(response.headers['x-krun-pod']), 'removed Pod must receive no new requests');
+ }
+ assert.deepEqual(servingRoutes(), routes);
+ assert.equal(environmentHost(await production()), hostProd);
+ return { scaled_up: observed.size, scaled_down: remaining.size };
 });
 
 console.log('PASS '+evidence.length+' kind backend end-to-end checks');

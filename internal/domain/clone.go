@@ -209,7 +209,12 @@ func cloneEnvironments(source map[string]WorkerEnvironment) map[string]WorkerEnv
 }
 
 func cloneEnvironment(source WorkerEnvironment) WorkerEnvironment {
+	if source.AssetRetentionSeconds != nil {
+		seconds := *source.AssetRetentionSeconds
+		source.AssetRetentionSeconds = &seconds
+	}
 	source.HyperdriveBindings = cloneStringMap(source.HyperdriveBindings)
+	source.ServiceBindings = maps.Clone(source.ServiceBindings)
 	source.R2Bindings = cloneR2Bindings(source.R2Bindings)
 	source.Domains = slices.Clone(source.Domains)
 	source.Hosts = slices.Clone(source.Hosts)
@@ -287,6 +292,7 @@ func cloneVersions(source map[string]WorkerVersion) map[string]WorkerVersion {
 	for id, version := range source {
 		version.SecretNames = slices.Clone(version.SecretNames)
 		version.HyperdriveBindings = cloneStringMap(version.HyperdriveBindings)
+		version.ServiceBindings = maps.Clone(version.ServiceBindings)
 		version.R2Bindings = cloneR2Bindings(version.R2Bindings)
 		version.CompatibilityFlags = slices.Clone(version.CompatibilityFlags)
 		version.Variables = CloneWorkerVariables(version.Variables)

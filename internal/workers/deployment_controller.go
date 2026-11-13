@@ -65,21 +65,10 @@ func (w *Controller) validateOperation(ctx context.Context, op domain.WorkerOper
 	if time.Since(claim.StartedAt) > 180*time.Second {
 		return fail("Candidate preparation deadline exceeded")
 	}
-	version, ok := state.Versions[op.Version]
-	if !ok {
-		return fail("Version unavailable")
-	}
 	placement, placed := domain.ActiveWorkerPlacement(&state, op.Worker)
 	pool, ok := w.Config.RuntimePool(placement.Pool)
 	if !placed || !ok {
 		return fail("Runtime pool unavailable")
-	}
-	artifact, ok := state.Artifacts[version.Artifact]
-	if !ok {
-		return fail("Artifact unavailable")
-	}
-	if _, err := w.ArtifactCode(ctx, artifact); err != nil {
-		return fail("Artifact validation failed: " + err.Error())
 	}
 	actor := state.OperationPrivate[op.ID].Actor
 	action := appconfig.WorkerOperationAction(op.Kind)
@@ -132,64 +121,92 @@ func (w *Controller) validateOperation(ctx context.Context, op domain.WorkerOper
 	if err != nil || status != 200 || !readyMatches || !readyUIDMatches {
 		return note("Waiting for a runtime image supporting isolated validation")
 	}
-	if len(version.HyperdriveBindings) != 0 {
-		if pool.PublicEgress != "direct" && pool.PrivateEgress != "direct" {
-			return fail("Hyperdrive is unavailable in the serving pool")
-		}
-		if ready["hyperdrive_protocol"] != float64(2) {
-			return note("Waiting for a runtime image supporting Hyperdrive")
-		}
+	if op.Candidate != "" {
 		for _, pod := range pods {
-			if role == "runtime" && pod.UID == candidate.UID {
-				continue
-			}
-			serving, status, err := w.Management(ctx, pool, pod, "", "/ready", nil)
-			if err != nil || status != 200 ||
-				serving["role"] != "runtime" || serving["pool"] != pool.ID ||
-				serving["pod_uid"] != pod.UID || serving["hyperdrive_protocol"] != float64(2) {
-				return note("Waiting for all serving members to support Hyperdrive")
+			status, code, err := w.Management(ctx, pool, pod, "", "/ready", nil)
+			if err != nil || code != 200 || status["pod_uid"] != pod.UID ||
+				status["pool"] != pool.ID || status["gradual_release_protocol"] != float64(1) {
+				return note("Waiting for serving members to support gradual releases")
 			}
 		}
-		if w.Service.validateHyperdriveBindings(ctx, version.Organization, version.HyperdriveBindings) != nil {
-			return fail("Hyperdrive configuration is unavailable")
+	}
+	needsServingCheck := op.Candidate != ""
+	targets := []string{op.Version}
+	if op.Candidate != "" {
+		targets = append(targets, op.Candidate)
+	}
+	for _, target := range targets {
+		version, ok := state.Versions[target]
+		if !ok || version.Worker != op.Worker || version.Organization != op.Organization || version.Environment != op.Environment {
+			return fail("Version unavailable")
 		}
-	}
-	secrets, err := w.validationSecrets(ctx, version, pool.ID)
-	if err != nil {
-		return note("Candidate secrets unavailable")
-	}
-
-	grant, e := w.ArtifactReadGrant(ctx, artifact)
-	if e != nil {
-		return note("Artifact credentials unavailable")
-	}
-	payload := map[string]any{
-		"version": version,
-		"secrets": secrets,
-		"artifact": map[string]any{
-			"storage":        runtimeclient.ReadGrantPayload(grant),
-			"object_key":     "bundle.tar.gz",
-			"size":           artifact.Size,
-			"archive_sha256": artifact.ArchiveDigest,
-		},
-	}
-	result, status, e := w.Management(ctx, validationPool, candidate, base, "/validate", payload)
-	if e != nil {
-		return note("Runtime validation temporarily unavailable")
-	}
-	if status != 200 {
-		if result["code"] == "DEPENDENCY_UNAVAILABLE" {
-			return note("Candidate dependency unavailable")
+		artifact, ok := state.Artifacts[version.Artifact]
+		if !ok {
+			return fail("Artifact unavailable")
 		}
-		return fail("Candidate validation failed on member " + candidate.Name)
-	}
+		if _, err := w.ArtifactCode(ctx, artifact); err != nil {
+			return fail("Artifact validation failed: " + err.Error())
+		}
+		if len(version.HyperdriveBindings) != 0 {
+			needsServingCheck = true
+			if pool.PublicEgress != "direct" && pool.PrivateEgress != "direct" {
+				return fail("Hyperdrive is unavailable in the serving pool")
+			}
+			if ready["hyperdrive_protocol"] != float64(2) {
+				return note("Waiting for a runtime image supporting Hyperdrive")
+			}
+			for _, pod := range pods {
+				if role == "runtime" && pod.UID == candidate.UID {
+					continue
+				}
+				serving, status, err := w.Management(ctx, pool, pod, "", "/ready", nil)
+				if err != nil || status != 200 ||
+					serving["role"] != "runtime" || serving["pool"] != pool.ID ||
+					serving["pod_uid"] != pod.UID || serving["hyperdrive_protocol"] != float64(2) {
+					return note("Waiting for all serving members to support Hyperdrive")
+				}
+			}
+			if w.Service.validateHyperdriveBindings(ctx, version.Organization, version.HyperdriveBindings) != nil {
+				return fail("Hyperdrive configuration is unavailable")
+			}
+		}
+		secrets, err := w.validationSecrets(ctx, version, pool.ID)
+		if err != nil {
+			return note("Candidate secrets unavailable")
+		}
 
-	uidMatches := result["pod_uid"] == candidate.UID
-	if base != "" {
-		uidMatches = true
-	}
-	if !uidMatches || result["version_id"] != version.ID || result["archive_sha256"] != version.ArchiveDigest {
-		return fail(fmt.Sprintf("Candidate identity mismatch (pod %s uid %s vs %s, version %s vs %s, archive %s vs %s)", candidate.Name, candidate.UID, result["pod_uid"], version.ID, result["version_id"], version.ArchiveDigest, result["archive_sha256"]))
+		grant, e := w.ArtifactReadGrant(ctx, artifact)
+		if e != nil {
+			return note("Artifact credentials unavailable")
+		}
+		payload := map[string]any{
+			"version": version,
+			"secrets": secrets,
+			"artifact": map[string]any{
+				"storage":        runtimeclient.ReadGrantPayload(grant),
+				"object_key":     "bundle.tar.gz",
+				"size":           artifact.Size,
+				"archive_sha256": artifact.ArchiveDigest,
+			},
+		}
+		result, status, e := w.Management(ctx, validationPool, candidate, base, "/validate", payload)
+		if e != nil {
+			return note("Runtime validation temporarily unavailable")
+		}
+		if status != 200 {
+			if result["code"] == "DEPENDENCY_UNAVAILABLE" {
+				return note("Candidate dependency unavailable")
+			}
+			return fail("Candidate validation failed on member " + candidate.Name)
+		}
+
+		uidMatches := result["pod_uid"] == candidate.UID
+		if base != "" {
+			uidMatches = true
+		}
+		if !uidMatches || result["version_id"] != version.ID || result["archive_sha256"] != version.ArchiveDigest {
+			return fail(fmt.Sprintf("Candidate identity mismatch (pod %s uid %s vs %s, version %s vs %s, archive %s vs %s)", candidate.Name, candidate.UID, result["pod_uid"], version.ID, result["version_id"], version.ArchiveDigest, result["archive_sha256"]))
+		}
 	}
 	var after []kubernetes.WorkerPod
 	if w.Config.ValidatorPool == "" {
@@ -203,7 +220,7 @@ func (w *Controller) validateOperation(ctx context.Context, op domain.WorkerOper
 	if WorkerMemberIDs(after) != WorkerMemberIDs(members) {
 		return note("Validation membership changed; validating again")
 	}
-	if role == "validator" && len(version.HyperdriveBindings) != 0 {
+	if role == "validator" && needsServingCheck {
 		serving, err := w.Kube.RuntimeMembers(ctx, pool.ID, pool.RuntimeService)
 		if err != nil {
 			return false, err
@@ -220,7 +237,11 @@ func (w *Controller) validateOperation(ctx context.Context, op domain.WorkerOper
 	if auth != nil {
 		return fail("Version permission revoked")
 	}
-	return w.Service.Store.CommitOperation(ctx, claim)
+	retention := time.Duration(w.Config.GradualAssetRetentionSeconds) * time.Second
+	if retention == 0 {
+		retention = 24 * time.Hour
+	}
+	return w.Service.Store.CommitOperation(ctx, claim, retention)
 }
 
 func (w *Controller) observeOperation(ctx context.Context, op domain.WorkerOperation, state domain.WorkerState, routesReady bool) error {
@@ -280,6 +301,13 @@ func (w *Controller) observeOperation(ctx context.Context, op domain.WorkerOpera
 	}
 
 	for _, pod := range pods {
+		if op.Candidate != "" {
+			status, code, err := w.Management(ctx, pool, pod, "", "/ready", nil)
+			if err != nil || code != 200 || status["pod_uid"] != pod.UID ||
+				status["pool"] != pool.ID || status["gradual_release_protocol"] != float64(1) {
+				return note("Committed; waiting for gradual release support on serving members")
+			}
+		}
 		ack, ok := acks[pod.UID]
 		if !ok || ack.Pool != pool.ID || ack.Revision < int(revision) || time.Now().UTC().Sub(ack.Time) > 10*time.Second {
 			return nil

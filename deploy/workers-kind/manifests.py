@@ -22,8 +22,13 @@ if not re.fullmatch(r'[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]',bucket): raise SystemExi
 def resource(kind,name,**fields):
  return {'apiVersion':fields.pop('apiVersion','v1'),'kind':kind,'metadata':{'name':name,'namespace':ns},**fields}
 items.append({'apiVersion':'v1','kind':'Namespace','metadata':{'name':ns,'labels':{'lab':'krun-workers-mvp'}}})
-validator_token=base64.urlsafe_b64encode(hmac.new(credentials['runtime_token'].encode(),b'krun/validator/default',hashlib.sha256).digest()).decode().rstrip('=')
-items.append(resource('Secret','workers-credentials',stringData={'KRUN_DATABASE_URL':f'postgres://postgres:{credentials["db_password"]}@postgres:5432/{database}?sslmode=disable','POSTGRES_PASSWORD':credentials['db_password'],'KRUN_S3_ACCESS':credentials['s3_access'],'KRUN_S3_SECRET':credentials['s3_secret'],'KRUN_RUNTIME_TOKEN':credentials['runtime_token'],'KRUN_VALIDATOR_TOKEN':validator_token,'KRUN_MANAGEMENT_TOKEN':credentials['management_token'],'KRUN_WORKERS_SECRETS_KEY':credentials['worker_secrets_key'],'MINIO_ROOT_USER':credentials['s3_access'],'MINIO_ROOT_PASSWORD':credentials['s3_secret']}))
+def derive_token(key, label):
+ return base64.urlsafe_b64encode(hmac.new(credentials[key].encode(),label.encode(),hashlib.sha256).digest()).decode().rstrip('=')
+
+validator_token=derive_token('runtime_token','krun/validator/default')
+isolated_runtime_token=derive_token('runtime_token','krun/kind/runtime/isolated')
+isolated_management_token=derive_token('management_token','krun/kind/management/isolated')
+items.append(resource('Secret','workers-credentials',stringData={'KRUN_DATABASE_URL':f'postgres://postgres:{credentials["db_password"]}@postgres:5432/{database}?sslmode=disable','POSTGRES_PASSWORD':credentials['db_password'],'KRUN_S3_ACCESS':credentials['s3_access'],'KRUN_S3_SECRET':credentials['s3_secret'],'KRUN_RUNTIME_TOKEN':credentials['runtime_token'],'KRUN_VALIDATOR_TOKEN':validator_token,'KRUN_ISOLATED_RUNTIME_TOKEN':isolated_runtime_token,'KRUN_ISOLATED_MANAGEMENT_TOKEN':isolated_management_token,'KRUN_MANAGEMENT_TOKEN':credentials['management_token'],'KRUN_WORKERS_SECRETS_KEY':credentials['worker_secrets_key'],'MINIO_ROOT_USER':credentials['s3_access'],'MINIO_ROOT_PASSWORD':credentials['s3_secret']}))
 items.append(resource('Secret','git-mock-tls',type='kubernetes.io/tls',stringData={'tls.crt':git_mock_certificate,'tls.key':git_mock_private_key,'ca.crt':git_mock_ca}))
 def claim(name,size):items.append(resource('PersistentVolumeClaim',name,spec={'accessModes':['ReadWriteOnce'],'resources':{'requests':{'storage':size}}}))
 claim('postgres-data','1Gi');claim('minio-data','1Gi')
@@ -65,7 +70,18 @@ workers:
       validator_service: runtime-validator-default
       runtime_token: ${KRUN_RUNTIME_TOKEN}
       management_token: ${KRUN_MANAGEMENT_TOKEN}
+      labels:
+        placement: default
       default: true
+    - id: isolated
+      access: [private]
+      private_egress: direct
+      public_egress: direct
+      runtime_service: runtime-isolated
+      runtime_token: ${KRUN_ISOLATED_RUNTIME_TOKEN}
+      management_token: ${KRUN_ISOLATED_MANAGEMENT_TOKEN}
+      labels:
+        placement: isolated
   gateways:
     - id: internal
       name: workers-mvp
@@ -94,10 +110,19 @@ workers:
         exposure: external
       gateway: external
       static_domain: static.public-workers.test
+    - id: isolated
+      domain: isolated-workers.test
+      label: 隔离池内网
+      access: private
+      labels:
+        exposure: isolated
+      gateway: internal
   network_profiles:
     - id: internal-service
       name: 内网服务
       description: kind 环境的内部入口。
+      pool_selector:
+        placement: default
       domain_selector:
         exposure: internal
       requirements:
@@ -110,10 +135,25 @@ workers:
     - id: external-service
       name: 公网服务
       description: kind 环境的外部入口。
+      pool_selector:
+        placement: default
       domain_selector:
         exposure: external
       requirements:
         ingress: [public]
+        private_egress: direct
+        public_egress: direct
+      approval: none
+      visibility: public
+    - id: isolated-service
+      name: 隔离池服务
+      description: kind 环境跨池调用的内部入口。
+      pool_selector:
+        placement: isolated
+      domain_selector:
+        exposure: isolated
+      requirements:
+        ingress: [private]
         private_egress: direct
         public_egress: direct
       approval: none
@@ -171,7 +211,8 @@ backend_image = f'krun-workers-backend:{tag}'
 deployment('backend', [
  {'name': 'backend', 'image': backend_image, 'imagePullPolicy': 'Never',
   'env': [env(n) for n in ['KRUN_DATABASE_URL', 'KRUN_S3_ACCESS', 'KRUN_S3_SECRET',
-                          'KRUN_RUNTIME_TOKEN', 'KRUN_MANAGEMENT_TOKEN', 'KRUN_WORKERS_SECRETS_KEY']],
+                          'KRUN_RUNTIME_TOKEN', 'KRUN_MANAGEMENT_TOKEN', 'KRUN_ISOLATED_RUNTIME_TOKEN',
+                          'KRUN_ISOLATED_MANAGEMENT_TOKEN', 'KRUN_WORKERS_SECRETS_KEY']],
   'securityContext': secure(),
   'volumeMounts': [{'name': 'config', 'mountPath': '/config', 'readOnly': True},
                    {'name': 'workdir', 'mountPath': '/workdir'}],
@@ -195,12 +236,15 @@ service('backend', [9001])
 # allow-list takes CIDR blocks only (host:port is rejected at startup), so it
 # must cover the object-storage Service ClusterIP; NetworkPolicy still pins the
 # real destination to the minio Pods on :9000.
-capnp=f'''using W = import "/workerd/workerd.capnp";
+def serving_config(pool):
+ static_domains={"static.workers.test": "int", "static.public-workers.test": "pub"} if pool == 'default' else {}
+ return f'''using W = import "/workerd/workerd.capnp";
 const config :W.Config = (
  services = [
   (name="entry",worker=(modules=[
    (name="entry.js",esModule=embed "/app/entry.js"),
    (name="assets.js",esModule=embed "/app/assets.js"),
+   (name="service.js",esModule=embed "/app/service.js"),
    (name="cache.js",esModule=embed "/app/cache.js"),
    (name="storage.js",esModule=embed "/app/storage.js"),
    (name="storage/signature.js",esModule=embed "/app/storage/signature.js"),
@@ -213,18 +257,18 @@ const config :W.Config = (
    (name="R2_BINDING_SOURCE",text=embed "/app/storage/binding.js"),
    (name="R2_METADATA_SOURCE",text=embed "/app/storage/metadata.js"),
    (name="R2_XML_SOURCE",text=embed "/app/storage/xml.js"),
-   (name="LOADER",workerLoader=(id="workers-mvp-default")),
+   (name="LOADER",workerLoader=(id="workers-mvp-{pool}")),
    (name="PLATFORM",service="platform"),
    (name="POD_NAME",text=embed "/pod/name"),
    (name="POD_UID",text=embed "/pod/uid"),
    (name="RUNTIME_TOKEN",text=embed "/secrets/KRUN_RUNTIME_TOKEN"),
    (name="MANAGEMENT_TOKEN",text=embed "/secrets/KRUN_MANAGEMENT_TOKEN"),
-   (name="RUNTIME_POOL",text="default"),
-   (name="CONFIG_BASE",text="http://minio:9000/krun-artifacts/config/pools/default"),
+   (name="RUNTIME_POOL",text="{pool}"),
+   (name="CONFIG_BASE",text="http://minio:9000/{bucket}/config/pools/{pool}"),
    (name="STORAGE_ACCESS_KEY",text=embed "/secrets/KRUN_S3_ACCESS"),
    (name="STORAGE_SECRET_KEY",text=embed "/secrets/KRUN_S3_SECRET"),
    (name="STORAGE_REGION",text="us-east-1"),
-   (name="STATIC_DOMAINS",text={json.dumps(json.dumps({"static.workers.test": "int", "static.public-workers.test": "pub"}))}),
+   (name="STATIC_DOMAINS",text={json.dumps(json.dumps(static_domains))}),
    (name="ASSETS_CACHE_MAX",text="67108864")
   ],globalOutbound="storage")),
   (name="platform",external=(address="backend:9001",http=())),
@@ -241,6 +285,7 @@ const config :W.Config = (
   (name="entry",worker=(modules=[
    (name="entry.js",esModule=embed "/app/entry.js"),
    (name="assets.js",esModule=embed "/app/assets.js"),
+   (name="service.js",esModule=embed "/app/service.js"),
    (name="cache.js",esModule=embed "/app/cache.js"),
    (name="storage.js",esModule=embed "/app/storage.js"),
    (name="storage/signature.js",esModule=embed "/app/storage/signature.js"),
@@ -269,10 +314,34 @@ const config :W.Config = (
   (name="management",address="*:8083",http=(),service=(name="entry",entrypoint="Management"))
  ]
 );'''
-capnp=capnp.replace('krun-artifacts',bucket)
-items.append(resource('ConfigMap','runtime-config',data={'runtime.capnp':capnp}))
+def serving_runtime(pool, replicas, runtime_token, management_token):
+ name=f'runtime-{pool}'
+ config_name='runtime-config' if pool == 'default' else f'{name}-config'
+ items.append(resource('ConfigMap',config_name,data={'runtime.capnp':serving_config(pool)}))
+ secrets=[{'key':runtime_token,'path':'KRUN_RUNTIME_TOKEN'},
+          {'key':management_token,'path':'KRUN_MANAGEMENT_TOKEN'}]
+ secrets.extend({'key':name,'path':name} for name in ['KRUN_S3_ACCESS','KRUN_S3_SECRET'])
+ deployment(name,[{
+  'name':'workerd',
+  'image':f'krun-worker-runtime:{tag}',
+  'imagePullPolicy':'Never',
+  'securityContext':secure(),
+  'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},
+                  {'name':'pod','mountPath':'/pod','readOnly':True},
+                  {'name':'secrets','mountPath':'/secrets','readOnly':True}],
+  'readinessProbe':{'httpGet':{'path':'/ready','port':8083},'periodSeconds':1,'timeoutSeconds':5,'failureThreshold':2},
+  'resources':limits('1Gi'),
+ }],replicas=replicas,labels={'role':'krun-runtime','pool':pool},volumes=[
+  {'name':'config','configMap':{'name':config_name}},
+  {'name':'pod','downwardAPI':{'items':[{'path':'name','fieldRef':{'fieldPath':'metadata.name'}},
+                                      {'path':'uid','fieldRef':{'fieldPath':'metadata.uid'}}]}},
+  {'name':'secrets','secret':{'secretName':'workers-credentials','items':secrets}},
+ ],terminationGracePeriodSeconds=10)
+ service(name,[8081,8083])
+
+serving_runtime('default',2,'KRUN_RUNTIME_TOKEN','KRUN_MANAGEMENT_TOKEN')
+serving_runtime('isolated',1,'KRUN_ISOLATED_RUNTIME_TOKEN','KRUN_ISOLATED_MANAGEMENT_TOKEN')
 items.append(resource('ConfigMap','validator-config',data={'runtime.capnp':validator_capnp}))
-deployment('runtime-default',[{'name':'workerd','image':f'krun-worker-runtime:{tag}','imagePullPolicy':'Never','securityContext':secure(),'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},{'name':'pod','mountPath':'/pod','readOnly':True},{'name':'secrets','mountPath':'/secrets','readOnly':True}],'readinessProbe':{'httpGet':{'path':'/ready','port':8083},'periodSeconds':1,'timeoutSeconds':5,'failureThreshold':2},'resources':limits('1Gi')}],replicas=2,labels={'role':'krun-runtime','pool':'default'},volumes=[{'name':'config','configMap':{'name':'runtime-config'}},{'name':'pod','downwardAPI':{'items':[{'path':'name','fieldRef':{'fieldPath':'metadata.name'}},{'path':'uid','fieldRef':{'fieldPath':'metadata.uid'}}]}},{'name':'secrets','secret':{'secretName':'workers-credentials','items':[{'key':n,'path':n} for n in ['KRUN_RUNTIME_TOKEN','KRUN_MANAGEMENT_TOKEN','KRUN_S3_ACCESS','KRUN_S3_SECRET']]}}],terminationGracePeriodSeconds=10);service('runtime-default',[8081,8083])
 deployment('runtime-validator-default',[{'name':'workerd','image':f'krun-worker-runtime:{tag}','imagePullPolicy':'Never','securityContext':secure(),'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},{'name':'pod','mountPath':'/pod','readOnly':True},{'name':'secrets','mountPath':'/secrets','readOnly':True}],'readinessProbe':{'httpGet':{'path':'/ready','port':8083},'periodSeconds':1,'timeoutSeconds':5,'failureThreshold':2},'livenessProbe':{'httpGet':{'path':'/ready','port':8083},'periodSeconds':2,'timeoutSeconds':1,'failureThreshold':3},'resources':limits('512Mi')}],labels={'role':'krun-validator','pool':'default'},volumes=[{'name':'config','configMap':{'name':'validator-config'}},{'name':'pod','downwardAPI':{'items':[{'path':'name','fieldRef':{'fieldPath':'metadata.name'}},{'path':'uid','fieldRef':{'fieldPath':'metadata.uid'}}]}},{'name':'secrets','secret':{'secretName':'workers-credentials','items':[{'key':'KRUN_VALIDATOR_TOKEN','path':'KRUN_RUNTIME_TOKEN'},{'key':'KRUN_MANAGEMENT_TOKEN','path':'KRUN_MANAGEMENT_TOKEN'}]}}],terminationGracePeriodSeconds=5);service('runtime-validator-default',[8083])
 deployment('tester',[{'name':'tester','image':f'krun-worker-builder:{tag}','imagePullPolicy':'Never','command':['node','-e','setInterval(()=>{},100000)'],'resources':limits('128Mi')}])
 def selector(app):return {'podSelector':{'matchLabels':{'app':app}}}
@@ -305,7 +374,7 @@ policy('git-mock',{'app':'git-mock'},ingress=[{'from':[selector('backend'),selec
 # Both network scopes are separate Gateway instances. The gateway-name label
 # selector keeps each instance's traffic distinct at the NetworkPolicy layer.
 gw_selector=[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}},'podSelector':{'matchLabels':{'gateway.networking.k8s.io/gateway-name':g}}} for g in ['workers-mvp','workers-public']]
-policy('minio',{'app':'minio'},ingress=[{'from':[selector('backend'),selector('krun-builder'),selector('runtime-default'),selector('runtime-validator-default'),selector('tester')],'ports':[tcp(9000)]},{'from':gw_selector,'ports':[tcp(9000)]}])
+policy('minio',{'app':'minio'},ingress=[{'from':[selector('backend'),selector('krun-builder'),selector('runtime-default'),selector('runtime-isolated'),selector('runtime-validator-default'),selector('tester')],'ports':[tcp(9000)]},{'from':gw_selector,'ports':[tcp(9000)]}])
 policy('builder',{'app':'krun-builder'},egress=[{'to':[selector('minio')],'ports':[tcp(9000)]}])
 policy('runtime',{'role':'krun-runtime'},ingress=[{'from':gw_selector,'ports':[tcp(8081)]},{'from':[selector('backend')],'ports':[tcp(8083)]}],egress=[{'to':[selector('backend')],'ports':[tcp(9001)]},{'to':[selector('minio')],'ports':[tcp(9000)]}])
 policy('validator',{'role':'krun-validator'},ingress=[{'from':[selector('backend')],'ports':[tcp(8083)]}],egress=[{'to':[selector('backend')],'ports':[tcp(9001)]},{'to':[selector('minio')],'ports':[tcp(9000)]}])

@@ -67,6 +67,8 @@ export type Environment = {
   deployment_revision: number;
   version_id?: string;
   confirmed_version_id?: string;
+  candidate_version?: string;
+  candidate_weight?: number;
 };
 
 /** Platform-configured domain. label is a free-form note, not a routing concept. */

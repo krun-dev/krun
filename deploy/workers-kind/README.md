@@ -59,6 +59,8 @@ KUBECONFIG="$KUBECONFIG" KIND_CLUSTER_NAME="$KIND_CLUSTER_NAME" node e2e.mjs
 - 发布 [`examples/workers-fullstack`](../../examples/workers-fullstack/README.md) 的真实前后端项目，
   验证同源 API、SPA fallback、HTML 规范化、ETag/304、immutable 缓存与静态域；
 - 重启 backend、替换 serving runtime Pod，并验证认领租约与持久化恢复；候选只由不接 Gateway 的 validator 加载；
+- 暂停一个承流 Pod 的配置同步，验证双版本发布停在 `committed`，恢复同步后进入
+  `available`。扩缩容与调权后，从 Gateway 检查承流 Pod、版本和 HTTPRoute；
 - 在目标 kind 节点做临时网络故障注入，随后撤销同一规则。
 
 因此运行者需要 Docker 权限以及 kind 节点中的 `crictl`、`nsenter`、`iptables`。
@@ -74,6 +76,35 @@ Go 控制台和 Runtime API 都在 backend Pod 内绑定回环 IP。backend Serv
 validator 访问该端口，Runtime API 仍验证池凭据。
 
 ## 同源 UI 与规模回归
+
+### krun CLI E2E
+
+需要 Go、Node.js、kubectl 和已运行的独立 kind 验收栈。先运行上面的原生 E2E 生成
+`deploy/workers-kind/generated/api-key.json` 和 `test-service.json`，再在两个终端分别转发控制台和私网 Gateway。
+如果部署时配置了 `KRUN_E2E_ORIGIN`，控制台转发端口和 `KRUN_UI_ORIGIN` 使用同一个端口。
+
+```sh
+kubectl -n workers-mvp port-forward deployment/backend 4380:9000 --address=127.0.0.1
+```
+
+```sh
+kubectl -n kgateway-system port-forward service/workers-mvp 4382:8080 --address=127.0.0.1
+```
+
+从仓库根目录运行：
+
+```sh
+KRUN_TOKEN="$(node -p 'require("./deploy/workers-kind/generated/api-key.json").key')" \
+  KRUN_CLI_E2E_ORG="$(node -p 'require("./deploy/workers-kind/generated/test-service.json").org')" \
+  KRUN_UI_ORIGIN=http://127.0.0.1:4380 \
+  KRUN_CLI_E2E_GATEWAY_ORIGIN=http://127.0.0.1:4382 \
+  node deploy/workers-kind/cli.e2e.mjs
+```
+
+成功时输出 `KRUN CLI E2E PASSED`。用例覆盖 API Key 登录、构建、上传、0% 验证、调权、
+历史查询、拒绝非法比例与过期 revision、真实请求分桶、晋级和回滚。
+
+### 浏览器与规模测试
 
 测试镜像同时包含 `npm run build` 导出的静态控制台；`deploy.sh` 会在本机依赖可用时构建，
 也可预先提供 gitignored 的 `generated/console/`。Go 在同一 origin 提供 `/` 与 `/api/*`，
@@ -93,6 +124,8 @@ KRUN_UI_ORIGIN=http://127.0.0.1:4380 npm run test:ui
 扩展 E2E 覆盖同源静态入口、百站点游标分页、共享 HTTPRoute 数量、有界配置 head/shard，
 以及实际过期 Artifact 的 indexed GC，确认回收不会删除仍在服务的资产。
 百万 PostgreSQL 元数据测试及算法微基准见 [性能验证](../../docs/performance-scaling.md)。
+原版 Wrangler 的双版本切流、定向验证、缓存和同池、跨池服务绑定见
+[Wrangler 端到端验证](../../docs/cloudflare-api.md#端到端验证)。
 
 ## 数据基线
 

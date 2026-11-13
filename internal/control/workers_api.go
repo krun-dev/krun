@@ -269,9 +269,19 @@ func (s *Server) workerDeploymentCreate(st *State, p Principal, r *http.Request,
 	if e != nil {
 		return nil, 0, e
 	}
-	var in workerapp.WorkerDeploymentCreateInput
-	if e = body(r, &in); e != nil {
+	var request struct {
+		workerapp.WorkerDeploymentCreateInput
+		Versions []workerapp.DeploymentPercentage `json:"versions,omitempty"`
+	}
+	if e = body(r, &request); e != nil {
 		return nil, 0, e
+	}
+	in := request.WorkerDeploymentCreateInput
+	if request.Versions != nil {
+		in.Versions, e = workerapp.DeploymentWeights(request.Versions)
+		if e != nil {
+			return nil, 0, e
+		}
 	}
 	out, outcome, err := s.workerApplication(r).WorkerDeploymentCreate(r.Context(), st, p, workerRef(r), t, env, kind, in)
 	return out, workerHTTPStatus(outcome), err

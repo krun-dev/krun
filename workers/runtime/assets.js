@@ -428,7 +428,7 @@ export function assetDecision(request, config, files, rules, binding = false) {
 
     for (;;) {
       if (files.has(directory + "404.html")) {
-        return { file: directory + "404.html", status: 404 };
+        return { file: directory + "404.html", status: 404, fallback: true };
       }
 
       if (directory === "/") {
@@ -445,10 +445,14 @@ export function assetDecision(request, config, files, rules, binding = false) {
     (binding || request.headers.get("sec-fetch-mode") === "navigate") &&
     files.has("/index.html")
   ) {
-    return { file: "/index.html" };
+    return { file: "/index.html", fallback: true };
   }
 
   return {};
+}
+
+export function immutableAssetName(path) {
+  return /[-.][0-9a-f]{8,}\.[a-z0-9]+$/i.test(path);
 }
 
 export function assetResponse(request, path, value, status = 200) {
@@ -456,7 +460,7 @@ export function assetResponse(request, path, value, status = 200) {
     etag: '"' + value.digest + '"',
     "x-content-type-options": "nosniff",
     "content-type": value.content_type,
-    "cache-control": /[-.][0-9a-f]{8,}\.[a-z0-9]+$/i.test(path)
+    "cache-control": immutableAssetName(path)
       ? "public, max-age=31536000, immutable"
       : "public, max-age=300",
   });

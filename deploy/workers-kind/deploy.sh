@@ -117,8 +117,8 @@ if [[ "$task_database_exists" != "1" ]]; then
   kubectl --kubeconfig "$KUBECONFIG" -n workers-mvp exec deployment/postgres -- createdb -U postgres "$task_database"
 fi
 # Rebuilt tags are local to this lab. Restart to consume updated images/config.
-kubectl --kubeconfig "$KUBECONFIG" -n workers-mvp rollout restart deployment/backend deployment/git-mock deployment/runtime-default deployment/runtime-validator-default deployment/tester
-for task_deployment in postgres minio git-mock backend runtime-default runtime-validator-default tester; do
+kubectl --kubeconfig "$KUBECONFIG" -n workers-mvp rollout restart deployment/backend deployment/git-mock deployment/runtime-default deployment/runtime-isolated deployment/runtime-validator-default deployment/tester
+for task_deployment in postgres minio git-mock backend runtime-default runtime-isolated runtime-validator-default tester; do
   kubectl --kubeconfig "$KUBECONFIG" -n workers-mvp rollout status "deployment/$task_deployment" --timeout=180s
 done
 for task_gateway in workers-mvp workers-public; do
