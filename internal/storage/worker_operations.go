@@ -54,7 +54,7 @@ func (s *Store) RenewOperationClaim(ctx context.Context, claim OperationClaim) (
 // commitOperation publishes a validated version. The environment row must still
 // carry the revision the operation validated against, so a configuration edit
 // that landed in between makes this a no-op instead of an overwrite.
-func (s *Store) CommitOperation(ctx context.Context, claim OperationClaim) (bool, error) {
+func (s *Store) CommitOperation(ctx context.Context, claim OperationClaim, retention ...time.Duration) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -64,24 +64,51 @@ func (s *Store) CommitOperation(ctx context.Context, claim OperationClaim) (bool
 	// Win this operation before changing the environment. The transient state
 	// is visible only inside this transaction, so a crash rolls it back and a
 	// concurrent committer cannot publish a version for an operation it lost.
-	var worker, environment, version string
-	var expectedRevision int
+	var worker, environment, version, candidate string
+	var expectedRevision, candidateWeight int
 	err = tx.QueryRow(ctx, `UPDATE krun_worker_operations SET state='committing'
 		WHERE `+activeOperationClaim+`
-		RETURNING worker_id, env_name, version_id, expected_revision`,
-		claim.id, claim.replica, claim.generation, workerClaimLease).Scan(&worker, &environment, &version, &expectedRevision)
+		RETURNING worker_id, env_name, version_id, expected_revision, candidate_version_id, candidate_weight`,
+		claim.id, claim.replica, claim.generation, workerClaimLease).Scan(&worker, &environment, &version, &expectedRevision, &candidate, &candidateWeight)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
+	if _, err = tx.Exec(ctx, "SAVEPOINT retain_assets"); err != nil {
+		return false, err
+	}
+	window := 24 * time.Hour
+	if len(retention) != 0 {
+		window = retention[0]
+	}
+	if window >= 0 {
+		_, err = tx.Exec(ctx, `INSERT INTO krun_worker_retained_assets(worker_id,env_name,version_id,expires_at,pending_seconds)
+			SELECT e.worker_id,e.env_name,old.version_id, TIMESTAMPTZ '9999-12-31 00:00:00+00',
+			       COALESCE(e.gradual_asset_retention_seconds,$7)+1
+			FROM krun_worker_environments e
+			CROSS JOIN LATERAL (VALUES (e.version_id,100000-e.candidate_weight),
+				(e.candidate_version_id,e.candidate_weight)) old(version_id,weight)
+			WHERE e.worker_id=$1 AND e.env_name=$2 AND e.deployment_revision=$3 AND e.enabled
+			  AND old.version_id<>'' AND old.weight>0 AND COALESCE(e.gradual_asset_retention_seconds,$7)>0
+			  AND NOT ((old.version_id=$4 AND $6<100000) OR (old.version_id=$5 AND $6>0))
+			ON CONFLICT (worker_id,env_name,version_id) DO UPDATE
+			SET expires_at=excluded.expires_at,pending_seconds=excluded.pending_seconds`,
+			worker, environment, expectedRevision, version, candidate, candidateWeight, int(window.Seconds()))
+		if err != nil {
+			return false, err
+		}
+	}
 	var revision int
 	err = tx.QueryRow(ctx, `UPDATE krun_worker_environments
-		SET version_id=$4, deployment_revision=deployment_revision+1, updated_at=now()
+		SET version_id=$4, candidate_version_id=$5, candidate_weight=$6, deployment_revision=deployment_revision+1, updated_at=now()
 		WHERE worker_id=$1 AND env_name=$2 AND deployment_revision=$3 AND enabled
-		RETURNING deployment_revision`, worker, environment, expectedRevision, version).Scan(&revision)
+		RETURNING deployment_revision`, worker, environment, expectedRevision, version, candidate, candidateWeight).Scan(&revision)
 	if errors.Is(err, pgx.ErrNoRows) {
+		if _, err = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT retain_assets"); err != nil {
+			return false, err
+		}
 		// The environment moved on: fail the operation, which is what the
 		// previous single-writer version also did on a revision conflict.
 		if _, err = tx.Exec(ctx, `UPDATE krun_worker_operations
@@ -149,6 +176,7 @@ func (s *Store) ConfirmOperation(ctx context.Context, id, pool string, target do
 		WHERE o.operation_id=$1 AND o.state='committed' AND o.edge_pool=$2 AND o.edge_revision=$3 AND o.edge_revision>0
 			AND e.worker_id=o.worker_id AND e.env_name=o.env_name AND e.enabled
 			AND e.deployment_revision=o.deployment_revision AND e.version_id=o.version_id
+			AND e.candidate_version_id=o.candidate_version_id AND e.candidate_weight=o.candidate_weight
 			AND `+activeOperationPool, id, pool, edgeRevision)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
@@ -175,6 +203,15 @@ func (s *Store) ConfirmOperation(ctx context.Context, id, pool string, target do
 		ON CONFLICT (worker_id, env_name, revision) DO NOTHING`, id); err != nil {
 		return err
 	}
+	// Keep retiring manifests readable through convergence and a bounded
+	// request drain. An intervening publish carries pending refs forward.
+	if _, err = tx.Exec(ctx, `UPDATE krun_worker_retained_assets a
+		SET expires_at=now()+(a.pending_seconds-1)*interval '1 second'+interval '30 seconds', pending_seconds=0
+		FROM krun_worker_operations o WHERE o.operation_id=$1
+		AND a.worker_id=o.worker_id AND a.env_name=o.env_name AND a.pending_seconds>0`, id); err != nil {
+		return err
+	}
+
 	return tx.Commit(ctx)
 }
 
@@ -195,12 +232,14 @@ func (s *Store) PinOperationEdgeRevision(ctx context.Context, id, pool string) (
 			AND m.key='worker_config_head'
 			AND e.worker_id=o.worker_id AND e.env_name=o.env_name AND e.enabled
 			AND e.deployment_revision=o.deployment_revision AND e.version_id=o.version_id
+			AND e.candidate_version_id=o.candidate_version_id AND e.candidate_weight=o.candidate_weight
 			AND `+activeOperationPool+`
 			AND NOT EXISTS (SELECT 1 FROM worker_config_dirty d WHERE d.worker_id=o.worker_id)
 			AND EXISTS (
 				SELECT 1 FROM worker_config_routes r
 				JOIN worker_config_versions v ON v.version_id=r.version_id AND v.pool=r.pool
 				WHERE r.worker_id=o.worker_id AND r.version_id=o.version_id AND r.pool=$2
+					AND r.candidate_version_id=o.candidate_version_id AND r.candidate_weight=o.candidate_weight
 					AND r.enabled AND r.expires_at IS NULL
 			)
 		RETURNING o.edge_revision`, id, pool).Scan(&stored)

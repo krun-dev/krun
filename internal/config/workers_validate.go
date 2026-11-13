@@ -175,6 +175,9 @@ func (c *WorkersConfig) Validate() error {
 	if err := c.ValidateSecretKeys(); err != nil {
 		return err
 	}
+	if c.GradualAssetRetentionSeconds < 0 || c.GradualAssetRetentionSeconds > 90*24*60*60 {
+		return fmt.Errorf("gradual_asset_retention_seconds must be between 0 and 7776000")
+	}
 	if c.PreviewLimit == 0 {
 		c.PreviewLimit = 32
 	}

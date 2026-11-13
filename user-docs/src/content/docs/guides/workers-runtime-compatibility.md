@@ -66,7 +66,8 @@ krun 基于 workerd 运行模块格式的 JavaScript / TypeScript Worker。代�
 - 以 krun 组件文档明确列出的 binding、方法和参数范围为准；官方文档用于查询写法，不代表 krun 支持其中全部能力。
 - 先检查项目实际配置的 binding 名称、compatibility date 和 flags；不要自行升级兼容日期或添加未经验证的 flags。
 - 业务 Worker 没有默认的公网出站权限，不要依赖全局 fetch(url) 访问外部服务；它与接收请求的 fetch handler 不同。
-- 不要假设支持 request.cf、KV、D1、Durable Objects、Queues、Service bindings 或定时触发器。
+- 服务绑定使用 `env.SERVICE.fetch(request)`，调用同一组织内目标 Worker 的默认 HTTP 入口。只使用项目已配置的绑定。
+- 不要假设支持 request.cf、KV、D1、Durable Objects、Queues 或定时触发器。
 - R2 列表处理分页，对象读取处理 null 和无 body；Cache miss 必须有回退，不能依赖跨实例共享或持久化缓存。
 - R2 list 每页最多 64 项，批量 delete 最多 1000 项；不使用 startAfter、SSE-C、PUT checksum 或组合条件，不因官方文档列出某个参数就假设 krun 支持。
 - binding 名称与 env 属性一致，区分大小写；bucket_name 是实际桶名。控制台仓库构建需要在目标环境手动配置绑定并发布，不能只修改仓库中的 wrangler.jsonc。

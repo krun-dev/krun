@@ -28,8 +28,9 @@ export default {
 | 版本元数据 | `env.VERSION` | 配置后可读取 `id`、`tag`、`timestamp` |
 | 静态资产 | `env.ASSETS.fetch(request)` | 读取当前版本打包的静态文件；需配置 `assets.binding` |
 | R2 桶 | `env.BUCKET` | 需配置 `r2_buckets` 并绑定已启用的逻辑桶；方法见 [对象存储](/docs/guides/component-object-storage.html) |
+| 服务绑定 | `env.SERVICE.fetch(request)` | 调用同一组织内目标 Worker 的默认 HTTP 入口。Wrangler 使用 `services` 配置并跟随目标部署。 [Wrangler 配置兼容范围](/docs/guides/wrangler-configuration.html) |
 
-这些名称只是示例，实际名称由项目或环境配置决定。不要使用 KV、D1、Durable Objects、Queue 或 Service binding，也不要假设未列出的 binding 可用。
+这些名称只是示例，实际名称由项目或环境配置决定。
 
 ## Cache API
 

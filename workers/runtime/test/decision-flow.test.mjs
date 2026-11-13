@@ -147,9 +147,10 @@ function platformFor(manifestConfig, fileList, rel, options = {}) {
     enabled: true,
     version: rel.id,
     ...(options.expires ? { expires_at: options.expires } : {}),
+    ...options.route,
   };
   let revision = options.revision || 1;
-  const versions = new Map([[rel.id, rel]]);
+  const versions = new Map([[rel.id, rel], ...Object.entries(options.versions || {})]);
   return {
     async fetch(request) {
       const url = new URL(request.url);
@@ -165,12 +166,13 @@ function platformFor(manifestConfig, fileList, rel, options = {}) {
         });
       }
       if (path.startsWith("/config/routes/")) {
+        const override = options.routeLookup?.();
         return Response.json({
           pool: "default",
           config_epoch: fixtureConfigEpoch,
           config_revision: revision,
-          routes: [route],
-          versions: Object.fromEntries(versions),
+          routes: [override?.route ?? route],
+          versions: override?.versions ?? Object.fromEntries(versions),
         });
       }
       if (path.startsWith("/config/changes")) {
@@ -192,6 +194,9 @@ function platformFor(manifestConfig, fileList, rel, options = {}) {
           headers: { "x-krun-config-epoch": fixtureConfigEpoch },
         });
       }
+      if (path === "/version-overrides/authorize") {
+        return options.authorizeOverride(await request.json());
+      }
       if (path === "/ack") {
         return Response.json({ ok: true });
       }
@@ -204,10 +209,11 @@ function platformFor(manifestConfig, fileList, rel, options = {}) {
       const assetMatch = path.match(/^\/versions\/([^/]+)\/assets$/);
       if (assetMatch) {
         const id = decodeURIComponent(assetMatch[1]);
+        const assets = options.versionAssets?.[id];
         return Response.json({
           version_id: id,
-          config: id === rel.id ? manifestConfig : null,
-          files: id === rel.id ? fileList : [],
+          config: assets?.config ?? (id === rel.id ? manifestConfig : null),
+          files: assets?.files ?? (id === rel.id ? fileList : []),
           storage: fixtureRead("http://assets.test/index.html").storage,
         });
       }
@@ -252,6 +258,9 @@ function makeEnv(manifestConfig, fileList, relId = version.id, options = {}) {
                 await loaded;
               }
               workerResponses.push(new URL(request.url).pathname);
+              if (options.workerResponse) {
+                return options.workerResponse(request, key, workerResponses.length);
+              }
               return Response.json({ worker: true, path: new URL(request.url).pathname });
             },
           };
@@ -280,7 +289,7 @@ async function check(name, run) {
     console.log("  ok  " + name);
   } catch (e) {
     failures++;
-    console.log("  FAIL " + name + " :: " + e.message);
+    console.log("  FAIL " + name + " :: " + e.stack);
   }
 }
 await check("run_worker_first positive hits the worker", async () => {
@@ -1338,5 +1347,331 @@ await check("expired deployment URLs stop before delayed route cleanup", async (
   assert.equal(response.status, 410);
   assert.equal(env.__workerResponses.length, 0);
 });
+const candidate = { ...version, id: "rel_candidate" };
+
+await check("a 50 percent rollout honors both version keys with krun precedence", async () => {
+  const mod = await freshEntry();
+  const options = {
+    route: { candidate_version: candidate.id, candidate_weight: 50000 },
+    versions: { [candidate.id]: candidate },
+  };
+  const first = new mod.Private(makeEnv(null, [], version.id, options), {});
+  const keysByVersion = new Map();
+  for (let n = 0; n < 24; n++) {
+    const key = `test-user-${n}`;
+    const response = await call(first, "/api/test", { "Krun-Workers-Version-Key": key });
+    assert.equal(response.status, 200);
+    const selected = response.headers.get("x-krun-version");
+    keysByVersion.set(selected, key);
+    const cloudflare = await call(first, "/api/test", { "Cloudflare-Workers-Version-Key": key });
+    assert.equal(cloudflare.headers.get("x-krun-version"), selected);
+  }
+  assert.equal(keysByVersion.size, 2);
+  const headers = {
+    "Krun-Workers-Version-Key": keysByVersion.get(candidate.id),
+    "Cloudflare-Workers-Version-Key": keysByVersion.get(version.id),
+  };
+  const secondMod = await freshEntry();
+  const second = new secondMod.Private(makeEnv(null, [], version.id, options), {});
+  assert.equal(
+    (await call(second, "/api/test", headers)).headers.get("x-krun-version"),
+    candidate.id,
+  );
+});
+
+await check("a cached route adopts a candidate and promotes it through deltas", async () => {
+  const mod = await freshEntry();
+  const changes = [];
+  const options = { changes };
+  const handler = new mod.Private(makeEnv(null, [], version.id, options), {});
+  const host = "w-test.workers.test";
+  assert.equal((await call(handler, "/api/test")).headers.get("x-krun-version"), version.id);
+  changes.push({
+    from: 1,
+    to: 2,
+    ops: [
+      { type: "version_put", version: candidate },
+      {
+        type: "route_upsert",
+        host,
+        route: {
+          host,
+          enabled: true,
+          version: version.id,
+          candidate_version: candidate.id,
+          candidate_weight: 100000,
+        },
+      },
+    ],
+  });
+  let response;
+  for (let n = 0; n < 100; n++) {
+    response = await call(handler, "/api/test");
+    if (response.headers.get("x-krun-version") === candidate.id) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(response.headers.get("x-krun-version"), candidate.id);
+});
+
+await check("production overrides authorize a 0 percent candidate and bypass cache", async () => {
+  const mod = await freshEntry();
+  const seen = [];
+  const env = makeEnv(null, [], version.id, {
+    route: {
+      script_name: "fixture",
+      public: true,
+      candidate_version: candidate.id,
+      candidate_weight: 0,
+    },
+    versions: { [candidate.id]: candidate },
+    authorizeOverride({ host, credential }) {
+      seen.push({ host, credential });
+      return credential === "Bearer verify-key"
+        ? Response.json({ allowed: true })
+        : new Response(null, { status: 403 });
+    },
+    workerResponse(request, _key, calls) {
+      return Response.json(
+        {
+          calls,
+          authorization: request.headers.get("authorization"),
+          krunVersionKey: request.headers.get("krun-workers-version-key"),
+          cloudflareVersionKey: request.headers.get("cloudflare-workers-version-key"),
+          override: request.headers.get("cloudflare-workers-version-overrides"),
+          verify: request.headers.get("krun-workers-verify-authorization"),
+        },
+        { headers: { "cache-control": "public, s-maxage=60" } },
+      );
+    },
+  });
+  const handler = new mod.Private(env, {});
+  const ordinary = await call(handler, "/api/cache");
+  assert.equal(ordinary.headers.get("x-krun-version"), version.id);
+  assert.equal((await ordinary.json()).calls, 1);
+
+  const override = { "Cloudflare-Workers-Version-Overrides": `fixture="${candidate.id}"` };
+  const denied = await call(handler, "/api/cache", override);
+  assert.equal(denied.status, 403);
+  const allowed = await call(handler, "/api/cache", {
+    ...override,
+    "Krun-Workers-Verify-Authorization": "Bearer verify-key",
+    authorization: "Bearer application-key",
+    "Krun-Workers-Version-Key": "preferred",
+    "Cloudflare-Workers-Version-Key": "ignored",
+  });
+  assert.equal(allowed.headers.get("x-krun-version"), candidate.id);
+  assert.equal(allowed.headers.get("cache-control"), "private, no-store");
+  assert.deepEqual(await allowed.json(), {
+    calls: 2,
+    authorization: "Bearer application-key",
+    krunVersionKey: null,
+    cloudflareVersionKey: "preferred",
+    override: null,
+    verify: null,
+  });
+  assert.deepEqual(seen.at(-1), {
+    host: "w-test.workers.test",
+    credential: "Bearer verify-key",
+  });
+  const cached = await call(handler, "/api/cache");
+  assert.equal((await cached.json()).calls, 1);
+});
+
+await check("public responses cache independently per version and vary header", async () => {
+  const mod = await freshEntry();
+  const env = makeEnv(null, [], version.id, {
+    route: { public: true, candidate_version: candidate.id, candidate_weight: 50000 },
+    versions: { [candidate.id]: candidate },
+    workerResponse(_request, _key, calls) {
+      return Response.json(
+        { calls },
+        {
+          headers: { "cache-control": "public, s-maxage=60", vary: "Accept-Language" },
+        },
+      );
+    },
+  });
+  const handler = new mod.Private(env, {});
+  const keys = new Map();
+  for (let n = 0; n < 24 && keys.size !== 2; n++) {
+    const key = `cache-user-${n}`;
+    const response = await call(handler, "/discover", { "Krun-Workers-Version-Key": key });
+    keys.set(response.headers.get("x-krun-version"), key);
+    await response.body.cancel();
+  }
+  assert.equal(keys.size, 2);
+  const request = async (key, extra = {}) => {
+    const response = await call(handler, "/api/version-cache", {
+      "Krun-Workers-Version-Key": key,
+      ...extra,
+    });
+    const body = await response.json();
+    return { ...body, version: response.headers.get("x-krun-version") };
+  };
+  const stable = await request(keys.get(version.id), { "accept-language": "en" });
+  const canary = await request(keys.get(candidate.id), { "accept-language": "en" });
+  assert.notEqual(canary.calls, stable.calls);
+  assert.deepEqual(await request(keys.get(version.id), { "accept-language": "en" }), stable);
+  assert.deepEqual(await request(keys.get(candidate.id), { "accept-language": "en" }), canary);
+  const french = await request(keys.get(version.id), { "accept-language": "fr" });
+  assert.notEqual(french.calls, stable.calls);
+  const auth = await request(keys.get(version.id), {
+    "accept-language": "en",
+    authorization: "Bearer private",
+  });
+  assert.notEqual(auth.calls, stable.calls);
+  assert.deepEqual(await request(keys.get(version.id), { "accept-language": "en" }), stable);
+});
+
+await check("only non-expired immutable historical assets can be recovered", async () => {
+  const mod = await freshEntry();
+  const historical = { ...version, id: "rel_historical" };
+  const expired = { ...version, id: "rel_expired" };
+  const hashed = fileList.find((file) => file.path.endsWith(".js"));
+  const env = makeEnv(
+    config,
+    fileList.filter((file) => file !== hashed),
+    version.id,
+    {
+      route: {
+        retained_versions: [
+          { version_id: historical.id, expires_at: new Date(Date.now() + 60000).toISOString() },
+          { version_id: expired.id, expires_at: new Date(Date.now() - 1000).toISOString() },
+        ],
+      },
+      versions: { [historical.id]: historical, [expired.id]: expired },
+      versionAssets: { [historical.id]: { config, files: [hashed] } },
+    },
+  );
+  const handler = new mod.Private(env, {});
+  const response = await call(handler, "/" + hashed.path);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), files[hashed.path]);
+  assert.equal(response.headers.get("x-krun-version"), version.id);
+  assert.equal(response.headers.get("x-krun-asset-version"), historical.id);
+  assert.match(response.headers.get("cache-control"), /max-age=0/);
+});
+
+await check(
+  "lagging snapshots resolve new immutable assets without changing selected code",
+  async () => {
+    const mod = await freshEntry();
+    const host = "w-test.workers.test";
+    const hashed = fileList.find((file) => file.path.endsWith(".js"));
+    const route = {
+      host,
+      enabled: true,
+      public: true,
+      version: version.id,
+      worker_id: version.worker_id,
+      environment: version.environment,
+    };
+    let latest;
+    const env = makeEnv(
+      config,
+      fileList.filter((file) => file !== hashed),
+      version.id,
+      {
+        route,
+        routeLookup: () => latest,
+        versionAssets: { [candidate.id]: { config, files: [hashed] } },
+      },
+    );
+    const handler = new mod.Private(env, {});
+    const initial = await call(handler, "/");
+    assert.match(await initial.text(), /<title>root<\/title>/);
+    latest = {
+      route: { ...route, candidate_version: candidate.id, candidate_weight: 50000 },
+      versions: { [version.id]: version, [candidate.id]: candidate },
+    };
+    const retained = await call(handler, "/" + hashed.path, { "sec-fetch-mode": "navigate" });
+    assert.equal(await retained.text(), files[hashed.path]);
+    assert.equal(retained.headers.get("x-krun-version"), version.id);
+    assert.equal(retained.headers.get("x-krun-asset-version"), candidate.id);
+    latest.route = {
+      ...route,
+      retained_versions: [
+        {
+          version_id: candidate.id,
+          expires_at: new Date(Date.now() - 1000).toISOString(),
+        },
+      ],
+    };
+    const expired = await call(handler, "/" + hashed.path, {
+      "if-none-match": retained.headers.get("etag"),
+    });
+    assert.equal((await expired.json()).worker, true);
+    assert.equal(expired.headers.get("x-krun-asset-version"), null);
+  },
+);
+
+await check("service receiver requires management auth and checks fixed target scope", async () => {
+  const mod = await freshEntry();
+  const fixed = { ...version, id: "rel_binding_fixed" };
+  const env = makeEnv(null, [], version.id, {
+    route: {
+      worker_id: version.worker_id,
+      environment: version.environment,
+      candidate_version: candidate.id,
+      candidate_weight: 100000,
+    },
+    versions: { [candidate.id]: candidate },
+    async workerResponse(request) {
+      return Response.json({
+        url: request.url,
+        app: request.headers.get("authorization"),
+        body: await request.text(),
+      });
+    },
+  });
+  const platform = env.PLATFORM.fetch;
+  env.PLATFORM.fetch = (request) => {
+    if (request.url.endsWith("/service-descriptor/" + fixed.id)) {
+      return Response.json({ version: fixed });
+    }
+    if (request.url.endsWith("/service-descriptor/other")) {
+      return Response.json({ version: { ...fixed, id: "other", worker_id: "another" } });
+    }
+    return platform(request);
+  };
+  const handler = new mod.Management(env, {});
+  const invoke = (headers = {}) =>
+    handler.fetch(
+      new Request("http://runtime:8083/service-invoke", {
+        method: "PATCH",
+        body: "service body",
+        headers: {
+          "x-krun-service-host": "w-test.workers.test",
+          "x-krun-service-url": "https://app.example/path?q=a%2Fb",
+          "x-krun-service-app-authorization": "Bearer business",
+          ...headers,
+        },
+      }),
+    );
+
+  assert.equal((await invoke()).status, 403);
+  const followed = await invoke({ authorization: "Bearer m" });
+  assert.equal(followed.status, 200);
+  assert.equal(followed.headers.get("x-krun-version"), candidate.id);
+  assert.deepEqual(await followed.json(), {
+    url: "https://app.example/path?q=a%2Fb",
+    app: "Bearer business",
+    body: "service body",
+  });
+  const pinned = await invoke({
+    authorization: "Bearer m",
+    "x-krun-service-version": fixed.id,
+  });
+  assert.equal(pinned.status, 200);
+  assert.equal(pinned.headers.get("x-krun-version"), fixed.id);
+  const mismatch = await invoke({
+    authorization: "Bearer m",
+    "x-krun-service-version": "other",
+  });
+  assert.equal(mismatch.status, 404);
+});
+
 console.log(failures === 0 ? "ALL RUNTIME CHECKS PASSED" : failures + " CHECK(S) FAILED");
 process.exit(failures === 0 ? 0 : 1);

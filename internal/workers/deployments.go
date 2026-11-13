@@ -14,12 +14,16 @@ import (
 
 const DeploymentRetention = 30 * 24 * time.Hour
 
-func RememberDeployment(st *domain.State, op domain.WorkerOperation) {
+func RememberDeployment(st *domain.State, op domain.WorkerOperation, messages ...string) {
 	if st.Workers.Deployments == nil {
 		st.Workers.Deployments = map[string]domain.WorkerDeployment{}
 	}
 	id := DeploymentID(op.ID)
-	st.Workers.Deployments[id] = domain.WorkerDeployment{ID: id, Organization: op.Organization, Worker: op.Worker, Environment: op.Environment, Version: op.Version, Operation: op.ID, Created: op.Created, Expires: op.Created.Add(DeploymentRetention)}
+	message := ""
+	if len(messages) > 0 {
+		message = messages[0]
+	}
+	st.Workers.Deployments[id] = domain.WorkerDeployment{WorkerGradualRelease: op.WorkerGradualRelease, Message: message, ID: id, Organization: op.Organization, Worker: op.Worker, Environment: op.Environment, Version: op.Version, Operation: op.ID, Created: op.Created, Expires: op.Created.Add(DeploymentRetention)}
 }
 func DeploymentID(operation string) string {
 	return "dep-" + strings.TrimPrefix(operation, "op-")
@@ -60,7 +64,7 @@ func (s *Service) WorkerDeployments(ctx context.Context, st *domain.State, p aut
 			state = "available"
 		}
 		hosts := []string{}
-		if d.Committed != nil && d.Expires.After(time.Now()) {
+		if d.Committed != nil && d.Expires.After(time.Now()) && d.Candidate == "" {
 			hosts = DeploymentHosts(s.Config.Workers, worker, d.ID)
 		}
 		view := DeploymentView{WorkerDeployment: d, State: state, Hosts: hosts}

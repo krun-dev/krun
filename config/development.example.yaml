@@ -76,6 +76,7 @@ providers:
   # 省略 workers: 段时服务仍可启动，Workers 接口返回 WORKERS_NOT_CONFIGURED，控制台显示“Workers 未配置”。
 
 # 完整 workers: 配置启用 reconcile_concurrency: 8。
+# 可设置 gradual_asset_retention_seconds 覆盖旧页面资源保留窗口。
 
 # 公司集群部署的可选渲染输入仍放在同一主配置；完整内网示例见 production.example.yaml。
 # deployment:

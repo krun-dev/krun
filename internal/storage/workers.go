@@ -188,9 +188,9 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 			}
 			if !ok {
 				tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_environments
-					(worker_id, env_name, enabled, config_revision, variables, deployment_revision, version_id, confirmed_version_id, version_metadata, assets_binding, hyperdrive_bindings)
-					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11::jsonb,'{}'::jsonb)) ON CONFLICT (worker_id, env_name) DO NOTHING`,
-					id, name, env.Enabled, env.ConfigRevision, variables, env.Revision, env.Version, env.Confirmed, env.VersionMetadata, env.AssetsBinding, env.HyperdriveBindings)
+					(worker_id, env_name, enabled, config_revision, variables, deployment_revision, version_id, confirmed_version_id, version_metadata, assets_binding, hyperdrive_bindings, service_bindings, gradual_asset_retention_seconds)
+					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11::jsonb,'{}'::jsonb),COALESCE(NULLIF($12::jsonb,'null'::jsonb),'{}'::jsonb),$13) ON CONFLICT (worker_id, env_name) DO NOTHING`,
+					id, name, env.Enabled, env.ConfigRevision, variables, env.Revision, env.Version, env.Confirmed, env.VersionMetadata, env.AssetsBinding, env.HyperdriveBindings, env.ServiceBindings, env.AssetRetentionSeconds)
 				if err != nil {
 					return err
 				}
@@ -200,11 +200,11 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 			} else {
 				tag, err := tx.Exec(ctx, `UPDATE krun_worker_environments
 					SET enabled=$3, config_revision=$4, variables=$5, deployment_revision=$6,
-					    version_id=$7, confirmed_version_id=$8, version_metadata=$13, assets_binding=$14, hyperdrive_bindings=COALESCE($15::jsonb,'{}'::jsonb), updated_at=now()
+					    version_id=$7, confirmed_version_id=$8, version_metadata=$13, assets_binding=$14, hyperdrive_bindings=COALESCE($15::jsonb,'{}'::jsonb), service_bindings=COALESCE(NULLIF($16::jsonb,'null'::jsonb),'{}'::jsonb), gradual_asset_retention_seconds=$17, updated_at=now()
 					WHERE worker_id=$1 AND env_name=$2 AND config_revision=$9
 					  AND deployment_revision=$10 AND version_id=$11 AND confirmed_version_id=$12`,
 					id, name, env.Enabled, env.ConfigRevision, variables, env.Revision, env.Version, env.Confirmed,
-					oldEnv.ConfigRevision, oldEnv.Revision, oldEnv.Version, oldEnv.Confirmed, env.VersionMetadata, env.AssetsBinding, env.HyperdriveBindings)
+					oldEnv.ConfigRevision, oldEnv.Revision, oldEnv.Version, oldEnv.Confirmed, env.VersionMetadata, env.AssetsBinding, env.HyperdriveBindings, env.ServiceBindings, env.AssetRetentionSeconds)
 				if err != nil {
 					return err
 				}
@@ -327,7 +327,7 @@ func sameWorkerPlacement(a, b domain.WorkerPlacement) bool {
 func defaultWorkerBaseline(name string, env domain.WorkerEnvironment) bool {
 	return name == workerBaseline && env.Name == workerBaseline && env.Enabled &&
 		env.ConfigRevision == 1 && env.Revision == 0 && env.Version == "" && env.Confirmed == "" &&
-		len(env.Variables) == 0 && len(env.SecretVersions) == 0 && len(env.R2Bindings) == 0 && len(env.HyperdriveBindings) == 0 && env.VersionMetadata == "" && env.AssetsBinding == ""
+		len(env.Variables) == 0 && len(env.SecretVersions) == 0 && len(env.R2Bindings) == 0 && len(env.HyperdriveBindings) == 0 && len(env.ServiceBindings) == 0 && env.VersionMetadata == "" && env.AssetsBinding == ""
 }
 
 func PreviewCount(environments map[string]domain.WorkerEnvironment) int {
@@ -368,7 +368,10 @@ func replaceWorkerDomains(ctx context.Context, tx pgx.Tx, worker string, domains
 }
 
 func sameEnvironment(a, b domain.WorkerEnvironment) bool {
-	if !reflect.DeepEqual(a.R2Bindings, b.R2Bindings) || !maps.Equal(a.HyperdriveBindings, b.HyperdriveBindings) {
+	if !reflect.DeepEqual(a.AssetRetentionSeconds, b.AssetRetentionSeconds) {
+		return false
+	}
+	if !reflect.DeepEqual(a.R2Bindings, b.R2Bindings) || !maps.Equal(a.HyperdriveBindings, b.HyperdriveBindings) || !sameServiceBindings(a.ServiceBindings, b.ServiceBindings) {
 		return false
 	}
 	return a.VersionMetadata == b.VersionMetadata && a.AssetsBinding == b.AssetsBinding && a.Name == b.Name && a.Enabled == b.Enabled && a.ConfigRevision == b.ConfigRevision &&
@@ -597,7 +600,7 @@ func sameArtifact(a, b domain.WorkerArtifact) bool {
 }
 
 func sameVersion(a, b domain.WorkerVersion) bool {
-	if !reflect.DeepEqual(a.R2Bindings, b.R2Bindings) || !maps.Equal(a.HyperdriveBindings, b.HyperdriveBindings) {
+	if !reflect.DeepEqual(a.R2Bindings, b.R2Bindings) || !maps.Equal(a.HyperdriveBindings, b.HyperdriveBindings) || !sameServiceBindings(a.ServiceBindings, b.ServiceBindings) {
 		return false
 	}
 	return a.Configuration == b.Configuration && a.CreatedBy == b.CreatedBy && a.CreatedByName == b.CreatedByName && a.VersionMetadata == b.VersionMetadata && a.AssetsBinding == b.AssetsBinding && a.Tag == b.Tag && a.Message == b.Message && a.ID == b.ID && a.Worker == b.Worker && a.Organization == b.Organization &&
@@ -635,13 +638,13 @@ func writeVersions(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) e
 		if err != nil {
 			return err
 		}
-		tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_versions (version_id, org_id, worker_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message, created_by, created_by_name, configuration_id, hyperdrive_bindings)
-				SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,COALESCE($22::jsonb,'{}'::jsonb)
+		tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_versions (version_id, org_id, worker_id, env_name, artifact_id, profile, archive_digest, module_digest, compatibility_date, compatibility_flags, config_revision, variables, secret_digest, created_at, version_metadata, assets_binding, tag, message, created_by, created_by_name, configuration_id, hyperdrive_bindings, service_bindings)
+				SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,COALESCE($22::jsonb,'{}'::jsonb),COALESCE(NULLIF($23::jsonb,'null'::jsonb),'{}'::jsonb)
 				WHERE EXISTS (SELECT 1 FROM krun_worker_artifacts
 					WHERE artifact_id=$5 AND state='finalized' AND org_id=$2
 					  AND profile=$6 AND archive_digest=$7 AND module_digest=$8
 					  AND compatibility_date=$9 AND compatibility_flags=$10)
-				ON CONFLICT (version_id) DO UPDATE SET version_id=excluded.version_id`, id, r.Organization, r.Worker, r.Environment, r.Artifact, r.Profile, r.ArchiveDigest, r.ModuleDigest, r.CompatibilityDate, flags, r.ConfigRevision, variables, r.SecretDigest, r.Created, r.VersionMetadata, r.AssetsBinding, r.Tag, r.Message, r.CreatedBy, r.CreatedByName, r.Configuration, r.HyperdriveBindings)
+				ON CONFLICT (version_id) DO UPDATE SET version_id=excluded.version_id`, id, r.Organization, r.Worker, r.Environment, r.Artifact, r.Profile, r.ArchiveDigest, r.ModuleDigest, r.CompatibilityDate, flags, r.ConfigRevision, variables, r.SecretDigest, r.Created, r.VersionMetadata, r.AssetsBinding, r.Tag, r.Message, r.CreatedBy, r.CreatedByName, r.Configuration, r.HyperdriveBindings, r.ServiceBindings)
 		if err != nil {
 			return err
 		}
@@ -692,7 +695,7 @@ func writeOperations(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState)
 		}
 		actor := aw.OperationPrivate[id].Actor
 		if !existed {
-			if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_operations (operation_id, kind, org_id, worker_id, env_name, state, build_id, version_id, expected_revision, config_revision, edge_revision, deployment_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, id, op.Kind, op.Organization, op.Worker, op.Environment, op.State, op.Build, op.Version, op.ExpectedRevision, op.ConfigRevision, op.EdgeRevision, op.DeploymentRevision, op.Error, steps, actor.User, actor.Key, actor.AuthVersion, op.Created, op.Finished); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_operations (operation_id, kind, org_id, worker_id, env_name, state, build_id, version_id, expected_revision, config_revision, edge_revision, deployment_revision, error, steps, actor_user_id, actor_key_id, actor_auth_version, created_at, finished_at, candidate_version_id, candidate_weight) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`, id, op.Kind, op.Organization, op.Worker, op.Environment, op.State, op.Build, op.Version, op.ExpectedRevision, op.ConfigRevision, op.EdgeRevision, op.DeploymentRevision, op.Error, steps, actor.User, actor.Key, actor.AuthVersion, op.Created, op.Finished, op.Candidate, op.CandidateWeight); err != nil {
 				return err
 			}
 			continue
@@ -766,4 +769,10 @@ func writeIdempotency(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState
 		}
 	}
 	return nil
+}
+
+func sameServiceBindings(a, b map[string]domain.WorkerServiceBinding) bool {
+	return maps.EqualFunc(a, b, func(left, right domain.WorkerServiceBinding) bool {
+		return reflect.DeepEqual(left, right)
+	})
 }

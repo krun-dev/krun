@@ -60,7 +60,7 @@ Runtime 配置分发和保留期。浏览器会话需要原有 CSRF 校验；CLI
 | `DELETE /accounts/{account}/workers/scripts/{script}` | 删除 Worker 资源，后台清理关联实体 |
 | `GET .../scripts/{script}/settings`、`.../script-settings` | 配置和脱敏绑定 |
 | `POST/GET .../scripts/{script}/versions`、`GET .../versions/{id}` | 只上传版本、列出版本、读取版本 |
-| `POST/GET .../scripts/{script}/deployments`、`GET .../deployments/{id}` | 单版本 100% 部署及部署记录 |
+| `POST/GET .../scripts/{script}/deployments`、`GET .../deployments/{id}` | 单版本 100% 或双版本百分比分流，查询实际版本权重和说明 |
 | `GET/PUT .../scripts/{script}/secrets`、`DELETE .../secrets/{name}` | Secret 元数据、修改及删除 |
 | `PATCH .../scripts/{script}/secrets-bulk` | 有界 Secret 批量修改 |
 | `GET/POST .../scripts/{script}/subdomain` | 已启用的 krun 托管 URL |
@@ -75,9 +75,9 @@ Version 固定代码、普通变量和 Secret 引用；只上传不会改变生�
 当前已部署代码生成并部署新版本；存在更新但未部署的 Version 时返回 `10215`。首次
 `wrangler secret put` 沿用 Wrangler 创建占位 Worker 后再写 Secret 的流程。
 Previews Base 只在创建 Preview 时复制；不会覆盖已存在 Preview 或生产环境。
-固定部署地址沿用 krun 的 30 天保留期，删除目标环境或服务后失效。
+单版本部署的固定地址保留 30 天，删除目标环境或服务后失效。灰度期间使用环境地址。
 
-当前支持 `plain_text`、`json`、`secret_text`、`version_metadata`、`assets`、`hyperdrive`，以及已打包 ESM、CommonJS 依赖、文本、数据、Wasm
+当前支持 `plain_text`、`json`、`secret_text`、`version_metadata`、`assets`、`hyperdrive`、`r2_bucket` 和 `service`，以及已打包 ESM、CommonJS 依赖、文本、数据、Wasm
 和 source map 模块；主模块必须为 ESM。沿用 krun 的模块、变量、Secret、Preview 数量
 和请求大小限制。错误采用 Cloudflare envelope 和数字 code，底层仍执行 krun 权限。
 
@@ -93,26 +93,77 @@ token 只能绑定到签发时的 Worker，且未传完或过期时不能部署�
 因此部署、回滚和固定地址复用原有运行链路；`keep_assets` 可以保留当前部署的资产。
 会话和文件元数据保留一小时，临时对象登记到现有 upload 清理任务，最长保留 24 小时。
 
-这不是完整 Cloudflare 平台实现。灰度比例、托管 URL 关闭、
-Cloudflare 自定义域名/Zone/Routes、定时任务、tail、KV/D1/DO/Queue/Service bindings、
-Service Worker 格式不在当前支持范围内。资产路由支持 `run_worker_first`、`base_path`，
+托管 URL 关闭、Cloudflare 自定义域名/Zone/Routes、定时任务、tail、KV/D1/DO/Queue、
+Service Worker 格式仍超出兼容范围。资产路由支持 `run_worker_first`、`base_path`，
 `none` / `single-page-application` / `404-page`，以及 `none` / `auto-trailing-slash` /
 `force-trailing-slash` / `drop-trailing-slash`。`_headers` 支持路径、域名、占位符、
 合并和删除响应头；`_redirects` 支持 301/302/303/307/308 和站内 200 重写，
-不代理外部站点。规则仅作用于静态响应，随资产版本冻结。部署接口仍拒绝非空部署描述，版本标签/说明独立保存。
+不代理外部站点。规则仅作用于静态响应，随资产版本冻结。部署说明使用 `annotations["workers/message"]`，版本标签和说明随版本保存。
 缺失接口和不支持的绑定会返回错误。静态资产也可以继续走 krun 原有构建入口。
 
-协议验证使用仓库固定的 Wrangler 4.155.0。复现需先运行独立 kind 后端 E2E 完成初始化，
-再让控制台同源入口可从本机访问，并将独立测试环境的内部 Gateway 8080 端口转发到 4382：
+## 版本灰度
+
+先用 `versions list` 获取当前 Worker 的两个版本 ID，将它们设为 `STABLE_VERSION` 和
+`CANDIDATE_VERSION`。沿用上方的 Wrangler 连接配置和具备该环境 `worker.publish` 的凭据。
 
 ```sh
-KRUN_UI_ORIGIN=http://127.0.0.1:4381 KRUN_CF_E2E_GATEWAY_ORIGIN=http://127.0.0.1:4382 node deploy/workers-kind/cloudflare.e2e.mjs
+npx wrangler@4.155.0 versions deploy "${STABLE_VERSION}@100%" "${CANDIDATE_VERSION}@0%" --yes
+npx wrangler@4.155.0 versions deploy "${STABLE_VERSION}@95%" "${CANDIDATE_VERSION}@5%" --yes
+npx wrangler@4.155.0 deployments status
+npx wrangler@4.155.0 rollback "$STABLE_VERSION" --yes --message "Restore stable"
 ```
 
-脚本在 `.data/` 下生成项目和命令日志，覆盖 deploy、只上传/独立部署、Secret、首次
-Secret、Previews Base、Preview 部署/Secret/删除、流量比例拒绝、删除重建身份隔离
-以及原生删除后的身份保护。
+Cloudflare 协议使用 `strategy: "percentage"` 和 `versions` 列表。最多两个同一环境的版本，
+百分比合计 100，0% 版本可定向验证。非法权重或重复版本返回 HTTP 422 / Cloudflare 错误
+`10021`（`UNSUPPORTED_DEPLOYMENT`）。跨 Worker 的版本返回 HTTP 404 / `10007`。
+修正版本 ID 或百分比后重新提交。
 
+`Krun-Workers-Version-Key` 和 `Cloudflare-Workers-Version-Key` 使用相同分桶，同时出现时
+以 krun Header 为准。正式域名使用 `Cloudflare-Workers-Version-Overrides: SCRIPT="VERSION"`
+定向验证，其中 `SCRIPT` 为 Worker 定位符，`VERSION` 为当前部署成员的版本 ID。验证要求
+`worker.publish` 权限，通过 `Authorization: Bearer …` 提交 krun 凭据。需要传入业务
+`Authorization` 时改用 `Krun-Workers-Verify-Authorization` 提交 krun 凭据。权限不足
+返回 HTTP 403，需更换为有目标 Worker 和环境发布权的凭据。核对响应的 `X-Krun-Version`。
+鉴权与验证请求绕过共享响应缓存。公开响应缓存按实际版本隔离。
+
+已承流版本的不可变哈希文件可以在过渡期通过原路径读取。平台通过
+`workers.gradual_asset_retention_seconds` 设置保留窗口，默认为 24 小时。环境可通过原生 API 的
+`gradual_asset_retention_seconds` 覆盖该设置。值为 `0` 时停止保留后续退场版本的哈希资产。
+固定部署地址继续使用其独立保留期。
+
+## 服务绑定
+
+Wrangler 配置中的 `services` 绑定跟随同一组织内目标 Worker 的发布。目标使用 Worker
+定位符，调用方版本冻结 binding 配置，调用者通过 `env.BINDING.fetch(request)` 发起 HTTP 请求。
+绑定建立时要求来源的 `worker.publish` 和目标的 `worker.invoke`，运行时复核目标调用权限。
+
+```json
+{
+  "services": [{ "binding": "CATALOG", "service": "catalog", "environment": "production" }]
+}
+```
+
+krun 原生环境配置的 `service_bindings` 可以指定同一目标环境的 `version_id`，用于固定版本调用。
+默认 HTTP 入口支持同池和跨池。目标被禁用、删除或授权被撤销时，调用失败。需要沿用会话选版时，
+在发给 binding 的 Request 中传入 `Cloudflare-Workers-Version-Key`。
+
+## 端到端验证
+
+先按[独立 kind 验收步骤](../deploy/workers-kind/README.md)启动集群和控制台同源入口。
+沿用该步骤的 `KUBECONFIG`、`KIND_CLUSTER_NAME` 以初始化本次测试的管理员。
+将 kind 的私网 `workers-mvp` 和公网 `workers-public` Gateway 服务的 8080 端口
+分别转发到本机 4382 和 4383，再从仓库根目录运行：
+
+```sh
+npm ci --prefix workers/builder
+KRUN_UI_ORIGIN=http://127.0.0.1:4381 \
+  KRUN_CF_E2E_GATEWAY_ORIGIN=http://127.0.0.1:4382 \
+  KRUN_CF_E2E_PUBLIC_GATEWAY_ORIGIN=http://127.0.0.1:4383 \
+  node deploy/workers-kind/cloudflare.e2e.mjs
+```
+
+脚本使用 Wrangler 4.155.0，验证上传、双版本部署、分桶、定向验证、回滚、资产、缓存、
+服务绑定和原有 Secret / Preview 操作。成功时输出 `CF WRANGLER E2E PASSED` 并保存本地结果。
 
 ## R2 bucket bindings
 

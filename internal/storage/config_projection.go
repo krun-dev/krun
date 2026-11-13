@@ -19,7 +19,7 @@ func (s *Store) EdgeConfigState(ctx context.Context, ids []string) (*domain.Stat
 	defer tx.Rollback(ctx)
 
 	st := domain.NewState()
-	rows, err := tx.Query(ctx, `SELECT s.worker_id, s.org_id, s.network_profile
+	rows, err := tx.Query(ctx, `SELECT s.worker_id, s.org_id, s.network_profile, r.locator
 		FROM krun_workers s
 		JOIN krun_resources r ON r.resource_id=s.worker_id AND r.kind='worker' AND r.org_id=s.org_id
 		JOIN krun_organizations o ON o.org_id=s.org_id
@@ -29,13 +29,13 @@ func (s *Store) EdgeConfigState(ctx context.Context, ids []string) (*domain.Stat
 		return nil, err
 	}
 	for rows.Next() {
-		var worker, organization, profile string
-		if err = rows.Scan(&worker, &organization, &profile); err != nil {
+		var worker, organization, profile, locator string
+		if err = rows.Scan(&worker, &organization, &profile, &locator); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		st.Organizations[organization] = domain.Organization{ID: organization}
-		st.Resources[worker] = domain.Resource{ID: worker, Kind: "worker", Organization: organization}
+		st.Resources[worker] = domain.Resource{ID: worker, Kind: "worker", Organization: organization, Locator: locator}
 		st.Workers.Workers[worker] = domain.Worker{Worker: worker, Organization: organization, NetworkProfile: profile, Environments: map[string]domain.WorkerEnvironment{}}
 	}
 	if err = rows.Err(); err != nil {
@@ -98,7 +98,7 @@ func (s *Store) EdgeConfigState(ctx context.Context, ids []string) (*domain.Stat
 	}
 	rows.Close()
 
-	rows, err = tx.Query(ctx, `SELECT e.worker_id, e.env_name, e.enabled, e.version_id
+	rows, err = tx.Query(ctx, `SELECT e.worker_id, e.env_name, e.enabled, e.version_id, e.candidate_version_id, e.candidate_weight
 		FROM krun_worker_environments e
 		JOIN krun_workers s ON s.worker_id=e.worker_id
 		JOIN krun_resources r ON r.resource_id=s.worker_id AND r.kind='worker' AND r.org_id=s.org_id
@@ -109,15 +109,16 @@ func (s *Store) EdgeConfigState(ctx context.Context, ids []string) (*domain.Stat
 		return nil, err
 	}
 	for rows.Next() {
-		var worker, name, version string
+		var worker, name, version, candidate string
+		var weight int
 		var enabled bool
-		if err = rows.Scan(&worker, &name, &enabled, &version); err != nil {
+		if err = rows.Scan(&worker, &name, &enabled, &version, &candidate, &weight); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		item, ok := st.Workers.Workers[worker]
 		if ok {
-			item.Environments[name] = domain.WorkerEnvironment{Name: name, Enabled: enabled, Version: version}
+			item.Environments[name] = domain.WorkerEnvironment{Name: name, Enabled: enabled, Version: version, WorkerGradualRelease: domain.WorkerGradualRelease{Candidate: candidate, CandidateWeight: weight}}
 			st.Workers.Workers[worker] = item
 		}
 	}
@@ -130,9 +131,9 @@ func (s *Store) EdgeConfigState(ctx context.Context, ids []string) (*domain.Stat
 	rows, err = tx.Query(ctx, `SELECT rel.version_id, rel.org_id, rel.worker_id, rel.env_name,
 		rel.artifact_id, rel.profile, rel.archive_digest, rel.module_digest,
 		rel.compatibility_date, rel.compatibility_flags, rel.config_revision,
-		rel.variables, rel.secret_digest, rel.created_at, rel.version_metadata, rel.assets_binding, rel.tag, rel.message, rel.created_by, rel.created_by_name, rel.configuration_id, rel.hyperdrive_bindings
+		rel.variables, rel.secret_digest, rel.created_at, rel.version_metadata, rel.assets_binding, rel.tag, rel.message, rel.created_by, rel.created_by_name, rel.configuration_id, rel.hyperdrive_bindings, rel.service_bindings
 		FROM krun_worker_versions rel
-		JOIN krun_worker_environments e ON (e.version_id=rel.version_id OR EXISTS(SELECT 1 FROM krun_worker_deployments d WHERE d.version_id=rel.version_id AND d.committed_at IS NOT NULL AND d.expires_at>now()))
+		JOIN krun_worker_environments e ON (rel.version_id IN (e.version_id,e.candidate_version_id) OR EXISTS(SELECT 1 FROM krun_worker_retained_assets a WHERE a.worker_id=e.worker_id AND a.env_name=e.env_name AND a.version_id=rel.version_id AND a.expires_at>now()) OR EXISTS(SELECT 1 FROM krun_worker_deployments d WHERE d.candidate_version_id='' AND rel.version_id=d.version_id AND d.committed_at IS NOT NULL AND d.expires_at>now()))
 			AND e.worker_id=rel.worker_id AND e.env_name=rel.env_name
 		JOIN krun_workers s ON s.worker_id=e.worker_id AND s.org_id=rel.org_id
 		JOIN krun_resources r ON r.resource_id=s.worker_id AND r.kind='worker' AND r.org_id=s.org_id
@@ -147,11 +148,35 @@ func (s *Store) EdgeConfigState(ctx context.Context, ids []string) (*domain.Stat
 		return nil, err
 	}
 	rows.Close()
-	rows, err = tx.Query(ctx, `SELECT deployment_id,org_id,worker_id,env_name,version_id,operation_id,created_at,expires_at,committed_at FROM krun_worker_deployments WHERE committed_at IS NOT NULL AND expires_at>now() AND ($1::text[] IS NULL OR worker_id=ANY($1))`, ids)
+	rows, err = tx.Query(ctx, `SELECT deployment_id,org_id,worker_id,env_name,version_id,operation_id,created_at,expires_at,committed_at,candidate_version_id,candidate_weight,message FROM krun_worker_deployments WHERE committed_at IS NOT NULL AND expires_at>now() AND ($1::text[] IS NULL OR worker_id=ANY($1))`, ids)
 	if err != nil {
 		return nil, err
 	}
 	if err = readDeploymentRows(rows, st.Workers); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	rows, err = tx.Query(ctx, `SELECT worker_id,env_name,version_id,expires_at FROM krun_worker_retained_assets
+		WHERE expires_at>now() AND ($1::text[] IS NULL OR worker_id=ANY($1))
+		ORDER BY worker_id,env_name,expires_at DESC,version_id`, ids)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var worker, name string
+		var item domain.RetainedWorkerVersion
+		if err = rows.Scan(&worker, &name, &item.Version, &item.Expires); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		owner := st.Workers.Workers[worker]
+		if environment, ok := owner.Environments[name]; ok {
+			environment.RetainedAssets = append(environment.RetainedAssets, item)
+			owner.Environments[name] = environment
+		}
+	}
+	if err = rows.Err(); err != nil {
 		rows.Close()
 		return nil, err
 	}

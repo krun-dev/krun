@@ -115,38 +115,48 @@ func (s *Server) cfCreateDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Strategy string `json:"strategy"`
-		Versions []struct {
-			ID         string  `json:"version_id"`
-			Percentage float64 `json:"percentage"`
-		} `json:"versions"`
-		Annotations        map[string]string `json:"annotations"`
-		CodeUpdateStrategy json.RawMessage   `json:"code_update_strategy"`
+		Strategy           string                           `json:"strategy"`
+		Versions           []workerapp.DeploymentPercentage `json:"versions"`
+		Annotations        map[string]string                `json:"annotations"`
+		CodeUpdateStrategy json.RawMessage                  `json:"code_update_strategy"`
 	}
 	if err = s.body(r, &in); err != nil {
 		s.WriteError(w, r, err)
 		return
 	}
-	if len(in.Versions) != 1 || in.Versions[0].Percentage != 100 || in.Strategy != "" && in.Strategy != "percentage" {
-		s.WriteError(w, r, domain.Problem(422, "UNSUPPORTED_DEPLOYMENT", "Only one version at 100 percent is supported"))
+	versions, err := workerapp.DeploymentWeights(in.Versions)
+	if err != nil || in.Strategy != "" && in.Strategy != "percentage" {
+		if err == nil {
+			err = domain.Invalid("UNSUPPORTED_DEPLOYMENT", "Only percentage strategy is supported")
+		}
+		s.WriteError(w, r, err)
 		return
 	}
-	for key, value := range in.Annotations {
-		if key != "workers/message" || value != "" {
-			s.WriteError(w, r, domain.Problem(422, "UNSUPPORTED_METADATA", "Deployment annotations are not supported"))
+	for key := range in.Annotations {
+		if key != "workers/message" {
+			s.WriteError(w, r, domain.Invalid("UNSUPPORTED_METADATA", "Unsupported deployment annotation"))
 			return
 		}
 	}
 	var op domain.WorkerOperation
 	err = s.cfCall(r, true, func(st *domain.State, p authorization.Principal) error {
 		ref := workerRef(r)
+		kind := "publish"
 		t, e := s.WorkerTarget(st, r, ref.Environment, "worker.publish", p)
+		if e != nil && len(versions) == 1 {
+			// Wrangler sends the same single-version request for promotion and
+			// rollback. A rollback-only credential may only use a historical version.
+			t, e = s.WorkerTarget(st, r, ref.Environment, "worker.rollback", p)
+			if e == nil {
+				kind = "rollback"
+			}
+		}
 		if e != nil {
 			return e
 		}
 		service := s.Application(r).Worker(st, t)
 		env := service.Environments[ref.Environment]
-		out, _, e := s.Application(r).WorkerDeploymentCreate(r.Context(), st, p, ref, t, ref.Environment, "publish", workerapp.WorkerDeploymentCreateInput{Version: in.Versions[0].ID, Revision: env.Revision, Key: securetoken.UUID()})
+		out, _, e := s.Application(r).WorkerDeploymentCreate(r.Context(), st, p, ref, t, ref.Environment, kind, workerapp.WorkerDeploymentCreateInput{Versions: versions, Message: in.Annotations["workers/message"], Revision: env.Revision, Key: securetoken.UUID()})
 		if e == nil {
 			op = out.(domain.WorkerOperation)
 		}

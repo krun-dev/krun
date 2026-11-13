@@ -29,10 +29,11 @@ krun 基于 workerd 运行模块格式的 JavaScript 和 TypeScript Worker。下
 | 静态资产（`assets`） | 支持 `env.ASSETS.fetch(request)`（名称可配置）、纯静态部署和常用路由模式，包括 SPA 回退。重写限站内路径。 [资产配置](user-docs/src/content/docs/guides/wrangler-configuration.md#静态资产配置) |
 | R2（`r2_bucket`） | 支持 S3 兼容逻辑桶的 `head`、`get`、`put`、`delete`、`list` 和分片上传，覆盖常用 Range 和条件请求。每页最多 64 项，批量删除最多 1000 项。`startAfter`、SSE-C、PUT checksum 和组合条件超出兼容范围。 [R2 方法与限制](docs/workers-r2.md#已实现的-runtime-api) |
 | Hyperdrive（`hyperdrive`） | 支持 PostgreSQL 配置管理和 `env.DB.connectionString`（名称可配置）。Worker 通过 workerd 按池出网规则直连 PostgreSQL。兼容范围涵盖配置和绑定，查询缓存与平台连接池超出范围。 [PostgreSQL 托管接入](user-docs/src/content/docs/guides/workers-hyperdrive.md) |
+| 服务绑定（`service`） | 通过 `env.BINDING.fetch(request)` 调用同一组织内 Worker 的默认 HTTP 入口，支持同池和跨池。Wrangler `services` 跟随目标发布，krun 原生配置可固定目标版本。 [Cloudflare 协议适配](docs/cloudflare-api.md#服务绑定) |
 
-KV、D1、Durable Objects、Queues 和 Service bindings 目前未实现。全局 Cache API 提供 `caches.default`、`caches.open()` 和 `put`、`match`、`delete`，缓存只在单个运行时进程内生效。 [Cache API](docs/workers-r2.md#cache-api)
+KV、D1、Durable Objects 和 Queues 目前未实现。全局 Cache API 提供 `caches.default`、`caches.open()` 和 `put`、`match`、`delete`，缓存只在单个运行时进程内生效。 [Cache API](docs/workers-r2.md#cache-api)
 
-控制台从仓库构建时，在 krun 的目标环境里配置变量、Secret、版本元数据、R2 和 Hyperdrive。静态资产随构建产物发布。Wrangler 直接部署支持在上传时提交配置中的绑定，Secret 通过 `wrangler secret put` 管理。 [Wrangler 配置兼容范围](user-docs/src/content/docs/guides/wrangler-configuration.md)
+控制台从仓库构建时，在 krun 的目标环境里配置变量、Secret、版本元数据、R2 和 Hyperdrive。服务绑定可通过环境 API 配置。静态资产随构建产物发布。Wrangler 直接部署支持在上传时提交配置中的绑定，Secret 通过 `wrangler secret put` 管理。 [Wrangler 配置兼容范围](user-docs/src/content/docs/guides/wrangler-configuration.md)
 
 各 binding 的测试用例和验证环境见 [Workers bindings 兼容测试表](docs/verification.md#workers-bindings-兼容测试)。五个真实 R2 项目的测试场景见 [R2 开源项目验证](docs/workers-r2.md#开源项目验证)。
 

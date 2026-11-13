@@ -85,6 +85,10 @@ func Bindings(env domain.WorkerEnvironment) []any {
 	for _, name := range names {
 		out = append(out, map[string]any{"name": name, "type": "r2_bucket", "bucket_name": env.R2Bindings[name].BucketName})
 	}
+	for _, name := range slices.Sorted(maps.Keys(env.ServiceBindings)) {
+		binding := env.ServiceBindings[name]
+		out = append(out, map[string]any{"name": name, "type": "service", "service": binding.Service, "environment": binding.Environment})
+	}
 	for _, name := range slices.Sorted(maps.Keys(env.HyperdriveBindings)) {
 		out = append(out, map[string]any{"name": name, "type": "hyperdrive", "id": env.HyperdriveBindings[name]})
 	}
@@ -159,7 +163,7 @@ func (s *Server) cfScriptDetails(st *domain.State, p authorization.Principal, r 
 	return map[string]any{"id": name, "name": name, "tag": workerID, "subdomain": subdomain, "previews_base_config": map[string]any{"env": cfEnvBindings(base)}, "default_environment": map[string]any{"environment": "production", "script": map[string]any{"id": name, "tag": workerID, "last_deployed_from": "api", "compatibility_date": version.CompatibilityDate, "compatibility_flags": version.CompatibilityFlags, "bindings": Bindings(env)}}}, 200, nil
 }
 func cfVersion(v domain.WorkerVersion, number int) map[string]any {
-	return map[string]any{"id": v.ID, "number": number, "metadata": map[string]any{"created_on": v.Created, "has_preview": false, "source": "api", "author_id": "krun", "author_email": ""}, "annotations": map[string]any{"workers/tag": v.Tag, "workers/message": v.Message}, "resources": map[string]any{"script": map[string]any{"etag": v.ArchiveDigest, "handlers": []string{"fetch"}}, "script_runtime": map[string]any{"compatibility_date": v.CompatibilityDate, "compatibility_flags": v.CompatibilityFlags}, "bindings": Bindings(domain.WorkerEnvironment{HyperdriveBindings: v.HyperdriveBindings, R2Bindings: v.R2Bindings, Variables: v.Variables, SecretVersions: v.SecretVersions, VersionMetadata: v.VersionMetadata, AssetsBinding: v.AssetsBinding})}}
+	return map[string]any{"id": v.ID, "number": number, "metadata": map[string]any{"created_on": v.Created, "has_preview": false, "source": "api", "author_id": "krun", "author_email": ""}, "annotations": map[string]any{"workers/tag": v.Tag, "workers/message": v.Message}, "resources": map[string]any{"script": map[string]any{"etag": v.ArchiveDigest, "handlers": []string{"fetch"}}, "script_runtime": map[string]any{"compatibility_date": v.CompatibilityDate, "compatibility_flags": v.CompatibilityFlags}, "bindings": Bindings(domain.WorkerEnvironment{ServiceBindings: v.ServiceBindings, HyperdriveBindings: v.HyperdriveBindings, R2Bindings: v.R2Bindings, Variables: v.Variables, SecretVersions: v.SecretVersions, VersionMetadata: v.VersionMetadata, AssetsBinding: v.AssetsBinding})}}
 }
 func (s *Server) cfVersions(st *domain.State, p authorization.Principal, r *http.Request) (any, int, error) {
 	out, _, err := s.Application(r).WorkerVersionList(r.Context(), st, p, workerRef(r))
@@ -183,7 +187,15 @@ func (s *Server) cfVersions(st *domain.State, p authorization.Principal, r *http
 	return map[string]any{"items": items}, 200, nil
 }
 func cfDeployment(d domain.WorkerDeployment) map[string]any {
-	return map[string]any{"id": d.ID, "source": "api", "strategy": "percentage", "created_on": d.Created, "versions": []any{map[string]any{"version_id": d.Version, "percentage": 100}}, "annotations": map[string]any{}}
+	versions := []any{map[string]any{"version_id": d.Version, "percentage": float64(domain.WorkerFullWeight-d.CandidateWeight) / 1000}}
+	if d.Candidate != "" {
+		versions = append(versions, map[string]any{"version_id": d.Candidate, "percentage": float64(d.CandidateWeight) / 1000})
+	}
+	annotations := map[string]string{}
+	if d.Message != "" {
+		annotations["workers/message"] = d.Message
+	}
+	return map[string]any{"id": d.ID, "source": "api", "strategy": "percentage", "created_on": d.Created, "versions": versions, "annotations": annotations}
 }
 func (s *Server) cfDeployments(st *domain.State, p authorization.Principal, r *http.Request) (any, int, error) {
 	ref := workerRef(r)

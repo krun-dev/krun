@@ -126,7 +126,7 @@ Version 固定引用 Artifact、目标环境、构建 profile、compatibility �
 `{id,tag,timestamp}`。创建版本可以传 `tag`（最多 100 bytes）和 `message`（最多
 1000 bytes），两者与创建时间一同保持不可变，控制台版本列表展示标签和说明。
 
-Deployment 独立记录目标 Version、Operation、创建时间、30 天的固定地址保留期以及提交时间。Operation 负责校验、CAS 提交和 ACK 收敛；只有通过校验并提交的 Deployment 才生成固定地址。环境地址跟随当前部署，固定地址在有效期内指向该次部署的 Version。删除 Preview、撤销 Worker或修改访问边界后会撤销相应路由；部署地址不会绕过当前网络边界。域名及资源池拓扑变更需要协调地址和路由。
+Deployment 记录目标版本及权重、Operation、创建时间和提交时间。环境地址跟随当前部署，可对同池的两个版本按百分比分流。单版本 Deployment 通过校验并提交后生成固定地址，有效期为 30 天。删除 Preview、撤销 Worker 或修改访问边界后会撤销相应路由。固定地址遵循当前网络边界。
 
 Previews Base 使用独立配置范围；新建 Preview 复制其普通变量与不可变 Secret 引用，后续 Base 修改只影响新建 Preview，生产配置独立。`GET/PATCH /previews-base` 管理基础变量，`PATCH /previews-base/secrets` 管理基础密钥。
 Secret 的普通写操作会自动部署：`PUT`（新增或轮换）和 `DELETE` 都创建不可变 Version 并立即进入发布流程，但复用当前 Artifact，不重新构建代码。每个环境保存 name → secret version 的期望映射，每个 Version 再固定一份映射，因此轮换后仍能准确回滚。值以 AES-256-GCM 加密后入库，AAD 绑定组织、Worker、环境、名称和版本；公开 API 只返回名称与创建时间。首次部署前可以保存 Secret；`deploy:false` 只生成配置版本，批量接口 `PATCH /environments/{env}/secrets` 使用 name → value/null 表示新增、轮换或删除，一批变更只生成一个版本。`workers.secrets_keys` 是带版本的 key ring，`secrets_active_key` 只用于新写入，仍被保留 Version 引用的旧 key 不得删除。生产 key 应由 KMS/Secret Manager 注入配置，而不是提交到仓库。
@@ -144,7 +144,12 @@ Secret 的普通写操作会自动部署：`PUT`（新增或轮换）和 `DELETE
 
 `committed` 之后的基础设施故障保留状态并重试，不自动撤销 Version。只有 `queued` / `validating` 的操作会阻止新的发布和配置修改；`committed` 表示已提交、正在收敛，新发布可以入队并在提交时 supersede 尚未确认的旧操作。回滚也先验证候选，只有回滚成功提交时才将仍处于 `committed` 的原操作标记 `superseded`；若管理连接恢复后原操作先完成确认，则保留它的 `available` 状态及成功历史。历史 API 记录成功生效的 Version；未成功确认的尝试通过 Operation 查询。
 
-此版没有跨 Pod 原子流量切换或灰度权重；短暂的新旧快照并存是预期行为。`confirmed_version_id` 保留上次已确认版本供状态展示，并非自动流量回退开关。
+灰度沿用已有域名和资源池，由入口在选中 Worker 之后按当前 Deployment 决定版本。更新在池内逐步生效，`available` 表示 serving 成员已确认目标配置。Cloudflare 协议、分桶与定向验证见 [Cloudflare 协议适配](cloudflare-api.md#版本灰度)。
+
+原生 `POST .../environments/{env}/deployments` 的 `versions` 列表也使用 `version_id` 和 `percentage`，沿用 `expected_revision` 和 `idempotency_key`。
+发布记录持有不可变版本引用，HTTP 选版发生在运行时入口。后续 Durable Objects 可以按对象身份选择版本，继续复用发布记录和版本引用。
+
+首次启用灰度前升级池内 serving runtime，使管理端 `/ready` 返回 `gradual_release_protocol: 1`。需要降级到旧 runtime 时，先将各双版本部署收敛为单版本 100%，并确认对应操作进入 `available`。
 
 ## 路由与代码加载
 
@@ -153,8 +158,8 @@ kgateway 私网 listener :8080
   → pool/domain 共享 HTTPRoute
   → runtime-default Service :8081
   → Pod 内可信入口 Worker
-  → Host 查找环境 Version
-  → immutable Version
+  → Host 查找环境 Deployment
+  → 选择不可变 Version
   → Worker Loader 加载业务 Worker
 ```
 

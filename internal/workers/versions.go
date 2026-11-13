@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"maps"
 	"sort"
 	"time"
 
@@ -105,6 +106,7 @@ func versionSnapshot(org, worker, environment string, artifact domain.WorkerArti
 	return domain.WorkerVersion{
 		R2Bindings:         domain.CloneR2Bindings(config.R2Bindings),
 		HyperdriveBindings: cloneHyperdriveBindings(config.HyperdriveBindings),
+		ServiceBindings:    maps.Clone(config.ServiceBindings),
 		VersionMetadata:    config.VersionMetadata,
 		AssetsBinding:      config.AssetsBinding,
 		Organization:       org,

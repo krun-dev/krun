@@ -1034,5 +1034,7 @@
   "保存 Hyperdrive 绑定": "Save Hyperdrive bindings",
   "Hyperdrive 绑定名称和配置不能为空，且名称不能重复。": "Hyperdrive binding names and configurations are required and must be unique.",
   "失败": "Failed",
-  "调整": "Adjusted"
+  "调整": "Adjusted",
+  "灰度版本": "Canary version",
+  "此版本流量百分比": "Traffic percentage for this version"
 }

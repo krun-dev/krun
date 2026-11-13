@@ -7,6 +7,6 @@
     "workerd": "1.20260928.1"
   },
   "scripts": {
-    "test": "node test/storage.test.mjs && node test/cache.test.mjs && node test/multipart.test.mjs && node test/r2-contract.test.mjs && node test/r2-workerd-smoke.mjs && node test/r2-workerd-smoke.mjs --shared-validator && node test/assets.test.mjs && node test/decision-flow.test.mjs && node test/scaling.test.mjs && node test/workerd-smoke.mjs && node test/wrangler-artifact-smoke.mjs"
+    "test": "node --test test/service.test.mjs && node test/storage.test.mjs && node test/cache.test.mjs && node test/multipart.test.mjs && node test/r2-contract.test.mjs && node test/r2-workerd-smoke.mjs && node test/r2-workerd-smoke.mjs --shared-validator && node test/assets.test.mjs && node test/decision-flow.test.mjs && node test/scaling.test.mjs && node test/workerd-smoke.mjs && node test/wrangler-artifact-smoke.mjs"
   }
 }

@@ -120,9 +120,9 @@ WHERE v.version_id=$1 AND (
 		p.role='primary' AND p.state='active' AND EXISTS (
 			SELECT 1 FROM krun_worker_environments e
 			WHERE e.worker_id=v.worker_id AND e.env_name=v.env_name AND e.enabled
-			AND (e.version_id=v.version_id OR EXISTS (
+			AND (v.version_id IN (e.version_id,e.candidate_version_id) OR EXISTS (
 				SELECT 1 FROM krun_worker_deployments d
-				WHERE d.version_id=v.version_id AND d.worker_id=v.worker_id
+				WHERE v.version_id IN (d.version_id,d.candidate_version_id) AND d.worker_id=v.worker_id
 				AND d.org_id=v.org_id AND d.env_name=v.env_name
 				AND d.committed_at IS NOT NULL AND d.expires_at>now()
 			))

@@ -59,6 +59,7 @@ Wrangler 是 Cloudflare 的 Workers 开发和部署工具；krun CLI 是管理 k
 | `vars` | 不自动注入运行环境；在 krun 目标环境中配置变量 | 支持字符串和 JSON 值，随 Version 冻结 |
 | `r2_buckets` | 不自动创建桶或绑定；在 krun 创建逻辑桶并配置目标环境的 R2 binding | 支持 `binding`、`bucket_name`，引用同组织已启用的逻辑桶；不支持非 `default` 的 jurisdiction |
 | `hyperdrive` | 在 krun 的目标环境中选择 PostgreSQL 托管配置并添加绑定 | 支持 `binding` 和 `id`，引用同组织的 PostgreSQL 托管配置。见 [PostgreSQL 托管接入](/docs/guides/workers-hyperdrive.html) |
+| `services` | 通过目标 krun 环境的原生 API 配置服务绑定，可指定目标版本 | 支持 `binding`、`service` 和 `environment`，调用同组织内目标 Worker 的默认 HTTP 入口，跟随目标部署 |
 | `version_metadata.binding` | 在 krun 目标环境中配置版本元数据 binding | 支持注入 `id`、`tag`、`timestamp` |
 | `env.<name>` | 构建读取 Wrangler 顶层配置，运行配置来自选定的 krun 环境 | `--env` 由 Wrangler 解析，生成的不同 Script 名称对应不同 krun Worker |
 | `keep_vars` / `--keep-vars` | 不作为仓库产物配置导入 | 支持保留未提交的普通变量，同名新值仍覆盖；普通上传默认替换变量 |
@@ -69,7 +70,7 @@ Secret 通过 krun 控制台或 `wrangler secret put` 设置，不写入配置�
 
 | 配置或能力 | 当前边界与替代方式 |
 | --- | --- |
-| `kv_namespaces`、`d1_databases`、`durable_objects`、`queues`、`services` | 不支持相应 binding；构建能保留类导出不代表提供 Durable Objects 服务 |
+| `kv_namespaces`、`d1_databases`、`durable_objects`、`queues` | 不支持相应 binding；构建能保留类导出不代表提供 Durable Objects 服务 |
 | `triggers.crons` | 不支持定时触发器，Worker 当前以 HTTP 请求入口运行 |
 | `route`、`routes`、Cloudflare Zone / 自定义域名 | 不调用 Cloudflare 路由或域名接口；通过 krun 管理 Worker 域名 |
 | `workers_dev`、`preview_urls` | 不作为 krun 托管地址的开关；使用 krun 返回的部署或预览地址，当前不支持通过兼容接口关闭托管 URL |

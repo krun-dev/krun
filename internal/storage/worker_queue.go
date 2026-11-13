@@ -87,6 +87,9 @@ func (s *Store) PendingWork(ctx context.Context, limit int) (domain.WorkerState,
 		for _, op := range state.Operations {
 			if op.Version != "" {
 				versionIDs = append(versionIDs, op.Version)
+				if op.Candidate != "" {
+					versionIDs = append(versionIDs, op.Candidate)
+				}
 			}
 		}
 		if len(versionIDs) > 0 {

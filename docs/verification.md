@@ -19,11 +19,14 @@ make check-static-build
 ## 端到端与 UI
 
 独立 kind 栈的部署、故障注入和恢复步骤见 [kind E2E](../deploy/workers-kind/README.md)。
-使用与测试控制面 `public_url` 一致的同源入口运行：
+沿用独立集群的 `KUBECONFIG` 和 `KIND_CLUSTER_NAME`，使用与测试控制面 `public_url` 一致的同源入口运行：
 
 ```sh
-KRUN_UI_ORIGIN="$TEST_ORIGIN" KRUN_CF_E2E_GATEWAY_ORIGIN="$TEST_GATEWAY_ORIGIN" \
+KRUN_UI_ORIGIN="$TEST_ORIGIN" \
+  KRUN_CF_E2E_GATEWAY_ORIGIN="$TEST_GATEWAY_ORIGIN" \
+  KRUN_CF_E2E_PUBLIC_GATEWAY_ORIGIN="$TEST_PUBLIC_GATEWAY_ORIGIN" \
   node deploy/workers-kind/cloudflare.e2e.mjs
+KRUN_UI_ORIGIN="$TEST_ORIGIN" npx playwright test tests/ui/worker-gradual.e2e.spec.mjs
 KRUN_UI_ORIGIN="$TEST_ORIGIN" npm run test:ui
 ```
 
@@ -67,6 +70,8 @@ Wrangler 端到端用例使用仓库固定的 Wrangler 4.155.0，将 Worker 发�
 | 静态资产（`assets`） | `env.ASSETS.fetch()`、纯静态 Worker、SPA 回退、挂载路径、重定向和响应头规则。回滚恢复旧版本的资产规则。 | [Wrangler kind E2E](../deploy/workers-kind/cloudflare.e2e.mjs) · [运行时资产测试](../workers/runtime/test/assets.test.mjs) |
 | R2（`r2_bucket`） | 控制面解析桶名、隔离组织并冻结版本绑定。运行时覆盖对象读写、Range、条件请求、列表分页、元数据和分片续传。真实 TOS 上还覆盖五个固定 commit 的开源 Worker 项目。 | [控制面测试](../internal/control/workers_buckets_test.go) · [R2 API 契约测试](../workers/runtime/test/r2-contract.test.mjs) · [分片测试](../workers/runtime/test/multipart.test.mjs) · [TOS 与开源项目验收](workers-r2.md#运行与验证) |
 | Hyperdrive（`hyperdrive`） | 原版 Wrangler 创建、列出、读取、更新和删除配置，创建时写入项目 binding。控制面验证组织隔离、版本绑定、直连连接串、密码轮换、凭据读取权限和配置删除后的拒绝行为。 | [PostgreSQL 集成测试](../internal/control/hyperdrive_postgres_test.go) |
+| 版本灰度 | 原版 Wrangler 验证双版本比例、0% 候选定向验证、调权、发布历史和回滚。真实 Gateway 验证两个分桶 Header 的等价性与优先级、旧资产访问、环境级保留窗口覆盖、缓存隔离和鉴权绕过。 | [Wrangler kind E2E](../deploy/workers-kind/cloudflare.e2e.mjs) |
+| 服务绑定（`service`） | 同池及跨池的固定版本与跟随发布、并行调用、HTTP 请求透传、分桶键传递、授权撤销与目标删除。 | [Wrangler kind E2E](../deploy/workers-kind/cloudflare.e2e.mjs) · [运行时传输测试](../workers/runtime/test/service.test.mjs) |
 | Cache API（`caches`） | 运行时覆盖 `put`、`match`、`delete`、缓存策略、`Vary`、条件和 Range 请求，以及不同组织和命名缓存之间的隔离。 | [运行时缓存测试](../workers/runtime/test/cache.test.mjs) |
 
 Wrangler 部署用例按上方[端到端步骤](#端到端与-ui)运行。运行时用例使用 `npm ci --prefix workers/runtime` 安装依赖，再执行 `npm test --prefix workers/runtime`。Hyperdrive 集成测试需要专用 PostgreSQL 测试库，原版 Wrangler 用例还需要 `npm ci --prefix workers/builder`。

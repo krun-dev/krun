@@ -24,14 +24,14 @@ func (s *Store) loadWorkers(ctx context.Context, st *domain.State) error {
 	queueStateRead(ctx, batch, "krun_workers", `SELECT worker_id, org_id, network_profile, repository, repository_revision, domains_revision, preview_revision FROM krun_workers`)
 	queueStateRead(ctx, batch, "krun_worker_placements", `SELECT worker_id, pool_id, org_id, network_profile, role, state, revision, created_at, updated_at FROM krun_worker_placements`)
 	queueStateRead(ctx, batch, "krun_worker_domains", `SELECT worker_id, domain_id FROM krun_worker_domains ORDER BY worker_id, ordinal`)
-	queueStateRead(ctx, batch, "krun_worker_environments", `SELECT worker_id, env_name, enabled, config_revision, variables, deployment_revision, version_id, confirmed_version_id, version_metadata, assets_binding, hyperdrive_bindings FROM krun_worker_environments`)
+	queueStateRead(ctx, batch, "krun_worker_environments", `SELECT worker_id, env_name, enabled, config_revision, variables, deployment_revision, version_id, confirmed_version_id, version_metadata, assets_binding, hyperdrive_bindings, candidate_version_id, candidate_weight, service_bindings, gradual_asset_retention_seconds FROM krun_worker_environments`)
 	queueStateRead(ctx, batch, "krun_worker_secret_versions", `SELECT secret_version_id, org_id, worker_id, env_name, name, value_digest, key_version, created_by, created_at FROM krun_worker_secret_versions`)
 	queueStateRead(ctx, batch, "krun_worker_environment_secrets", `SELECT worker_id, env_name, name, secret_version_id FROM krun_worker_environment_secrets`)
 	queueStateRead(ctx, batch, "krun_worker_builds", `SELECT `+workerBuildColumns+` FROM krun_worker_builds`)
 	queueStateRead(ctx, batch, "krun_worker_artifacts", `SELECT `+workerArtifactColumns+` FROM krun_worker_artifacts`)
 	queueStateRead(ctx, batch, "krun_worker_versions", `SELECT `+workerVersionColumns+` FROM krun_worker_versions`)
 	queueStateRead(ctx, batch, "krun_worker_version_secrets", `SELECT version_id, name, secret_version_id FROM krun_worker_version_secrets`)
-	queueStateRead(ctx, batch, "krun_worker_deployments", `SELECT deployment_id,org_id,worker_id,env_name,version_id,operation_id,created_at,expires_at,committed_at FROM krun_worker_deployments`)
+	queueStateRead(ctx, batch, "krun_worker_deployments", `SELECT deployment_id,org_id,worker_id,env_name,version_id,operation_id,created_at,expires_at,committed_at,candidate_version_id,candidate_weight,message FROM krun_worker_deployments`)
 	queueStateRead(ctx, batch, "krun_worker_operations", `SELECT `+workerOperationColumns+` FROM krun_worker_operations`)
 	queueStateRead(ctx, batch, "krun_worker_history", `SELECT worker_id, env_name, revision, version_id, operation_id, kind, created_at FROM krun_worker_history ORDER BY created_at DESC`)
 	queueStateRead(ctx, batch, "krun_worker_idempotency", `SELECT idem_key, digest, target_id FROM krun_worker_idempotency`)
@@ -140,7 +140,7 @@ func readWorkerEnvironments(results pgx.BatchResults, st *domain.State) error {
 		var worker, name string
 		var env domain.WorkerEnvironment
 		var variables []byte
-		if err = rows.Scan(&worker, &name, &env.Enabled, &env.ConfigRevision, &variables, &env.Revision, &env.Version, &env.Confirmed, &env.VersionMetadata, &env.AssetsBinding, &env.HyperdriveBindings); err != nil {
+		if err = rows.Scan(&worker, &name, &env.Enabled, &env.ConfigRevision, &variables, &env.Revision, &env.Version, &env.Confirmed, &env.VersionMetadata, &env.AssetsBinding, &env.HyperdriveBindings, &env.Candidate, &env.CandidateWeight, &env.ServiceBindings, &env.AssetRetentionSeconds); err != nil {
 			return err
 		}
 		env.Name = name

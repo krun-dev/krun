@@ -1,11 +1,11 @@
 // Run against the isolated kind backend through its same-origin console entry.
 // All generated projects, CLI logs and credentials stay under ignored .data/.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { request as httpRequest } from "node:http";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { Agent, request as httpRequest } from "node:http";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 const origin = process.env.KRUN_UI_ORIGIN;
 assert(origin, "KRUN_UI_ORIGIN must identify the isolated same-origin E2E console");
 const directory = path.resolve(process.env.KRUN_CF_E2E_DIR || ".data/cf-api-e2e");
@@ -67,6 +67,33 @@ const login = await api(
 );
 const callback = new URL(login.redirect_url, origin);
 await api(callback.pathname + callback.search, "GET", undefined, true, 303);
+const loginUser = await api("/api/auth/me", "GET", undefined, true);
+if (!loginUser.system_admin) {
+  const kubeconfig = process.env.KUBECONFIG;
+  const cluster = process.env.KIND_CLUSTER_NAME;
+  assert(kubeconfig && cluster, "Use the isolated kind kubeconfig and cluster name");
+  const kubectl = (...args) =>
+    execFileSync("kubectl", ["--kubeconfig", kubeconfig, ...args], {
+      encoding: "utf8",
+      timeout: 30000,
+    });
+  assert.equal(kubectl("config", "current-context").trim(), "kind-" + cluster);
+  kubectl(
+    "exec",
+    "-n",
+    "workers-mvp",
+    "deploy/backend",
+    "-c",
+    "backend",
+    "--",
+    "/app/krun-server",
+    "bootstrap",
+    "--config",
+    "/config/control.yaml",
+    "--user",
+    loginUser.user.user_id,
+  );
+}
 csrf = (await api("/api/auth/csrf", "POST", undefined, true)).csrf_token;
 const credential = await api(
   "/api/v1/system/api-keys",
@@ -159,7 +186,11 @@ async function wrangler(args, input = "", account = org.short_name) {
     { env, stdio: ["pipe", "pipe", "pipe"] },
   );
   let log = "";
-  child.stdout.on("data", (b) => (log += b));
+  let stdout = "";
+  child.stdout.on("data", (b) => {
+    stdout += b;
+    log += b;
+  });
   child.stderr.on("data", (b) => (log += b));
   child.stdin.end(input);
   const timer = setTimeout(() => child.kill("SIGTERM"), 180000);
@@ -168,7 +199,7 @@ async function wrangler(args, input = "", account = org.short_name) {
   log = log.split(token).join("[redacted]");
   writeFileSync(path.join(directory, "command-" + ++commandCount + ".log"), log, { mode: 0o600 });
   assert.equal(status, 0, args.join(" ") + " failed: " + log.slice(-6000));
-  return log;
+  return args.includes("--json") ? stdout : log;
 }
 async function invoke(environment, expected) {
   let last;
@@ -283,22 +314,6 @@ await check("official Preview delete removes only its target", async () => {
   await api(workerPath + "/previews/branch-one", "GET", undefined, false, 404);
   await invoke("production", { marker: "second" });
 });
-await check("traffic splitting is explicitly rejected", async () => {
-  const r = await api(
-    scriptPath + "/deployments",
-    "POST",
-    {
-      strategy: "percentage",
-      versions: [
-        { version_id: firstVersion, percentage: 50 },
-        { version_id: secondVersion, percentage: 50 },
-      ],
-    },
-    false,
-    422,
-  );
-  assert.equal(r.success, false);
-});
 await check(
   "first Secret on a nonexistent Worker follows Wrangler placeholder deployment",
   async () => {
@@ -312,6 +327,34 @@ await check(
 // Bindings must survive the complete official upload/deploy/rollback path.
 let bindingsVersion;
 let bindingsConfig;
+const gatewayAgent = new Agent({ keepAlive: true, maxSockets: 32 });
+async function workerGateway(worker, environment, domain, gatewayOrigin) {
+  assert(gatewayOrigin, "Expose the " + domain + " test Gateway");
+  const env = (await api(worker + "/environments")).items.find((e) => e.name === environment);
+  const host = env.display_hosts?.[domain] || env.hosts?.[(env.domains || []).indexOf(domain)];
+  assert(host, environment + " " + domain + " host");
+  return { host, origin: gatewayOrigin };
+}
+function gatewayRequest(gateway, url, headers = {}, method = "GET", body = null) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      new URL(url, gateway.origin),
+      { agent: gatewayAgent, method, headers: { ...headers, host: gateway.host } },
+      (response) => {
+        let received = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => (received += chunk));
+        response.on("error", reject);
+        response.on("end", () =>
+          resolve({ status: response.statusCode, body: received, headers: response.headers }),
+        );
+      },
+    );
+    req.on("error", reject);
+    req.setTimeout(15000, () => req.destroy(new Error("gateway timeout")));
+    req.end(body);
+  });
+}
 async function invokePath(url, environment = "production") {
   if (!process.env.KRUN_CF_E2E_GATEWAY_ORIGIN) {
     return api(native + "/environments/" + environment + "/invoke", "POST", {
@@ -319,26 +362,13 @@ async function invokePath(url, environment = "production") {
       method: "GET",
     });
   }
-  const env = (await api(native + "/environments")).items.find((e) => e.name === environment);
-  const host = env.display_hosts?.internal || env.hosts?.[(env.domains || []).indexOf("internal")];
-  assert(host, "environment internal host");
-  return new Promise((resolve, reject) => {
-    const req = httpRequest(
-      new URL(url, process.env.KRUN_CF_E2E_GATEWAY_ORIGIN),
-      { headers: { host } },
-      (response) => {
-        let body = "";
-        response.setEncoding("utf8");
-        response.on("data", (chunk) => (body += chunk));
-        response.on("end", () =>
-          resolve({ status: response.statusCode, body, headers: response.headers }),
-        );
-      },
-    );
-    req.on("error", reject);
-    req.setTimeout(15000, () => req.destroy(new Error("gateway timeout")));
-    req.end();
-  });
+  const gateway = await workerGateway(
+    native,
+    environment,
+    "internal",
+    process.env.KRUN_CF_E2E_GATEWAY_ORIGIN,
+  );
+  return gatewayRequest(gateway, url);
 }
 await check(
   "asset capabilities reject corrupt files, incomplete tokens and cross-Worker reuse",
@@ -807,6 +837,756 @@ await check("rollback restores asset rules, mount and HTML mode with its version
   assert.equal(restored.headers["x-shared"], "common, assets");
   assert.equal((await invokePath("/next")).body, "worker-response");
 });
+const deploymentPath = scriptPath + "/deployments";
+let gradualGateway;
+let gradualVersions;
+let gradualAssets;
+let gradualAtHalf;
+
+function percentages(deployment) {
+  assert.equal(deployment.strategy, "percentage");
+  assert.equal(
+    deployment.versions.length,
+    new Set(deployment.versions.map((v) => v.version_id)).size,
+  );
+  return Object.fromEntries(deployment.versions.map((v) => [v.version_id, v.percentage]));
+}
+async function wranglerJSON(args) {
+  return JSON.parse(await wrangler([...args, "--json"]));
+}
+async function activeDeployment(worker = native, endpoint = deploymentPath) {
+  const result = (await api(endpoint)).result.deployments;
+  assert(result.length > 0, "deployment history is empty");
+  const latest = result[0];
+  await assertEventually(async () => {
+    const actual = await api(worker + "/deployments/" + latest.id);
+    assert.equal(
+      actual.state,
+      "available",
+      "deployment should converge: " + JSON.stringify(actual),
+    );
+  });
+  return latest;
+}
+async function deployGradual(
+  v1Weight,
+  v2Weight,
+  message,
+  worker = native,
+  endpoint = deploymentPath,
+) {
+  const [v1, v2] = gradualVersions;
+  await wrangler([
+    "versions",
+    "deploy",
+    v1 + "@" + v1Weight + "%",
+    v2 + "@" + v2Weight + "%",
+    "--yes",
+    "--message",
+    message,
+  ]);
+  const current = await activeDeployment(worker, endpoint);
+  assert.deepEqual(percentages(current), { [v1]: v1Weight, [v2]: v2Weight });
+  assert.equal(current.annotations["workers/message"], message);
+  assert.deepEqual((await api(endpoint + "/" + current.id)).result, current);
+  return current;
+}
+function fixtureAsset(marker) {
+  const content = "console.log(" + JSON.stringify(marker) + ");";
+  const hash = createHash("sha256").update(content).digest("hex").slice(0, 12);
+  return { file: "app-" + hash + ".js", content };
+}
+function gradualFixture(workerName, marker) {
+  const dir = path.join(directory, "gradual-assets");
+  const asset = fixtureAsset(marker);
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(path.join(dir, "assets"), { recursive: true });
+  writeFileSync(path.join(dir, "index.html"), '<script src="/assets/' + asset.file + '"></script>');
+  writeFileSync(path.join(dir, "assets", asset.file), asset.content);
+  writeFileSync(
+    config,
+    JSON.stringify({
+      name: workerName,
+      main: "index.js",
+      compatibility_date: "2026-09-28",
+      vars: { LABEL: marker },
+      version_metadata: { binding: "META" },
+      assets: { directory: "gradual-assets", binding: "ASSETS" },
+    }),
+  );
+  writeFileSync(
+    source,
+    `export default {
+  fetch(request, env) {
+    const cache = new URL(request.url).pathname === "/cache";
+    return Response.json({
+      code: ${JSON.stringify(marker)},
+      label: env.LABEL,
+      version: env.META.id,
+      requestId: crypto.randomUUID(),
+      appAuthorization: request.headers.get("authorization") === "Bearer fixture-app",
+      verificationAuthorization: request.headers.has("krun-workers-verify-authorization"),
+    }, { headers: { "Cache-Control": cache ? "public, s-maxage=60" : "no-store" } });
+  },
+};
+`,
+  );
+  return asset;
+}
+async function gatewayVersion(gateway, headers = {}, url = "/version") {
+  const response = await gatewayRequest(gateway, url, headers);
+  assert.equal(response.status, 200, response.body);
+  const value = JSON.parse(response.body);
+  assert.equal(response.headers["x-krun-version"], value.version);
+  assert.equal(value.code, value.label, "code and version-bound variables should agree");
+  assert(response.headers["x-krun-pod"], "response should identify the serving Pod");
+  return { ...value, pod: response.headers["x-krun-pod"], headers: response.headers };
+}
+async function uniformVersion(version) {
+  const seen = new Set();
+  for (let index = 0; index < 32; index++) {
+    const response = await gatewayVersion(gradualGateway);
+    assert.equal(response.version, version);
+    seen.add(response.pod);
+  }
+  assert.equal(seen.size, 2, "expected both serving Pods");
+  return [...seen].sort();
+}
+async function sampleGradualTraffic(expectedMinimum, expectedMaximum) {
+  const [stable, candidate] = gradualVersions;
+  let candidateCount = 0;
+  const pods = new Set();
+  for (let offset = 0; offset < 10000; offset += 32) {
+    const batchSize = Math.min(32, 10000 - offset);
+    const batch = await Promise.all(
+      Array.from({ length: batchSize }, () => gatewayVersion(gradualGateway)),
+    );
+    for (const result of batch) {
+      assert(result.version === stable || result.version === candidate, "unexpected version");
+      assert.equal(result.code, result.version === stable ? "gradual-v1" : "gradual-v2");
+      pods.add(result.pod);
+      candidateCount += Number(result.version === candidate);
+    }
+  }
+  assert.equal(pods.size, 2, "expected both serving Pods");
+  assert(
+    candidateCount >= expectedMinimum && candidateCount <= expectedMaximum,
+    "candidate received " + candidateCount + " of 10,000 requests",
+  );
+  return candidateCount;
+}
+const cloudflareKey = "Cloudflare-Workers-Version-Key";
+const krunKey = "Krun-Workers-Version-Key";
+const overrideHeader = "Cloudflare-Workers-Version-Overrides";
+function versionOverride(workerName, version) {
+  return { [overrideHeader]: workerName + "=" + JSON.stringify(version) };
+}
+function bearer(key = token) {
+  return "Bearer " + key;
+}
+
+await check("Wrangler stages a second version without changing production traffic", async () => {
+  gradualGateway = await workerGateway(
+    native,
+    "production",
+    "internal",
+    process.env.KRUN_CF_E2E_GATEWAY_ORIGIN,
+  );
+  gradualAssets = [gradualFixture(script, "gradual-v1")];
+  await wrangler(["deploy"]);
+  const [old] = (await api(scriptPath + "/versions")).result.items;
+  await activeDeployment();
+  gradualAssets.push(gradualFixture(script, "gradual-v2"));
+  await wrangler(["versions", "upload", "--tag", "gradual-v2"]);
+  const [candidate] = (await api(scriptPath + "/versions")).result.items;
+  gradualVersions = [old.id, candidate.id];
+  assert.notEqual(candidate.id, old.id);
+  const list = await wranglerJSON(["versions", "list"]);
+  assert(list.some((v) => v.id === old.id));
+  assert(list.some((v) => v.id === candidate.id));
+  const view = await wranglerJSON(["versions", "view", candidate.id]);
+  assert.equal(view.id, candidate.id);
+  assert.equal(view.annotations["workers/tag"], "gradual-v2");
+  await deployGradual(100, 0, "Stage candidate");
+  await uniformVersion(old.id);
+  const candidateAsset = await gatewayRequest(gradualGateway, "/assets/" + gradualAssets[1].file);
+  assert(!candidateAsset.body.includes(gradualAssets[1].content));
+});
+await check("only authorized production overrides reach a zero-weight candidate", async () => {
+  const [stable, candidate] = gradualVersions;
+  const override = versionOverride(script, candidate);
+  const unauthenticated = await gatewayRequest(gradualGateway, "/version", override);
+  assert.equal(unauthenticated.status, 403);
+  const reader = await api(
+    orgNative + "/api-keys",
+    "POST",
+    {
+      name: "Gradual read only",
+      expires_in: 3600,
+      policy: {
+        schema_version: 1,
+        statements: [
+          {
+            effect: "allow",
+            actions: ["worker.read", "worker.version.read"],
+            resource: { kind: "worker", organization_id: org.id, ids: [nativeWorker.id] },
+          },
+        ],
+      },
+    },
+    true,
+    201,
+  );
+  const denied = await gatewayRequest(gradualGateway, "/version", {
+    ...override,
+    Authorization: bearer(reader.key),
+  });
+  assert.equal(denied.status, 403);
+  const noPublish = await fetch(origin + deploymentPath, {
+    method: "POST",
+    headers: { authorization: bearer(reader.key), "content-type": "application/json" },
+    body: JSON.stringify({
+      strategy: "percentage",
+      versions: [
+        { version_id: stable, percentage: 95 },
+        { version_id: candidate, percentage: 5 },
+      ],
+    }),
+  });
+  assert.equal(noPublish.status, 403);
+  const selected = await gatewayVersion(gradualGateway, { ...override, Authorization: bearer() });
+  assert.equal(selected.version, candidate);
+  assert.match(selected.headers["cache-control"], /no-store/);
+  const dedicated = await gatewayVersion(gradualGateway, {
+    ...override,
+    Authorization: "Bearer fixture-app",
+    "Krun-Workers-Verify-Authorization": bearer(),
+  });
+  assert.equal(dedicated.version, candidate);
+  assert.equal(dedicated.appAuthorization, true);
+  assert.equal(dedicated.verificationAuthorization, false);
+  const unknown = await gatewayVersion(gradualGateway, {
+    ...versionOverride(script, randomUUID()),
+    Authorization: bearer(),
+  });
+  assert.equal(unknown.version, stable);
+  const asset = await gatewayRequest(gradualGateway, "/assets/" + gradualAssets[1].file, {
+    ...override,
+    Authorization: bearer(),
+  });
+  assert.equal(asset.body, gradualAssets[1].content);
+  assert.match(asset.headers["cache-control"], /no-store/);
+});
+await check("Wrangler sets 5% traffic and lists matching deployment history", async () => {
+  const gradualAtFive = await deployGradual(95, 5, "Canary 5 percent");
+  const status = await wranglerJSON(["deployments", "status"]);
+  assert.equal(status.id, gradualAtFive.id);
+  assert.deepEqual(percentages(status), { [gradualVersions[0]]: 95, [gradualVersions[1]]: 5 });
+  const list = await wranglerJSON(["deployments", "list"]);
+  assert(list.some((d) => d.id === status.id));
+  assert(list.some((d) => d.annotations["workers/message"] === "Stage candidate"));
+  console.log("5% candidate requests: " + (await sampleGradualTraffic(400, 600)));
+});
+const rolloutKeys = Array.from({ length: 256 }, (_, index) => "gradual-session-" + index);
+async function readAssignments() {
+  const values = [];
+  for (const key of rolloutKeys) {
+    values.push((await gatewayVersion(gradualGateway, { [cloudflareKey]: key })).version);
+  }
+  return values;
+}
+let atFive;
+await check("both version keys stay stable across Pods at 5%", async () => {
+  atFive = await readAssignments();
+  const [stable, candidate] = gradualVersions;
+  assert(atFive.includes(stable));
+  assert(atFive.includes(candidate));
+  const pods = new Set();
+  for (const [index, key] of rolloutKeys.entries()) {
+    const r = await gatewayVersion(gradualGateway, { [krunKey]: key });
+    assert.equal(r.version, atFive[index]);
+    pods.add(r.pod);
+  }
+  const key = rolloutKeys[atFive.indexOf(candidate)];
+  const conflicting = rolloutKeys[atFive.indexOf(stable)];
+  for (let i = 0; i < 32; i++) {
+    const response = await gatewayVersion(gradualGateway, {
+      [krunKey]: key,
+      [cloudflareKey]: conflicting,
+    });
+    assert.equal(response.version, candidate);
+    pods.add(response.pod);
+  }
+  assert.equal(pods.size, 2);
+});
+await check("increasing to 50% keeps existing candidate assignments", async () => {
+  gradualAtHalf = await deployGradual(50, 50, "Canary 50 percent");
+  const atHalf = await readAssignments();
+  const candidate = gradualVersions[1];
+  for (const [index, assignment] of atFive.entries()) {
+    if (assignment === candidate) {
+      assert.equal(atHalf[index], candidate, "moving the threshold should keep this session");
+    }
+  }
+  console.log("50% candidate requests: " + (await sampleGradualTraffic(4800, 5200)));
+});
+await check(
+  "invalid deployment lists are rejected without replacing the active rollout",
+  async () => {
+    const [stable, candidate] = gradualVersions;
+    for (const versions of [
+      [
+        { version_id: stable, percentage: 80 },
+        { version_id: candidate, percentage: 10 },
+      ],
+      [
+        { version_id: stable, percentage: 50 },
+        { version_id: stable, percentage: 50 },
+      ],
+      [
+        { version_id: stable, percentage: 20 },
+        { version_id: candidate, percentage: 30 },
+        { version_id: firstVersion, percentage: 50 },
+      ],
+    ]) {
+      const outcome = await api(
+        deploymentPath,
+        "POST",
+        { strategy: "percentage", versions },
+        false,
+        422,
+      );
+      assert.equal(outcome.success, false);
+      assert.equal(typeof outcome.errors[0].code, "number");
+    }
+    assert.equal((await api(deploymentPath)).result.deployments[0].id, gradualAtHalf.id);
+  },
+);
+await check("Wrangler moves 100% to the candidate, promotes it and rolls back", async () => {
+  const [stable, candidate] = gradualVersions;
+  await deployGradual(99.875, 0.125, "Fractional weight");
+  await deployGradual(0, 100, "Candidate takes full traffic");
+  const pods = await uniformVersion(candidate);
+  await wrangler(["versions", "deploy", candidate + "@100%", "--yes"]);
+  const promoted = await activeDeployment();
+  assert.deepEqual(percentages(promoted), { [candidate]: 100 });
+  assert.deepEqual(await uniformVersion(candidate), pods);
+  assert.equal(
+    (await workerGateway(native, "production", "internal", gradualGateway.origin)).host,
+    gradualGateway.host,
+  );
+  const oldAsset = await gatewayRequest(gradualGateway, "/assets/" + gradualAssets[0].file);
+  assert.equal(oldAsset.status, 200);
+  assert.equal(oldAsset.body, gradualAssets[0].content);
+
+  await wrangler(["rollback", stable, "--message", "Restore gradual v1", "--yes"]);
+  const restored = await activeDeployment();
+  assert.deepEqual(percentages(restored), { [stable]: 100 });
+  assert.equal(restored.annotations["workers/message"], "Restore gradual v1");
+  assert.deepEqual(await uniformVersion(stable), pods);
+  const newAsset = await gatewayRequest(gradualGateway, "/assets/" + gradualAssets[1].file);
+  assert.equal(newAsset.status, 200);
+  assert.equal(newAsset.body, gradualAssets[1].content);
+});
+
+await check("native retention override disables fallback for newly retired assets", async () => {
+  const environment = async () =>
+    (await api(native + "/environments")).items.find((item) => item.name === "production");
+  const before = await environment();
+  const updated = await api(native + "/environments/production", "PATCH", {
+    expected_revision: before.configuration_revision,
+    gradual_asset_retention_seconds: 0,
+  });
+  assert.equal(updated.gradual_asset_retention_seconds, 0);
+  const configured = await environment();
+  assert.equal(configured.gradual_asset_retention_seconds, 0);
+  assert.equal(configured.configuration_revision, before.configuration_revision + 1);
+
+  const asset = gradualFixture(script, "retention-disabled");
+  await wrangler(["versions", "upload"]);
+  const [temporary] = (await api(scriptPath + "/versions")).result.items;
+  await wrangler(["versions", "deploy", temporary.id + "@100%", "--yes"]);
+  await activeDeployment();
+  const url = "/assets/" + asset.file;
+  const present = await gatewayRequest(gradualGateway, url);
+  assert.equal(present.status, 200);
+  assert.equal(present.body, asset.content);
+  assert(present.headers.etag, "active asset should have a validator");
+
+  const [stable] = gradualVersions;
+  await wrangler(["rollback", stable, "--yes"]);
+  await activeDeployment();
+  const retired = await gatewayRequest(gradualGateway, url, {
+    "If-None-Match": present.headers.etag,
+  });
+  assert.notEqual(retired.status, 304);
+  assert.notEqual(retired.body, asset.content);
+  assert.equal(retired.headers["x-krun-asset-version"], undefined);
+});
+
+await check(
+  "public responses cache by version while authorization bypasses the cache",
+  async () => {
+    const publicOrigin = process.env.KRUN_CF_E2E_PUBLIC_GATEWAY_ORIGIN;
+    assert(publicOrigin, "Expose workers-public Gateway for response-cache verification");
+    const name = "cf-cache-" + locatorSuffix;
+    const worker = orgNative + "/workers/" + name;
+    const endpoint = cf + "/workers/scripts/" + name;
+    const resource = await api(orgNative + "/workers", "POST", { name }, false, 201);
+    assert.equal(resource.locator, name);
+    await api(worker + "/network-profile", "PUT", {
+      network_profile: "external-service",
+      expected_revision: 0,
+    });
+    try {
+      const gateway = await workerGateway(worker, "production", "external", publicOrigin);
+      gradualFixture(name, "cache-v1");
+      await wrangler(["deploy"]);
+      const [v1] = (await api(endpoint + "/versions")).result.items;
+      await activeDeployment(worker, endpoint + "/deployments");
+      gradualFixture(name, "cache-v2");
+      await wrangler(["versions", "upload"]);
+      const [v2] = (await api(endpoint + "/versions")).result.items;
+      await wrangler(["versions", "deploy", v1.id + "@50%", v2.id + "@50%", "--yes"]);
+      await activeDeployment(worker, endpoint + "/deployments");
+
+      const crossWorker = await api(
+        deploymentPath,
+        "POST",
+        {
+          strategy: "percentage",
+          versions: [
+            { version_id: gradualVersions[0], percentage: 50 },
+            { version_id: v1.id, percentage: 50 },
+          ],
+        },
+        false,
+        404,
+      );
+      assert.equal(crossWorker.success, false);
+
+      const keys = new Map();
+      for (const key of rolloutKeys.slice(0, 32)) {
+        const selected = await gatewayVersion(gateway, { [krunKey]: key });
+        keys.set(selected.version, key);
+        if (keys.size === 2) {
+          break;
+        }
+      }
+      assert(keys.has(v1.id) && keys.has(v2.id));
+
+      const warmed = new Map();
+      for (const [version, key] of keys) {
+        const ids = new Map();
+        for (let i = 0; i < 16; i++) {
+          const response = await gatewayVersion(gateway, { [krunKey]: key }, "/cache");
+          assert.equal(response.version, version);
+          assert.equal(response.code, version === v1.id ? "cache-v1" : "cache-v2");
+          const previous = ids.get(response.pod);
+          if (previous) {
+            assert.equal(
+              response.requestId,
+              previous,
+              "public cache should reuse the same response",
+            );
+          }
+          ids.set(response.pod, response.requestId);
+        }
+        assert.equal(ids.size, 2);
+        warmed.set(version, ids);
+      }
+
+      const candidateKey = keys.get(v2.id);
+      const authenticated = await gatewayVersion(
+        gateway,
+        { [krunKey]: candidateKey, Authorization: "Bearer fixture-app" },
+        "/cache",
+      );
+      assert.equal(authenticated.version, v2.id);
+      assert.equal(authenticated.appAuthorization, true);
+      assert.match(authenticated.headers["cache-control"], /no-store/);
+      assert.notEqual(authenticated.requestId, warmed.get(v2.id).get(authenticated.pod));
+
+      const verified = await gatewayVersion(
+        gateway,
+        {
+          [krunKey]: keys.get(v1.id),
+          ...versionOverride(name, v2.id),
+          "Krun-Workers-Verify-Authorization": bearer(),
+        },
+        "/cache",
+      );
+      assert.equal(verified.version, v2.id);
+      assert.equal(verified.verificationAuthorization, false);
+      assert.match(verified.headers["cache-control"], /no-store/);
+      assert.notEqual(verified.requestId, warmed.get(v2.id).get(verified.pod));
+      assert.notEqual(verified.requestId, authenticated.requestId);
+
+      const ordinary = await gatewayVersion(gateway, { [krunKey]: candidateKey }, "/cache");
+      assert.equal(ordinary.version, v2.id);
+      assert.equal(ordinary.appAuthorization, false);
+      assert.equal(ordinary.requestId, warmed.get(v2.id).get(ordinary.pod));
+    } finally {
+      await api(endpoint, "DELETE");
+    }
+  },
+);
+
+await check(
+  "Wrangler service bindings stream HTTP across pools and follow the target rollout",
+  async () => {
+    const targetName = "cf-isolated-" + locatorSuffix;
+    const callerName = "cf-caller-" + locatorSuffix;
+    const targetWorker = orgNative + "/workers/" + targetName;
+    const callerWorker = orgNative + "/workers/" + callerName;
+    const targetScript = cf + "/workers/scripts/" + targetName;
+    const callerScript = cf + "/workers/scripts/" + callerName;
+    const targetResource = await api(
+      orgNative + "/workers",
+      "POST",
+      { name: targetName },
+      false,
+      201,
+    );
+    await api(targetWorker + "/network-profile", "PUT", {
+      network_profile: "isolated-service",
+      expected_revision: 0,
+    });
+
+    function targetFixture(label) {
+      writeFileSync(
+        config,
+        JSON.stringify({
+          name: targetName,
+          main: "index.js",
+          compatibility_date: "2026-09-28",
+          vars: { LABEL: label },
+          version_metadata: { binding: "META" },
+        }),
+      );
+      writeFileSync(
+        source,
+        `export default {
+  async fetch(request, env) {
+    return Response.json({
+      label: env.LABEL,
+      version: env.META.id,
+      method: request.method,
+      url: request.url,
+      body: await request.text(),
+      appAuth: request.headers.get("authorization"),
+      managedHost: request.headers.get("x-krun-service-host"),
+    }, { status: 202 });
+  },
+};
+`,
+      );
+    }
+
+    async function callerBinding(gateway, path, key, body = null) {
+      const headers = { [krunKey]: key, authorization: "Bearer fixture-app" };
+      return gatewayRequest(gateway, path, headers, body === null ? "GET" : "PATCH", body);
+    }
+
+    let targetDeleted = false;
+    let bindingGrant;
+    try {
+      targetFixture("isolated-v1");
+      await wrangler(["deploy"]);
+      const [v1] = (await api(targetScript + "/versions")).result.items;
+      await activeDeployment(targetWorker, targetScript + "/deployments");
+      targetFixture("isolated-v2");
+      await wrangler(["versions", "upload"]);
+      const [v2] = (await api(targetScript + "/versions")).result.items;
+      await wrangler(["versions", "deploy", v1.id + "@50%", v2.id + "@50%", "--yes"]);
+      await activeDeployment(targetWorker, targetScript + "/deployments");
+
+      const callerConfig = {
+        name: callerName,
+        main: "index.js",
+        compatibility_date: "2026-09-28",
+        services: [
+          { binding: "LOCAL", service: script },
+          { binding: "REMOTE", service: targetName },
+        ],
+      };
+      writeFileSync(config, JSON.stringify(callerConfig));
+      writeFileSync(
+        source,
+        `export default {
+  fetch(request, env) {
+    const url = new URL(request.url);
+    const destination = "https://app.example/target?q=a%2Fb";
+    const key = url.searchParams.get("key");
+    const forwarded = new Request(destination, request);
+    if (key !== null) {
+      forwarded.headers.set("Cloudflare-Workers-Version-Key", key);
+    }
+    const bindings = {
+      "/local": env.LOCAL,
+      "/fixed": env.FIXED,
+      "/fixed-local": env.FIXED_LOCAL,
+    };
+    const binding = bindings[url.pathname] ?? env.REMOTE;
+    return binding.fetch(forwarded);
+  },
+};
+`,
+      );
+      const callerResource = await api(
+        orgNative + "/workers",
+        "POST",
+        { name: callerName },
+        false,
+        201,
+      );
+      await wrangler(["deploy"]);
+      await activeDeployment(callerWorker, callerScript + "/deployments");
+      const callerVersion = (await api(callerScript + "/versions")).result.items[0].id;
+      const gateway = await workerGateway(
+        callerWorker,
+        "production",
+        "internal",
+        gradualGateway.origin,
+      );
+      const target = await workerGateway(
+        targetWorker,
+        "production",
+        "isolated",
+        gradualGateway.origin,
+      );
+
+      const samePool = await callerBinding(gateway, "/local", "service-local");
+      assert.equal(samePool.status, 200, samePool.body);
+      assert.equal(JSON.parse(samePool.body).version, gradualVersions[0]);
+
+      const observed = new Set();
+      for (const key of rolloutKeys.slice(0, 16)) {
+        const direct = await gatewayRequest(target, "/target", { [krunKey]: key });
+        assert.equal(direct.status, 202);
+        const selected = JSON.parse(direct.body);
+        const forwarded = await callerBinding(gateway, "/remote?key=" + key, key, "request body");
+        assert.equal(forwarded.status, 202, forwarded.body);
+        const actual = JSON.parse(forwarded.body);
+        assert.equal(actual.version, selected.version);
+        assert.equal(actual.label, selected.label);
+        assert.equal(actual.url, "https://app.example/target?q=a%2Fb");
+        assert.equal(actual.method, "PATCH");
+        assert.equal(actual.body, "request body");
+        assert.equal(actual.appAuth, "Bearer fixture-app");
+        assert.equal(actual.managedHost, null);
+        observed.add(actual.version);
+      }
+      assert(observed.has(v1.id) && observed.has(v2.id));
+
+      const callerEnvironment = (await api(callerWorker + "/environments")).items.find(
+        (environment) => environment.name === "production",
+      );
+      await api(callerWorker + "/environments/production", "PATCH", {
+        expected_revision: callerEnvironment.configuration_revision,
+        service_bindings: {
+          LOCAL: { service: script },
+          REMOTE: { service: targetName },
+          FIXED: { service: targetName, version_id: v1.id },
+          FIXED_LOCAL: { service: script, version_id: gradualVersions[1] },
+        },
+      });
+      bindingGrant = await api(
+        orgNative + "/api-keys",
+        "POST",
+        {
+          name: "Delegated service binding",
+          expires_in: 3600,
+          policy: {
+            schema_version: 1,
+            statements: [
+              {
+                effect: "allow",
+                actions: ["worker.read", "worker.publish"],
+                resource: { kind: "worker", organization_id: org.id, ids: [callerResource.id] },
+              },
+              {
+                effect: "allow",
+                actions: ["worker.invoke"],
+                resource: {
+                  kind: "worker",
+                  organization_id: org.id,
+                  ids: [targetResource.id, nativeWorker.id],
+                },
+              },
+            ],
+          },
+        },
+        true,
+        201,
+      );
+      const form = new FormData();
+      form.append(
+        "metadata",
+        JSON.stringify({
+          main_module: "index.js",
+          compatibility_date: "2026-09-28",
+          bindings: ["LOCAL", "REMOTE", "FIXED", "FIXED_LOCAL"].map((name) => ({
+            name,
+            type: "inherit",
+          })),
+        }),
+      );
+      form.append(
+        "index.js",
+        new Blob([readFileSync(source)], { type: "application/javascript+module" }),
+        "index.js",
+      );
+      const fixedCaller = await fetch(origin + callerScript, {
+        method: "PUT",
+        headers: { authorization: bearer(bindingGrant.key) },
+        body: form,
+        signal: AbortSignal.timeout(180000),
+      });
+      assert.equal(fixedCaller.status, 200, await fixedCaller.text());
+      await activeDeployment(callerWorker, callerScript + "/deployments");
+      targetFixture("isolated-v2");
+      await wrangler(["versions", "deploy", v2.id + "@100%", "--yes"]);
+      await activeDeployment(targetWorker, targetScript + "/deployments");
+      const bindings = [
+        { path: "/fixed", status: 202, version: v1.id },
+        { path: "/remote", status: 202, version: v2.id },
+        { path: "/fixed-local", status: 200, version: gradualVersions[1] },
+        { path: "/local", status: 200, version: gradualVersions[0] },
+      ];
+      await Promise.all(
+        [...bindings, ...bindings].map(async (expected, index) => {
+          const response = await callerBinding(gateway, expected.path, "service-" + index);
+          assert.equal(response.status, expected.status, response.body);
+          assert.equal(JSON.parse(response.body).version, expected.version);
+        }),
+      );
+
+      await api("/api/v1/api-keys/" + bindingGrant.id, "DELETE", undefined, true, 204);
+      bindingGrant = undefined;
+      const revokedBinding = await callerBinding(gateway, "/fixed", "service-fixed");
+      assert.equal(revokedBinding.status, 403, "revoked grant remained callable");
+      writeFileSync(config, JSON.stringify(callerConfig));
+      await wrangler(["versions", "deploy", callerVersion + "@100%", "--yes"]);
+      await activeDeployment(callerWorker, callerScript + "/deployments");
+      assert.equal((await callerBinding(gateway, "/remote", "service-remote")).status, 202);
+
+      await api(targetScript, "DELETE");
+      targetDeleted = true;
+      const revoked = await callerBinding(gateway, "/remote", "service-remote");
+      assert([403, 404].includes(revoked.status), "deleted target remained callable");
+    } finally {
+      if (bindingGrant) {
+        await api("/api/v1/api-keys/" + bindingGrant.id, "DELETE", undefined, true, 204);
+      }
+      await api(callerScript, "DELETE");
+      if (!targetDeleted) {
+        await api(targetScript, "DELETE");
+      }
+    }
+  },
+);
+
 // Identity lifecycle checks use a plain Worker after the asset-policy fixtures.
 writeFileSync(
   config,
@@ -837,4 +1617,5 @@ await check("native service deletion cannot resurrect a previous Script identity
   assert.notEqual(response.result.tag, id);
   await api("/api/v1/orgs/" + org.id + "/workers/" + id, "GET", undefined, false, 404);
 });
+gatewayAgent.destroy();
 console.log("CF WRANGLER E2E PASSED " + results.length + " cases");

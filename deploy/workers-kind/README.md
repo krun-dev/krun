@@ -59,6 +59,8 @@ KUBECONFIG="$KUBECONFIG" KIND_CLUSTER_NAME="$KIND_CLUSTER_NAME" node e2e.mjs
 - 发布 [`examples/workers-fullstack`](../../examples/workers-fullstack/README.md) 的真实前后端项目，
   验证同源 API、SPA fallback、HTML 规范化、ETag/304、immutable 缓存与静态域；
 - 重启 backend、替换 serving runtime Pod，并验证认领租约与持久化恢复；候选只由不接 Gateway 的 validator 加载；
+- 暂停一个承流 Pod 的配置同步，验证双版本发布停在 `committed`，恢复同步后进入
+  `available`。扩缩容与调权后，从 Gateway 检查承流 Pod、版本和 HTTPRoute；
 - 在目标 kind 节点做临时网络故障注入，随后撤销同一规则。
 
 因此运行者需要 Docker 权限以及 kind 节点中的 `crictl`、`nsenter`、`iptables`。
@@ -93,6 +95,8 @@ KRUN_UI_ORIGIN=http://127.0.0.1:4380 npm run test:ui
 扩展 E2E 覆盖同源静态入口、百站点游标分页、共享 HTTPRoute 数量、有界配置 head/shard，
 以及实际过期 Artifact 的 indexed GC，确认回收不会删除仍在服务的资产。
 百万 PostgreSQL 元数据测试及算法微基准见 [性能验证](../../docs/performance-scaling.md)。
+原版 Wrangler 的双版本切流、定向验证、缓存和同池、跨池服务绑定见
+[Wrangler 端到端验证](../../docs/cloudflare-api.md#端到端验证)。
 
 ## 数据基线
 

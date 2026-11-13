@@ -45,6 +45,43 @@ var schemaMigrations = []schemaMigration{
 			UPDATE worker_config_checkpoints SET published_revision=0 WHERE published_revision<>0;
 			UPDATE krun_worker_operations SET edge_revision=0,edge_pool='' WHERE state='committed' AND edge_revision<>0`,
 	},
+	{
+		from: "5ec33847b55dc6a84dd405672d22b70ff4c90f5ebd6597ea709cc57e9b13900e",
+		to:   "0774eee652005060dfd1d3a5dc98e009808e98ec212ec21c8c7a07a8186ec760",
+		sql: `ALTER TABLE krun_worker_versions ADD COLUMN IF NOT EXISTS service_bindings jsonb NOT NULL DEFAULT '{}'::jsonb;
+		ALTER TABLE krun_worker_environments ADD COLUMN IF NOT EXISTS service_bindings jsonb NOT NULL DEFAULT '{}'::jsonb,
+			ADD COLUMN IF NOT EXISTS gradual_asset_retention_seconds integer CHECK (gradual_asset_retention_seconds BETWEEN 0 AND 7776000);
+		ALTER TABLE krun_worker_environments
+			ADD COLUMN IF NOT EXISTS candidate_version_id text NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS candidate_weight integer NOT NULL DEFAULT 0 CHECK (candidate_weight BETWEEN 0 AND 100000);
+		ALTER TABLE krun_worker_operations
+			ADD COLUMN IF NOT EXISTS candidate_version_id text NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS candidate_weight integer NOT NULL DEFAULT 0 CHECK (candidate_weight BETWEEN 0 AND 100000);
+		ALTER TABLE krun_worker_deployments
+			ADD COLUMN IF NOT EXISTS candidate_version_id text NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS candidate_weight integer NOT NULL DEFAULT 0 CHECK (candidate_weight BETWEEN 0 AND 100000),
+			ADD COLUMN IF NOT EXISTS message text NOT NULL DEFAULT '';
+		ALTER TABLE worker_config_routes
+			ADD COLUMN IF NOT EXISTS candidate_version_id text NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS candidate_weight integer NOT NULL DEFAULT 0 CHECK (candidate_weight BETWEEN 0 AND 100000),
+			ADD COLUMN IF NOT EXISTS script_name text NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS env_name text NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS public boolean NOT NULL DEFAULT false,
+			ADD COLUMN IF NOT EXISTS retained_versions jsonb NOT NULL DEFAULT '[]'::jsonb;
+		CREATE INDEX IF NOT EXISTS worker_config_routes_candidate ON worker_config_routes(candidate_version_id,pool) WHERE candidate_version_id<>'';
+		CREATE TABLE IF NOT EXISTS krun_worker_retained_assets (
+			worker_id text NOT NULL, env_name text NOT NULL, version_id text NOT NULL, expires_at timestamptz NOT NULL,
+			pending_seconds integer NOT NULL DEFAULT 0,
+			PRIMARY KEY(worker_id,env_name,version_id)
+		);
+		CREATE INDEX IF NOT EXISTS krun_worker_retained_assets_expiry ON krun_worker_retained_assets(expires_at);
+		CREATE OR REPLACE TRIGGER retained_assets_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_retained_assets
+			FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
+		CREATE OR REPLACE TRIGGER worker_env_config_dirty AFTER INSERT OR DELETE OR UPDATE OF enabled,version_id,candidate_version_id,candidate_weight
+			ON krun_worker_environments FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
+		INSERT INTO worker_config_dirty(worker_id) SELECT worker_id FROM krun_workers
+			ON CONFLICT(worker_id) DO UPDATE SET generation=nextval('worker_dirty_seq')`,
+	},
 }
 
 // MigrateSchema upgrades an existing database while the control plane is

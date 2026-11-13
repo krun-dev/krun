@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/krun-dev/krun/internal/domain"
@@ -51,32 +50,28 @@ func (s *Store) MarkConfigCheckpointPublished(ctx context.Context, pool, shard s
 func (s *Store) RuntimeConfigRoute(ctx context.Context, host, pool string) (domain.EdgeConfigProjection, domain.EdgeConfigCursor, error) {
 	out := domain.EdgeConfigProjection{Versions: map[string]domain.WorkerVersion{}}
 
-	var route domain.EdgeConfigRoute
-	var payload []byte
 	var position domain.EdgeConfigCursor
-	var found bool
-	err := s.pool.QueryRow(ctx, `
-		SELECT config.epoch, config.head, r.host IS NOT NULL,
-			COALESCE(r.worker_id,''), COALESCE(r.host,''), COALESCE(r.pool,''), COALESCE(r.path,''),
-			COALESCE(r.enabled,false), COALESCE(r.version_id,''), r.expires_at, c.payload
-		FROM (`+readConfigPosition+`) AS config(epoch,head)
-		LEFT JOIN worker_config_routes r ON r.host=$1 AND r.pool=$2
-		LEFT JOIN worker_config_versions c ON c.version_id=r.version_id AND c.pool=r.pool`, host, pool).Scan(
-		&position.Epoch, &position.Revision, &found,
-		&route.Worker, &route.Host, &route.Pool, &route.Path, &route.Enabled, &route.Version, &route.Expires, &payload)
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return out, position, err
 	}
-	if !found {
+	defer tx.Rollback(ctx)
+	if err = tx.QueryRow(ctx, readConfigPosition).Scan(&position.Epoch, &position.Revision); err != nil {
+		return out, position, err
+	}
+	route, err := scanEdgeRoute(tx.QueryRow(ctx, "SELECT "+edgeRouteColumns+" FROM worker_config_routes r WHERE r.host=$1 AND r.pool=$2", host, pool))
+	if err == pgx.ErrNoRows {
 		return out, position, domain.NotFound()
 	}
+	if err != nil {
+		return out, position, err
+	}
 	out.Routes = []domain.EdgeConfigRoute{route}
-	if len(payload) > 0 {
-		var version domain.WorkerVersion
-		if err := json.Unmarshal(payload, &version); err != nil {
-			return out, position, err
-		}
-		out.Versions[version.ID] = version
+	if err = readEdgeRouteVersions(ctx, tx, pool, out.Routes, out.Versions); err != nil {
+		return out, position, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return out, position, err
 	}
 	return out, position, nil
 }
@@ -87,7 +82,9 @@ func (s *Store) PublishedAssetHosts(ctx context.Context, organization, worker, d
 	rows, err := s.pool.Query(ctx, `
 		SELECT r.host
 		FROM worker_config_routes r
-		JOIN krun_worker_versions v ON v.version_id = r.version_id AND v.worker_id = r.worker_id
+		JOIN krun_worker_versions v ON ((v.version_id=r.version_id AND r.candidate_weight<100000)
+			OR (v.version_id=r.candidate_version_id AND r.candidate_weight>0)
+			OR EXISTS (SELECT 1 FROM jsonb_array_elements(r.retained_versions) a WHERE a->>'version_id'=v.version_id AND (a->>'expires_at')::timestamptz > now())) AND v.worker_id = r.worker_id
 		WHERE r.worker_id = $1 AND v.org_id = $2 AND v.archive_digest = $3 AND r.pool = $4
 		  AND r.enabled AND (r.expires_at IS NULL OR r.expires_at > now())`,
 		worker, organization, digest, pool)

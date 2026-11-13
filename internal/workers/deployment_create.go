@@ -14,10 +14,12 @@ import (
 )
 
 type WorkerDeploymentCreateInput struct {
-	Build    string `json:"build_id,omitempty"`
-	Version  string `json:"version_id,omitempty"`
-	Revision int    `json:"expected_revision"`
-	Key      string `json:"idempotency_key"`
+	Versions []domain.WorkerVersionWeight `json:"versions,omitempty"`
+	Message  string                       `json:"message,omitempty"`
+	Build    string                       `json:"build_id,omitempty"`
+	Version  string                       `json:"version_id,omitempty"`
+	Revision int                          `json:"expected_revision"`
+	Key      string                       `json:"idempotency_key"`
 }
 
 func PublicWorkerVersion(version domain.WorkerVersion) domain.WorkerVersion {
@@ -62,7 +64,41 @@ func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, 
 	if WorkerBusy(st, t.ID, env) {
 		return nil, Read, domain.Conflict("DEPLOYMENT_BUSY", "Wait for the active version operation")
 	}
+	input := in
 	var version domain.WorkerVersion
+	var release domain.WorkerGradualRelease
+	if len(in.Message) > 1000 {
+		return nil, Read, domain.Invalid("UNSUPPORTED_METADATA", "Deployment message exceeds 1000 bytes")
+	}
+	if len(in.Versions) > 0 {
+		if (kind != "publish" && (kind != "rollback" || len(in.Versions) != 1)) || in.Version != "" || in.Build != "" || len(in.Versions) > 2 {
+			return nil, Read, domain.Invalid("WORKER_VERSION_INVALID", "Invalid release targets")
+		}
+		stable, candidate, weight := in.Versions[0].Version, "", 0
+		if len(in.Versions) == 2 {
+			candidate = in.Versions[1].Version
+			weight = in.Versions[1].Weight
+			if stable == candidate || candidate == "" || weight < 0 || weight > domain.WorkerFullWeight ||
+				weight > 0 && weight < 10 || in.Versions[0].Weight > 0 && in.Versions[0].Weight < 10 ||
+				in.Versions[0].Weight != domain.WorkerFullWeight-weight {
+				return nil, Read, domain.Invalid("WORKER_VERSION_INVALID", "Invalid release targets")
+			}
+			// Keep the orientation of the current pair so equivalent requests
+			// from other clients preserve the same set of bucket assignments.
+			if current.Candidate == stable || current.Version == candidate {
+				stable, candidate = candidate, stable
+				weight = domain.WorkerFullWeight - weight
+			}
+			target, found := st.Workers.Versions[candidate]
+			if !found || target.Worker != t.ID || target.Organization != t.Organization || target.Environment != env {
+				return nil, Read, domain.NotFound()
+			}
+		} else if in.Versions[0].Weight != domain.WorkerFullWeight {
+			return nil, Read, domain.Invalid("WORKER_VERSION_INVALID", "A single version must receive all traffic")
+		}
+		in.Version = stable
+		release = domain.WorkerGradualRelease{Candidate: candidate, CandidateWeight: weight}
+	}
 	if kind == "publish" && in.Version != "" && in.Build == "" {
 		var exists bool
 		version, exists = st.Workers.Versions[in.Version]
@@ -112,24 +148,32 @@ func (s *Service) WorkerDeploymentCreate(ctx context.Context, st *domain.State, 
 				historical = true
 			}
 		}
+		for _, deployment := range st.Workers.Deployments {
+			if deployment.Worker == t.ID && deployment.Environment == env && deployment.Committed != nil &&
+				(deployment.Version == d.ID && deployment.CandidateWeight < domain.WorkerFullWeight ||
+					deployment.Candidate == d.ID && deployment.CandidateWeight > 0) {
+				historical = true
+			}
+		}
 		if !historical {
 			return nil, Read, domain.Conflict("ROLLBACK_NOT_PUBLISHED", "Rollback target must be a successfully published version")
 		}
 		version = d
 	}
 	return queueWorkerDeployment(st, p, domain.WorkerOperation{
-		Kind:             kind,
-		Organization:     t.Organization,
-		Worker:           t.ID,
-		Environment:      env,
-		Build:            in.Build,
-		Version:          version.ID,
-		ExpectedRevision: current.Revision,
-		ConfigRevision:   current.ConfigRevision,
-	}, key, in), Queued, nil
+		WorkerGradualRelease: release,
+		Kind:                 kind,
+		Organization:         t.Organization,
+		Worker:               t.ID,
+		Environment:          env,
+		Build:                in.Build,
+		Version:              version.ID,
+		ExpectedRevision:     current.Revision,
+		ConfigRevision:       current.ConfigRevision,
+	}, key, input, in.Message), Queued, nil
 }
 
-func queueWorkerDeployment(st *domain.State, p authorization.Principal, op domain.WorkerOperation, key string, input any) domain.WorkerOperation {
+func queueWorkerDeployment(st *domain.State, p authorization.Principal, op domain.WorkerOperation, key string, input any, messages ...string) domain.WorkerOperation {
 	op.ID = securetoken.NewID("op")
 	op.State = "queued"
 	op.Steps = []domain.WorkerStep{
@@ -140,7 +184,7 @@ func queueWorkerDeployment(st *domain.State, p authorization.Principal, op domai
 	}
 	op.Created = time.Now().UTC()
 	st.Workers.Operations[op.ID] = op
-	RememberDeployment(st, op)
+	RememberDeployment(st, op, messages...)
 	st.Workers.OperationPrivate[op.ID] = domain.WorkerOperationPrivate{Actor: WorkerActor(p)}
 	WorkerRemember(st, key, input, op.ID)
 	return op

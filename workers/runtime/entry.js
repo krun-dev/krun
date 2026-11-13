@@ -5,11 +5,14 @@ import {
   assetDecision,
   applyHeaders,
   assetResponse,
+  immutableAssetName,
+  workerFirst,
 } from "./assets.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { prepareStorageRequest, createCursor, createMultipartToken } from "./storage/signer.js";
-import { cacheRequest } from "./cache.js";
+import { cacheRequest, createCacheStorage } from "./cache.js";
 import { signRequest } from "./storage/signature.js";
+import { serviceCall, serviceRequest } from "./service.js";
 
 // Only completed plain data is cached across workerd requests. Each signing call gets
 // its own request context; no request-owned I/O object or promise is retained.
@@ -844,6 +847,60 @@ function ensureBootstrap(env) {
   return booting;
 }
 
+function routeVersionIDs(route) {
+  const ids = [route.version, route.candidate_version];
+  for (const retained of route.retained_versions || []) {
+    ids.push(retained.version_id);
+  }
+  return [...new Set(ids.filter(Boolean))];
+}
+
+function routeVersionDescriptors(route, getVersion) {
+  if (
+    route.candidate_version &&
+    (!route.version ||
+      route.version === route.candidate_version ||
+      !Number.isSafeInteger(route.candidate_weight ?? 0) ||
+      (route.candidate_weight ?? 0) < 0 ||
+      (route.candidate_weight ?? 0) > 100000)
+  ) {
+    throw new Error("invalid version split");
+  }
+  const descriptors = new Map();
+  for (const id of routeVersionIDs(route)) {
+    const version = getVersion(id);
+    if (
+      version?.id !== id ||
+      (route.worker_id && version.worker_id !== route.worker_id) ||
+      (route.environment && version.environment !== route.environment)
+    ) {
+      throw new Error("route descriptor missing or invalid");
+    }
+    descriptors.set(id, version);
+  }
+  return descriptors;
+}
+
+function referenceRoute(route, descriptors) {
+  routeDescriptors.set(route, descriptors);
+  for (const [id, version] of descriptors) {
+    view.versions.set(id, version);
+    versionRefs.set(id, (versionRefs.get(id) || 0) + 1);
+  }
+}
+
+function unreferenceRoute(route) {
+  for (const id of routeVersionIDs(route)) {
+    const count = (versionRefs.get(id) || 0) - 1;
+    if (count > 0) {
+      versionRefs.set(id, count);
+    } else {
+      versionRefs.delete(id);
+      view.versions.delete(id);
+    }
+  }
+}
+
 function applyBatch(batch) {
   if (batch.config_epoch !== view.epoch) {
     return false;
@@ -861,88 +918,60 @@ function applyBatch(batch) {
     return false;
   }
 
-  // Validate before mutating: a malformed batch must never leave a partial view.
+  // Resolve descriptors before changing indexes, so a malformed batch cannot
+  // leave a partial view or alter any descriptor held by an in-flight request.
   const ops = batch.ops || [];
-
+  const supplied = new Map();
+  const updates = new Map();
   for (const op of ops) {
     if (op.type === "version_put" && op.version?.id) {
-      continue;
-    }
-
-    if (op.type === "route_upsert" && op.host && op.route?.host === op.host) {
-      continue;
-    }
-
-    if (op.type === "route_delete" && op.host) {
-      continue;
-    }
-
-    throw new Error("invalid config op " + op.type);
-  }
-
-  // No await occurs in this commit. Requests capture their immutable descriptor
-  // before yielding; updating the indexes cannot change an in-flight version.
-  const prune = new Set();
-  const needed = new Set();
-
-  for (const op of ops) {
-    if (
-      op.type === "route_upsert" &&
-      view.routes.has(String(op.host).toLowerCase()) &&
-      op.route.version
+      supplied.set(op.version.id, op.version);
+    } else if (
+      (op.type !== "route_upsert" && op.type !== "route_delete") ||
+      !op.host ||
+      (op.type === "route_upsert" && op.route?.host !== op.host)
     ) {
-      needed.add(op.route.version);
+      throw new Error("invalid config op " + op.type);
     }
   }
 
   for (const op of ops) {
     if (op.type === "version_put") {
-      if (!needed.has(op.version.id) && !versionRefs.has(op.version.id)) {
-        continue;
-      }
-      view.versions.set(op.version.id, op.version);
-      prune.add(op.version.id);
       continue;
     }
+    const host = op.host.toLowerCase();
+    if (!view.routes.has(host) || (routeVersions.get(host) || 0) > revision) {
+      continue;
+    }
+    if (op.type === "route_upsert") {
+      updates.set(
+        op,
+        routeVersionDescriptors(op.route, (id) => supplied.get(id) || view.versions.get(id)),
+      );
+    }
+  }
 
-    const host = String(op.host).toLowerCase();
+  for (const op of ops) {
+    if (op.type === "version_put") {
+      if (versionRefs.has(op.version.id)) {
+        view.versions.set(op.version.id, op.version);
+      }
+      continue;
+    }
+    const host = op.host.toLowerCase();
     const old = view.routes.get(host);
     routeMisses.delete(host);
-
     if (!old || (routeVersions.get(host) || 0) > revision) {
       continue;
     }
-
-    routeVersions.set(host, revision);
-
-    if (old.version) {
-      const n = (versionRefs.get(old.version) || 0) - 1;
-
-      if (n > 0) {
-        versionRefs.set(old.version, n);
-      } else {
-        versionRefs.delete(old.version);
-      }
-
-      prune.add(old.version);
-    }
-
+    unreferenceRoute(old);
     if (op.type === "route_delete") {
       view.routes.delete(host);
       routeVersions.delete(host);
     } else {
       view.routes.set(host, op.route);
-      routeDescriptors.set(op.route, view.versions.get(op.route.version));
-
-      if (op.route.version) {
-        versionRefs.set(op.route.version, (versionRefs.get(op.route.version) || 0) + 1);
-      }
-    }
-  }
-
-  for (const id of prune) {
-    if (!versionRefs.has(id)) {
-      view.versions.delete(id);
+      routeVersions.set(host, revision);
+      referenceRoute(op.route, updates.get(op));
     }
   }
 
@@ -958,15 +987,8 @@ function forgetRoute(host) {
   view.routes.delete(host);
   routeVersions.delete(host);
 
-  if (route?.version) {
-    const n = (versionRefs.get(route.version) || 0) - 1;
-
-    if (n > 0) {
-      versionRefs.set(route.version, n);
-    } else {
-      versionRefs.delete(route.version);
-      view.versions.delete(route.version);
-    }
+  if (route) {
+    unreferenceRoute(route);
   }
 }
 
@@ -1091,22 +1113,12 @@ async function resolveRoute(env, host) {
         return null;
       }
 
-      const version = (snapshot.versions || {})[route.version];
-
-      if (route.version && !version) {
-        throw new Error("route descriptor missing");
-      }
+      const descriptors = routeVersionDescriptors(route, (id) => snapshot.versions?.[id]);
 
       forgetRoute(host);
       view.routes.set(host, route);
-      routeVersions.set(host, Number(snapshot.config_revision || 0));
-
-      if (version) {
-        view.versions.set(version.id, version);
-        versionRefs.set(version.id, (versionRefs.get(version.id) || 0) + 1);
-      }
-
-      routeDescriptors.set(route, version);
+      routeVersions.set(host, snapshot.config_revision);
+      referenceRoute(route, descriptors);
 
       while (view.routes.size > ROUTE_CACHE_MAX) {
         forgetRoute(view.routes.keys().next().value);
@@ -1426,8 +1438,8 @@ async function assetBytes(env, version, path, manifest) {
   });
 }
 
-async function staticAssetResponse(env, version, request, manifest, binding = false) {
-  const hit = assetDecision(request, manifest.config, manifest.index, manifest.rules, binding);
+async function staticAssetResponse(env, version, request, manifest, binding = false, hit) {
+  hit ??= assetDecision(request, manifest.config, manifest.index, manifest.rules, binding);
 
   if (hit.redirect !== undefined) {
     return new Response(null, { status: hit.status || 307, headers: { location: hit.redirect } });
@@ -1730,6 +1742,12 @@ function trackWorkerSource(entry, prepare) {
   };
 }
 
+export class VersionService extends WorkerEntrypoint {
+  fetch(request) {
+    return serviceCall(this.env, this.ctx.props, request);
+  }
+}
+
 async function worker(env, ctx, d, { artifact, validation, entry, epoch } = {}) {
   const validating = validation !== undefined;
   return env.LOADER.get(
@@ -1784,6 +1802,13 @@ async function worker(env, ctx, d, { artifact, validation, entry, epoch } = {}) 
         KRUN_WORKER_ID: d.worker_id,
         KRUN_VERSION_ID: d.id,
       };
+
+      for (const binding of Object.keys(d.service_bindings || {})) {
+        Object.defineProperty(childEnv, binding, {
+          value: ctx.exports.VersionService({ props: { callerVersion: d.id, binding } }),
+          enumerable: true,
+        });
+      }
 
       let mainModule = manifest.main_module;
       if (typeof env.CACHE_SOURCE === "string" && ctx?.exports?.VersionCache) {
@@ -2107,6 +2132,379 @@ async function staticDomainResponse(env, request, prefix, epoch) {
   return response;
 }
 
+const krunVersionKey = "krun-workers-version-key";
+const cloudflareVersionKey = "cloudflare-workers-version-key";
+const versionOverrides = "cloudflare-workers-version-overrides";
+const verifyAuthorization = "krun-workers-verify-authorization";
+const totalVersionWeight = 100000;
+
+function overrideVersion(header, script) {
+  if (!header || header.length > 4096 || !script) {
+    return null;
+  }
+  // Overrides are a structured dictionary with quoted version IDs.
+  const entry = /\s*([a-z*][a-z0-9_.*-]*)\s*=\s*"((?:[ !#-\[\]-~]|\\["\\])*)"\s*/gy;
+  const versions = new Map();
+  let position = 0;
+  while (position < header.length) {
+    entry.lastIndex = position;
+    const match = entry.exec(header);
+    if (!match || versions.has(match[1])) {
+      return null;
+    }
+    versions.set(match[1], match[2].replace(/\\(["\\])/g, "$1"));
+    position = entry.lastIndex;
+    if (position === header.length) {
+      return versions.get(script) ?? null;
+    }
+    if (header[position++] !== ",") {
+      return null;
+    }
+  }
+  return null;
+}
+
+function requestVersionKey(request) {
+  return request.headers.get(krunVersionKey) ?? request.headers.get(cloudflareVersionKey);
+}
+
+async function selectedVersionID(route, request, override) {
+  if (override !== null && (override === route.version || override === route.candidate_version)) {
+    return override;
+  }
+  const weight = route.candidate_weight || 0;
+  if (!route.candidate_version || weight === 0) {
+    return route.version;
+  }
+  if (weight === totalVersionWeight) {
+    return route.candidate_version;
+  }
+
+  const key = requestVersionKey(request);
+  let bucket;
+  if (key) {
+    const identity = route.worker_id || route.host;
+    const digest = await sha256(
+      JSON.stringify([identity, route.environment, route.version, route.candidate_version, key]),
+    );
+    bucket = Math.floor((parseInt(digest.slice(0, 8), 16) * totalVersionWeight) / 2 ** 32);
+  } else {
+    bucket = Math.floor(Math.random() * totalVersionWeight);
+  }
+  return bucket < weight ? route.candidate_version : route.version;
+}
+
+function withoutSharedCache(response) {
+  response.headers.set("cache-control", "private, no-store");
+  response.headers.delete("cdn-cache-control");
+  response.headers.delete("cloudflare-cdn-cache-control");
+  response.headers.delete("surrogate-control");
+  response.headers.delete("expires");
+  return response;
+}
+
+function requiresPrivateResponse(request) {
+  return (
+    request.headers.has("authorization") ||
+    request.headers.has("cookie") ||
+    request.headers.has(versionOverrides) ||
+    request.headers.has(verifyAuthorization)
+  );
+}
+
+function responseCache(version, epoch, request, headers, route, privateResponse) {
+  if (
+    route.public !== true ||
+    privateResponse ||
+    request.method !== "GET" ||
+    request.headers.has("upgrade") ||
+    request.headers.has("range") ||
+    /(?:^|,)\s*(?:no-store|no-cache|max-age\s*=\s*0)(?:\s*[,=]|\s*$)/i.test(
+      request.headers.get("cache-control") || "",
+    ) ||
+    /\bno-cache\b/i.test(request.headers.get("pragma") || "")
+  ) {
+    return null;
+  }
+  const namespace = JSON.stringify([
+    "ingress-response",
+    epoch,
+    version.organization_id,
+    version.worker_id,
+    version.environment,
+    version.id,
+  ]);
+  if ([...headers].length > 100) {
+    return null;
+  }
+  return {
+    cache: createCacheStorage({
+      fetch(url, init) {
+        return cacheRequest(namespace, new Request(url, { ...init, duplex: "half" }));
+      },
+    }).default,
+    key: new Request(request.url, { headers }),
+  };
+}
+
+function canStoreResponse(response, asset, immutable) {
+  const control = response.headers.get("cache-control") || "";
+  const sharedAge = /(?:^|,)\s*s-maxage\s*=\s*"?[1-9]\d*"?(?=\s*(?:,|$))/i.test(control);
+  const publicAge =
+    /(?:^|,)\s*public\s*(?=,|$)/i.test(control) &&
+    /(?:^|,)\s*max-age\s*=\s*"?[1-9]\d*"?(?=\s*(?:,|$))/i.test(control);
+
+  return (
+    response.status === 200 &&
+    !response.headers.has("set-cookie") &&
+    !response.headers.has("www-authenticate") &&
+    !/(?:^|,)\s*(?:no-store|no-cache|private)(?=\s*[,=]|\s*$)/i.test(control) &&
+    (!asset || immutable) &&
+    (sharedAge || publicAge)
+  );
+}
+
+function historicalVersionIDs(route, selected, now) {
+  const ids = new Set();
+  const weight = route.candidate_weight || 0;
+  if (route.candidate_version && weight > 0) {
+    ids.add(route.candidate_version);
+  }
+  if (weight < totalVersionWeight && route.version) {
+    ids.add(route.version);
+  }
+  for (const version of route.retained_versions || []) {
+    if (Date.parse(version.expires_at) > now) {
+      ids.add(version.version_id);
+    }
+  }
+  ids.delete(selected);
+  return ids;
+}
+
+async function readHistoricalAsset(env, request, url, versions, descriptors) {
+  const matches = [];
+  const normalized = normalizePath(url.pathname);
+  for (const id of versions) {
+    const version = descriptors.get(id);
+    if (!version) {
+      continue;
+    }
+    const manifest = await assetManifest(env, version);
+    const base = (manifest.config?.base_path || "").replace(/\/$/, "");
+    if (base && !normalized.startsWith(base + "/")) {
+      continue;
+    }
+    const file = manifest.index.get(normalized.slice(base.length));
+    if (file) {
+      matches.push({ version, manifest, file, digest: manifest.metadata.get(file)?.sha256 });
+    }
+  }
+  if (!matches.length || matches.some((hit) => hit.digest !== matches[0].digest)) {
+    return null;
+  }
+  const { version, manifest, file } = matches[0];
+  const value = await assetBytes(env, version, file, manifest);
+  const response = applyHeaders(assetResponse(request, "/" + file, value), request, manifest.rules);
+  withoutSharedCache(response).headers.set("cache-control", "private, max-age=0, must-revalidate");
+  response.headers.set("x-krun-asset-version", version.id);
+  return response;
+}
+
+async function historicalAssetResponse(env, route, selected, request, url, epoch, descriptors) {
+  const now = Date.now();
+  const local = historicalVersionIDs(route, selected.id, now);
+  const response = await readHistoricalAsset(env, request, url, local, descriptors);
+  if (response || !route.worker_id || !route.environment || route.expires_at) {
+    return response;
+  }
+
+  // Another Pod may already serve the new HTML. Resolve only hashed asset
+  // misses against the current route without changing this request's selection.
+  const latest = await platform(env, "/config/routes/" + encodeURIComponent(route.host));
+  requireFreshConfig(epoch);
+  if (
+    latest.config_epoch !== epoch ||
+    latest.pool !== (env.RUNTIME_POOL || "default") ||
+    !Number.isSafeInteger(latest.config_revision) ||
+    latest.config_revision < view.revision
+  ) {
+    return null;
+  }
+  const updated = latest.routes?.find((item) => item.host === route.host);
+  if (
+    !updated?.enabled ||
+    updated.worker_id !== route.worker_id ||
+    updated.environment !== route.environment
+  ) {
+    return null;
+  }
+  const ids = historicalVersionIDs(updated, selected.id, Date.now());
+  for (const id of local) {
+    ids.delete(id);
+  }
+  const updatedDescriptors = routeVersionDescriptors(updated, (id) => latest.versions?.[id]);
+  return readHistoricalAsset(env, request, url, ids, updatedDescriptors);
+}
+
+async function serveWorkerRequest(
+  env,
+  ctx,
+  request,
+  route,
+  epoch,
+  { directVersion, internalCall = false } = {},
+) {
+  const url = new URL(request.url);
+  const descriptors = routeDescriptors.get(route);
+  const override = internalCall
+    ? null
+    : overrideVersion(request.headers.get(versionOverrides), route.script_name);
+  const verification = request.headers.get(verifyAuthorization);
+  if (override !== null) {
+    const credential = verification ?? request.headers.get("authorization");
+    if (!credential) {
+      return withoutSharedCache(json({ error: "version override denied" }, 403));
+    }
+    const result = await platformResponse(env, "/version-overrides/authorize", {
+      method: "POST",
+      body: JSON.stringify({ host: route.host, credential }),
+    });
+    if (!result.ok || (await result.json()).allowed !== true) {
+      const status = result.status >= 500 ? 503 : 403;
+      return withoutSharedCache(json({ error: "version override unavailable" }, status));
+    }
+    requireFreshConfig(epoch);
+  }
+
+  const versionID = directVersion?.id || (await selectedVersionID(route, request, override));
+  requireFreshConfig(epoch);
+  const d = directVersion || descriptors?.get(versionID);
+
+  if (!d) {
+    return json({ error: "environment not published" }, 503);
+  }
+
+  const headers = new Headers(request.headers);
+  for (const name of [
+    "x-krun-version",
+    "x-krun-scope",
+    "x-forwarded-host",
+    "x-internal",
+    krunVersionKey,
+    cloudflareVersionKey,
+    versionOverrides,
+    verifyAuthorization,
+  ]) {
+    headers.delete(name);
+  }
+  if (override !== null && verification === null) {
+    headers.delete("authorization");
+  }
+  const versionKey = requestVersionKey(request);
+  if (versionKey) {
+    headers.set(cloudflareVersionKey, versionKey);
+  }
+
+  const privateResponse = internalCall || requiresPrivateResponse(request);
+  const shared = responseCache(d, epoch, request, headers, route, privateResponse);
+  if (shared) {
+    const cached = await shared.cache.match(shared.key).catch(() => undefined);
+    requireFreshConfig(epoch);
+    if (cached) {
+      cached.headers.set("x-krun-version", d.id);
+      cached.headers.set("x-krun-pod", env.POD_UID);
+      return cached;
+    }
+  }
+
+  const forward = async () => {
+    requireFreshConfig(epoch);
+    const forwarded = new Request(request, { headers, signal: request.signal });
+    const entry = recordWorkerRequest(d, ctx);
+    let finished = false;
+    const finish = () => {
+      if (!finished) {
+        finished = true;
+        entry.forwarding--;
+      }
+    };
+    request.signal.addEventListener("abort", finish, { once: true });
+    const startedAt = performance.now();
+    let stub;
+    let statusClass = "5xx";
+    try {
+      stub = await worker(env, ctx, d, { entry, epoch });
+      requireFreshConfig(epoch);
+      const response = await stub.getEntrypoint().fetch(forwarded);
+      const responseClass = `${Math.floor(response.status / 100)}xx`;
+      statusClass = Object.hasOwn(requestsByStatusClass, responseClass) ? responseClass : "other";
+      return response;
+    } finally {
+      recordRequestMetrics(d, statusClass, startedAt);
+      request.signal.removeEventListener("abort", finish);
+      finish();
+      if (stub) {
+        inspectWorkerRetirement(ctx, stub, entry);
+      }
+    }
+  };
+  const manifest = await assetManifest(env, d);
+  requireFreshConfig(epoch);
+  const path = normalizePath(url.pathname);
+  const staticRequest = request.method === "GET" || request.method === "HEAD";
+  const immutable = staticRequest && immutableAssetName(path || "");
+  let response;
+  let asset = false;
+  const hit = manifest.config
+    ? assetDecision(request, manifest.config, manifest.index, manifest.rules)
+    : {};
+  const fallback = !hit.file || hit.fallback === true;
+  if (
+    !hit.redirect &&
+    fallback &&
+    !internalCall &&
+    immutable &&
+    !request.headers.has(versionOverrides) &&
+    !workerFirst(path, manifest.config?.run_worker_first)
+  ) {
+    response = await historicalAssetResponse(env, route, d, request, url, epoch, descriptors);
+    asset = Boolean(response);
+  }
+  if (!response && manifest.config) {
+    response = await staticAssetResponse(env, d, request, manifest, false, hit);
+    asset = Boolean(response);
+  }
+  if (!response) {
+    response = await forward();
+  }
+  requireFreshConfig(epoch);
+
+  const out = Object.keys(d.r2_buckets || {}).length
+    ? storageResponse(request, response)
+    : new Response(response.body, response);
+  if (
+    privateResponse ||
+    out.headers.has("set-cookie") ||
+    (asset && route.candidate_version && (!immutable || hit.fallback))
+  ) {
+    withoutSharedCache(out);
+  }
+
+  if (shared && canStoreResponse(out, asset, immutable && !hit.fallback)) {
+    const write = shared.cache.put(shared.key, out.clone()).catch(() => {});
+    if (typeof ctx?.waitUntil === "function") {
+      ctx.waitUntil(write);
+    } else {
+      await write;
+    }
+  }
+  out.headers.set("x-krun-version", d.id);
+  out.headers.set("x-krun-pod", env.POD_UID);
+
+  return out;
+}
+
 export class Private extends WorkerEntrypoint {
   async fetch(request) {
     try {
@@ -2143,77 +2541,14 @@ export class Private extends WorkerEntrypoint {
         return json({ error: "environment disabled" }, 410);
       }
 
-      const d = routeDescriptors.get(route) || view.versions.get(route.version);
-
-      if (!d) {
-        return json({ error: "environment not published" }, 503);
-      }
-
-      const headers = new Headers(request.headers);
-
-      for (const name of ["x-krun-version", "x-krun-scope", "x-forwarded-host", "x-internal"]) {
-        headers.delete(name);
-      }
-
-      const forward = async () => {
-        requireFreshConfig(epoch);
-        const forwarded = new Request(request, { headers, signal: request.signal });
-        const entry = recordWorkerRequest(d, this.ctx);
-        let finished = false;
-        const finish = () => {
-          if (!finished) {
-            finished = true;
-            entry.forwarding--;
-          }
-        };
-        request.signal.addEventListener("abort", finish, { once: true });
-        const startedAt = performance.now();
-        let stub;
-        let statusClass = "5xx";
-        try {
-          stub = await worker(this.env, this.ctx, d, { entry, epoch });
-          requireFreshConfig(epoch);
-          const response = await stub.getEntrypoint().fetch(forwarded);
-          const responseClass = `${Math.floor(response.status / 100)}xx`;
-          statusClass = Object.hasOwn(requestsByStatusClass, responseClass)
-            ? responseClass
-            : "other";
-          return response;
-        } finally {
-          recordRequestMetrics(d, statusClass, startedAt);
-          request.signal.removeEventListener("abort", finish);
-          finish();
-          if (stub) {
-            inspectWorkerRetirement(this.ctx, stub, entry);
-          }
-        }
-      };
-      let response;
-      const manifest = await assetManifest(this.env, d);
-      requireFreshConfig(epoch);
-
-      if (!manifest.config) {
-        response = await forward();
-      } else {
-        response = await staticAssetResponse(this.env, d, request, manifest);
-        if (response) {
-          requireFreshConfig(epoch);
-        } else {
-          response = await forward();
-        }
-      }
-
-      const out = Object.keys(d.r2_buckets || {}).length
-        ? storageResponse(request, response)
-        : new Response(response.body, response);
-      out.headers.set("x-krun-version", d.id);
-      out.headers.set("x-krun-pod", this.env.POD_UID);
-
-      return out;
+      return await serveWorkerRequest(this.env, this.ctx, request, route, epoch);
     } catch (e) {
       console.error("runtime request failed", e.message);
 
-      return json({ error: "runtime unavailable" }, 503);
+      const response = json({ error: "runtime unavailable" }, 503);
+      return request.headers.has(versionOverrides) || request.headers.has(verifyAuthorization)
+        ? withoutSharedCache(response)
+        : response;
     }
   }
 }
@@ -2237,6 +2572,47 @@ export class Management extends WorkerEntrypoint {
     }
 
     try {
+      if (path === "/service-invoke") {
+        if (validatorOnly) {
+          return json({ error: "denied" }, 403);
+        }
+        const host = request.headers.get("x-krun-service-host");
+        if (!host || host.length > 253) {
+          return json({ error: "invalid service host" }, 400);
+        }
+        await ensureBootstrap(this.env);
+        requireFreshConfig();
+        const epoch = view.epoch;
+        const route = await resolveRoute(this.env, host);
+        requireFreshConfig(epoch);
+        if (!route?.enabled || (route.expires_at && Date.parse(route.expires_at) <= Date.now())) {
+          return json({ error: "service target unavailable" }, 404);
+        }
+
+        const fixed = request.headers.get("x-krun-service-version");
+        let directVersion;
+        if (fixed) {
+          const local = routeDescriptors.get(route)?.get(fixed);
+          directVersion =
+            local ||
+            (await platform(this.env, "/service-descriptor/" + encodeURIComponent(fixed))).version;
+          requireFreshConfig(epoch);
+          if (
+            !directVersion ||
+            directVersion.id !== fixed ||
+            directVersion.worker_id !== route.worker_id ||
+            directVersion.environment !== route.environment
+          ) {
+            return json({ error: "service version unavailable" }, 404);
+          }
+        }
+        const forwarded = serviceRequest(request);
+        return await serveWorkerRequest(this.env, this.ctx, forwarded, route, epoch, {
+          directVersion,
+          internalCall: true,
+        });
+      }
+
       if (path === "/validate") {
         const input = await request.json();
 
@@ -2280,6 +2656,7 @@ export class Management extends WorkerEntrypoint {
         status: "ready",
         role: "runtime",
         validation_protocol: 1,
+        gradual_release_protocol: 1,
         hyperdrive_protocol: this.env.HYPERDRIVE_DIRECT_EGRESS ? 2 : 0,
         pod_uid: this.env.POD_UID,
         pool: this.env.RUNTIME_POOL || "default",

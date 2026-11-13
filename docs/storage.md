@@ -119,13 +119,15 @@ CF 资产临时对象在写入前登记 `krun_worker_source_uploads`，由现有
 升级。命令锁定该 schema 的 fingerprint 行，将增量 DDL 和 fingerprint 更新提交为一个事务。
 同一目标重复执行会返回已是当前版本。空库、缺少 fingerprint 或没有完整升级路径的库会被拒绝。
 
-当前支持从两份基线升级。指纹 `8f802b41ccf74f398f6c4c8ede9c480ad29b7e29ae95d7febda6046baa3842ef`
+指纹 `8f802b41ccf74f398f6c4c8ede9c480ad29b7e29ae95d7febda6046baa3842ef`
 对应提交 `96b6dd4` 所用的 schema，先为已有构建补充 `config_path`，旧行取空字符串默认值。
 指纹 `791bb9ebf10e4652f69918635175574492833a5b55b53db9806f0a604b333a30`
 已包含该列，从此步继续为发布 Operation 增加 `claim_generation` 和 `edge_pool`。已有 `validating` 行在下一次认领时采用新租约。
 仍指向当前部署的 `committed` 行重新确认边缘 revision，失去部署目标的行标记为 `superseded`。
 指纹 `f5ddb02a599235f4f87c218e94dcac41afa1212d8f8634f025254e9ab3f80877`
 从发布认领基线继续升级，为配置流初始化代次。旧 ACK 被清除，仍在收敛的部署和 checkpoint 重新发布。
+指纹 `5ec33847b55dc6a84dd405672d22b70ff4c90f5ebd6597ea709cc57e9b13900e`
+是灰度发布前的基线。升级后，已有环境和发布仍以原版本接收 100% 流量，控制面重新生成运行时路由配置。
 新增迁移时，在 `schema_migrate.go` 按发布顺序追加增量 SQL 和准确的源、目标文件 SHA-256，
 并更新建库 DDL。维护窗、备份与恢复步骤见[生产部署](../deploy/production/README.md#更新与恢复)。
 
@@ -136,7 +138,9 @@ CF 资产临时对象在写入前登记 `krun_worker_source_uploads`，由现有
 - 常用身份与站点路径按主体裁剪授权上下文，权限缓存仅限单次只读请求。
 - 数据库集成测试需要 `KRUN_TEST_POSTGRES_URL`，未提供时跳过。存储包的数据库测试使用独立 schema，控制层集成测试通过独立测试连接布置数据，不开放生产连接池。
 
-部署专属地址保留 30 天；部署记录到期或目标环境删除后由后台有界清理，删除同时入队路由撤销。保留中的 Deployment 会保护其 Version，Version 继续保护 Artifact 与 Secret。地址携带到期时间，Runtime 即使暂未收到清理增量也会拒绝过期部署请求。
+单版本部署的专属地址保留 30 天。部署记录到期或目标环境删除后由后台有界清理，删除同时入队路由撤销。
+保留中的 Deployment 保护其版本，版本继续保护 Artifact 与 Secret。退场版本的哈希资产另由
+`krun_worker_retained_assets` 保护至配置的保留期，运行时在提供文件前检查到期时间。
 
 OAuth 请求保留 5 分钟；access Session 最长 1 小时；授权与旋转 refresh 记录最长 30 天。
 授权码与刷新令牌仅保存摘要，单次兑换使用条件更新；过期及孤儿行接入统一后台清理。

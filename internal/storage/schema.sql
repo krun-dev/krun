@@ -334,6 +334,10 @@ CREATE TABLE IF NOT EXISTS krun_worker_hyperdrive_configs (
 );
 
 CREATE TABLE IF NOT EXISTS krun_worker_environments (
+ gradual_asset_retention_seconds integer CHECK (gradual_asset_retention_seconds BETWEEN 0 AND 7776000),
+ service_bindings jsonb NOT NULL DEFAULT '{}'::jsonb,
+ candidate_version_id text NOT NULL DEFAULT '',
+ candidate_weight integer NOT NULL DEFAULT 0 CHECK (candidate_weight BETWEEN 0 AND 100000),
  hyperdrive_bindings jsonb NOT NULL DEFAULT '{}'::jsonb,
  version_metadata text NOT NULL DEFAULT '',
  assets_binding text NOT NULL DEFAULT '',
@@ -500,6 +504,7 @@ CREATE TABLE IF NOT EXISTS krun_worker_configuration_r2 (
 );
 
 CREATE TABLE IF NOT EXISTS krun_worker_versions (
+ service_bindings jsonb NOT NULL DEFAULT '{}'::jsonb,
  configuration_id text NOT NULL DEFAULT '',
  created_by text NOT NULL DEFAULT '',
  created_by_name text NOT NULL DEFAULT '',
@@ -534,6 +539,9 @@ CREATE TABLE IF NOT EXISTS krun_worker_version_secrets (
 );
 
 CREATE TABLE IF NOT EXISTS krun_worker_deployments (
+ message text NOT NULL DEFAULT '',
+ candidate_version_id text NOT NULL DEFAULT '',
+ candidate_weight integer NOT NULL DEFAULT 0 CHECK (candidate_weight BETWEEN 0 AND 100000),
  deployment_id text PRIMARY KEY,
  org_id text NOT NULL,
  worker_id text NOT NULL,
@@ -549,6 +557,8 @@ CREATE INDEX IF NOT EXISTS krun_worker_deployments_worker ON krun_worker_deploym
 CREATE INDEX IF NOT EXISTS krun_worker_deployments_expiry ON krun_worker_deployments(expires_at);
 
 CREATE TABLE IF NOT EXISTS krun_worker_operations (
+ candidate_version_id text NOT NULL DEFAULT '',
+ candidate_weight integer NOT NULL DEFAULT 0 CHECK (candidate_weight BETWEEN 0 AND 100000),
 	operation_id       text PRIMARY KEY,
 	kind               text NOT NULL,
 	org_id             text NOT NULL,
@@ -603,7 +613,23 @@ CREATE TABLE IF NOT EXISTS worker_config_revisions (
 	created_at      timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS krun_worker_retained_assets (
+ pending_seconds integer NOT NULL DEFAULT 0,
+ worker_id text NOT NULL,
+ env_name text NOT NULL,
+ version_id text NOT NULL,
+ expires_at timestamptz NOT NULL,
+ PRIMARY KEY(worker_id,env_name,version_id)
+);
+CREATE INDEX IF NOT EXISTS krun_worker_retained_assets_expiry ON krun_worker_retained_assets(expires_at);
+
 CREATE TABLE IF NOT EXISTS worker_config_routes (
+ script_name text NOT NULL DEFAULT '',
+ env_name text NOT NULL DEFAULT '',
+ public boolean NOT NULL DEFAULT false,
+ retained_versions jsonb NOT NULL DEFAULT '[]'::jsonb,
+ candidate_version_id text NOT NULL DEFAULT '',
+ candidate_weight integer NOT NULL DEFAULT 0 CHECK (candidate_weight BETWEEN 0 AND 100000),
  expires_at timestamptz,
  worker_id text NOT NULL,
  shard text NOT NULL CHECK(shard ~ '^[0-9a-f]{2}$'),
@@ -638,6 +664,7 @@ CREATE TABLE IF NOT EXISTS worker_config_ops (
 );
 
 CREATE INDEX IF NOT EXISTS worker_config_routes_worker ON worker_config_routes(worker_id);
+CREATE INDEX IF NOT EXISTS worker_config_routes_candidate ON worker_config_routes(candidate_version_id,pool) WHERE candidate_version_id<>'';
 CREATE INDEX IF NOT EXISTS worker_config_routes_version ON worker_config_routes(version_id,pool);
 CREATE INDEX IF NOT EXISTS worker_config_routes_shard ON worker_config_routes(pool,shard,host);
 CREATE INDEX IF NOT EXISTS worker_config_ops_pool ON worker_config_ops(pool,config_revision,ordinal);
@@ -695,7 +722,7 @@ BEGIN
  RETURN NULL;
 END $$;
 CREATE OR REPLACE TRIGGER workers_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_workers FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
-CREATE OR REPLACE TRIGGER worker_env_config_dirty AFTER INSERT OR DELETE OR UPDATE OF enabled,version_id ON krun_worker_environments FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
+CREATE OR REPLACE TRIGGER worker_env_config_dirty AFTER INSERT OR DELETE OR UPDATE OF enabled,version_id,candidate_version_id,candidate_weight ON krun_worker_environments FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
 CREATE OR REPLACE TRIGGER worker_domains_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_domains FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
 CREATE OR REPLACE TRIGGER worker_placements_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_placements FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
 CREATE OR REPLACE FUNCTION krun_mark_resource_config_dirty() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -786,3 +813,5 @@ CREATE TABLE IF NOT EXISTS krun_worker_version_r2 (
  PRIMARY KEY (version_id, name)
 );
 CREATE INDEX IF NOT EXISTS krun_worker_version_r2_bucket ON krun_worker_version_r2(bucket_id);
+
+CREATE OR REPLACE TRIGGER retained_assets_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_retained_assets FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();

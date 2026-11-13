@@ -76,6 +76,10 @@ type WorkerArtifact struct {
 }
 
 type WorkerEnvironment struct {
+	AssetRetentionSeconds *int                            `json:"gradual_asset_retention_seconds,omitempty"`
+	ServiceBindings       map[string]WorkerServiceBinding `json:"service_bindings,omitempty"`
+	RetainedAssets        []RetainedWorkerVersion         `json:"-"`
+	WorkerGradualRelease
 	HyperdriveBindings map[string]string          `json:"hyperdrive_bindings,omitempty"`
 	R2Bindings         map[string]WorkerR2Binding `json:"r2_buckets,omitempty"`
 	VersionMetadata    string                     `json:"version_metadata,omitempty"`
@@ -141,28 +145,29 @@ type WorkerPlacement struct {
 }
 
 type WorkerVersion struct {
-	SecretNames        []string                   `json:"secret_names,omitempty"`
-	Configuration      string                     `json:"configuration_id,omitempty"`
-	CreatedBy          string                     `json:"created_by"`
-	CreatedByName      string                     `json:"created_by_name"`
-	HyperdriveBindings map[string]string          `json:"hyperdrive_bindings,omitempty"`
-	R2Bindings         map[string]WorkerR2Binding `json:"r2_buckets,omitempty"`
-	VersionMetadata    string                     `json:"version_metadata,omitempty"`
-	AssetsBinding      string                     `json:"assets_binding,omitempty"`
-	Tag                string                     `json:"tag,omitempty"`
-	Message            string                     `json:"message,omitempty"`
-	ID                 string                     `json:"id"`
-	Worker             string                     `json:"worker_id"`
-	Organization       string                     `json:"organization_id"`
-	Environment        string                     `json:"environment"`
-	Artifact           string                     `json:"artifact_id"`
-	Profile            string                     `json:"profile"`
-	ArchiveDigest      string                     `json:"archive_sha256"`
-	ModuleDigest       string                     `json:"module_sha256"`
-	CompatibilityDate  string                     `json:"compatibility_date"`
-	CompatibilityFlags []string                   `json:"compatibility_flags,omitempty"`
-	ConfigRevision     int                        `json:"configuration_revision"`
-	Variables          WorkerVariables            `json:"variables"`
+	ServiceBindings    map[string]WorkerServiceBinding `json:"service_bindings,omitempty"`
+	SecretNames        []string                        `json:"secret_names,omitempty"`
+	Configuration      string                          `json:"configuration_id,omitempty"`
+	CreatedBy          string                          `json:"created_by"`
+	CreatedByName      string                          `json:"created_by_name"`
+	HyperdriveBindings map[string]string               `json:"hyperdrive_bindings,omitempty"`
+	R2Bindings         map[string]WorkerR2Binding      `json:"r2_buckets,omitempty"`
+	VersionMetadata    string                          `json:"version_metadata,omitempty"`
+	AssetsBinding      string                          `json:"assets_binding,omitempty"`
+	Tag                string                          `json:"tag,omitempty"`
+	Message            string                          `json:"message,omitempty"`
+	ID                 string                          `json:"id"`
+	Worker             string                          `json:"worker_id"`
+	Organization       string                          `json:"organization_id"`
+	Environment        string                          `json:"environment"`
+	Artifact           string                          `json:"artifact_id"`
+	Profile            string                          `json:"profile"`
+	ArchiveDigest      string                          `json:"archive_sha256"`
+	ModuleDigest       string                          `json:"module_sha256"`
+	CompatibilityDate  string                          `json:"compatibility_date"`
+	CompatibilityFlags []string                        `json:"compatibility_flags,omitempty"`
+	ConfigRevision     int                             `json:"configuration_revision"`
+	Variables          WorkerVariables                 `json:"variables"`
 	// SecretDigest is safe to distribute with the edge descriptor. The
 	// version IDs and values stay in PostgreSQL and are fetched only through
 	// the authenticated runtime endpoint.
@@ -191,7 +196,30 @@ type WorkerStep struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// WorkerFullWeight is 100 percent in thousandths of a percentage point.
+const WorkerFullWeight = 100000
+
+type WorkerServiceBinding struct {
+	GrantedBy   *WorkerActor `json:"granted_by,omitempty"`
+	Worker      string       `json:"worker_id"`
+	Service     string       `json:"service,omitempty"`
+	Environment string       `json:"environment"`
+	Version     string       `json:"version_id,omitempty"`
+}
+
+type WorkerVersionWeight struct {
+	Version string `json:"version_id"`
+	Weight  int    `json:"weight"`
+}
+
+type WorkerGradualRelease struct {
+	Candidate       string `json:"candidate_version,omitempty"`
+	CandidateWeight int    `json:"candidate_weight,omitempty"`
+}
+
 type WorkerDeployment struct {
+	Message string `json:"message,omitempty"`
+	WorkerGradualRelease
 	ID           string     `json:"id"`
 	Organization string     `json:"organization_id"`
 	Worker       string     `json:"worker_id"`
@@ -204,6 +232,7 @@ type WorkerDeployment struct {
 }
 
 type WorkerOperation struct {
+	WorkerGradualRelease
 	ID                 string       `json:"id"`
 	Kind               string       `json:"kind"`
 	Worker             string       `json:"worker_id"`

@@ -727,3 +727,30 @@ test("configuration publication preserves code and updates the active marker onl
   await expect(detail.getByRole("button", { name: "当前已生效", exact: true })).toBeDisabled();
   expect(errors).toEqual([]);
 });
+
+test("deploys a saved version at a fractional canary percentage", async ({ page }) => {
+  const { state } = await fixture(page);
+  state.versions["version-canary"] = {
+    ...state.versions["version-current"],
+    id: "version-canary",
+    tag: "canary",
+  };
+  await page.goto(origin + location);
+  await page.getByRole("tab", { name: "版本与部署", exact: true }).click();
+  await page
+    .getByLabel("版本 version-canary", { exact: true })
+    .getByRole("button", { name: "部署此版本" })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "部署已保存版本" });
+  await dialog.getByLabel("此版本流量百分比").fill("5.125");
+  await dialog.getByRole("button", { name: "确认部署" }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(state.deploys).toHaveLength(1);
+  expect(state.deploys[0]).toMatchObject({
+    expected_revision: 3,
+    versions: [
+      { version_id: "version-current", percentage: 94.875 },
+      { version_id: "version-canary", percentage: 5.125 },
+    ],
+  });
+});
