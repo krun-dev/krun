@@ -444,20 +444,9 @@ export function VersionsPanel({
                           : t("无关联构建记录")}
                       </dd>
                     </div>
-                    <div>
-                      <dt>{t("制品")}</dt>
-                      <dd
-                        title={version.artifact_id}
-                        className="mt-1 break-all font-mono"
-                      >
-                        {shortID(version.artifact_id)}
-                      </dd>
-                    </div>
                   </dl>
                   <details className="border-t pt-3">
-                    <summary className="cursor-pointer text-sm">
-                      {t("查看冻结配置")} · r{version.configuration_revision}
-                    </summary>
+                    <summary className="cursor-pointer text-sm">{t("查看冻结配置")}</summary>
                     <div className="mt-3">
                       <VersionConfiguration config={version} />
                     </div>

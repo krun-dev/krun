@@ -63,7 +63,9 @@ func assignmentScope(st *domain.State, a domain.Assignment, t authorization.Targ
 
 type ListedAssignment struct {
 	domain.Assignment
-	RevokeBlocked bool `json:"revoke_blocked,omitempty"`
+	SubjectName   string `json:"subject_name,omitempty"`
+	ScopeName     string `json:"scope_name,omitempty"`
+	RevokeBlocked bool   `json:"revoke_blocked,omitempty"`
 }
 
 func (s Service) Assignments(st *domain.State, t authorization.Target) ([]ListedAssignment, error) {
@@ -79,7 +81,20 @@ func (s Service) Assignments(st *domain.State, t authorization.Target) ([]Listed
 			activeAdminGrants++
 			lastAdminIndex = len(out)
 		}
-		out = append(out, ListedAssignment{Assignment: assignment})
+		item := ListedAssignment{Assignment: assignment}
+		switch assignment.SubjectKind {
+		case "user":
+			item.SubjectName = st.Users[assignment.SubjectID].Name
+		case "group":
+			item.SubjectName = st.Groups[assignment.SubjectID].Name
+		}
+		switch assignment.ScopeKind {
+		case "organization":
+			item.ScopeName = st.Organizations[assignment.ScopeID].Name
+		case "worker", "model":
+			item.ScopeName = st.Resources[assignment.ScopeID].Name
+		}
+		out = append(out, item)
 	}
 	if activeAdminGrants == 1 {
 		out[lastAdminIndex].RevokeBlocked = true

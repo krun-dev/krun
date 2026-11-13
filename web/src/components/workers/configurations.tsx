@@ -177,13 +177,7 @@ export function ConfigurationsPanel({
                   : t("配置保存后需发布才会运行。")}
               </strong>
             </div>
-            <code className="text-xs text-muted-foreground">{shortID(current?.id)}</code>
           </div>
-          {current ? (
-            <p className="break-all text-xs text-muted-foreground">
-              {t("运行代码制品")} · {shortID(current.artifact_id)}
-            </p>
-          ) : null}
           {active || env.version_id !== env.confirmed_version_id ? (
             <p className="text-xs text-muted-foreground">
               {t("发布正在进行，当前生效标记将在运行时确认后更新。")}
@@ -281,7 +275,7 @@ export function ConfigurationsPanel({
                   </Badge>
                 </span>
                 <span className="break-all text-xs text-muted-foreground">
-                  {shortID(c.id)} · {new Date(c.created_at).toLocaleString()}
+                  <time dateTime={c.created_at}>{new Date(c.created_at).toLocaleString()}</time>
                 </span>
               </button>
             ))}
@@ -291,10 +285,7 @@ export function ConfigurationsPanel({
               className="grid min-w-0 content-start gap-4 rounded-md border p-5"
               aria-label={t("配置版本详情")}
             >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="break-all font-medium">{selected.name}</h3>
-                <Badge variant="outline">{t("内容固定")}</Badge>
-              </div>
+              <h3 className="break-all font-medium">{selected.name}</h3>
               {selected.message ? (
                 <p className="whitespace-pre-wrap break-all text-sm text-muted-foreground">
                   {selected.message}

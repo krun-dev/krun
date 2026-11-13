@@ -298,6 +298,77 @@ test("removed resource catalog links open the current organization overview", as
   expect(requests).not.toContain("/api/v1/orgs/org-a/models");
 });
 
+test("management pages show names and keep IDs available for CLI and forms", async ({
+  page,
+  context,
+}) => {
+  await fixture(page, {
+    orgs: [{ ...organization("org-a"), name: "平台工程", short_name: "platform" }],
+    actions: { "org-a": admin },
+  });
+  await page.route("**/api/v1/orgs/platform/permissions", (route) =>
+    route.fulfill({ json: { organization_id: "org-a", actions: admin, revision: 1 } }),
+  );
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.route("**/api/v1/orgs/platform/groups", (route) =>
+    route.fulfill({
+      json: {
+        items: [
+          {
+            id: "grp-on-call",
+            name: "值班团队",
+            members: ["user-alice", "user-legacy"],
+            member_names: { "user-alice": "Alice" },
+            revision: 2,
+          },
+        ],
+      },
+    }),
+  );
+  await page.route("**/api/v1/orgs/platform/role-assignments", (route) =>
+    route.fulfill({
+      json: {
+        items: [
+          {
+            assignment_id: "assignment-on-call",
+            subject_kind: "group",
+            subject_id: "grp-on-call",
+            subject_name: "值班团队",
+            role_id: "viewer",
+            scope_kind: "organization",
+            scope_id: "org-a",
+            scope_name: "平台工程",
+            conditions: {},
+            revision: 3,
+          },
+        ],
+      },
+    }),
+  );
+
+  await page.goto(origin + "/?workspace=platform");
+  await expect(page.getByText("当前身份", { exact: true })).toBeVisible();
+  await expect(page.getByText("platform", { exact: true })).toBeVisible();
+  await expect(page.getByText(/权限修订|每次请求重新检查|v0\.1/)).toHaveCount(0);
+  await page.getByRole("button", { name: "复制用户 ID", exact: true }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("user-test");
+
+  await page.getByRole("button", { name: "用户组", exact: true }).click();
+  await expect(page.getByText("2 位成员", { exact: true })).toBeVisible();
+  await expect(page.getByText("Alice", { exact: true })).toBeVisible();
+  await expect(page.getByText("user-legacy", { exact: true })).toBeVisible();
+  await expect(page.getByText(/修订|user-alice|grp-on-call/)).toHaveCount(0);
+  await page.getByRole("button", { name: "复制用户组 ID", exact: true }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("grp-on-call");
+
+  await page.getByRole("button", { name: "角色授权", exact: true }).click();
+  const row = page.getByRole("row").filter({ hasText: "值班团队" });
+  await expect(row).toContainText("平台工程");
+  await expect(row).not.toContainText("org-a");
+  await row.getByRole("button", { name: "复制授权对象 ID", exact: true }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("grp-on-call");
+});
+
 test("permission forms use the environments advertised by the API", async ({ page }) => {
   await fixture(page, {
     actions: { "org-a": admin },
@@ -319,6 +390,7 @@ test("permission forms use the environments advertised by the API", async ({ pag
   expect((await checkRequest).postDataJSON().environment).toBe("production");
   const result = page.getByRole("heading", { name: "允许访问", exact: true });
   await expect(result).toBeVisible();
+  await expect(page.getByText(/权限修订|默认拒绝|由服务端解析|ALLOWED/)).toHaveCount(0);
   await page.getByRole("button", { name: "切换深色主题", exact: true }).click();
   await expect(result).toBeVisible();
   await expect(page.locator("html")).toHaveClass(/dark/);

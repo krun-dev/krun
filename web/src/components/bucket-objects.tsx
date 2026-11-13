@@ -208,7 +208,6 @@ export function BucketObjects({
         {t("返回桶列表")}
       </Button>
       <PageHeader
-        eyebrow={t("对象存储")}
         title={bucket.name}
         description={t("上传下载直连存储。引用文件时保存桶和对象 key，短期链接到期后需重新获取。")}
         action={

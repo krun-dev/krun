@@ -215,7 +215,6 @@ export function KeysPage(p: Props & { organizations: Organization[] }) {
   return (
     <>
       <PageHeader
-        eyebrow={p.system ? t("Access management") : t("个人设置")}
         title={p.system ? t("全平台 API 密钥") : t("API Keys")}
         description={t("管理脚本、CLI 和自动化任务的访问凭据。")}
         action={
@@ -474,7 +473,7 @@ export function KeysPage(p: Props & { organizations: Organization[] }) {
                 />
                 <p className="text-xs leading-5 text-muted-foreground">
                   {t(
-                    "{{scope}}的 * 范围包含未来资源；每次请求仍检查你的实时权限。撤销角色或成员资格后，Key 会立即失去相应访问权限。",
+                    "选择 {{scope}}的所有资源会同时授权将来新增的资源。账号失去访问权限时，Key 也会失去对应权限。",
                     { scope: p.system ? t("跨组织") : t("当前组织") },
                   )}
                 </p>
@@ -526,7 +525,7 @@ export function KeysPage(p: Props & { organizations: Organization[] }) {
                       />
                       <p className="text-[11px] leading-5 text-muted-foreground">
                         {t(
-                          "读写包含读取、创建、更新、删除及管理操作。发布、回滚、执行与调用可单独勾选；目录也包含预留的领域动作。",
+                          "读写包含读取、创建、更新、删除和管理。发布、回滚、执行和调用可单独选择。",
                         )}
                       </p>
                       <div className="space-y-3">
@@ -564,12 +563,7 @@ export function KeysPage(p: Props & { organizations: Organization[] }) {
                                   }
                                 />
                                 <div>
-                                  <h3 className="text-sm font-medium">
-                                    {t(group.label)}{" "}
-                                    <span className="ml-1.5 font-mono text-[10px] font-normal text-muted-foreground">
-                                      {group.kind}
-                                    </span>
-                                  </h3>
+                                  <h3 className="text-sm font-medium">{t(group.label)}</h3>
                                   <p className="mt-0.5 text-[11px] text-muted-foreground">
                                     {t(group.description)}
                                   </p>
@@ -830,7 +824,7 @@ export function KeysPage(p: Props & { organizations: Organization[] }) {
               <DialogHeader>
                 <DialogTitle>{detail.name}</DialogTitle>
                 <DialogDescription>
-                  {t("密钥的有效权限 = 策略允许范围 ∩ 所属用户当前权限。")}
+                  {t("API Key 只能使用所属账号当前拥有且在此 Key 中授权的权限。")}
                 </DialogDescription>
               </DialogHeader>
               <dl className="grid grid-cols-2 gap-4 rounded-md border p-4 text-xs">
@@ -847,16 +841,17 @@ export function KeysPage(p: Props & { organizations: Organization[] }) {
                   <dd className="mt-1">{expiryLabel(detail)}</dd>
                 </div>
                 <div>
-                  <dt className="text-muted-foreground">{t("状态 / 策略修订")}</dt>
-                  <dd className="mt-1">
-                    {t(statusLabels[keyState(detail)])} / {detail.policy_revision}
-                  </dd>
+                  <dt className="text-muted-foreground">{t("状态")}</dt>
+                  <dd className="mt-1">{t(statusLabels[keyState(detail)])}</dd>
                 </div>
               </dl>
               <PolicySummary policy={detail.policy} />
-              <pre className="overflow-auto rounded-md border bg-secondary/30 p-4 text-xs leading-6">
-                {JSON.stringify(detail.policy, null, 2)}
-              </pre>
+              <details className="rounded-md border p-3">
+                <summary className="cursor-pointer text-sm">{t("策略 JSON")}</summary>
+                <pre className="mt-3 overflow-auto rounded-md bg-secondary/30 p-3 text-xs leading-6">
+                  {JSON.stringify(detail.policy, null, 2)}
+                </pre>
+              </details>
             </>
           )}
         </DialogContent>

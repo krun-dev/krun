@@ -151,10 +151,8 @@ export default function SystemConfigPage({ refresh }: { refresh: number }) {
   return (
     <>
       <PageHeader
-        eyebrow={t("平台管理")}
         title={t("系统配置")}
-        description={t("查看当前控制面加载的配置。凭据、内部地址、服务名和标签原文已隐藏。")}
-        action={<Badge variant="outline">{t("只读")}</Badge>}
+        description={t("查看 Workers 的资源池和网络配置。")}
       />
       {loading ? (
         <Loading />
@@ -166,10 +164,7 @@ export default function SystemConfigPage({ refresh }: { refresh: number }) {
           deployment={data.deployment}
         />
       ) : (
-        <Empty
-          title={t("Workers 未配置")}
-          description={t("当前控制面没有加载 Workers 运行配置。")}
-        />
+        <Empty title={t("Workers 未配置")} />
       )}
     </>
   );

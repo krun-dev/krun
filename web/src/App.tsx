@@ -25,7 +25,7 @@ import {
   UsersRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -40,17 +40,7 @@ import { AUTH_REQUIRED_EVENT } from "@/lib/auth-required";
 import { canOpenSection, type OrganizationPermissions, type Section } from "@/lib/navigation";
 import { useSuggestedShortName } from "@/lib/suggested-short-name";
 import { cn } from "@/lib/utils";
-import {
-  Empty,
-  Field,
-  Loading,
-  Logo,
-  Metric,
-  Notice,
-  PageHeader,
-  QuickLink,
-  ThemeToggle,
-} from "@/components/common";
+import { Empty, Field, Loading, Logo, Notice, PageHeader, ThemeToggle } from "@/components/common";
 const OAuthConsent = lazy(() =>
   import("@/components/oauth-consent").then((m) => ({
     default: m.OAuthConsent,
@@ -667,13 +657,7 @@ export default function App() {
               className="hover:text-foreground"
             >
               {t("使用文档")}
-            </a>{" "}
-            <Badge
-              variant="outline"
-              className="ml-auto text-[9px]"
-            >
-              v0.1
-            </Badge>
+            </a>
           </div>
         </div>
       </aside>
@@ -825,9 +809,7 @@ export default function App() {
           ) : section === "overview" ? (
             <>
               <PageHeader
-                eyebrow={t("Workspace overview")}
                 title={t("组织概览")}
-                description={t("从这里管理团队身份、访问权限与自动化凭据。")}
                 action={
                   canCreateOrg ? (
                     <Button onClick={() => setOrgDialog(true)}>
@@ -837,37 +819,10 @@ export default function App() {
                   ) : undefined
                 }
               />
-              <div className="grid gap-4 sm:grid-cols-3">
-                <Metric
-                  label={t("可访问组织")}
-                  value={orgs.length}
-                  icon={<Building2 size={18} />}
-                  note={t("只展示当前身份获准访问的组织")}
-                />
-                <Metric
-                  label={t("已启用身份来源")}
-                  value={providers.length}
-                  icon={<ShieldCheck size={18} />}
-                  note={t("每个来源对应独立的平台账号")}
-                />
-                <Metric
-                  label={t("当前身份")}
-                  value={
-                    <span className="text-xl">
-                      {me.system_admin ? t("系统管理员") : t("平台用户")}
-                    </span>
-                  }
-                  icon={<Users size={18} />}
-                  note={t("权限修订 {{v0}} · 每次请求重新检查", {
-                    v0: me.revision,
-                  })}
-                />
-              </div>
-              <div className="mt-6 grid gap-6 xl:grid-cols-[1.35fr_1fr]">
+              <div className="grid gap-6 xl:grid-cols-[1.35fr_1fr]">
                 <Card className="gap-0 shadow-none">
                   <CardHeader className="border-b pb-5">
                     <CardTitle className="text-base">{t("我的组织")}</CardTitle>
-                    <CardDescription>{t("协作与权限隔离的组织")}</CardDescription>
                   </CardHeader>
                   <CardContent className="pt-5">
                     {orgs.length ? (
@@ -885,9 +840,11 @@ export default function App() {
                           </div>
                           <div>
                             <p className="text-sm font-medium">{o.name}</p>
-                            <p className="mt-1 font-mono text-[11px] text-muted-foreground">
-                              {o.id}
-                            </p>
+                            {o.short_name && (
+                              <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                                {o.short_name}
+                              </p>
+                            )}
                           </div>
                           <ArrowUpRight
                             className="ml-auto text-muted-foreground"
@@ -900,8 +857,8 @@ export default function App() {
                         title={t("尚未加入组织")}
                         description={
                           me.system_admin
-                            ? t("创建组织后即可管理成员与权限。")
-                            : t("把下方的本地用户 ID 提供给管理员，申请组织成员资格与角色。")
+                            ? undefined
+                            : t("把本地用户 ID 提供给管理员，申请加入组织。")
                         }
                       />
                     )}
@@ -909,24 +866,15 @@ export default function App() {
                 </Card>
                 <Card className="gap-0 shadow-none">
                   <CardHeader className="border-b pb-5">
-                    <CardTitle className="text-base">{t("快速开始")}</CardTitle>
-                    <CardDescription>{t("把权限配置成团队需要的样子")}</CardDescription>
+                    <CardTitle className="text-base">{t("当前身份")}</CardTitle>
                   </CardHeader>
                   <CardContent className="grid gap-3 pt-5">
-                    {canOpen("groups") && (
-                      <QuickLink
-                        title={t("设置用户组与角色")}
-                        description={t("让团队通过用户组共享权限")}
-                        onClick={() => setSection("groups")}
-                      />
-                    )}
-                    {canOpen("keys") && (
-                      <QuickLink
-                        title={t("创建受限 API Key")}
-                        description={t("精确选择自动化所需资源和动作")}
-                        onClick={() => setSection("keys")}
-                      />
-                    )}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium">{me.user.name}</span>
+                      <Badge variant="outline">
+                        {me.system_admin ? t("系统管理员") : t("平台用户")}
+                      </Badge>
+                    </div>
                     <div className="mt-1 rounded-lg bg-secondary/70 p-4">
                       <p className="text-xs text-muted-foreground">{t("你的本地用户 ID")}</p>
                       <div className="mt-2 flex items-center gap-2">
@@ -941,10 +889,6 @@ export default function App() {
                           {copied ? <Check size={14} /> : <Clipboard size={14} />}
                         </Button>
                       </div>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
-                        {t("来源：")}
-                        {me.user.source_id}
-                      </p>
                     </div>
                   </CardContent>
                 </Card>
@@ -1036,7 +980,7 @@ export default function App() {
             me.workers_configured === false ? (
               <Empty
                 title={t("Workers 未配置")}
-                description={t("请在控制面配置 workers: 段并重启服务，然后刷新此页面。")}
+                description={t("请联系平台管理员启用 Workers。")}
                 action={
                   selection && (
                     <Button
@@ -1079,6 +1023,7 @@ export default function App() {
             <CheckPage
               scope={scope}
               system={system}
+              credentialKind={me.credential_kind}
             />
           ) : (
             <AuditPage
@@ -1207,22 +1152,9 @@ function OrgCatalogPage({
   const { t } = useTranslation();
   return (
     <section className="grid gap-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <p className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
-            {t("平台管理")}
-          </p>
-          <h1 className="mt-1 text-xl font-semibold">{t("组织目录")}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {t("平台上的全部组织。点按进入该组织的控制台。")}
-          </p>
-        </div>
-      </div>
+      <h1 className="text-xl font-semibold">{t("组织目录")}</h1>
       {orgs.length === 0 ? (
-        <Empty
-          title={t("暂无组织")}
-          description={t("还没有任何组织。")}
-        />
+        <Empty title={t("暂无组织")} />
       ) : (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {orgs.map((o) => (
@@ -1238,7 +1170,11 @@ function OrgCatalogPage({
                   className="shrink-0 text-muted-foreground"
                 />
               </div>
-              <code className="mt-2 block break-all text-[11px] text-muted-foreground">{o.id}</code>
+              {o.short_name && (
+                <code className="mt-2 block break-all text-[11px] text-muted-foreground">
+                  {o.short_name}
+                </code>
+              )}
             </button>
           ))}
         </div>

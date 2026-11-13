@@ -111,7 +111,6 @@ export default function HyperdrivePage({
   return (
     <>
       <PageHeader
-        eyebrow={t("数据库")}
         title="Hyperdrive"
         description={t("由 krun 保管 PostgreSQL 源库凭据，为 Worker 提供数据库绑定。")}
         action={

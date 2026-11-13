@@ -36,7 +36,6 @@ export default function ResourceInventoryPage({
   return (
     <>
       <PageHeader
-        eyebrow={t("平台管理")}
         title={t(workers ? "全平台 Workers" : "全平台 Bucket")}
         description={t(workers ? "查看所有组织的 Worker。" : "查看所有组织的对象存储桶。")}
       />

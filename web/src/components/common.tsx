@@ -1,9 +1,8 @@
 import { t } from "@/lib/i18n";
 import { useTranslation } from "react-i18next";
 import { useEffect, useState, type ReactNode } from "react";
-import { ArrowUpRight, LoaderCircle, Moon, ShieldCheck, Sun, X } from "lucide-react";
+import { LoaderCircle, Moon, ShieldCheck, Sun, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -121,7 +120,7 @@ export function SelectField({
 }
 export function Empty({
   title = t("暂无数据"),
-  description = t("创建第一条记录，开始管理你的组织。"),
+  description,
   action,
 }: {
   title?: string;
@@ -135,7 +134,7 @@ export function Empty({
         <ShieldCheck size={22} />
       </div>
       <h3 className="font-medium">{title}</h3>
-      <p className="max-w-md text-sm text-muted-foreground">{description}</p>
+      {description && <p className="max-w-md text-sm text-muted-foreground">{description}</p>}
       {action}
     </div>
   );
@@ -159,53 +158,23 @@ export function Loading() {
   );
 }
 export function PageHeader({
-  eyebrow,
   title,
   description,
   action,
 }: {
-  eyebrow: string;
   title: string;
-  description: string;
+  description?: string;
   action?: ReactNode;
 }) {
   useTranslation();
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
       <div>
-        <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-          {eyebrow}
-        </p>
         <h1 className="text-2xl font-medium tracking-tight">{title}</h1>
-        <p className="mt-2 text-sm text-muted-foreground">{description}</p>
+        {description && <p className="mt-2 text-sm text-muted-foreground">{description}</p>}
       </div>
       {action}
     </div>
-  );
-}
-export function Metric({
-  label,
-  value,
-  icon,
-  note,
-}: {
-  label: string;
-  value: ReactNode;
-  icon: ReactNode;
-  note: string;
-}) {
-  useTranslation();
-  return (
-    <Card className="gap-0 py-0 shadow-none">
-      <CardContent className="p-5">
-        <div className="flex items-center justify-between text-sm text-muted-foreground">
-          {label}
-          {icon}
-        </div>
-        <div className="my-3 text-3xl font-semibold tracking-tight">{value}</div>
-        <p className="text-xs text-muted-foreground">{note}</p>
-      </CardContent>
-    </Card>
   );
 }
 export function StatusBadge({ active }: { active: boolean }) {
@@ -237,31 +206,5 @@ export function Notice({ message, close }: { message: string; close: () => void 
         <X size={16} />
       </Button>
     </div>
-  );
-}
-export function QuickLink({
-  title,
-  description,
-  onClick,
-}: {
-  title: string;
-  description: string;
-  onClick: () => void;
-}) {
-  useTranslation();
-  return (
-    <button
-      onClick={onClick}
-      className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition hover:border-primary/30 hover:bg-secondary/40"
-    >
-      <div>
-        <p className="text-sm font-medium">{title}</p>
-        <p className="mt-1 text-xs text-muted-foreground">{description}</p>
-      </div>
-      <ArrowUpRight
-        size={16}
-        className="text-muted-foreground"
-      />
-    </button>
   );
 }

@@ -65,7 +65,6 @@ export default function RepositoryAuthorizations({
   return (
     <>
       <PageHeader
-        eyebrow={t("个人设置")}
         title={t("Git 仓库授权")}
         description={t("管理当前账号的 GitHub 和 GitLab 仓库授权。")}
         action={

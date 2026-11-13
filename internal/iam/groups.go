@@ -19,12 +19,24 @@ func sameScope(g domain.Group, t authorization.Target) bool {
 	return g.ScopeKind == t.Kind && g.ScopeID == t.ID
 }
 
-func (s Service) Groups(st *domain.State, t authorization.Target) ([]domain.Group, error) {
-	out := []domain.Group{}
+type ListedGroup struct {
+	domain.Group
+	MemberNames map[string]string `json:"member_names,omitempty"`
+}
+
+func (s Service) Groups(st *domain.State, t authorization.Target) ([]ListedGroup, error) {
+	out := []ListedGroup{}
 	for _, g := range st.Groups {
-		if sameScope(g, t) {
-			out = append(out, g)
+		if !sameScope(g, t) {
+			continue
 		}
+		item := ListedGroup{Group: g, MemberNames: make(map[string]string)}
+		for _, id := range g.Members {
+			if name := st.Users[id].Name; name != "" {
+				item.MemberNames[id] = name
+			}
+		}
+		out = append(out, item)
 	}
 	return out, nil
 }

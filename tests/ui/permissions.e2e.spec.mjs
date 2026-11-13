@@ -110,6 +110,7 @@ test("viewer permissions drive navigation and cannot be bypassed through URLs or
     "概览",
     "Workers",
     "对象存储",
+    "Hyperdrive",
     "权限检查",
     "API 密钥",
     "Git 仓库授权",
@@ -179,9 +180,9 @@ test("the role picker offers three roles and a member can work without organizat
   const dialog = ownerPage.getByRole("dialog");
   const roleSelect = dialog.getByRole("combobox", { name: "角色", exact: true });
   await expect(roleSelect.locator("option")).toHaveText([
-    "组织管理员 (org_admin)",
-    "成员 (member)",
-    "只读 (viewer)",
+    "组织管理员",
+    "成员",
+    "只读",
   ]);
   await dialog.getByRole("textbox", { name: /本地用户 ID/ }).fill(viewerID);
   await roleSelect.selectOption("member");
@@ -222,8 +223,12 @@ test("the role picker offers three roles and a member can work without organizat
 test("group grants and revocations refresh the live page against PostgreSQL", async () => {
   const ownerPage = member.page;
   const ownerID = (await api(member.context, "/api/auth/me")).user.user_id;
+  const viewerName = (await api(viewer.context, "/api/auth/me")).user.name;
   await ownerPage.goto(`/?page=roles&workspace=${organization.id}`);
-  const ownerGrant = ownerPage.getByRole("row").filter({ hasText: ownerID });
+  const ownerGrant = ownerPage.getByRole("row").filter({
+    has: ownerPage.getByTitle(ownerID, { exact: true }),
+    hasText: "组织管理员",
+  });
   const revoke = ownerGrant.getByRole("button", { name: "撤销", exact: true });
   const hint = ownerGrant.getByText("请先将组织管理员角色授予另一名有效成员。");
   await expect(revoke).toBeDisabled();
@@ -233,8 +238,12 @@ test("group grants and revocations refresh the live page against PostgreSQL", as
   await expect(revoke).toBeDisabled();
   await expect(hint).toBeVisible();
   await ownerPage.getByRole("button", { name: "切换浅色主题" }).click();
-  const viewerGrant = ownerPage.getByRole("row").filter({ hasText: viewerID });
+  const viewerGrant = ownerPage.getByRole("row").filter({
+    has: ownerPage.getByTitle(viewerID, { exact: true }),
+  });
   await expect(viewerGrant.getByRole("button", { name: "撤销", exact: true })).toBeEnabled();
+  await expect(viewerGrant.getByText(viewerName, { exact: true })).toBeVisible();
+  await expect(viewerGrant.getByText(viewerID, { exact: true })).toBeVisible();
 
   const group = await api(
     admin.context,
@@ -244,6 +253,8 @@ test("group grants and revocations refresh the live page against PostgreSQL", as
     201,
   );
   await api(admin.context, `${orgPath()}/groups/${group.id}/members/${viewerID}`, "PUT", {});
+  const groups = await api(admin.context, orgPath() + "/groups");
+  expect(groups.items.find((item) => item.id === group.id).member_names[viewerID]).toBe(viewerName);
   const grant = await api(
     admin.context,
     orgPath() + "/role-assignments",

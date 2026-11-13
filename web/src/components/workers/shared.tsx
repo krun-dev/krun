@@ -48,11 +48,20 @@ export const stepStates: Record<string, string> = {
   failed: "失败",
 };
 export const stepNames: Record<string, string> = {
-  artifact: "制品检查",
-  candidate: "候选验证",
-  commit: "提交 Version",
-  synchronize: "运行副本确认",
+  artifact: "检查构建产物",
+  candidate: "验证新版本",
+  commit: "提交部署",
+  synchronize: "等待部署生效",
 };
+export function operationLabel(kind: string) {
+  const labels: Record<string, string> = {
+    publish: "发布",
+    rollback: "回滚",
+    secret: "更新 Secret",
+  };
+  return t(labels[kind] ?? "部署");
+}
+
 export const idempotency = () => crypto.randomUUID();
 
 // Always the production form: the plain domain over HTTPS. Local tunnels

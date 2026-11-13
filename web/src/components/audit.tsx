@@ -1,14 +1,7 @@
 import { errorMessage, t, locale, credentialLabel } from "@/lib/i18n";
 import { useTranslation } from "react-i18next";
 import { useEffect, useState } from "react";
-import {
-  CalendarDays,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  Download,
-  RefreshCw,
-} from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronsLeft, Download, RefreshCw } from "lucide-react";
 import { api, downloadAuditCSV, type AuditPageResponse } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -99,9 +92,8 @@ export function AuditPage({ base, refresh }: { base: string; refresh: number }) 
   return (
     <>
       <PageHeader
-        eyebrow={t("Activity log")}
         title={t("审计记录")}
-        description={t("查看最近 7 天的授权与管理记录，超过保留期的记录会自动清理。")}
+        description={t("审计记录保留 7 天。")}
         action={
           <div className="flex flex-wrap items-center gap-2">
             <Button
@@ -140,9 +132,7 @@ export function AuditPage({ base, refresh }: { base: string; refresh: number }) 
           id="audit-export-description"
           className="text-xs text-muted-foreground"
         >
-          {t(
-            "导出当前快照，最多 5,000 条。脱敏会遮盖记录、主体、API Key、资源、组织和请求的标识。",
-          )}
+          {t("最多导出 5,000 条记录。开启脱敏后，导出的 ID 将被遮盖。")}
         </p>
       </div>
       {exportError && (
@@ -151,13 +141,6 @@ export function AuditPage({ base, refresh }: { base: string; refresh: number }) 
         </div>
       )}
       <div className="mb-5 flex flex-wrap items-center gap-3 border-b pb-4">
-        <Badge
-          variant="outline"
-          className="gap-1.5 font-normal text-muted-foreground"
-        >
-          <CalendarDays size={13} />
-          {t("最近 7 天")}
-        </Badge>
         <span className="text-xs text-muted-foreground">
           {!loading && data
             ? t("共 {{v0}} 条记录", { v0: data.total.toLocaleString(locale()) })
@@ -201,7 +184,7 @@ export function AuditPage({ base, refresh }: { base: string; refresh: number }) 
       ) : !data?.items.length ? (
         <Empty
           title={t("没有更多审计记录")}
-          description={t("仅展示最近 7 天内且当前身份有权访问的记录，可返回上一页或刷新。")}
+          description={t("可返回上一页，或刷新查看新记录。")}
         />
       ) : (
         <DataTable
@@ -304,7 +287,7 @@ export function AuditPage({ base, refresh }: { base: string; refresh: number }) 
       </div>
       {data && !loading && (
         <p className="mt-4 text-[11px] leading-5 text-muted-foreground">
-          {t("按 {{date}} 的快照浏览；刷新可查看新记录。超过 7 天的记录不再保留。", {
+          {t("记录截至 {{date}}。刷新可查看新记录。", {
             date: new Date(data.as_of).toLocaleString(locale()),
           })}
         </p>

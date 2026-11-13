@@ -212,7 +212,6 @@ export function BucketsPage({
         ) : opened ? (
           <>
             <PageHeader
-              eyebrow={t("对象存储")}
               title={opened.name}
               description={t("已停用")}
               action={canUpdate ? statusAction(opened) : undefined}
@@ -234,7 +233,6 @@ export function BucketsPage({
   return (
     <>
       <PageHeader
-        eyebrow={t("存储服务")}
         title={t("对象存储")}
         description={t("管理存储桶，并在 Worker 中通过对象存储绑定使用。")}
         action={
