@@ -30,6 +30,8 @@ KRUN_UI_ORIGIN="$TEST_ORIGIN" npx playwright test tests/ui/worker-gradual.e2e.sp
 KRUN_UI_ORIGIN="$TEST_ORIGIN" npm run test:ui
 ```
 
+原生 krun CLI 的完整灰度链路见 [kind CLI E2E](../deploy/workers-kind/README.md#krun-cli-e2e)。用例从源码编译 CLI，通过同源 API 发布，并通过真实 Gateway 验证路由。
+
 local-first 私有对象存储验收使用 `deploy/workers-dev/storage.e2e.mjs`；设置
 `KRUN_UI_ORIGIN`、`KRUN_DEV_GATEWAY_ORIGIN` 和 `KRUN_DEV_STATIC_HOST`，有存储前缀时
 同时设置 `KRUN_STORAGE_PREFIX`。它覆盖真实上传、构建、发布、静态资产、浏览器调用
@@ -70,7 +72,7 @@ Wrangler 端到端用例使用仓库固定的 Wrangler 4.155.0，将 Worker 发�
 | 静态资产（`assets`） | `env.ASSETS.fetch()`、纯静态 Worker、SPA 回退、挂载路径、重定向和响应头规则。回滚恢复旧版本的资产规则。 | [Wrangler kind E2E](../deploy/workers-kind/cloudflare.e2e.mjs) · [运行时资产测试](../workers/runtime/test/assets.test.mjs) |
 | R2（`r2_bucket`） | 控制面解析桶名、隔离组织并冻结版本绑定。运行时覆盖对象读写、Range、条件请求、列表分页、元数据和分片续传。真实 TOS 上还覆盖五个固定 commit 的开源 Worker 项目。 | [控制面测试](../internal/control/workers_buckets_test.go) · [R2 API 契约测试](../workers/runtime/test/r2-contract.test.mjs) · [分片测试](../workers/runtime/test/multipart.test.mjs) · [TOS 与开源项目验收](workers-r2.md#运行与验证) |
 | Hyperdrive（`hyperdrive`） | 原版 Wrangler 创建、列出、读取、更新和删除配置，创建时写入项目 binding。控制面验证组织隔离、版本绑定、直连连接串、密码轮换、凭据读取权限和配置删除后的拒绝行为。 | [PostgreSQL 集成测试](../internal/control/hyperdrive_postgres_test.go) |
-| 版本灰度 | 原版 Wrangler 验证双版本比例、0% 候选定向验证、调权、发布历史和回滚。真实 Gateway 验证两个分桶 Header 的等价性与优先级、旧资产访问、环境级保留窗口覆盖、缓存隔离和鉴权绕过。 | [Wrangler kind E2E](../deploy/workers-kind/cloudflare.e2e.mjs) |
+| 版本灰度 | krun CLI 和原版 Wrangler 验证双版本比例、0% 候选定向验证、调权、发布历史和回滚。真实 Gateway 验证两个分桶 Header 的等价性与优先级、旧资产访问、环境级保留窗口覆盖、缓存隔离和鉴权绕过。 | [krun CLI kind E2E](../deploy/workers-kind/cli.e2e.mjs) · [Wrangler kind E2E](../deploy/workers-kind/cloudflare.e2e.mjs) |
 | 服务绑定（`service`） | 同池及跨池的固定版本与跟随发布、并行调用、HTTP 请求透传、分桶键传递、授权撤销与目标删除。 | [Wrangler kind E2E](../deploy/workers-kind/cloudflare.e2e.mjs) · [运行时传输测试](../workers/runtime/test/service.test.mjs) |
 | Cache API（`caches`） | 运行时覆盖 `put`、`match`、`delete`、缓存策略、`Vary`、条件和 Range 请求，以及不同组织和命名缓存之间的隔离。 | [运行时缓存测试](../workers/runtime/test/cache.test.mjs) |
 

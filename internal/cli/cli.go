@@ -513,6 +513,7 @@ Workers
   krun build --help
   krun deploy [--org ID] --worker ID --env NAME [--build ID | --path DIR_OR_ZIP]
   krun deploy --dry-run [--config FILE] [--outdir DIR]
+  krun versions deploy VERSION_ID[@PERCENTAGE%] [VERSION_ID[@PERCENTAGE%]] --worker ID --env NAME
   krun rollback VERSION_ID [--org ID] --worker ID --env NAME
   krun deployments --help
   krun versions --help

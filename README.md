@@ -14,6 +14,7 @@ krun 是一个自托管应用平台，目标是在自己的基础设施上提供
 
 - 使用控制台创建 Worker、构建和发布版本，管理环境、域名与资源池。
 - 使用部分兼容的 Cloudflare API 和 Wrangler 工作流部署 Workers。
+- 使用 krun CLI 或原版 Wrangler 进行双版本百分比灰度、晋级和回滚。 [krun CLI 指南](user-docs/src/content/docs/guides/krun-cli.md#双版本灰度)
 - 为 Worker 绑定基于 S3 兼容存储的逻辑桶，并在控制台管理对象。
 - 通过组织、成员、角色和 API Key 管理访问权限，使用 CLI 管理身份和组织。
 

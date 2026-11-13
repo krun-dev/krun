@@ -150,8 +150,12 @@ func TestDeployRejectsUnsupportedOptions(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"versions", "deploy", "ver_fixture@50%"}, "one version at 100%"},
-		{[]string{"versions", "deploy", "ver_a@50%", "ver_b@50%"}, "unexpected positional"},
+		{[]string{"versions", "deploy", "ver_fixture@50%"}, "total 100%"},
+		{[]string{"versions", "deploy", "ver_a@50%", "ver_b@49.9%"}, "total 100%"},
+		{[]string{"versions", "deploy", "ver_a@50%", "ver_a@50%"}, "distinct"},
+		{[]string{"versions", "deploy", "ver_a@99.999%", "ver_b@0.001%"}, "0.01%"},
+		{[]string{"versions", "deploy", "ver_a@95%foo", "ver_b"}, "invalid percentage"},
+		{[]string{"versions", "deploy", "ver_a", "ver_b", "ver_c"}, "one or two"},
 		{[]string{"deploy", "--dry-run", "--build", "bld_fixture"}, "cannot combine"},
 		{[]string{"deploy", "--dry-run", "--path", "./dist"}, "cannot combine"},
 		{[]string{"deploy", "--path", "./dist", "--build", "bld_fixture"}, "cannot be combined with --path"},
@@ -204,5 +208,39 @@ printf '%s\n' "$@"
 	want := strings.Join([]string{"--yes", dryRunWrangler, "deploy", "--dry-run", "--config", config, "--outdir", outdir, ""}, "\n")
 	if out.String() != want {
 		t.Fatalf("Wrangler arguments: got %q, want %q", out.String(), want)
+	}
+}
+
+func TestDeployVersionPercentages(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"single", []string{"stable"}, `"version_id":"stable"`},
+		{"split and message", []string{"stable@94.875%", "candidate@5.125", "-y", "--message", "Start rollout"}, `"message":"Start rollout","versions":[{"version_id":"stable","percentage":94.875},{"version_id":"candidate","percentage":5.125}]`},
+		{"omitted weight", []string{"--yes", "stable", "--worker", "wrk_a", "candidate@0%"}, `"versions":[{"version_id":"stable","percentage":100},{"version_id":"candidate","percentage":0}]`},
+		{"equal split", []string{"stable", "candidate"}, `"versions":[{"version_id":"stable","percentage":50},{"version_id":"candidate","percentage":50}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "POST" || r.URL.Path != "/api/v1/orgs/org-a/workers/wrk_a/environments/production/deployments" {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+				}
+				raw, err := io.ReadAll(r.Body)
+				if err != nil || !strings.Contains(string(raw), tc.want) {
+					t.Errorf("deployment request = %s, err = %v, want %s", raw, err, tc.want)
+				}
+				fmt.Fprint(w, `{"id":"op_fixture","state":"queued"}`)
+			}))
+			defer server.Close()
+			t.Setenv("KRUN_ENDPOINT", server.URL)
+			t.Setenv("KRUN_TOKEN", "fixture-ci-key")
+			args := append([]string{"versions", "deploy"}, tc.args...)
+			args = append(args, "--org", "org-a", "--worker", "wrk_a", "--env", "production", "--revision", "7", "--wait=false", "--profile", filepath.Join(t.TempDir(), "profile.yaml"))
+			if err := Run(t.Context(), args, strings.NewReader(""), io.Discard, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

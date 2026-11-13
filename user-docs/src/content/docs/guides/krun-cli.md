@@ -218,7 +218,41 @@ krun workers invoke --worker WORKER_ID --env production --path /
 
 `build start` 返回构建 ID，`build wait` 在构建失败时以非零状态退出。使用返回的操作 ID 执行 `deployments wait --worker WORKER_ID --operation OPERATION_ID`，可以继续等待。用 `deployments status` 查询目标环境当前提交与已确认的版本。
 
-需要先审核版本再发布时，用 `versions upload --worker WORKER_ID --env production` 构建已绑定的仓库并上传版本，或附加 `--build BUILD_ID` 复用已有构建。上传版本不会改变流量。审核后执行 `versions deploy VERSION_ID@100% --worker WORKER_ID --env production`。省略 `@100%` 同样会切换全部流量；当前只支持一个版本。回滚用 `rollback VERSION_ID`，目标必须是在该环境成功发布过的版本。
+需要先审核版本再发布时，用 `versions upload --worker WORKER_ID --env production` 构建已绑定的仓库并上传版本，或附加 `--build BUILD_ID` 复用已有构建。上传版本不会改变流量。
+
+### 双版本灰度
+
+用 `krun versions list --worker WORKER_ID --env production` 获取同一环境的两个版本 ID。将下面的 `WORKER_ID`、`STABLE_VERSION` 和 `CANDIDATE_VERSION` 替换为实际值。沿用前文的浏览器登录，也可以在 CI 设置 `KRUN_ENDPOINT` 和 `KRUN_TOKEN`。发布与查询需要 `worker.publish`、`worker.read` 和 `worker.version.read`，回滚需要 `worker.rollback`。API Key 的 [策略示例](#管理-api-key) 可限制到目标 Worker 和环境。
+
+在 CI 只执行已上传版本的发布、查询和回滚时，可将下面的策略保存为 `rollout-policy.yaml`。将 `ORG_ID` 和 `WORKER_ID` 换成实际资源 ID，再用有权创建组织 Key 的身份运行 `krun keys create --org ORG_ID --name rollout --expires 24h --policy rollout-policy.yaml`。将返回的 Key 保存为 CI 的 `KRUN_TOKEN`。
+
+```yaml
+schema_version: 1
+statements:
+  - effect: allow
+    actions: [worker.read, worker.version.read, worker.publish, worker.rollback]
+    resource:
+      kind: worker
+      organization_id: ORG_ID
+      ids: [WORKER_ID]
+    conditions:
+      environments: [production]
+```
+
+```sh
+krun versions deploy "STABLE_VERSION@100%" "CANDIDATE_VERSION@0%" --worker WORKER_ID --env production --yes
+krun versions deploy "STABLE_VERSION@94.875%" "CANDIDATE_VERSION@5.125%" --worker WORKER_ID --env production --yes --message "Start rollout"
+krun deployments status --worker WORKER_ID --env production
+krun deployments list --worker WORKER_ID --env production
+krun versions deploy "CANDIDATE_VERSION@100%" --worker WORKER_ID --env production --yes
+krun rollback STABLE_VERSION --worker WORKER_ID --env production --yes --message "Restore stable"
+```
+
+每次部署提交完整的目标列表。一到两个版本的百分比合计为 100，支持 0% 和最多三位小数，最小非零比例为 0.01%。`%` 可以省略。省略权重的版本平分剩余流量，例如 `STABLE_VERSION CANDIDATE_VERSION@5%` 等于 95% 和 5%，两个都省略时各 50%。单独传一个版本时默认 100%。`--yes` 和 `-y` 可沿用 Wrangler 的命令写法，krun 本身直接提交。
+
+发布默认等到操作的 `state` 为 `available`。使用 `deployments status` 核对环境当前提交的 `versions[].percentage`，用 `deployments list` 或 `deployments view DEPLOYMENT_ID --worker WORKER_ID` 核对历史权重和说明。使用 `--wait=false` 提交后，可从结果取 `id` 并传给 `deployments wait --worker WORKER_ID --operation OPERATION_ID`。回滚目标必须在该环境成功发布过。
+
+若 CLI 报 `traffic percentages must total 100%`，修正两项比例后重试。HTTP 404 `RESOURCE_NOT_FOUND` 表示版本不在目标 Worker 和环境或当前身份无法访问，先用 `versions list` 核对。HTTP 409 `REVISION_CONFLICT` 表示并发发布改变了环境，重新查看 `deployments status` 再提交。生产 0% 定向验证和分桶 Header 见 [Wrangler 版本指南](/docs/guides/cloudflare-workers.html#4-管理版本和预览)。
 
 要预检本地源码，在项目目录执行：
 

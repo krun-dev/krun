@@ -2,9 +2,6 @@ package workers
 
 import (
 	"encoding/json"
-	"math/big"
-	"strconv"
-	"strings"
 
 	"github.com/krun-dev/krun/internal/domain"
 )
@@ -29,30 +26,15 @@ func DeploymentWeights(input []DeploymentPercentage) ([]domain.WorkerVersionWeig
 		if item.ID == "" || len(out) > 0 && item.ID == out[0].Version {
 			return nil, invalid
 		}
-		raw := string(item.Percentage)
-		var decimal big.Rat
-		if len(raw) == 0 || len(raw) > 24 {
+		weight, ok := domain.ParseWorkerPercentage(string(item.Percentage))
+		if !ok {
 			return nil, invalid
 		}
-		if i := strings.IndexAny(raw, "eE"); i >= 0 {
-			exponent, err := strconv.Atoi(raw[i+1:])
-			if err != nil || exponent < -12 || exponent > 12 {
-				return nil, invalid
-			}
-		}
-		if _, ok := decimal.SetString(raw); !ok {
+		if weight > 0 && weight < domain.WorkerMinPositiveWeight {
 			return nil, invalid
 		}
-		decimal.Mul(&decimal, big.NewRat(1000, 1))
-		if !decimal.IsInt() || !decimal.Num().IsInt64() {
-			return nil, invalid
-		}
-		weight := decimal.Num().Int64()
-		if weight < 0 || weight > domain.WorkerFullWeight || weight > 0 && weight < 10 {
-			return nil, invalid
-		}
-		total += int(weight)
-		out = append(out, domain.WorkerVersionWeight{Version: item.ID, Weight: int(weight)})
+		total += weight
+		out = append(out, domain.WorkerVersionWeight{Version: item.ID, Weight: weight})
 	}
 	if total != domain.WorkerFullWeight {
 		return nil, invalid

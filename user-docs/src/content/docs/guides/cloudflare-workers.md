@@ -117,6 +117,16 @@ npx wrangler@4.155.0 versions deploy VERSION_ID@100% --yes
 
 上传版本不会改变当前生产流量；部署命令将流量全部切换到指定版本。
 
+用 `versions list` 查询已上传版本。将下面的 `STABLE_VERSION` 和 `CANDIDATE_VERSION` 换成同一 Worker 的两个版本 ID：
+
+```sh
+npx wrangler@4.155.0 versions deploy "STABLE_VERSION@100%" "CANDIDATE_VERSION@0%" --yes
+npx wrangler@4.155.0 versions deploy "STABLE_VERSION@95%" "CANDIDATE_VERSION@5%" --yes
+npx wrangler@4.155.0 deployments status
+```
+
+可发送 `Krun-Workers-Version-Key` 或 `Cloudflare-Workers-Version-Key` 做会话分桶。两个头同时出现时以 krun 为准。定向验证 0% 版本时，在 Worker 域名的请求上发送 `Cloudflare-Workers-Version-Overrides: WORKER_NAME="CANDIDATE_VERSION"` 和有目标环境 `worker.publish` 权限的 `Authorization: Bearer …`，并检查响应的 `X-Krun-Version`。如果业务也需要 `Authorization`，把发布凭据放到 `Krun-Workers-Verify-Authorization`。两条 CLI 路径共用发布记录，原生命令见 [krun CLI 双版本灰度](/docs/guides/krun-cli.html#双版本灰度)。
+
 也可以创建独立预览，检查修改：
 
 ```sh

@@ -113,6 +113,9 @@ npx wrangler@4.155.0 deployments status
 npx wrangler@4.155.0 rollback "$STABLE_VERSION" --yes --message "Restore stable"
 ```
 
+krun CLI 同样支持 `versions deploy VERSION_ID@PERCENTAGE%` 的双版本语法，查询与回滚示例见
+[krun CLI 双版本灰度](../user-docs/src/content/docs/guides/krun-cli.md#双版本灰度)。
+
 Cloudflare 协议使用 `strategy: "percentage"` 和 `versions` 列表。最多两个同一环境的版本，
 百分比合计 100，0% 版本可定向验证。非法权重或重复版本返回 HTTP 422 / Cloudflare 错误
 `10021`（`UNSUPPORTED_DEPLOYMENT`）。跨 Worker 的版本返回 HTTP 404 / `10007`。

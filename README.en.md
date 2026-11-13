@@ -14,6 +14,7 @@ krun is pre-launch. It currently supports running and managing Workers, object s
 
 - Create Workers, build and release versions, and manage environments, domains, and resource pools in the console.
 - Deploy Workers through supported Cloudflare APIs and Wrangler workflows.
+- Use krun CLI or upstream Wrangler for two-version percentage rollouts, promotion, and rollback. [krun CLI guide](user-docs/src/content/docs/guides/krun-cli.md#双版本灰度)
 - Bind logical buckets backed by S3-compatible storage to Workers and manage objects in the console.
 - Manage access through organizations, members, roles, and API keys, and manage identities and organizations from the CLI.
 
