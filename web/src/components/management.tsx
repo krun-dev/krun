@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   ArrowRight,
+  Copy,
   LoaderCircle,
   Plus,
   ShieldAlert,
@@ -177,6 +178,47 @@ export function ID({ value }: { value: string }) {
   useTranslation();
   return <code className="break-all text-[11px] text-muted-foreground">{value}</code>;
 }
+function ambiguousNames(entries: Iterable<readonly [string, string]>) {
+  const idsByName = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  for (const [id, name] of entries) {
+    const other = idsByName.get(name);
+    if (other && other !== id) ambiguous.add(name);
+    idsByName.set(name, id);
+  }
+  return ambiguous;
+}
+
+function CopyID({
+  value,
+  label,
+  notify,
+}: {
+  value: string;
+  label: string;
+  notify: Props["notify"];
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      title={value}
+      aria-label={label}
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(value);
+          notify(t("已复制"));
+        } catch {
+          notify(t("复制失败，请手动复制。") + " " + value);
+        }
+      }}
+    >
+      <Copy size={14} />
+    </Button>
+  );
+}
+
 export function Confirm({
   label,
   description,
@@ -247,6 +289,22 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
   const { data, error, loading } = useData<List<User | Group | Assignment>>(
     p.base + "/" + (section === "roles" ? "role-assignments" : section),
     p.refresh,
+  );
+  const groups = section === "groups" ? ((data?.items as Group[] | undefined) ?? []) : [];
+  const ambiguousGroups = ambiguousNames(groups.map((group) => [group.id, group.name]));
+  const ambiguousMembers = new Map(
+    groups.map((group) => [group.id, ambiguousNames(Object.entries(group.member_names ?? {}))]),
+  );
+  const assignments = section === "roles" ? ((data?.items as Assignment[] | undefined) ?? []) : [];
+  const ambiguousSubjects = ambiguousNames(
+    assignments.flatMap((item) =>
+      item.subject_name ? [[item.subject_id, item.subject_name] as const] : [],
+    ),
+  );
+  const ambiguousScopes = ambiguousNames(
+    assignments.flatMap((item) =>
+      item.scope_name ? [[item.scope_id, item.scope_name] as const] : [],
+    ),
   );
   const [open, setOpen] = useState(false),
     [busy, setBusy] = useState(false),
@@ -324,7 +382,6 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
   return (
     <>
       <PageHeader
-        eyebrow={t("Identity & access")}
         title={l.title}
         description={l.description}
         action={
@@ -429,7 +486,7 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
         />
       ) : section === "groups" ? (
         <div className="grid gap-5 md:grid-cols-2">
-          {(data.items as Group[]).map((g) => (
+          {groups.map((g) => (
             <Card
               key={g.id}
               className="gap-0 shadow-none"
@@ -441,13 +498,18 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
                       <UsersRound size={20} />
                     </div>
                     <div>
-                      <CardTitle className="text-base">{g.name}</CardTitle>
+                      <div className="flex items-center gap-1">
+                        <CardTitle className="break-all text-base">{g.name}</CardTitle>
+                        <CopyID
+                          value={g.id}
+                          label={t("复制用户组 ID")}
+                          notify={p.notify}
+                        />
+                      </div>
                       <CardDescription className="mt-1">
-                        {t("{{count}} 位成员 · 修订 {{revision}}", {
-                          count: g.members.length,
-                          revision: g.revision,
-                        })}
+                        {t("{{count}} 位成员", { count: g.members.length })}
                       </CardDescription>
+                      {ambiguousGroups.has(g.name) && <ID value={g.id} />}
                     </div>
                   </div>
                   <Confirm
@@ -458,28 +520,40 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
                     }
                   />
                 </div>
-                <ID value={g.id} />
               </CardHeader>
               <CardContent className="grid gap-3 border-t pt-4">
                 {g.members.length ? (
-                  g.members.map((u) => (
-                    <div
-                      key={u}
-                      className="flex items-center justify-between gap-2 rounded-md bg-secondary/60 px-3 py-1"
-                    >
-                      <ID value={u} />
-                      <Confirm
-                        label={t("移出")}
-                        description={t("用户将失去通过此组取得的权限，其他直接角色授权保留。")}
-                        onConfirm={() =>
-                          run(
-                            () => api(`${p.base}/groups/${g.id}/members/${u}`, "DELETE"),
-                            t("成员已移出。"),
-                          )
-                        }
-                      />
-                    </div>
-                  ))
+                  g.members.map((u) => {
+                    const name = g.member_names?.[u];
+                    return (
+                      <div
+                        key={u}
+                        className="flex items-center justify-between gap-2 rounded-md bg-secondary/60 px-3 py-1"
+                      >
+                        <div className="flex min-w-0 items-center gap-1">
+                          <div className="grid">
+                            {name && <span className="break-all text-sm">{name}</span>}
+                            {(!name || ambiguousMembers.get(g.id)?.has(name)) && <ID value={u} />}
+                          </div>
+                          <CopyID
+                            value={u}
+                            label={t("复制用户 ID")}
+                            notify={p.notify}
+                          />
+                        </div>
+                        <Confirm
+                          label={t("移出")}
+                          description={t("用户将失去通过此组取得的权限，其他直接角色授权保留。")}
+                          onConfirm={() =>
+                            run(
+                              () => api(`${p.base}/groups/${g.id}/members/${u}`, "DELETE"),
+                              t("成员已移出。"),
+                            )
+                          }
+                        />
+                      </div>
+                    );
+                  })
                 ) : (
                   <p className="py-3 text-xs text-muted-foreground">
                     {t("还没有成员。添加成员后，再为此组分配角色。")}
@@ -514,7 +588,7 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
         </div>
       ) : (
         <DataTable
-          rows={data.items as Assignment[]}
+          rows={assignments}
           getKey={(a) => a.assignment_id}
           columns={[
             {
@@ -528,7 +602,21 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
                     {a.subject_kind === "group" ? t("用户组") : t("用户")}
                   </Badge>
                   <div>
-                    <ID value={a.subject_id} />
+                    <div className="flex items-center gap-1">
+                      <div className="grid">
+                        {a.subject_name && (
+                          <span className="break-all text-sm">{a.subject_name}</span>
+                        )}
+                        {(!a.subject_name || ambiguousSubjects.has(a.subject_name)) && (
+                          <ID value={a.subject_id} />
+                        )}
+                      </div>
+                      <CopyID
+                        value={a.subject_id}
+                        label={t("复制授权对象 ID")}
+                        notify={p.notify}
+                      />
+                    </div>
                   </div>
                 </div>
               ),
@@ -549,7 +637,21 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
               render: (a) => (
                 <div>
                   <p className="text-xs">{resourceLabel(a.scope_kind)}</p>
-                  <ID value={a.scope_id} />
+                  {a.scope_kind !== "system" && (
+                    <div className="flex items-center gap-1">
+                      <div className="grid">
+                        {a.scope_name && <span className="break-all text-sm">{a.scope_name}</span>}
+                        {(!a.scope_name || ambiguousScopes.has(a.scope_name)) && (
+                          <ID value={a.scope_id} />
+                        )}
+                      </div>
+                      <CopyID
+                        value={a.scope_id}
+                        label={t("复制授权范围 ID")}
+                        notify={p.notify}
+                      />
+                    </div>
+                  )}
                 </div>
               ),
             },
@@ -567,7 +669,7 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
                 <div className="grid justify-items-start gap-1">
                   <Confirm
                     label={t("撤销")}
-                    description={t("撤销后，下一次请求立即使用新的授权状态。")}
+                    description={t("该用户或用户组将失去此项授权。")}
                     disabled={a.revoke_blocked}
                     onConfirm={() =>
                       run(
@@ -632,7 +734,11 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
                       ? t("用户组 ID")
                       : t("本地用户 ID")
                   }
-                  hint={t("使用平台生成的准确 ID，邮箱和显示名不作为身份凭据。")}
+                  hint={t(
+                    section === "roles" && subjectKind === "group"
+                      ? "在用户组页面点击复制用户组 ID。"
+                      : "请填写用户从组织概览复制的本地用户 ID。",
+                  )}
                 >
                   <Input
                     required
@@ -654,7 +760,7 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
                               key={r}
                               value={r}
                             >
-                              {roleLabel(r)} ({r})
+                              {roleLabel(r)}
                             </option>
                           ),
                         )}
@@ -718,7 +824,15 @@ export function IAMPage({ section, ...p }: Props & { section: "members" | "group
   );
 }
 
-export function CheckPage({ scope, system }: { scope: string; system: boolean }) {
+export function CheckPage({
+  scope,
+  system,
+  credentialKind,
+}: {
+  scope: string;
+  system: boolean;
+  credentialKind: string;
+}) {
   useTranslation();
   const [kind, setKind] = useState(system ? "system" : "organization"),
     [id, setID] = useState(scope),
@@ -741,15 +855,13 @@ export function CheckPage({ scope, system }: { scope: string; system: boolean })
   return (
     <>
       <PageHeader
-        eyebrow={t("Permission explorer")}
         title={t("权限检查")}
-        description={t("检查当前登录身份对指定资源与环境的访问能力。实际操作仍会重新授权。")}
+        description={t("检查当前账号能否在指定环境中对资源执行某项操作。")}
       />
       <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
         <Card className="shadow-none">
           <CardHeader>
-            <CardTitle className="text-base">{t("构造检查请求")}</CardTitle>
-            <CardDescription>{t("资源的组织归属由服务端解析。")}</CardDescription>
+            <CardTitle className="text-base">{t("检查对象")}</CardTitle>
           </CardHeader>
           <CardContent>
             <form
@@ -786,7 +898,7 @@ export function CheckPage({ scope, system }: { scope: string; system: boolean })
                       key={k}
                       value={k}
                     >
-                      {resourceLabel(k)} ({k})
+                      {resourceLabel(k)}
                     </option>
                   ))}
                 </SelectField>
@@ -836,8 +948,7 @@ export function CheckPage({ scope, system }: { scope: string; system: boolean })
         </Card>
         <Card className="shadow-none">
           <CardHeader>
-            <CardTitle className="text-base">{t("决策结果")}</CardTitle>
-            <CardDescription>{t("默认拒绝 · 用户与凭据分别求值")}</CardDescription>
+            <CardTitle className="text-base">{t("检查结果")}</CardTitle>
           </CardHeader>
           <CardContent>
             {error ? (
@@ -861,31 +972,23 @@ export function CheckPage({ scope, system }: { scope: string; system: boolean })
                   <h3 className="text-xl font-semibold">
                     {decision.allowed ? t("允许访问") : t("拒绝访问")}
                   </h3>
-                  <p className="mt-2 font-mono text-xs text-muted-foreground">
-                    {t(decision.reason === "ALLOWED" ? "权限已允许" : "没有访问权限")} (
-                    {decision.reason})
-                  </p>
+                  {decision.reason === "OAUTH_SCOPE" && (
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      {t("当前登录凭据未获准执行此操作。")}
+                    </p>
+                  )}
                 </div>
-                <div className="grid gap-4 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">{t("用户角色检查")}</span>
-                    <span>{decision.user_allowed ? t("允许") : t("拒绝")}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">{t("凭据限制检查")}</span>
-                    <span>{decision.key_allowed ? t("通过") : t("拒绝")}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">{t("权限修订")}</span>
-                    <code>{decision.revision}</code>
-                  </div>
-                </div>
+                {!decision.allowed && decision.reason !== "OAUTH_SCOPE" && (
+                  <ul className="grid gap-2 text-sm">
+                    {!decision.user_allowed && <li>{t("当前账号未获准执行此操作。")}</li>}
+                    {credentialKind === "api_key" && !decision.key_allowed && (
+                      <li>{t("当前 API Key 未获准执行此操作。")}</li>
+                    )}
+                  </ul>
+                )}
               </div>
             ) : (
-              <Empty
-                title={t("等待检查")}
-                description={t("输入资源和动作，查看当前身份的授权决策。")}
-              />
+              <Empty title={t("等待检查")} />
             )}
           </CardContent>
         </Card>
@@ -907,7 +1010,6 @@ export function UsersPage({
   return (
     <>
       <PageHeader
-        eyebrow={t("System administration")}
         title={t("系统用户")}
         description={t("不同来源的账号独立保存权限。停用用户会撤销已有会话并阻止其 Key 访问。")}
       />

@@ -153,7 +153,10 @@ export function CreateVersionDialog({
             </div>
           ) : null}
         </dl>
-        <VersionConfiguration config={env} />
+        <div className="grid gap-2">
+          <h3 className="text-sm font-medium">{t("环境配置")}</h3>
+          <VersionConfiguration config={env} />
+        </div>
         <Field label={t("版本标签（可选）")}>
           <Input
             value={tag}

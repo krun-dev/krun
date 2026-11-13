@@ -3,12 +3,7 @@ import type { Version } from "@/lib/workers";
 
 type Configuration = Pick<
   Version,
-  | "configuration_revision"
-  | "variables"
-  | "r2_buckets"
-  | "hyperdrive_bindings"
-  | "version_metadata"
-  | "assets_binding"
+  "variables" | "r2_buckets" | "hyperdrive_bindings" | "version_metadata" | "assets_binding"
 > & { secret_names?: string[]; secret_digest?: string };
 
 export function VersionConfiguration({ config }: { config: Configuration }) {
@@ -16,9 +11,6 @@ export function VersionConfiguration({ config }: { config: Configuration }) {
   const hyperdrive = Object.entries(config.hyperdrive_bindings || {});
   return (
     <div className="grid gap-3 text-sm">
-      <p className="text-muted-foreground">
-        {t("环境配置")} · r{config.configuration_revision}
-      </p>
       <details className="rounded-md border p-3">
         <summary className="cursor-pointer font-medium">
           {t("普通变量（{{count}}）", { count: Object.keys(config.variables || {}).length })}

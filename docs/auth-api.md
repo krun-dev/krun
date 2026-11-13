@@ -168,9 +168,11 @@ Key 范围和撤权检查逐请求生效。`/orgs/:org/models` 和 CLI `krun mod
 | GET /system/audit、/orgs/:org/audit | S K | audit.read，游标分页，仅最近 7 天；limit 默认 50、最大 500 |
 | GET /system/audit/export、/orgs/:org/audit/export | S K | audit.read，下载当前范围的 CSV，默认脱敏 |
 
+用户组列表的 `member_names` 按成员 ID 提供已知的显示名称。角色授权列表中的 `subject_name` 和 `scope_name` 为可选的显示名称。CLI 和 API 仍使用原有 ID 字段定位成员、用户组和授权范围。
+
 JSON DTO 拒绝未知字段和重复键，正文上限 1 MiB。资源/组/Key/Assignment 的更新需要 expected_revision，不匹配 409。创建返回稳定随机 ID；删除后不会复用。名单、组织成员和组写入读取最新事实，禁止跨组织组/角色；错误的用户或资源不会被隐式创建。
 
-控制台依据组织权限接口显示菜单、概览快捷入口并限制页面访问；「平台管理」仅对系统管理员开放，包含系统用户、全平台审计及跨组织的 Worker、Bucket 和 API Key 清单。管理员可以在平台管理中打开所属组织允许访问的 Worker 和 Bucket，详情和操作使用对应的组织接口。切换组织、完成修改或重新聚焦窗口时刷新权限，加载失败时关闭组织功能入口。页面权限仅用于界面显示，业务接口仍逐请求授权。
+控制台依据组织权限接口显示菜单并限制页面访问；「平台管理」仅对系统管理员开放，包含系统用户、全平台审计及跨组织的 Worker、Bucket 和 API Key 清单。管理员可以在平台管理中打开所属组织允许访问的 Worker 和 Bucket，详情和操作使用对应的组织接口。切换组织、完成修改或重新聚焦窗口时刷新权限，加载失败时关闭组织功能入口。页面权限仅用于界面显示，业务接口仍逐请求授权。
 
 主配置的 `organization_self_service` 控制自助创建，示例配置显式开启；省略或设为 `false` 时仅系统管理员可创建。API Key 不允许创建组织。创建者不会获得系统权限，也不会获得其他组织的权限。
 

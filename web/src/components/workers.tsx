@@ -62,7 +62,15 @@ import { Empty, Field, Loading, PageHeader, SelectField } from "@/components/com
 import { cn } from "@/lib/utils";
 import { RepositoryBuild, RepositorySettings } from "@/components/workers-repository";
 
-import { Status, artifactColors, artifactIcons, idempotency, workerURL } from "./workers/shared";
+import {
+  Status,
+  artifactColors,
+  artifactIcons,
+  idempotency,
+  operationLabel,
+  workerURL,
+} from "./workers/shared";
+import { VersionConfiguration } from "./workers/version-configuration";
 import { OperationPanel, VersionSummary } from "./workers/version";
 import { WorkerDomains } from "./workers/domains";
 import { EnvironmentSettings, Invocation } from "./workers/environment";
@@ -280,7 +288,6 @@ export function WorkersPage({
   return (
     <>
       <PageHeader
-        eyebrow="WORKERS"
         title={t("Workers")}
         description={t("构建代码，选择环境发布，并查看实际运行结果。")}
         action={
@@ -683,10 +690,7 @@ function WorkerDetail({
       clearTimeout(timer);
     };
   }, [base, inspectedBuildID, pollSeconds]);
-  const [rollback, setRollback] = useState<{
-    id: string;
-    revision: number;
-  } | null>(null);
+  const [rollback, setRollback] = useState<string | null>(null);
   const [previewDialog, setPreviewDialog] = useState(false);
   const [previewName, setPreviewName] = useState("");
   const [previewDelete, setPreviewDelete] = useState<string | null>(null);
@@ -894,11 +898,15 @@ function WorkerDetail({
                         : t("未发布")}
                 </Badge>
               </div>
-              <div className="my-3 text-sm">
-                {t("Version")} r{e.deployment_revision}{" "}
-                <span className="text-muted-foreground">· {shortID(e.version_id)}</span>
-              </div>
-              <div className="grid gap-1">
+              {e.confirmed_version_id && (
+                <p className="mt-3 break-all text-xs text-muted-foreground">
+                  {t("当前生效版本")} ·{" "}
+                  <span title={e.confirmed_version_id}>
+                    {data.versions[e.confirmed_version_id]?.tag || shortID(e.confirmed_version_id)}
+                  </span>
+                </p>
+              )}
+              <div className="mt-3 grid gap-1">
                 {(e.hosts || []).map((host, i) => {
                   const d = domains.find((x) => x.id === (e.domains || [])[i]);
                   const text = d?.label ? `${host}（${d.label}）` : host;
@@ -1146,10 +1154,15 @@ function WorkerDetail({
                           className="flex flex-wrap items-center justify-between gap-3 border-t py-3 first:border-0"
                         >
                           <div>
-                            <span className="font-medium">r{h.revision}</span>{" "}
-                            <code className="ml-2 text-xs">{shortID(h.version_id)}</code>
+                            <span
+                              className="break-all text-sm font-medium"
+                              title={h.version_id}
+                            >
+                              {data.versions[h.version_id]?.tag || shortID(h.version_id)}
+                            </span>
                             <p className="mt-1 text-xs text-muted-foreground">
-                              {h.kind} · {new Date(h.time).toLocaleString()}
+                              {operationLabel(h.kind)} ·{" "}
+                              <time dateTime={h.time}>{new Date(h.time).toLocaleString()}</time>
                             </p>
                           </div>
                           <Button
@@ -1158,12 +1171,7 @@ function WorkerDetail({
                             disabled={
                               rollbackBusy || !env.enabled || env.version_id === h.version_id
                             }
-                            onClick={() =>
-                              setRollback({
-                                id: h.version_id,
-                                revision: h.revision,
-                              })
-                            }
+                            onClick={() => setRollback(h.version_id)}
                           >
                             {t("回滚到此版本")}
                           </Button>
@@ -1402,7 +1410,7 @@ function WorkerDetail({
           <DialogHeader>
             <DialogTitle>{t("发布构建版本")}</DialogTitle>
             <DialogDescription>
-              {t("选用成功制品与目标环境当前配置，候选验证通过后提交发布。")}
+              {t("使用所选构建和目标环境的配置。部署生效后会切换线上流量。")}
             </DialogDescription>
           </DialogHeader>
           <Field label={t("目标环境")}>
@@ -1422,12 +1430,22 @@ function WorkerDetail({
                 ))}
             </SelectField>
           </Field>
-          <p className="text-sm">
-            {shortID(publish?.id)} → {env?.name} / r{env?.deployment_revision}
-          </p>
-          <pre className="max-h-40 overflow-auto rounded-md bg-secondary p-3 text-xs">
-            {JSON.stringify(env?.variables, null, 2)}
-          </pre>
+          {publish && (
+            <p className="break-all text-sm">
+              {t("来源构建")} · <code title={publish.id}>{shortID(publish.id)}</code>
+              {publish.repository_source && (
+                <span className="text-muted-foreground"> · {publish.repository_source.ref}</span>
+              )}
+            </p>
+          )}
+          {env && (
+            <details className="rounded-md border p-3">
+              <summary className="cursor-pointer text-sm">{t("环境配置")}</summary>
+              <div className="mt-3">
+                <VersionConfiguration config={env} />
+              </div>
+            </details>
+          )}
           <Button
             disabled={busy || active || !env?.enabled}
             onClick={() => {
@@ -1448,12 +1466,26 @@ function WorkerDetail({
           <DialogHeader>
             <DialogTitle>{t("回滚历史版本")}</DialogTitle>
             <DialogDescription>
-              {t("恢复该历史 Version 的代码和变量，仍需验证并等待生效。")}
+              {t("回滚生效后，目标环境将恢复所选版本的代码和配置。")}
             </DialogDescription>
           </DialogHeader>
-          <p className="text-sm">
-            {env?.name} → r{rollback?.revision} · {shortID(rollback?.id)}
-          </p>
+          <dl className="grid gap-2 rounded-md bg-secondary p-3 text-sm">
+            <div className="flex justify-between gap-2">
+              <dt>{t("目标环境")}</dt>
+              <dd className="break-all">{env?.name}</dd>
+            </div>
+            {rollback && (
+              <div className="flex justify-between gap-2">
+                <dt>{t("目标版本")}</dt>
+                <dd
+                  className="break-all"
+                  title={rollback}
+                >
+                  {data.versions[rollback]?.tag || rollback}
+                </dd>
+              </div>
+            )}
+          </dl>
           <Button
             disabled={busy}
             onClick={async () => {
@@ -1464,7 +1496,7 @@ function WorkerDetail({
                   base + "/environments/" + env.name + "/rollbacks",
                   "POST",
                   {
-                    version_id: rollback.id,
+                    version_id: rollback,
                     expected_revision: env.deployment_revision,
                     idempotency_key: idempotency(),
                   },

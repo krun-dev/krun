@@ -411,7 +411,8 @@ test("create, find after refresh, inspect and deploy a frozen version", async ({
   expect(state.deploys[0]).toMatchObject({ version_id: "version-candidate", expected_revision: 3 });
   expect(state.deploys[0].build_id).toBeUndefined();
   await expect(candidate).toContainText("部署中");
-  await expect(page.getByText("op-candidate · publish", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "发布进度 · production" })).toBeVisible();
+  await expect(page.getByText("op-candidate · publish", { exact: true })).toHaveCount(0);
   await expect(page.getByText("待部署版本已创建，线上部署未改变。", { exact: true })).toHaveCount(
     0,
   );
@@ -533,6 +534,12 @@ test("direct publishing stays available without creating an undeployed version f
   expect(state.creates).toHaveLength(0);
   await page.getByRole("button", { name: "发布", exact: true }).first().click();
   const confirm = page.getByRole("dialog", { name: "发布构建版本", exact: true });
+  await expect(confirm.getByRole("combobox", { name: "目标环境" })).toHaveValue("production");
+  await expect(confirm.getByText("build-candidate", { exact: true })).toBeVisible();
+  await expect(confirm).not.toContainText("/ r3");
+  await confirm.getByText("环境配置", { exact: true }).click();
+  await confirm.getByText("普通变量（1）", { exact: true }).click();
+  await expect(confirm.getByText(/"MODE": "reviewed"/)).toBeVisible();
   await confirm.getByRole("button", { name: "确认发布", exact: true }).click();
   await expect(confirm).toHaveCount(0);
   expect(state.creates).toHaveLength(0);
@@ -584,7 +591,7 @@ test("versions and deployments paginate independently and open version details o
   await deployments.getByRole("button", { name: "version-page-024", exact: true }).click();
   const detail = page.getByRole("dialog", { name: "版本详情", exact: true });
   await expect(detail).toContainText("Release Author");
-  await expect(detail).toContainText("author-123");
+  await expect(detail).not.toContainText("author-123");
   await expect(detail).toContainText("Release message 24");
   await expect(detail.locator("time")).toHaveAttribute("datetime", "2026-01-05T00:00:00Z");
   await expect(detail).toContainText("查看冻结配置");
@@ -634,7 +641,7 @@ test("deployment stays visible while submitting, then reports progress, failure 
   await expect(confirm.getByRole("button", { name: "提交中…", exact: true })).toBeDisabled();
   await page.keyboard.press("Escape");
   await expect(confirm).toBeVisible();
-  expect(state.deploys).toHaveLength(1);
+  await expect.poll(() => state.deploys.length).toBe(1);
   release();
   await expect(confirm).toHaveCount(0);
   await expect(
@@ -656,15 +663,13 @@ test("deployment stays visible while submitting, then reports progress, failure 
   delete operation.error;
   state.environments[0].version_id = "version-candidate";
   await page.reload();
-  await expect(
-    page.getByText("部署已提交，正在等待运行副本确认生效。", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("部署已提交，正在等待生效。", { exact: true })).toBeVisible();
   const current = page.getByRole("region", { name: "当前部署", exact: true });
   await expect(current).toContainText("正在生效的版本");
   await expect(current.getByRole("button", { name: "version-current", exact: true })).toBeVisible();
   operation.state = "available";
   state.environments[0].confirmed_version_id = "version-candidate";
-  await expect(page.getByText("部署成功，运行副本已确认生效。", { exact: true })).toBeVisible();
+  await expect(page.getByText("部署已生效。", { exact: true })).toBeVisible();
   await expect(
     current.getByRole("button", { name: "version-candidate", exact: true }),
   ).toBeVisible();

@@ -84,14 +84,7 @@ export function VersionDetails({
               </div>
               <div>
                 <dt className="text-muted-foreground">{t("保存者")}</dt>
-                <dd>
-                  {version.created_by_name || version.created_by || t("未记录")}
-                  {version.created_by_name && version.created_by ? (
-                    <span className="ml-2 break-all text-xs text-muted-foreground">
-                      {version.created_by}
-                    </span>
-                  ) : null}
-                </dd>
+                <dd>{version.created_by_name || version.created_by || t("未记录")}</dd>
               </div>
               <div>
                 <dt className="text-muted-foreground">{t("创建时间")}</dt>
@@ -153,9 +146,7 @@ export function VersionDetails({
               ) : null}
             </div>
             <div className="grid gap-2 border-t pt-3">
-              <h4 className="font-medium">
-                {t("查看冻结配置")} · r{version.configuration_revision}
-              </h4>
+              <h4 className="font-medium">{t("查看冻结配置")}</h4>
               <VersionConfiguration config={version} />
             </div>
             {operations

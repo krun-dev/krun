@@ -16,7 +16,6 @@ import { Status } from "./shared";
 export type BuildArtifact = {
   id: string;
   state: string;
-  profile: string;
   archive_sha256: string;
   archive_size_bytes: number;
   compatibility_date: string;
@@ -249,9 +248,6 @@ export function BuildInspector({
                     </Detail>
                     <Detail label={t("兼容日期")}>{artifact.compatibility_date}</Detail>
                   </div>
-                  <Detail label={t("运行配置")}>
-                    <code className="text-xs">{artifact.profile}</code>
-                  </Detail>
                   <Detail label="SHA-256">
                     <code className="text-[11px] leading-5 text-muted-foreground">
                       {artifact.archive_sha256}
@@ -278,14 +274,6 @@ export function BuildInspector({
             )}
           </aside>
         </div>
-        <details className="border-t px-5 py-4 text-xs sm:px-7">
-          <summary className="w-fit cursor-pointer text-muted-foreground transition-colors hover:text-foreground">
-            {t("原始元数据")}
-          </summary>
-          <pre className="mt-3 max-h-56 overflow-auto rounded-md border bg-secondary/40 p-4 font-mono text-[11px] leading-5">
-            {JSON.stringify({ build, artifact }, null, 2)}
-          </pre>
-        </details>
       </DialogContent>
     </Dialog>
   );

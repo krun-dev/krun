@@ -1,16 +1,10 @@
 import { Check, Circle, LoaderCircle } from "lucide-react";
 import { t } from "@/lib/i18n";
-import {
-  shortID,
-  type Build,
-  type Environment,
-  type Operation,
-  type WorkerData,
-} from "@/lib/workers";
+import { type Build, type Environment, type Operation, type WorkerData } from "@/lib/workers";
 import { Card, CardContent } from "@/components/ui/card";
 import { SelectField } from "@/components/common";
 import { cn } from "@/lib/utils";
-import { Status, stepNames, stepStates, states } from "./shared";
+import { operationLabel, Status, stepNames, stepStates, states } from "./shared";
 
 export function VersionSummary({
   build,
@@ -81,9 +75,7 @@ export function OperationPanel({
             <h3 className="font-medium">
               {t("发布进度")} · {op.environment}
             </h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {shortID(op.id)} · {op.kind}
-            </p>
+            <p className="mt-1 text-xs text-muted-foreground">{operationLabel(op.kind)}</p>
           </div>
           <Status state={op.state} />
         </div>
@@ -94,18 +86,20 @@ export function OperationPanel({
         >
           <p className={cn(op.state === "failed" && "text-destructive")}>
             {op.state === "available"
-              ? t("部署成功，运行副本已确认生效。")
+              ? t("部署已生效。")
               : op.state === "failed"
                 ? t("部署失败，请查看下方错误详情。")
                 : op.state === "superseded"
                   ? t("此部署已被后续部署替换。")
                   : op.state === "committed"
-                    ? t("部署已提交，正在等待运行副本确认生效。")
+                    ? t("部署已提交，正在等待生效。")
                     : t("部署请求已受理，正在排队或验证，请等待生效。")}
           </p>
-          <p className="break-all text-xs text-muted-foreground">
-            {t("目标版本")} · <code>{op.version_id}</code>
-          </p>
+          {op.version_id && (
+            <p className="break-all text-xs text-muted-foreground">
+              {t("目标版本")} · <code>{op.version_id}</code>
+            </p>
+          )}
           <p className="text-xs text-muted-foreground">
             {t("部署时间")} ·{" "}
             <time dateTime={op.created_at}>{new Date(op.created_at).toLocaleString()}</time>
@@ -161,7 +155,8 @@ export function OperationPanel({
                 key={o.id}
                 value={o.id}
               >
-                {o.environment} · {o.kind} · {shortID(o.id)} · {t(states[o.state] || o.state)}
+                {new Date(o.created_at).toLocaleString()} · {operationLabel(o.kind)} ·{" "}
+                {t(states[o.state] || o.state)}
               </option>
             ))}
           </SelectField>

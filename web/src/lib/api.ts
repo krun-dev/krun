@@ -129,15 +129,18 @@ export type Group = {
   scope_kind: string;
   scope_id: string;
   members: string[];
+  member_names?: Record<string, string>;
   revision: number;
 };
 export type Assignment = {
   assignment_id: string;
   subject_kind: string;
   subject_id: string;
+  subject_name?: string;
   role_id: string;
   scope_kind: string;
   scope_id: string;
+  scope_name?: string;
   conditions: { environments?: string[] };
   revision: number;
   revoke_blocked?: boolean;
