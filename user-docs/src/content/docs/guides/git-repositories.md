@@ -18,7 +18,7 @@ description: 连接 Git 平台并从仓库构建 Worker。
 
 [![1 打开代码源，2 选择已授权仓库，3 保存仓库配置](/docs/screenshots/git-repositories/worker-source.png)](/docs/screenshots/git-repositories/worker-source.png)
 
-绑定后，进入 **构建与发布 → 部署项目 → Git 仓库**，点击 **从仓库构建**，填写分支、Tag 或 Commit，再点击 **开始构建**。留空时使用绑定中的 Git ref。填写 `HEAD` 时使用仓库默认分支。构建成功后，在构建记录中点击 **发布** 并确认目标环境。
+绑定后，进入 **构建 → 部署项目 → Git 仓库**，点击 **从仓库构建**，填写分支、Tag 或 Commit，再点击 **开始构建**。留空时使用绑定中的 Git ref。填写 `HEAD` 时使用仓库默认分支。构建成功后，在构建记录中点击 **发布** 并确认目标环境。
 
 ## 使用 krun CLI 部署
 
@@ -35,7 +35,7 @@ CI 使用 API Key 登录，权限可限制到目标 Worker。[已绑定仓库的
 
 ## 未配置仓库来源
 
-如果 **代码源** 显示「管理员尚未配置 Git 仓库来源。你仍可在「构建与发布」上传本地项目。」，请让管理员为当前组织配置 Git 平台，或使用[上传部署](/docs/guides/deploy-local-project.html)。
+如果 **代码源** 显示「管理员尚未配置 Git 仓库来源。你仍可在「构建」上传本地项目。」，请让管理员为当前组织配置 Git 平台，或使用[上传部署](/docs/guides/deploy-local-project.html)。
 
 ## 授权失效
 

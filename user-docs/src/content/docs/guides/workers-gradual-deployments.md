@@ -13,9 +13,27 @@ description: 让同一个 Worker 的两个版本按百分比分担流量，验�
 
 ## 在控制台发布
 
-1. 打开目标 Worker，选中已有部署的环境。在「构建与发布」中，从候选构建的更多操作里选「创建待部署版本」。
-2. 打开「版本与部署」，找到候选版本，点「部署此版本」，填写「此版本流量百分比」。输入 `0` 可以先做定向验证，输入 `5` 会把 5% 流量交给候选版。
-3. 等发布状态显示生效后，在当前部署查看版本和比例。需要晋级时重新部署候选版并填 `100`。需要结束灰度并恢复全部流量时，在「版本与部署」重新部署稳定版，确认它接收 100%。
+**构建**负责从源码生成可发布的产物，可以直接发布，也可以保存为待部署版本。**版本与流量**管理已保存的版本，决定哪些版本承流以及各占多少。
+
+**①–③ 找到候选构建。** 打开已有部署的环境，依次点击「构建」、候选构建右侧的「⋯」、菜单中的「创建待部署版本」。
+
+[![① 点击构建，② 打开候选构建的更多操作，③ 选择创建待部署版本](/docs/screenshots/workers-gradual-deployments/01-build.png)](/docs/screenshots/workers-gradual-deployments/01-build.png)
+
+**④ 保存候选版本。** 核对目标环境，可填写标签（如 `v2`）。点击「创建待部署版本」，当前流量不会改变。
+
+[![④ 在弹窗中确认创建待部署版本](/docs/screenshots/workers-gradual-deployments/02-save.png)](/docs/screenshots/workers-gradual-deployments/02-save.png)
+
+**⑤ 选择要部署的版本。** 保存后，控制台会跳到「版本与流量」。找到带 `v2` 标签的待部署版本，点击「部署此版本」。
+
+[![⑤ 在候选版本卡片右侧点击部署此版本](/docs/screenshots/workers-gradual-deployments/03-versions.png)](/docs/screenshots/workers-gradual-deployments/03-versions.png)
+
+**⑥–⑦ 设置比例并部署。** 在「此版本流量百分比」输入 `0` 可先做定向验证，输入 `5` 则把 5% 的普通流量交给候选版。点击「确认部署」。
+
+[![⑥ 输入 5，⑦ 点击确认部署](/docs/screenshots/workers-gradual-deployments/04-percentage.png)](/docs/screenshots/workers-gradual-deployments/04-percentage.png)
+
+**⑧ 核对生效结果。** 等发布操作显示「已生效」，在「当前部署」核对「灰度版本 · 5%」。晋级时重新部署候选版并填 `100`。需要恢复时，重新部署稳定版，使其接收全部流量。
+
+[![⑧ 在当前部署确认候选版比例为 5%](/docs/screenshots/workers-gradual-deployments/05-result.png)](/docs/screenshots/workers-gradual-deployments/05-result.png)
 
 ## 从终端发布
 

@@ -22,7 +22,7 @@ description: 按 Workers + R2、PostgreSQL、Hono、Astro 和静态页面选择�
 1. 打开控制台，选择组织，进入 **Workers**，创建一个 Worker。选择适合业务的网络访问范围。
 2. 在 Worker 的环境配置中绑定仓库：来源选择 GitHub，仓库地址填写 `https://github.com/krun-dev/krun-examples`，项目目录填写上表中所选示例的目录。分支通常填写 `main`，Workers + PG使用[示例专页](/docs/guides/examples-postgres-todo.html#绑定并发布)列出的分支。
 3. 如果选择 Workers + R2，先按[分类文档](/docs/guides/examples-r2-workers.html#配置对象存储)创建桶并配置 R2 绑定；Workers + PG 按[专页](/docs/guides/examples-postgres-todo.html)创建临时库、建表并绑定 `DB`。Hono、Astro 和静态页面不需要额外资源绑定。
-4. 在 **构建与发布** 中点击 **构建新版本**，选择目标环境并开始构建。构建失败时查看构建日志。
+4. 在 **构建** 中点击 **构建新版本**，选择目标环境并开始构建。构建失败时查看构建日志。
 5. 构建成功后，选择该构建和目标环境发布，等待发布实际生效。打开目标环境显示的访问地址验证；需要从当前网络能够访问该地址。
 
 平台按项目目录中的 `wrangler.jsonc` 和锁文件安装依赖并构建；Astro 和 Object Studio 还会执行各自配置的构建命令。要修改示例，请先将仓库复制到自己的代码仓库，在绑定时填写自己的仓库地址和分支，再构建发布。

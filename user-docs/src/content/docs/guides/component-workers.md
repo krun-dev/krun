@@ -40,7 +40,7 @@ export default {
 
 ## 构建和发布
 
-支持 Wrangler 配置、JavaScript/TypeScript 模块、静态资产和已配置的自定义构建。在 **构建与发布 → 部署项目** 选择 **Git 仓库** 或 **上传部署**。指南包含适用场景、控制台与 CLI 步骤，以及验证发布的方法。[部署项目](/docs/guides/deploy-project.html)
+支持 Wrangler 配置、JavaScript/TypeScript 模块、静态资产和已配置的自定义构建。在 **构建 → 部署项目** 选择 **Git 仓库** 或 **上传部署**。指南包含适用场景、控制台与 CLI 步骤，以及验证发布的方法。[部署项目](/docs/guides/deploy-project.html)
 
 如需限定编码 Agent 的使用范围，参照 [Workers 代码兼容范围](/docs/guides/workers-runtime-compatibility.html)。
 
@@ -57,7 +57,7 @@ export default {
 Secret 引用一起保存；保存不会改变当前运行。
 
 选择配置后点击「发布并生效」，复用当前代码制品并确认发布。恢复旧配置也使用当前代码；
-要连同代码回滚，请使用「版本与部署」。首次部署需先完成一次构建，再选择该构建发布。
+要连同代码回滚，请使用「版本与流量」。首次部署需先完成一次构建，再选择该构建发布。
 当前生效标记会在运行时确认后更新。非活动配置历史保留 30 天，当前和发布中的配置继续保留。
 
 「环境管理 → 创建预览环境 → 新建预览默认配置」只决定之后新建 Preview 的初始值，已有环境各自独立。

@@ -295,7 +295,7 @@ export function VersionsPanel({
             )}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            {t("需要提前准备版本时，在“构建与发布”的更多操作中选择“创建待部署版本”。")}
+            {t("需要提前准备版本时，在“构建”的更多操作中选择“创建待部署版本”。")}
           </p>
         </div>
         <CollectionToolbar

@@ -359,7 +359,7 @@ test("create, find after refresh, inspect and deploy a frozen version", async ({
   await expect.poll(() => state.creates.length).toBe(1);
   release();
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole("tab", { name: "版本与部署", exact: true })).toHaveAttribute(
+  await expect(page.getByRole("tab", { name: "版本与流量", exact: true })).toHaveAttribute(
     "data-state",
     "active",
   );
@@ -384,7 +384,7 @@ test("create, find after refresh, inspect and deploy a frozen version", async ({
   state.environments[0].variables.MODE = "changed-after-creation";
   state.environments[0].configuration_revision = 5;
   await page.reload();
-  await expect(page.getByRole("tab", { name: "版本与部署", exact: true })).toHaveAttribute(
+  await expect(page.getByRole("tab", { name: "版本与流量", exact: true })).toHaveAttribute(
     "data-state",
     "active",
   );
@@ -491,7 +491,7 @@ test("project deployment keeps local upload available alongside Git builds", asy
   await expect(upload.getByRole("button", { name: "选择 ZIP" })).toBeEnabled();
   await git.getByRole("button", { name: "绑定代码仓库" }).click();
   await expect(page.getByText(/管理员尚未配置 Git 仓库来源/)).toBeVisible();
-  await page.getByRole("tab", { name: "构建与发布", exact: true }).click();
+  await page.getByRole("tab", { name: "构建", exact: true }).click();
   await expect(upload.getByRole("button", { name: "选择文件夹" })).toBeEnabled();
 
   state.repository = {
@@ -527,7 +527,7 @@ test("direct publishing stays available without creating an undeployed version f
     .getByRole("button", { name: /production/ })
     .first()
     .click();
-  await page.getByRole("tab", { name: "构建与发布", exact: true }).click();
+  await page.getByRole("tab", { name: "构建", exact: true }).click();
   const draft = await openCreate(page);
   await draft.getByRole("button", { name: "取消", exact: true }).click();
   expect(state.creates).toHaveLength(0);
@@ -736,7 +736,7 @@ test("deploys a saved version at a fractional canary percentage", async ({ page 
     tag: "canary",
   };
   await page.goto(origin + location);
-  await page.getByRole("tab", { name: "版本与部署", exact: true }).click();
+  await page.getByRole("tab", { name: "版本与流量", exact: true }).click();
   await page
     .getByLabel("版本 version-canary", { exact: true })
     .getByRole("button", { name: "部署此版本" })

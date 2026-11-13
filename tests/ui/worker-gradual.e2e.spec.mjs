@@ -70,7 +70,7 @@ test("UI publishes a saved version at a fractional percentage on the real runtim
     idempotency_key: randomUUID(),
   });
   await page.goto("/?page=workers&workspace=" + org.id + "&worker=" + worker.id);
-  await page.getByRole("tab", { name: "版本与部署", exact: true }).click();
+  await page.getByRole("tab", { name: "版本与流量", exact: true }).click();
   await page
     .getByLabel("版本 " + candidate.id, { exact: true })
     .getByRole("button", { name: "部署此版本", exact: true })

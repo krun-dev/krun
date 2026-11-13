@@ -959,8 +959,8 @@ function WorkerDetail({
         >
           <div className="max-w-full overflow-x-auto">
             <TabsList>
-              <TabsTrigger value="delivery">{t("构建与发布")}</TabsTrigger>
-              <TabsTrigger value="versions">{t("版本与部署")}</TabsTrigger>
+              <TabsTrigger value="delivery">{t("构建")}</TabsTrigger>
+              <TabsTrigger value="versions">{t("版本与流量")}</TabsTrigger>
               <TabsTrigger value="source">{t("代码源")}</TabsTrigger>
               <TabsTrigger value="routing">{t("路由与域名")}</TabsTrigger>
               <TabsTrigger value="configurations">{t("配置版本")}</TabsTrigger>

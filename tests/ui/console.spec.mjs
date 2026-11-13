@@ -83,7 +83,7 @@ async function waitRevision(context, revision) {
     .toBe(revision);
 }
 async function publishUI(page, context, revision) {
-  await page.getByRole("tab", { name: "构建与发布", exact: true }).click();
+  await page.getByRole("tab", { name: "构建", exact: true }).click();
   await page.getByRole("button", { name: "发布", exact: true }).first().click();
   await page
     .getByRole("dialog")
@@ -201,7 +201,7 @@ test("UI binds repository, builds, publishes and invokes a real Worker", async (
       async () => (await api(context, workerBase() + "/repository")).revision,
     )
     .toBe(1);
-  await page.getByRole("tab", { name: "构建与发布", exact: true }).click();
+  await page.getByRole("tab", { name: "构建", exact: true }).click();
   await page
     .getByRole("button", { name: /构建新版本|从仓库构建|新建构建/ })
     .first()
@@ -310,7 +310,7 @@ test("UI saves an undeployed Version and lists pinned deployments", async ({
 }) => {
   await context.addCookies(cookies);
   await page.goto(locationFor(workflow.id));
-  await page.getByRole("tab", { name: "构建与发布", exact: true }).click();
+  await page.getByRole("tab", { name: "构建", exact: true }).click();
   const before = await currentEnvironment(context);
   const upload = page.waitForResponse(
     (r) =>
@@ -335,7 +335,7 @@ test("UI saves an undeployed Version and lists pinned deployments", async ({
   expect((await currentEnvironment(context)).version_id).toBe(
     before.version_id,
   );
-  await expect(page.getByRole("tab", { name: "版本与部署", exact: true })).toHaveAttribute("data-state", "active");
+  await expect(page.getByRole("tab", { name: "版本与流量", exact: true })).toHaveAttribute("data-state", "active");
   await expect(page.getByText("ui-candidate-" + run, { exact: true })).toBeVisible();
   await expect(
     page.getByText(version.id.slice(0, 16), { exact: true }),
@@ -421,7 +421,7 @@ test("UI edits JSON values and metadata bindings, then displays immutable versio
   expect(version.variables.FLAG).toBe(false);
   expect(version.version_metadata).toBe("CF_VERSION_METADATA");
   await page.goto(locationFor(workflow.id));
-  await page.getByRole("tab", { name: "版本与部署", exact: true }).click();
+  await page.getByRole("tab", { name: "版本与流量", exact: true }).click();
   await expect(page.getByText("ui-json-v1", { exact: true })).toBeVisible();
   await expect(page.getByText("JSON configuration snapshot", { exact: true })).toBeVisible();
   await page.screenshot({ path: ".data/bindings/ui-json-version.png", fullPage: true });

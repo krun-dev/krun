@@ -152,7 +152,7 @@ export function RepositorySettings({
   if (providers !== null && providers.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        {t("管理员尚未配置 Git 仓库来源。你仍可在「构建与发布」上传本地项目。")}
+        {t("管理员尚未配置 Git 仓库来源。你仍可在「构建」上传本地项目。")}
       </p>
     );
   }
