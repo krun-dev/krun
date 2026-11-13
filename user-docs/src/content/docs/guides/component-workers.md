@@ -44,6 +44,10 @@ export default {
 
 如需限定编码 Agent 的使用范围，参照 [Workers 代码兼容范围](/docs/guides/workers-runtime-compatibility.html)。
 
+### 灰度发布
+
+同一个 Worker 环境可以让两个版本按百分比分担同一域名的流量。先保存候选版本，再从 0% 定向验证开始，确认后逐步加量。控制台、krun CLI 和 Wrangler 共用发布记录。[灰度发布操作指南](/docs/guides/workers-gradual-deployments.html)
+
 发布后可以从 Worker 详情的「指标」页查看请求数、HTTP 5xx 比例和响应延迟，并比较不同环境及版本。操作步骤见 [Workers 观测](/docs/guides/workers-observability.html)。
 
 ## 命名配置版本

@@ -252,7 +252,7 @@ krun rollback STABLE_VERSION --worker WORKER_ID --env production --yes --message
 
 发布默认等到操作的 `state` 为 `available`。使用 `deployments status` 核对环境当前提交的 `versions[].percentage`，用 `deployments list` 或 `deployments view DEPLOYMENT_ID --worker WORKER_ID` 核对历史权重和说明。使用 `--wait=false` 提交后，可从结果取 `id` 并传给 `deployments wait --worker WORKER_ID --operation OPERATION_ID`。回滚目标必须在该环境成功发布过。
 
-若 CLI 报 `traffic percentages must total 100%`，修正两项比例后重试。HTTP 404 `RESOURCE_NOT_FOUND` 表示版本不在目标 Worker 和环境或当前身份无法访问，先用 `versions list` 核对。HTTP 409 `REVISION_CONFLICT` 表示并发发布改变了环境，重新查看 `deployments status` 再提交。生产 0% 定向验证和分桶 Header 见 [Wrangler 版本指南](/docs/guides/cloudflare-workers.html#4-管理版本和预览)。
+若 CLI 报 `traffic percentages must total 100%`，修正两项比例后重试。HTTP 404 `RESOURCE_NOT_FOUND` 表示版本不在目标 Worker 和环境或当前身份无法访问，先用 `versions list` 核对。HTTP 409 `REVISION_CONFLICT` 表示并发发布改变了环境，重新查看 `deployments status` 再提交。生产 0% 定向验证和分桶 Header 见 [Workers 灰度发布](/docs/guides/workers-gradual-deployments.html#验证实际命中的版本)。
 
 要预检本地源码，在项目目录执行：
 
