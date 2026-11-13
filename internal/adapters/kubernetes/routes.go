@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 
@@ -115,6 +116,7 @@ func (k *Client) EnsureRoute(ctx context.Context, name, runtimeService string, g
 								"x-krun-version",
 								"x-forwarded-host",
 								"x-internal",
+								"x-krun-route",
 							},
 						},
 					},
@@ -170,6 +172,11 @@ func (k *Client) EnsureRoute(ctx context.Context, name, runtimeService string, g
 			BackendRefs []struct {
 				Name string `json:"name"`
 			} `json:"backendRefs"`
+			Filters []struct {
+				HeaderModifier struct {
+					Remove []string `json:"remove"`
+				} `json:"requestHeaderModifier"`
+			} `json:"filters"`
 		} `json:"rules"`
 	}
 	_ = json.Unmarshal(current.Spec, &old)
@@ -179,7 +186,8 @@ func (k *Client) EnsureRoute(ctx context.Context, name, runtimeService string, g
 	parentDrift := len(old.Parent) != 1 || old.Parent[0].Name != gatewayName ||
 		old.Parent[0].Namespace != gatewayNamespace || old.Parent[0].Section != section
 	backendDrift := len(old.Rules) != 1 || len(old.Rules[0].BackendRefs) != 1 || old.Rules[0].BackendRefs[0].Name != runtimeService
-	if parentDrift || backendDrift || strings.Join(old.Hosts, "\n") != strings.Join(hosts, "\n") {
+	markerDrift := len(old.Rules) != 1 || len(old.Rules[0].Filters) != 1 || !slices.Contains(old.Rules[0].Filters[0].HeaderModifier.Remove, "x-krun-route")
+	if parentDrift || backendDrift || markerDrift || strings.Join(old.Hosts, "\n") != strings.Join(hosts, "\n") {
 		return false, k.Call(ctx, "PATCH", base+"/"+name, map[string]any{"spec": spec}, nil)
 	}
 	accepted, resolved := false, false

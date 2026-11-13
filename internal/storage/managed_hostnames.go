@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"errors"
-	"sort"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/krun-dev/krun/internal/domain"
@@ -20,7 +19,7 @@ const configRouteInScope = `(r.worker_id=ANY($1) OR (r.route_key<>'' AND r.host 
 
 func edgeManagedHostnames(ctx context.Context, tx pgx.Tx, ids []string) ([]domain.ManagedHostname, error) {
 	return collectManagedHostnames(ctx, tx, managedConfigScope+`
-		SELECT h.host,h.org_id,h.suffix_id,h.revision,r.match_type,r.path,r.worker_id,r.enabled,''
+		SELECT h.host,h.org_id,h.suffix_id,h.revision,h.gateway_managed,r.match_type,r.path,r.worker_id,r.enabled,r.origin,r.cf_pattern,r.custom_domain,''
 		FROM krun_worker_hostnames h JOIN krun_worker_hostname_routes r ON r.host=h.host
 		WHERE NOT h.retired AND ($1::text[] IS NULL OR h.host IN (SELECT host FROM touched_hosts))
 		ORDER BY h.host,r.match_type,r.path`, ids)
@@ -28,7 +27,7 @@ func edgeManagedHostnames(ctx context.Context, tx pgx.Tx, ids []string) ([]domai
 
 func (s *Store) ManagedHostnames(ctx context.Context, org string) ([]domain.ManagedHostname, error) {
 	return collectManagedHostnames(ctx, s.pool, `
-		SELECT h.host,h.org_id,h.suffix_id,h.revision,r.match_type,r.path,r.worker_id,r.enabled,COALESCE(w.locator,'')
+		SELECT h.host,h.org_id,h.suffix_id,h.revision,h.gateway_managed,r.match_type,r.path,r.worker_id,r.enabled,r.origin,r.cf_pattern,r.custom_domain,COALESCE(w.locator,'')
 		FROM krun_worker_hostnames h LEFT JOIN krun_worker_hostname_routes r ON r.host=h.host
 		LEFT JOIN krun_resources w ON w.resource_id=r.worker_id AND w.org_id=h.org_id AND w.kind='worker'
 		WHERE h.org_id=$1 AND NOT h.retired
@@ -37,7 +36,7 @@ func (s *Store) ManagedHostnames(ctx context.Context, org string) ([]domain.Mana
 
 func (s *Store) WorkerManagedHostnames(ctx context.Context, org, worker string) ([]domain.ManagedHostname, error) {
 	return collectManagedHostnames(ctx, s.pool, `
-		SELECT h.host,h.org_id,h.suffix_id,h.revision,r.match_type,r.path,r.worker_id,r.enabled,COALESCE(w.locator,'')
+		SELECT h.host,h.org_id,h.suffix_id,h.revision,h.gateway_managed,r.match_type,r.path,r.worker_id,r.enabled,r.origin,r.cf_pattern,r.custom_domain,COALESCE(w.locator,'')
 		FROM krun_worker_hostname_routes r JOIN krun_worker_hostnames h ON r.host=h.host
 		LEFT JOIN krun_resources w ON w.resource_id=r.worker_id AND w.org_id=h.org_id AND w.kind='worker'
 		WHERE r.worker_id=$1 AND h.org_id=$2 AND NOT h.retired
@@ -58,10 +57,10 @@ func collectManagedHostnames(ctx context.Context, db hostnameQueryer, query stri
 	out := []domain.ManagedHostname{}
 	for rows.Next() {
 		var item domain.ManagedHostname
-		var match, path, worker *string
-		var enabled *bool
+		var match, path, worker, origin, pattern *string
+		var enabled, customDomain *bool
 		var locator string
-		err = rows.Scan(&item.Host, &item.Organization, &item.SuffixID, &item.Revision, &match, &path, &worker, &enabled, &locator)
+		err = rows.Scan(&item.Host, &item.Organization, &item.SuffixID, &item.Revision, &item.GatewayManaged, &match, &path, &worker, &enabled, &origin, &pattern, &customDomain, &locator)
 		if err != nil {
 			return nil, err
 		}
@@ -73,6 +72,7 @@ func collectManagedHostnames(ctx context.Context, db hostnameQueryer, query stri
 			current := &out[len(out)-1]
 			current.Routes = append(current.Routes, domain.ManagedHostnameRoute{
 				Match: *match, Path: *path, Worker: *worker, WorkerLocator: locator, Enabled: *enabled,
+				Origin: *origin, CFPattern: *pattern, CustomDomain: *customDomain,
 			})
 		}
 	}
@@ -80,34 +80,39 @@ func collectManagedHostnames(ctx context.Context, db hostnameQueryer, query stri
 }
 
 func (s *Store) SaveManagedHostname(ctx context.Context, item domain.ManagedHostname, expected int, audits []domain.Audit) (domain.ManagedHostname, error) {
+	return s.saveManagedHostnames(ctx, []domain.ManagedHostname{item}, []int{expected}, audits)
+}
+
+// SaveManagedHostnames applies a script's complete route update atomically.
+func (s *Store) SaveManagedHostnames(ctx context.Context, items []domain.ManagedHostname, expected []int, audits []domain.Audit) error {
+	_, err := s.saveManagedHostnames(ctx, items, expected, audits)
+	return err
+}
+
+func (s *Store) saveManagedHostnames(ctx context.Context, items []domain.ManagedHostname, expected []int, audits []domain.Audit) (domain.ManagedHostname, error) {
+	var item domain.ManagedHostname
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return item, err
 	}
 	defer tx.Rollback(ctx)
 
-	if expected == 0 {
-		err = tx.QueryRow(ctx, `
-			INSERT INTO krun_worker_hostnames(host,org_id,suffix_id) VALUES ($1,$2,$3)
-			ON CONFLICT (host) DO NOTHING RETURNING revision`, item.Host, item.Organization, item.SuffixID).Scan(&item.Revision)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return item, domain.Conflict("HOSTNAME_UNAVAILABLE", "Hostname is unavailable")
+	// All callers acquire hostname locks in lexical order. Worker dirty rows
+	// are marked in one order after all hostname locks have been acquired.
+	for i, candidate := range items {
+		item, err = saveManagedHostnameRow(ctx, tx, candidate, expected[i])
+		if err != nil {
+			return item, err
 		}
-	} else {
-		err = tx.QueryRow(ctx, `
-			UPDATE krun_worker_hostnames SET revision=revision+1, retired=$4
-			WHERE host=$1 AND org_id=$2 AND revision=$3 AND NOT retired
-			RETURNING revision`, item.Host, item.Organization, expected, item.Retired).Scan(&item.Revision)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return item, domain.Conflict("REVISION_CONFLICT", "Hostname configuration changed")
-		}
+		items[i] = item
 	}
-	if err != nil {
+	if err = markManagedHostnameWorkers(ctx, tx, items); err != nil {
 		return item, err
 	}
-
-	if err = writeManagedHostnameRoutes(ctx, tx, item); err != nil {
-		return item, err
+	for _, item := range items {
+		if err = writeManagedHostnameRoutes(ctx, tx, item); err != nil {
+			return item, err
+		}
 	}
 	if err = insertAudits(ctx, tx, audits); err != nil {
 		return item, err
@@ -119,37 +124,61 @@ func (s *Store) SaveManagedHostname(ctx context.Context, item domain.ManagedHost
 	return item, nil
 }
 
+func saveManagedHostnameRow(ctx context.Context, tx pgx.Tx, item domain.ManagedHostname, revision int) (domain.ManagedHostname, error) {
+	var err error
+
+	if revision == 0 {
+		err = tx.QueryRow(ctx, `
+			INSERT INTO krun_worker_hostnames(host,org_id,suffix_id,gateway_managed) VALUES ($1,$2,$3,$4)
+			ON CONFLICT (host) DO NOTHING RETURNING revision`, item.Host, item.Organization, item.SuffixID, item.GatewayManaged).Scan(&item.Revision)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return item, domain.Conflict("HOSTNAME_UNAVAILABLE", "Hostname is unavailable")
+		}
+	} else {
+		err = tx.QueryRow(ctx, `
+			UPDATE krun_worker_hostnames SET revision=revision+1, retired=$4, gateway_managed=gateway_managed OR $5
+			WHERE host=$1 AND org_id=$2 AND revision=$3 AND NOT retired
+			RETURNING revision`, item.Host, item.Organization, revision, item.Retired, item.GatewayManaged).Scan(&item.Revision)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return item, domain.Conflict("REVISION_CONFLICT", "Hostname configuration changed")
+		}
+	}
+	if err != nil {
+		return item, err
+	}
+
+	return item, nil
+}
+
+func markManagedHostnameWorkers(ctx context.Context, tx pgx.Tx, items []domain.ManagedHostname) error {
+	hosts := make([]string, 0, len(items))
+	workers := []string{}
+	for _, item := range items {
+		hosts = append(hosts, item.Host)
+		for _, route := range item.Routes {
+			if route.Worker != "" {
+				workers = append(workers, route.Worker)
+			}
+		}
+	}
+	_, err := tx.Exec(ctx, `
+		INSERT INTO worker_config_dirty(worker_id)
+		SELECT worker_id FROM (
+			SELECT unnest($2::text[]) AS worker_id
+			UNION SELECT worker_id FROM krun_worker_hostname_routes WHERE host=ANY($1) AND worker_id<>''
+		) dirty ORDER BY worker_id
+		ON CONFLICT(worker_id) DO UPDATE SET generation=nextval('worker_dirty_seq')`, hosts, workers)
+	return err
+}
+
 func writeManagedHostnameRoutes(ctx context.Context, tx pgx.Tx, item domain.ManagedHostname) error {
-	// Acquire dirty-row locks in worker ID order, including previous targets,
-	// before changing routes. The publisher uses these same generations.
-	rows, err := tx.Query(ctx, `SELECT worker_id FROM krun_worker_hostname_routes WHERE host=$1`, item.Host)
-	if err != nil {
-		return err
-	}
-	old, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		return err
-	}
-	for _, route := range item.Routes {
-		old = append(old, route.Worker)
-	}
-	sort.Strings(old)
-	for i, worker := range old {
-		if i > 0 && old[i-1] == worker {
-			continue
-		}
-		if _, err = tx.Exec(ctx, `INSERT INTO worker_config_dirty(worker_id) VALUES($1)
-			ON CONFLICT(worker_id) DO UPDATE SET generation=nextval('worker_dirty_seq')`, worker); err != nil {
-			return err
-		}
-	}
-	if _, err = tx.Exec(ctx, `DELETE FROM krun_worker_hostname_routes WHERE host=$1`, item.Host); err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM krun_worker_hostname_routes WHERE host=$1`, item.Host); err != nil {
 		return err
 	}
 	batch := &pgx.Batch{}
 	for _, route := range item.Routes {
-		batch.Queue(`INSERT INTO krun_worker_hostname_routes(host,match_type,path,worker_id,enabled)
-			VALUES ($1,$2,$3,$4,$5)`, item.Host, route.Match, route.Path, route.Worker, route.Enabled)
+		batch.Queue(`INSERT INTO krun_worker_hostname_routes(host,match_type,path,worker_id,enabled,origin,cf_pattern,custom_domain)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, item.Host, route.Match, route.Path, route.Worker, route.Enabled, route.Origin, route.CFPattern, route.CustomDomain)
 	}
 	if batch.Len() > 0 {
 		return tx.SendBatch(ctx, batch).Close()
@@ -159,7 +188,7 @@ func writeManagedHostnameRoutes(ctx context.Context, tx pgx.Tx, item domain.Mana
 
 func (s *Store) ManagedHostname(ctx context.Context, org, host string) (domain.ManagedHostname, error) {
 	items, err := collectManagedHostnames(ctx, s.pool, `
-		SELECT h.host,h.org_id,h.suffix_id,h.revision,r.match_type,r.path,r.worker_id,r.enabled,COALESCE(w.locator,'')
+		SELECT h.host,h.org_id,h.suffix_id,h.revision,h.gateway_managed,r.match_type,r.path,r.worker_id,r.enabled,r.origin,r.cf_pattern,r.custom_domain,COALESCE(w.locator,'')
 		FROM krun_worker_hostnames h LEFT JOIN krun_worker_hostname_routes r ON r.host=h.host
 		LEFT JOIN krun_resources w ON w.resource_id=r.worker_id AND w.org_id=h.org_id AND w.kind='worker'
 		WHERE h.org_id=$1 AND h.host=$2 AND NOT h.retired
@@ -171,4 +200,17 @@ func (s *Store) ManagedHostname(ctx context.Context, org, host string) (domain.M
 		return domain.ManagedHostname{}, domain.NotFound()
 	}
 	return items[0], nil
+}
+
+// GatewayManagedHostnames returns active and retired exact hosts. Retired
+// hosts keep their deny route so the shared wildcard cannot expose stale data.
+func (s *Store) GatewayManagedHostnames(ctx context.Context) ([]domain.ManagedHostname, error) {
+	return collectManagedHostnames(ctx, s.pool, `
+		SELECT h.host,h.org_id,h.suffix_id,h.revision,h.gateway_managed,
+			r.match_type,r.path,r.worker_id,r.enabled,r.origin,r.cf_pattern,r.custom_domain,''
+		FROM krun_worker_hostnames h
+		LEFT JOIN krun_organizations o ON o.org_id=h.org_id
+		LEFT JOIN krun_worker_hostname_routes r ON r.host=h.host AND o.org_id IS NOT NULL AND NOT h.retired
+		WHERE h.gateway_managed
+		ORDER BY h.host,r.match_type,r.path`)
 }

@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	kruncli "github.com/krun-dev/krun/internal/cli"
+	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/domain"
 	workerapp "github.com/krun-dev/krun/internal/workers"
 )
@@ -157,7 +159,7 @@ func TestCLIManagedHostnameWorkflow(t *testing.T) {
 	run := func(args ...string) string {
 		t.Helper()
 		var out, diagnostics bytes.Buffer
-		flags := append([]string{"--no-update-check", "--profile", filepath.Join(dir, "profile.yaml"), "workers", "hostnames"}, args...)
+		flags := append([]string{"--no-update-check", "--profile", filepath.Join(dir, "profile.yaml"), "domains"}, args...)
 		flags = append(flags, "--org", "org-a")
 		if err := kruncli.Run(t.Context(), flags, strings.NewReader(""), &out, &diagnostics); err != nil {
 			t.Fatalf("krun %v: %v (%s)", args, err, diagnostics.String())
@@ -181,5 +183,162 @@ func TestCLIManagedHostnameWorkflow(t *testing.T) {
 	run("retire", "--host", claimed.Host, "--revision", "2")
 	if out := run("list"); strings.Contains(out, claimed.Host) {
 		t.Fatalf("CLI still lists a retired hostname: %s", out)
+	}
+}
+
+func TestCloudflareHostnameAPIsShareOrganizationRoutes(t *testing.T) {
+	s, store, _ := workerTestServer(t)
+	cfg := s.Config.Workers
+	cfg.Domains[0].ManagedSubdomains = true
+	suffix := cfg.Domains[0]
+	host := "shop." + suffix.Domain
+	cfg.ManagedOrigins = []appconfig.ManagedOrigin{
+		{Host: "shop-static.origin.example.com", Kind: "static", Service: "storefront", Port: 80, Organizations: []string{"org-a"}, Suffixes: []string{suffix.ID}},
+		{Host: "legacy.origin.example.com", Kind: "http", Service: "legacy", Port: 8080, Organizations: []string{"org-a"}, Suffixes: []string{suffix.ID}},
+	}
+	if _, err := postgresTestPool(store).Exec(t.Context(), `UPDATE krun_resources SET locator='storefront' WHERE resource_id='svc-a'`); err != nil {
+		t.Fatal(err)
+	}
+
+	cloud := cfPrefix
+	native := "/api/v1/orgs/org-a/domains"
+	account := cloud + "/accounts/org-a"
+	script := account + "/workers/scripts/storefront"
+	admin := "krun_cli_admin"
+	do := func(method, path, token, body string, status int) []byte {
+		t.Helper()
+		res := request(s, method, path, token, body)
+		if res.Code != status {
+			t.Fatalf("%s %s: want %d, got %d: %s", method, path, status, res.Code, res.Body.String())
+		}
+		return res.Body.Bytes()
+	}
+	var zones struct {
+		Result []struct{ ID, Name string }
+	}
+	raw := do(http.MethodGet, cloud+"/zones?name="+suffix.Domain+"&account.id=org-a", admin, "", 200)
+	if err := json.Unmarshal(raw, &zones); err != nil || len(zones.Result) != 1 || zones.Result[0].Name != suffix.Domain {
+		t.Fatalf("zone discovery: %s (%v)", raw, err)
+	}
+	zone := cloud + "/zones/" + zones.Result[0].ID
+	pattern := host + "/api/*"
+	route := fmt.Sprintf(`{"pattern":%q,"script":"storefront"}`, pattern)
+	raw = do(http.MethodPost, zone+"/workers/routes", admin, route, 200)
+	var created struct{ Result struct{ ID, Pattern string } }
+	if err := json.Unmarshal(raw, &created); err != nil || created.Result.ID == "" || created.Result.Pattern != pattern {
+		t.Fatalf("route result: %s (%v)", raw, err)
+	}
+	do(http.MethodGet, zone+"/workers/routes/"+created.Result.ID, admin, "", 200)
+	do(http.MethodPut, script+"/routes", admin, fmt.Sprintf(`[{"pattern":%q,"zone_name":%q}]`, pattern, suffix.Domain), 200)
+
+	origins := zone + "/rulesets/phases/http_request_origin/entrypoint"
+	expression := "http.host eq " + fmt.Sprintf("%q", host)
+	payload := fmt.Sprintf(`{"rules":[
+		{"action":"route","expression":%q,"action_parameters":{"origin":{"host":"shop-static.origin.example.com"}}},
+		{"action":"route","expression":%q,"enabled":false,"action_parameters":{"origin":{"host":"legacy.origin.example.com","port":8080}}}
+	]}`, expression, expression+` and (http.request.uri.path eq "/legacy" or starts_with(http.request.uri.path, "/legacy/"))`)
+	do(http.MethodPut, origins, admin, payload, 200)
+	item, err := store.ManagedHostname(t.Context(), "org-a", host)
+	if err != nil || !item.GatewayManaged || len(item.Routes) != 3 {
+		t.Fatalf("mixed routes: %+v (%v)", item, err)
+	}
+	raw = do(http.MethodGet, native, admin, "", 200)
+	for _, expected := range []string{host, "shop-static.origin.example.com", "/api", "/legacy"} {
+		if !strings.Contains(string(raw), expected) {
+			t.Fatalf("organization domain list omitted %q: %s", expected, raw)
+		}
+	}
+
+	custom := "worker." + suffix.Domain
+	do(http.MethodPost, script+"/domains/changeset?replace_state=true", admin, fmt.Sprintf(`[{"hostname":%q}]`, custom), 200)
+	do(http.MethodPut, script+"/domains/records", admin, fmt.Sprintf(`{"override_scope":true,"origins":[{"hostname":%q}]}`, custom), 200)
+	raw = do(http.MethodGet, account+"/workers/domains?hostname="+custom, admin, "", 200)
+	var records struct {
+		Result []struct{ ID, Hostname string }
+	}
+	if err = json.Unmarshal(raw, &records); err != nil || len(records.Result) != 1 || records.Result[0].Hostname != custom {
+		t.Fatalf("custom domain result: %s (%v)", raw, err)
+	}
+	do(http.MethodDelete, account+"/workers/domains/"+records.Result[0].ID, admin, "", 200)
+	do(http.MethodDelete, zone+"/workers/routes/"+created.Result.ID, admin, "", 200)
+	do(http.MethodPut, origins, admin, strings.Replace(payload, "legacy.origin.example.com", "private.other.example.com", 1), 422)
+	item, err = store.ManagedHostname(t.Context(), "org-a", host)
+	if err != nil || len(item.Routes) != 2 {
+		t.Fatalf("a rejected ruleset update changed the remaining routes: %+v (%v)", item, err)
+	}
+}
+
+// Opt in with the Wrangler version installed by workers/builder. This talks to
+// a real HTTP server using the same unmodified CLI that users run in CI.
+func TestOfficialWranglerHostnameTriggers(t *testing.T) {
+	binary := os.Getenv("KRUN_TEST_WRANGLER")
+	if binary == "" {
+		t.Skip("set KRUN_TEST_WRANGLER to the absolute path of the Wrangler CLI")
+	}
+	s, store, _ := workerTestServer(t)
+	s.Config.Workers.Domains[0].ManagedSubdomains = true
+	suffix := s.Config.Workers.Domains[0].Domain
+	host := "wrangler." + suffix
+	if _, err := postgresTestPool(store).Exec(t.Context(), `
+		UPDATE krun_resources SET locator='storefront' WHERE resource_id='svc-a';
+		UPDATE krun_organizations SET short_name='store-org' WHERE org_id='org-a';
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(s)
+	defer server.Close()
+	dir := t.TempDir()
+	cfg := fmt.Sprintf(`{
+		"name":"storefront", "account_id":"store-org", "main":"index.js", "compatibility_date":"2026-09-28",
+		"routes":[{"pattern":%q,"zone_name":%q},{"pattern":%q,"custom_domain":true}]
+	}`, host+"/api/*", suffix, host)
+	if err := os.WriteFile(filepath.Join(dir, "wrangler.jsonc"), []byte(cfg), 0600); err != nil {
+		t.Fatal(err)
+	}
+	source := "export default {\n  fetch() {\n    return new Response('ok');\n  },\n};\n"
+	if err := os.WriteFile(filepath.Join(dir, "index.js"), []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	for range 2 {
+		cmd := exec.CommandContext(t.Context(), binary, "triggers", "deploy", "--config", "wrangler.jsonc")
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"CLOUDFLARE_API_BASE_URL="+server.URL+cfPrefix,
+			"CLOUDFLARE_API_TOKEN=krun_cli_admin",
+			"WRANGLER_SEND_METRICS=false",
+			"WRANGLER_LOG_PATH="+filepath.Join(dir, "wrangler.log"),
+			"CI=true",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("Wrangler triggers deploy: %v\n%s", err, out)
+		}
+	}
+	item, err := store.ManagedHostname(t.Context(), "org-a", host)
+	if err != nil || len(item.Routes) != 2 {
+		t.Fatalf("Wrangler did not publish both routes: %+v (%v)", item, err)
+	}
+	resp := request(s, "GET", cfPrefix+"/accounts/org-a/workers/scripts/storefront/subdomain", "krun_cli_admin", "")
+	if resp.Code != 200 || !strings.Contains(resp.Body.String(), `"enabled":false,"previews_enabled":true`) {
+		t.Fatalf("Wrangler's defaults did not persist: %d %s", resp.Code, resp.Body.String())
+	}
+	state, err := store.EdgeConfigState(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection := workerapp.EdgeConfigFromState(state, s.Config.Workers)
+	found := 0
+	for _, route := range projection.Routes {
+		if route.Worker != "svc-a" || route.Environment != "production" {
+			continue
+		}
+		if route.Host != host {
+			t.Fatalf("disabled default URL is still in the runtime projection: %+v", route)
+		}
+		found++
+	}
+	if found != 2 {
+		t.Fatalf("expected two custom routes after disabling the default URL; got %d", found)
 	}
 }

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { APIError, api } from "@/lib/api";
 import { errorMessage, t } from "@/lib/i18n";
-import { Field, Loading, SelectField } from "@/components/common";
+import { Field, Loading, PageHeader, SelectField } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,19 +20,22 @@ type Route = {
   path: string;
   worker_id: string;
   worker_locator?: string;
+  origin?: string;
+  custom_domain?: boolean;
   enabled: boolean;
 };
 type Hostname = { host: string; suffix_id: string; revision: number; routes: Route[] };
 type Suffix = { id: string; domain: string; label: string };
-type Catalog = { items: Hostname[]; suffixes: Suffix[]; can_manage: boolean };
+type Origin = { host: string; kind: "static" | "http"; label: string; suffixes: string[] };
+type Catalog = { items: Hostname[]; suffixes: Suffix[]; origins: Origin[]; can_manage: boolean };
 type Bindings = { items: Hostname[]; can_read_catalog: boolean };
 
 export function WorkerHostnameBindings({
   base,
-  openCatalog,
+  catalogHref,
 }: {
   base: string;
-  openCatalog: () => void;
+  catalogHref: string;
 }) {
   const [data, setData] = useState<Bindings>();
   const [error, setError] = useState("");
@@ -54,9 +57,9 @@ export function WorkerHostnameBindings({
           {data?.can_read_catalog ? (
             <Button
               variant="outline"
-              onClick={openCatalog}
+              asChild
             >
-              {t("管理域名与路由")}
+              <a href={catalogHref}>{t("管理域名与路由")}</a>
             </Button>
           ) : null}
         </div>
@@ -121,7 +124,9 @@ function HostnameCard({ item, edit }: { item: Hostname; edit?: () => void }) {
               >
                 →
               </span>
-              <code className="break-all">{route.worker_locator || route.worker_id}</code>
+              <code className="break-all">
+                {route.origin || route.worker_locator || route.worker_id}
+              </code>
               {!route.enabled ? <Badge variant="secondary">{t("已停用")}</Badge> : null}
             </li>
           ))}
@@ -138,7 +143,7 @@ function matchLabel(match: Route["match"]) {
 }
 
 export function ManagedHostnames({ base }: { base: string }) {
-  const path = base + "/worker-hostnames";
+  const path = base + "/domains";
   const [catalog, setCatalog] = useState<Catalog>();
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
@@ -161,76 +166,82 @@ export function ManagedHostnames({ base }: { base: string }) {
   }
 
   return (
-    <Card className="py-0 shadow-none">
-      <CardContent className="grid gap-4 p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="font-semibold">{t("自定义子域名")}</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {t("从平台后缀中申请子域名，将同一域名的不同路径交给不同的 Worker。")}
-            </p>
+    <>
+      <PageHeader
+        title={t("域名")}
+        description={t("申请平台子域名，为每个域名配置 HTTP 路由。")}
+      />
+      <Card className="py-0 shadow-none">
+        <CardContent className="grid gap-4 p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="font-semibold">{t("自定义子域名")}</h2>
+            </div>
+            {catalog?.can_manage && catalog.suffixes.length > 0 ? (
+              <Button onClick={() => setEditor("new")}>
+                <Plus size={16} />
+                {t("申请域名")}
+              </Button>
+            ) : null}
           </div>
-          {catalog?.can_manage && catalog.suffixes.length > 0 ? (
-            <Button onClick={() => setEditor("new")}>
-              <Plus size={16} />
-              {t("申请域名")}
-            </Button>
-          ) : null}
-        </div>
-        {notice ? (
-          <p
-            role="status"
-            className="text-sm text-muted-foreground"
-          >
-            {notice}
-          </p>
-        ) : null}
-        {error ? (
-          <div
-            role="alert"
-            className="flex items-center gap-3 text-sm text-destructive"
-          >
-            {error}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={refresh}
+          {notice ? (
+            <p
+              role="status"
+              className="text-sm text-muted-foreground"
             >
-              {t("重试")}
-            </Button>
-          </div>
-        ) : !catalog ? (
-          <Loading />
-        ) : catalog.items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            {catalog.suffixes.length
-              ? t("还没有自定义子域名。")
-              : t("平台尚未开放可申请的域名后缀。")}
-          </p>
-        ) : (
-          catalog.items.map((item) => (
-            <HostnameCard
-              key={item.host}
-              item={item}
-              edit={catalog.can_manage ? () => setEditor(item) : undefined}
-            />
-          ))
-        )}
-      </CardContent>
-      {editor && catalog ? (
-        <HostnameEditor
-          path={path}
-          item={editor === "new" ? undefined : editor}
-          suffixes={catalog.suffixes}
-          close={() => setEditor(null)}
-          saved={(retired) => {
-            setEditor(null);
-            setNotice(retired ? t("域名已退役，路由正在撤除。") : t("配置已保存，路由正在同步。"));
-            refresh();
-          }}
-        />
-      ) : null}
-    </Card>
+              {notice}
+            </p>
+          ) : null}
+          {error ? (
+            <div
+              role="alert"
+              className="flex items-center gap-3 text-sm text-destructive"
+            >
+              {error}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={refresh}
+              >
+                {t("重试")}
+              </Button>
+            </div>
+          ) : !catalog ? (
+            <Loading />
+          ) : catalog.items.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {catalog.suffixes.length
+                ? t("还没有自定义子域名。")
+                : t("平台尚未开放可申请的域名后缀。")}
+            </p>
+          ) : (
+            catalog.items.map((item) => (
+              <HostnameCard
+                key={item.host}
+                item={item}
+                edit={catalog.can_manage ? () => setEditor(item) : undefined}
+              />
+            ))
+          )}
+        </CardContent>
+        {editor && catalog ? (
+          <HostnameEditor
+            path={path}
+            item={editor === "new" ? undefined : editor}
+            suffixes={catalog.suffixes}
+            origins={catalog.origins || []}
+            close={() => setEditor(null)}
+            saved={(retired) => {
+              setEditor(null);
+              setNotice(
+                retired ? t("域名已退役，路由正在撤除。") : t("配置已保存，路由正在同步。"),
+              );
+              refresh();
+            }}
+          />
+        ) : null}
+      </Card>
+    </>
   );
 }
 
@@ -238,12 +249,14 @@ function HostnameEditor({
   path,
   item,
   suffixes,
+  origins,
   close,
   saved,
 }: {
   path: string;
   item?: Hostname;
   suffixes: Suffix[];
+  origins: Origin[];
   close: () => void;
   saved: (retired: boolean) => void;
 }) {
@@ -252,6 +265,10 @@ function HostnameEditor({
   const [routes, setRoutes] = useState(() =>
     (item?.routes || []).map((route, key) => ({ ...route, key })),
   );
+  const availableOrigins = origins.filter((origin) =>
+    origin.suffixes.includes(item?.suffix_id || suffix),
+  );
+  const routeLimit = routes.some((route) => route.origin) ? 16 : 64;
   const [nextKey, setNextKey] = useState(routes.length);
   const [retiring, setRetiring] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -272,10 +289,10 @@ function HostnameEditor({
     setBusy(true);
     setError("");
     try {
-      const input = routes.map(({ match, path, worker_id, enabled }) => ({
+      const input = routes.map(({ match, path, worker_id, origin, enabled }) => ({
         match,
         path,
-        worker_id,
+        ...(origin ? { origin } : { worker_id }),
         enabled,
       }));
       if (item && retire) {
@@ -289,7 +306,7 @@ function HostnameEditor({
           routes: input,
         });
       } else {
-        await api(path, "POST", { suffix_id: suffix, label, routes: input });
+        await api(path, "POST", { suffix_id: suffix, label });
       }
       saved(retire);
     } catch (cause) {
@@ -314,7 +331,9 @@ function HostnameEditor({
         <DialogHeader>
           <DialogTitle>{item ? item.host : t("申请域名")}</DialogTitle>
           <DialogDescription>
-            {t("精确路径优先，其次匹配最长的路径段前缀。路由指向 Worker 的 production 环境。")}
+            {item
+              ? t("精确路径优先，其次匹配最长的路径段前缀。")
+              : t("申请后可在域名详情配置路由。")}
           </DialogDescription>
         </DialogHeader>
         <form
@@ -360,85 +379,119 @@ function HostnameEditor({
                   </code>
                 </>
               ) : null}
-              {routes.map((route, index) => (
-                <div
-                  key={route.key}
-                  className="grid gap-3 rounded-lg border p-3"
+              {item
+                ? routes.map((route, index) => (
+                    <div
+                      key={route.key}
+                      className="grid gap-3 rounded-lg border p-3"
+                    >
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <SelectField
+                          label={t("匹配方式")}
+                          value={route.match}
+                          onChange={(match) =>
+                            changeRoute(route.key, {
+                              match: match === "exact" ? "exact" : "prefix",
+                            })
+                          }
+                        >
+                          <option value="prefix">{matchLabel("prefix")}</option>
+                          <option value="exact">{matchLabel("exact")}</option>
+                        </SelectField>
+                        <Field label={t("请求路径")}>
+                          <Input
+                            required
+                            value={route.path}
+                            onChange={(event) =>
+                              changeRoute(route.key, { path: event.target.value })
+                            }
+                          />
+                        </Field>
+                        <SelectField
+                          label={t("目标类型")}
+                          value={route.origin ?? ""}
+                          onChange={(origin) =>
+                            changeRoute(route.key, { origin: origin || undefined, worker_id: "" })
+                          }
+                        >
+                          <option value="">{t("Worker")}</option>
+                          {availableOrigins.map((origin) => (
+                            <option
+                              key={origin.host}
+                              value={origin.host}
+                            >
+                              {origin.kind === "static" ? t("静态站点") : t("HTTP 服务")} ·{" "}
+                              {origin.label || origin.host}
+                            </option>
+                          ))}
+                          {route.origin &&
+                          !availableOrigins.some((origin) => origin.host === route.origin) ? (
+                            <option value={route.origin}>{route.origin}</option>
+                          ) : null}
+                        </SelectField>
+                        {route.origin ? null : (
+                          <Field label={t("目标 Worker")}>
+                            <Input
+                              required
+                              value={route.worker_id}
+                              placeholder={t("Worker 短名或 ID")}
+                              onChange={(event) =>
+                                changeRoute(route.key, { worker_id: event.target.value })
+                              }
+                            />
+                          </Field>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <label className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={route.enabled}
+                            onChange={(event) =>
+                              changeRoute(route.key, { enabled: event.target.checked })
+                            }
+                          />
+                          {t("启用路由")}
+                        </label>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            setRoutes((current) => current.filter((_, i) => i !== index))
+                          }
+                        >
+                          <Trash2 size={14} />
+                          {t("移除路由")}
+                        </Button>
+                      </div>
+                    </div>
+                  ))
+                : null}
+              {item ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="justify-self-start"
+                  disabled={routes.length >= routeLimit}
+                  onClick={() => {
+                    setRoutes((current) => [
+                      ...current,
+                      {
+                        key: nextKey,
+                        match: "prefix",
+                        path: current.length ? "/api" : "/",
+                        worker_id: "",
+                        enabled: true,
+                      },
+                    ]);
+                    setNextKey((key) => key + 1);
+                  }}
                 >
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <SelectField
-                      label={t("匹配方式")}
-                      value={route.match}
-                      onChange={(match) =>
-                        changeRoute(route.key, { match: match === "exact" ? "exact" : "prefix" })
-                      }
-                    >
-                      <option value="prefix">{matchLabel("prefix")}</option>
-                      <option value="exact">{matchLabel("exact")}</option>
-                    </SelectField>
-                    <Field label={t("请求路径")}>
-                      <Input
-                        required
-                        value={route.path}
-                        onChange={(event) => changeRoute(route.key, { path: event.target.value })}
-                      />
-                    </Field>
-                    <Field label={t("目标 Worker")}>
-                      <Input
-                        required
-                        value={route.worker_id}
-                        placeholder={t("Worker 短名或 ID")}
-                        onChange={(event) =>
-                          changeRoute(route.key, { worker_id: event.target.value })
-                        }
-                      />
-                    </Field>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={route.enabled}
-                        onChange={(event) =>
-                          changeRoute(route.key, { enabled: event.target.checked })
-                        }
-                      />
-                      {t("启用路由")}
-                    </label>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setRoutes((current) => current.filter((_, i) => i !== index))}
-                    >
-                      <Trash2 size={14} />
-                      {t("移除路由")}
-                    </Button>
-                  </div>
-                </div>
-              ))}
-              <Button
-                type="button"
-                variant="outline"
-                className="justify-self-start"
-                disabled={routes.length >= 64}
-                onClick={() => {
-                  setRoutes((current) => [
-                    ...current,
-                    {
-                      key: nextKey,
-                      match: "prefix",
-                      path: current.length ? "/api" : "/",
-                      worker_id: "",
-                      enabled: true,
-                    },
-                  ]);
-                  setNextKey((key) => key + 1);
-                }}
-              >
-                <Plus size={16} />
-                {t("添加路由")}
-              </Button>
+                  <Plus size={16} />
+                  {t("添加路由")}
+                </Button>
+              ) : null}
               {changesFallback ? (
                 <p
                   role="status"
@@ -481,7 +534,7 @@ function HostnameEditor({
               disabled={busy}
               variant={retiring ? "destructive" : "default"}
             >
-              {retiring ? t("确认退役") : t("保存")}
+              {retiring ? t("确认退役") : item ? t("保存") : t("申请域名")}
             </Button>
           </div>
         </form>

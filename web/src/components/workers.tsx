@@ -73,7 +73,7 @@ import {
 import { VersionConfiguration } from "./workers/version-configuration";
 import { OperationPanel, VersionSummary } from "./workers/version";
 import { WorkerDomains } from "./workers/domains";
-import { ManagedHostnames, WorkerHostnameBindings } from "./workers/managed-hostnames";
+import { WorkerHostnameBindings } from "./workers/managed-hostnames";
 import { EnvironmentSettings, Invocation } from "./workers/environment";
 
 function initialNetworkProfile(profiles: WorkerNetworkProfile[]) {
@@ -88,23 +88,19 @@ export function WorkersPage({
   base,
   detail,
   canCreate,
-  canReadHostnames,
+  domainCatalogHref,
   notify,
 }: {
   base: string;
   detail?: { id: string; back: () => void };
   canCreate: boolean;
-  canReadHostnames: boolean;
+  domainCatalogHref: string;
   notify: (message: string) => void;
 }) {
   useTranslation();
   const [worker, setWorker] = useState(
     () => detail?.id || new URLSearchParams(location.search).get("worker") || "",
   );
-  const [hostnameTab, setShowHostnames] = useState(
-    () => new URLSearchParams(location.search).get("workers_tab") === "hostnames",
-  );
-  const showHostnames = canReadHostnames && hostnameTab;
   const [detailError, setDetailError] = useState("");
   const [selected, setSelected] = useState<WorkerSummary | null>(null);
   const [create, setCreate] = useState(false);
@@ -119,11 +115,7 @@ export function WorkersPage({
   const locator = useSuggestedShortName(name, 63);
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
-  const collection = useCollectionPage<WorkerSummary>(
-    base + "/workers",
-    !worker && !showHostnames,
-    revision,
-  );
+  const collection = useCollectionPage<WorkerSummary>(base + "/workers", !worker, revision);
   const workers = collection.items;
   const error = worker ? detailError : collection.error;
   const [networkProfiles, setNetworkProfiles] = useState<WorkerNetworkProfile[]>([]);
@@ -189,7 +181,6 @@ export function WorkersPage({
     const onPopState = () => {
       const id = new URLSearchParams(location.search).get("worker") || "";
       setWorker(id);
-      setShowHostnames(new URLSearchParams(location.search).get("workers_tab") === "hostnames");
       if (!id) setRevision((v) => v + 1);
     };
     window.addEventListener("popstate", onPopState);
@@ -209,25 +200,8 @@ export function WorkersPage({
     url.searchParams.delete("worker_tab");
     url.searchParams.delete("workers_tab");
     history.pushState(null, "", url);
-    setShowHostnames(false);
     setWorker(id);
     if (!id) setRevision((v) => v + 1);
-  }
-
-  function selectWorkersTab(hostnames: boolean) {
-    const url = new URL(location.href);
-    url.searchParams.set("page", "workers");
-    url.searchParams.set("workspace", base.split("/").at(-1) || "");
-    for (const key of ["worker", "worker_tab", "environment"]) url.searchParams.delete(key);
-    if (hostnames) url.searchParams.set("workers_tab", "hostnames");
-    else url.searchParams.delete("workers_tab");
-    if (detail) {
-      location.assign(url);
-      return;
-    }
-    history.pushState(null, "", url);
-    setWorker("");
-    setShowHostnames(hostnames);
   }
 
   function resetCreatedWorker() {
@@ -321,7 +295,7 @@ export function WorkersPage({
         title={t("Workers")}
         description={t("构建代码，选择环境发布，并查看实际运行结果。")}
         action={
-          canCreate && !detail && !showHostnames ? (
+          canCreate && !detail ? (
             <Button
               onClick={() => {
                 setNetworkProfile(initialNetworkProfile(networkProfiles));
@@ -334,25 +308,7 @@ export function WorkersPage({
           ) : undefined
         }
       />
-      {!worker && canReadHostnames ? (
-        <Tabs
-          value={showHostnames ? "hostnames" : "list"}
-          onValueChange={(value) => selectWorkersTab(value === "hostnames")}
-          className="mb-4"
-        >
-          <TabsList>
-            <TabsTrigger value="list">{t("Worker 列表")}</TabsTrigger>
-            <TabsTrigger value="hostnames">{t("域名与路由")}</TabsTrigger>
-          </TabsList>
-        </Tabs>
-      ) : null}
-      {showHostnames && !worker ? (
-        <ManagedHostnames
-          key={base}
-          base={base}
-        />
-      ) : null}
-      {error && (!showHostnames || worker) ? (
+      {error ? (
         <div
           role="alert"
           className="mb-4 flex items-center gap-3 text-sm text-destructive"
@@ -367,13 +323,13 @@ export function WorkersPage({
           </Button>
         </div>
       ) : null}
-      {!worker && !showHostnames ? (
+      {!worker ? (
         <CollectionToolbar
           page={collection}
           label={t("搜索 Worker 名称或 ID")}
         />
       ) : null}
-      {showHostnames && !worker ? null : worker && !selected ? (
+      {worker && !selected ? (
         !detailError ? (
           <Loading />
         ) : (
@@ -400,7 +356,7 @@ export function WorkersPage({
             organizationBase={base}
             worker={selected}
             networkProfiles={networkProfiles}
-            openHostnames={() => selectWorkersTab(true)}
+            domainCatalogHref={domainCatalogHref}
             notify={notify}
           />
         </>
@@ -517,7 +473,7 @@ export function WorkersPage({
           </CardContent>
         </Card>
       )}
-      {!worker && !showHostnames ? <CollectionPagination page={collection} /> : null}
+      {!worker ? <CollectionPagination page={collection} /> : null}
       <Dialog
         open={create}
         onOpenChange={(open) => {
@@ -639,14 +595,14 @@ function WorkerDetail({
   organizationBase,
   worker,
   networkProfiles,
-  openHostnames,
+  domainCatalogHref,
   notify,
 }: {
   base: string;
   organizationBase: string;
   worker: WorkerSummary;
   networkProfiles: WorkerNetworkProfile[];
-  openHostnames: () => void;
+  domainCatalogHref: string;
   notify: (s: string) => void;
 }) {
   const [revision, setRevision] = useState(0);
@@ -1276,7 +1232,7 @@ function WorkerDetail({
           >
             <WorkerHostnameBindings
               base={base}
-              openCatalog={openHostnames}
+              catalogHref={domainCatalogHref}
             />
             <WorkerDomains
               base={base}

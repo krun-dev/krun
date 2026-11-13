@@ -10,6 +10,7 @@ export type Section =
   | "audit"
   | "users"
   | "system-config"
+  | "domains"
   | "workers"
   | "buckets"
   | "hyperdrive";
@@ -41,6 +42,8 @@ export function canOpenSection(
   }
   const allowed = (action: string) => permissions.actions[action] === true;
   switch (section) {
+    case "domains":
+      return allowed("worker.hostname.read");
     case "git-authorizations":
     case "workers":
     case "hyperdrive":

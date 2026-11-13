@@ -78,8 +78,12 @@ func TestCloudflareRejectsInvalidTrafficAndBindings(t *testing.T) {
 		t.Fatal("D1 binding accepted")
 	}
 	r = request(s, "POST", base+"/subdomain", "krun_cli_admin", `{"enabled":false}`)
-	if r.Code != 422 {
-		t.Fatal("disabled URL reported as supported")
+	if r.Code != 200 || !strings.Contains(r.Body.String(), `"enabled":false`) {
+		t.Fatalf("disable generated URL: %d %s", r.Code, r.Body.String())
+	}
+	r = request(s, "GET", base+"/subdomain", "krun_cli_admin", "")
+	if r.Code != 200 || !strings.Contains(r.Body.String(), `"enabled":false`) {
+		t.Fatalf("read disabled URL state: %d %s", r.Code, r.Body.String())
 	}
 }
 func TestCloudflareMultipartRetainsNestedModuleNames(t *testing.T) {

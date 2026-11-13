@@ -86,7 +86,8 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 			if name == appconfig.WorkerBaseline {
 				managedTargets[id] = systemRoute
 			}
-			if st.Workers.ProjectionWorkers == nil || slices.Contains(st.Workers.ProjectionWorkers, id) {
+			if (name != appconfig.WorkerBaseline || !ws.WorkersDevDisabled) &&
+				(st.Workers.ProjectionWorkers == nil || slices.Contains(st.Workers.ProjectionWorkers, id)) {
 				for _, host := range hosts {
 					if expanded := EnvHostName(host, name); expanded != "" {
 						route := systemRoute
@@ -121,6 +122,9 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 			continue
 		}
 		for _, rule := range hostname.Routes {
+			if rule.Origin != "" {
+				continue
+			}
 			target := managedTargets[rule.Worker]
 			worker := st.Workers.Workers[rule.Worker]
 			if target.Pool != pool.ID || worker.Organization != hostname.Organization || !config.ManagedDomainAllowsWorker(suffix.ID, worker.NetworkProfile) {

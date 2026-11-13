@@ -316,6 +316,8 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		return nil
 	case "workers":
 		return c.workers(ctx, rest)
+	case "domains":
+		return c.managedHostnames(ctx, rest)
 	case "r2":
 		return c.r2(ctx, rest)
 	case "rollback":
@@ -510,6 +512,7 @@ const help = `krun — control-plane CLI
 
 Workers
   krun workers --help
+  krun domains --help
   krun build --help
   krun deploy [--org ID] --worker ID --env NAME [--build ID | --path DIR_OR_ZIP]
   krun deploy --dry-run [--config FILE] [--outdir DIR]

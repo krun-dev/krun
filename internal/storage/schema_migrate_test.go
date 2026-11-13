@@ -232,3 +232,43 @@ func TestPostgresSchemaUpgradeRejectsUnknownAndEmptyDatabases(t *testing.T) {
 		t.Fatalf("missing fingerprint was created: count=%d err=%v", count, err)
 	}
 }
+
+func TestPostgresSchemaUpgradePreservesManagedWorkerRoutes(t *testing.T) {
+	schema := testpgx.NewSchema(t, "krun_hostname_upgrade")
+	ctx := t.Context()
+	store, err := Open(ctx, schema.DSN, RepositoryTokenKeys{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err = store.pool.Exec(ctx, `
+		ALTER TABLE krun_workers DROP COLUMN workers_dev_disabled, DROP COLUMN preview_urls_disabled;
+		ALTER TABLE krun_worker_hostnames DROP COLUMN gateway_managed;
+		ALTER TABLE krun_worker_hostname_routes DROP COLUMN origin, DROP COLUMN cf_pattern, DROP COLUMN custom_domain;
+		INSERT INTO krun_workers(worker_id,org_id) VALUES ('old-worker','old-org');
+		INSERT INTO krun_worker_hostnames(host,org_id,suffix_id,revision)
+			VALUES ('shop.workers.example.com','old-org','public',5);
+		INSERT INTO krun_worker_hostname_routes(host,match_type,path,worker_id,enabled)
+			VALUES ('shop.workers.example.com','prefix','/api','old-worker',true);
+		UPDATE krun_meta SET value='23c469b3647eb09d4a9e9355d92f4d9e70f230381b56c25408fc141c1927e5c3' WHERE key='schema_baseline';
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if applied, err := MigrateSchema(ctx, schema.DSN); !applied || err != nil {
+		t.Fatalf("upgrade from Worker-only hostnames: applied=%t err=%v", applied, err)
+	}
+	host, err := store.ManagedHostname(ctx, "old-org", "shop.workers.example.com")
+	if err != nil || host.Revision != 5 || host.GatewayManaged || len(host.Routes) != 1 {
+		t.Fatalf("legacy hostname was changed: %+v (%v)", host, err)
+	}
+	rule := host.Routes[0]
+	if rule.Worker != "old-worker" || rule.Path != "/api" || !rule.Enabled || rule.CustomDomain || rule.Origin != "" {
+		t.Fatalf("legacy route was changed: %+v", rule)
+	}
+	var workersDevDisabled, previewURLsDisabled bool
+	err = store.pool.QueryRow(ctx, `SELECT workers_dev_disabled,preview_urls_disabled FROM krun_workers
+		WHERE worker_id='old-worker'`).Scan(&workersDevDisabled, &previewURLsDisabled)
+	if err != nil || workersDevDisabled || previewURLsDisabled {
+		t.Fatalf("default addresses changed: disabled=%t/%t (%v)", workersDevDisabled, previewURLsDisabled, err)
+	}
+}

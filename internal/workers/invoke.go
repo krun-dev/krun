@@ -17,6 +17,9 @@ func (s *Service) ResolveInvocation(st *domain.State, principal authorization.Pr
 	}
 	worker := st.Workers.Workers[target.ID]
 	current := worker.Environments[env]
+	if env == appconfig.WorkerBaseline && worker.WorkersDevDisabled {
+		return "", "", domain.Conflict("WORKER_NOT_PUBLISHED", "The default production URL is disabled")
+	}
 	if !current.Enabled || current.Version == "" {
 		return "", "", domain.Conflict("WORKER_NOT_PUBLISHED", "Publish this enabled environment first")
 	}

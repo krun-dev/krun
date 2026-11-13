@@ -63,7 +63,13 @@ Runtime 配置分发和保留期。浏览器会话需要原有 CSRF 校验；CLI
 | `POST/GET .../scripts/{script}/deployments`、`GET .../deployments/{id}` | 单版本 100% 或双版本百分比分流，查询实际版本权重和说明 |
 | `GET/PUT .../scripts/{script}/secrets`、`DELETE .../secrets/{name}` | Secret 元数据、修改及删除 |
 | `PATCH .../scripts/{script}/secrets-bulk` | 有界 Secret 批量修改 |
-| `GET/POST .../scripts/{script}/subdomain` | 已启用的 krun 托管 URL |
+| `GET/POST .../scripts/{script}/subdomain` | 读取和切换默认生产、固定预览地址 |
+| `GET /zones`、`GET /zones/{zone}` | 发现平台已开放的域名后缀 |
+| `GET/POST /zones/{zone}/workers/routes`、`GET/PUT/DELETE .../routes/{id}` | Workers Routes 的查询、创建、替换和删除 |
+| `GET/PUT .../scripts/{script}/routes` | Wrangler 使用的脚本路由批量查询和替换 |
+| `GET/PUT /accounts/{account}/workers/domains`、`GET/DELETE .../domains/{id}` | 查询、绑定、解除生产 Worker Custom Domain |
+| `POST .../scripts/{script}/domains/changeset`、`PUT .../scripts/{script}/domains/records` | Wrangler 预览和提交 Custom Domains |
+| `GET/PUT /zones/{zone}/rulesets/phases/http_request_origin/entrypoint` | 用 Origin Rules 配置已登记静态站点和 HTTP 服务 |
 | `POST /accounts/{account}/workers/workers` | 创建 Worker 身份 |
 | `GET/PATCH .../workers/{script}`、`GET .../services/{script}` | Worker 元数据、Previews Base 绑定 |
 | `GET/POST .../workers/{script}/previews` | 列出、创建 Preview |
@@ -93,13 +99,53 @@ token 只能绑定到签发时的 Worker，且未传完或过期时不能部署�
 因此部署、回滚和固定地址复用原有运行链路；`keep_assets` 可以保留当前部署的资产。
 会话和文件元数据保留一小时，临时对象登记到现有 upload 清理任务，最长保留 24 小时。
 
-托管 URL 关闭、Cloudflare 自定义域名/Zone/Routes、定时任务、tail、KV/D1/DO/Queue、
+任意外部域名、通配主机名、通用 Ruleset、定时任务、tail、KV/D1/DO/Queue、
 Service Worker 格式仍超出兼容范围。资产路由支持 `run_worker_first`、`base_path`，
 `none` / `single-page-application` / `404-page`，以及 `none` / `auto-trailing-slash` /
 `force-trailing-slash` / `drop-trailing-slash`。`_headers` 支持路径、域名、占位符、
 合并和删除响应头；`_redirects` 支持 301/302/303/307/308 和站内 200 重写，
 不代理外部站点。规则仅作用于静态响应，随资产版本冻结。部署说明使用 `annotations["workers/message"]`，版本标签和说明随版本保存。
 缺失接口和不支持的绑定会返回错误。静态资产也可以继续走 krun 原有构建入口。
+
+## 域名与路由
+
+使用组织 ID 和 Zone 名查找 `zone_id`。兼容写入可在平台开放的后缀下自动申请单层子域；
+同名域名不能跨组织占用。普通 Routes 支持精确 Host、精确路径及尾部 `/*`，后者按完整路径段匹配，
+例如 `/api/*` 也匹配 `/api`。查询串不会参与精确匹配。Custom Domain 绑定生产 Worker，
+相当于根路径入口；更具体路径可由另一个 Worker 处理。相同匹配方式和路径只有一个目标，
+不能在根路径把 Route 和 Custom Domain 叠成两层，也不为命名 Preview 自动生成更深的子域。
+Wrangler 的路由配置和示例见
+[域名使用指南](../user-docs/src/content/docs/guides/workers-hostnames.md)。
+
+Origin Rules 沿用 `action: route` 和 `action_parameters.origin.host`。Host 必须为平台给该组织、
+后缀登记的目标；如果指定了端口和 `host_header`，必须与登记值相同。用以下请求体
+`PUT` 到 Zone 的 Origin Rules 入口。请求会完整替换该 Zone 的非 Worker 路由，
+保留所有 Workers Routes 和 Custom Domains。
+
+```json
+{
+  "rules": [{
+    "action": "route",
+    "expression": "http.host eq \"shop.apps.example.com\" and (http.request.uri.path eq \"/legacy\" or starts_with(http.request.uri.path, \"/legacy/\"))",
+    "action_parameters": {"origin": {"host": "legacy.origin.example.com"}}
+  }]
+}
+```
+
+API Key 需要 `worker.hostname.read`、`worker.hostname.manage`；脚本路由写入还需目标
+Worker 的 `worker.update`，读取脚本需 `worker.read`。Wrangler OAuth 会使用
+`zone:read` 和 `workers_routes:write`。兼容错误通过 Cloudflare envelope 返回：
+`10000` 为认证或权限错误，`10007` 为资源不可见或不存在，`10021` 为其他请求错误；
+发生冲突或不支持的匹配时可读取 `errors[].message`。
+
+有本地 Node 和隔离 PostgreSQL 测试库时，可运行同域 Route 与 Custom Domain 的原版
+Wrangler 集成测试。将 `KRUN_TEST_POSTGRES_URL` 指向该测试库，再执行：
+
+```sh
+npm --prefix workers/builder ci
+KRUN_TEST_WRANGLER="$PWD/workers/builder/node_modules/.bin/wrangler" \
+  go test ./internal/control -run '^TestOfficialWranglerHostnameTriggers$' -v
+```
 
 ## 版本灰度
 

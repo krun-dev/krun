@@ -14,17 +14,17 @@ import (
 
 func (c *Client) managedHostnames(ctx context.Context, args []string) error {
 	if len(args) == 0 || args[0] == "--help" {
-		_, err := fmt.Fprint(c.Out, `Usage: krun workers hostnames COMMAND [--org ID]
-  list [--worker ID]                           List hostnames, optionally for a Worker
-  claim --suffix ID --label LABEL [--routes FILE]    Claim a platform hostname
-  set --host HOST --revision N --routes FILE     Replace the host's route table
-  retire --host HOST --revision N               Remove routing and reserve the hostname
+		_, err := fmt.Fprint(c.Out, `Usage: krun domains COMMAND [--org ID]
+  list [--worker ID]                               List domains, optionally for a Worker
+  claim --suffix ID --label LABEL [--routes FILE]  Claim a platform hostname
+  set --host HOST --revision N --routes FILE       Replace the host's route table
+  retire --host HOST --revision N                  Remove routing and reserve the hostname
 `)
 		return err
 	}
 
 	action := args[0]
-	f := flags("workers hostnames "+action, c.Err)
+	f := flags("domains "+action, c.Err)
 	org := c.orgFlag(f)
 	var worker, suffix, label, host, routeFile string
 	var revision int
@@ -42,7 +42,7 @@ func (c *Client) managedHostnames(ctx context.Context, args []string) error {
 			f.StringVar(&routeFile, "routes", "", "JSON file containing an array of routes")
 		}
 	default:
-		return fmt.Errorf("unknown hostnames command %q", action)
+		return fmt.Errorf("unknown domains command %q", action)
 	}
 	if err := parseFlags(f, args[1:]); err != nil {
 		return err
@@ -51,7 +51,7 @@ func (c *Client) managedHostnames(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	path := base + "/worker-hostnames"
+	path := base + "/domains"
 	if action == "list" {
 		if worker != "" {
 			path = base + "/workers/" + url.PathEscape(worker) + "/hostnames"

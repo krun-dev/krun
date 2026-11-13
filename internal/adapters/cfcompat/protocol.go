@@ -279,12 +279,43 @@ func (s *Server) Routes(objects Endpoint) []Route {
 	add("POST "+base+"/r2/buckets", s.cfProtected(s.cfBucketCreate), false)
 	add("GET "+base+"/r2/buckets/{bucket}", s.cfProtected(s.cfBucketList), false)
 	add("GET "+base+"/r2/buckets/{bucket}/objects", s.cfProtected(objects), false)
+	zones := Prefix + "/zones"
+	add("GET "+zones, s.cfProtected(s.cfHostnameZones), true)
+	add("GET "+zones+"/{zone}", s.cfProtected(s.cfGetHostnameZone), true)
+	originRules := zones + "/{zone}/rulesets/phases/http_request_origin/entrypoint"
+	for _, method := range []string{"GET", "PUT"} {
+		add(method+" "+originRules, s.cfProtected(s.cfOriginRuleset), true)
+	}
+	zoneRoutes := zones + "/{zone}/workers/routes"
+	for _, method := range []string{"GET", "POST"} {
+		add(method+" "+zoneRoutes, s.cfProtected(s.cfZoneWorkerRoutes), true)
+	}
+	for _, method := range []string{"GET", "PUT", "DELETE"} {
+		add(method+" "+zoneRoutes+"/{route_id}", s.cfProtected(s.cfZoneWorkerRoutes), true)
+	}
+
 	add("GET "+Prefix+"/memberships", s.cfProtected(s.cfMemberships), true)
 	add("GET "+Prefix+"/user", s.cfProtected(s.cfUser), true)
 	add("GET "+Prefix+"/accounts", s.cfProtected(s.cfAccounts), true)
 	add("GET "+Prefix+"/user/tokens/verify", s.cfProtected(s.cfVerifyToken), true)
 	add("GET "+base+"/workers/subdomain", s.cfProtected(s.cfAccountSubdomain), false)
 	scripts := base + "/workers/scripts"
+	for _, method := range []string{"GET", "PUT"} {
+		add(method+" "+scripts+"/{script}/routes", s.cfProtected(s.cfScriptWorkerRoutes), false)
+	}
+
+	domains := base + "/workers/domains"
+	for _, method := range []string{"GET", "PUT"} {
+		add(method+" "+domains, s.cfProtected(s.cfCustomDomains), false)
+	}
+	for _, method := range []string{"GET", "DELETE"} {
+		add(method+" "+domains+"/{domain_id}", s.cfProtected(s.cfCustomDomains), false)
+	}
+	add("GET "+domains+"/records", s.cfProtected(s.cfCustomDomains), false)
+	add("GET "+domains+"/records/{domain_id}", s.cfProtected(s.cfCustomDomains), false)
+	add("POST "+scripts+"/{script}/domains/changeset", s.cfProtected(s.cfScriptCustomDomains), false)
+	add("PUT "+scripts+"/{script}/domains/records", s.cfProtected(s.cfScriptCustomDomains), false)
+
 	add("GET "+scripts, s.cfProtected(s.cfScripts), false)
 	add("POST "+scripts+"/{script}/assets-upload-session", s.cfTransport(s.cfAssetSession), false)
 	add("POST "+base+"/workers/assets/upload", s.cfTransport(s.cfAssetUpload), false)

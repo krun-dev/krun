@@ -304,6 +304,12 @@ func (w *Controller) ReconcileRoutes(ctx context.Context) (map[string]bool, erro
 		routesReady["pool:"+pool.ID] = ready
 	}
 
+	if err := w.reconcileManagedHostnames(ctx, desiredRoutes); err != nil {
+		// A database or gateway error cannot turn the last known exact routes
+		// into stale entries eligible for deletion.
+		return routesReady, errors.Join(append(failures, err)...)
+	}
+
 	staleRoutes, staleErr := kubernetes.StaleWorkerRoutes(ctx, w.Kube, "workers-", desiredRoutes)
 	if staleErr != nil {
 		failures = append(failures, staleErr)

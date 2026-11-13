@@ -36,4 +36,33 @@ func TestManagedSuffixLoadsThroughMainConfig(t *testing.T) {
 	if _, err = LoadConfig(file); err == nil || !strings.Contains(err.Error(), "invalid reserved host") {
 		t.Fatalf("reserved host outside its suffix: %v", err)
 	}
+
+	const originBlock = `
+  managed_origins:
+    - host: storefront.origin.example.com
+      kind: static
+      service: storefront
+      namespace: web
+      port: 80
+      host_header: site.example.com
+      organizations: [org-a]
+      suffixes: [public]
+`
+	withOrigin := strings.Replace(base, "  # managed_origins:\n", originBlock, 1)
+	write(withOrigin)
+	cfg, err = LoadConfig(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin, ok := cfg.Workers.ManagedOriginFor("org-a", "public", "storefront.origin.example.com")
+	if !ok || origin.Service != "storefront" || origin.Namespace != "web" || origin.HostHeader != "site.example.com" {
+		t.Fatalf("registered origin did not load: %+v", origin)
+	}
+	if _, ok = cfg.Workers.ManagedOriginFor("org-b", "public", origin.Host); ok {
+		t.Fatal("origin unexpectedly available outside the configured organizations")
+	}
+	write(strings.Replace(withOrigin, "suffixes: [public]", "suffixes: [unknown]", 1))
+	if _, err = LoadConfig(file); err == nil || !strings.Contains(err.Error(), "references unknown suffix") {
+		t.Fatalf("origin with unknown suffix: %v", err)
+	}
 }

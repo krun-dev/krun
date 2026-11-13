@@ -25,11 +25,15 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
     .click();
   await expect(page.getByRole("button", { name: "退出登录" })).toBeVisible();
 
-  const org = await request("/api/v1/orgs", "POST", {
-    name: process.env.KRUN_HOSTNAME_SCREENSHOTS ? "示例工作空间" : "Domain Demo " + Date.now(),
-  });
+  const configuredOrg = process.env.KRUN_HOSTNAME_TEST_ORG;
+  const org = configuredOrg
+    ? await request("/api/v1/orgs/" + configuredOrg)
+    : await request("/api/v1/orgs", "POST", {
+        name: process.env.KRUN_HOSTNAME_SCREENSHOTS ? "示例工作空间" : "Domain Demo " + Date.now(),
+        short_name: "domain-demo-" + Date.now(),
+      });
   const orgBase = "/api/v1/orgs/" + org.id;
-  const catalog = await request(orgBase + "/worker-hostnames");
+  const catalog = await request(orgBase + "/domains");
   test.skip(!catalog.suffixes.length, "The test deployment must enable a managed suffix");
   const profiles = await request(orgBase + "/workers/network-profiles");
   const profile = profiles.items.find((item) => item.default);
@@ -38,14 +42,25 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
     ["Storefront", "storefront"],
     ["Orders API", "orders"],
   ]) {
-    const worker = await request(orgBase + "/workers", "POST", { name, locator });
-    await request(orgBase + "/workers/" + worker.id + "/network-profile", "PUT", {
-      network_profile: profile.id,
-      expected_revision: 0,
-    });
+    if (!configuredOrg) {
+      const worker = await request(orgBase + "/workers", "POST", { name, locator });
+      await request(orgBase + "/workers/" + worker.id + "/network-profile", "PUT", {
+        network_profile: profile.id,
+        expected_revision: 0,
+      });
+    }
   }
 
-  const desiredLabel = process.env.KRUN_HOSTNAME_SCREENSHOTS ? "shop" : "shop-" + Date.now();
+  const suffix = catalog.suffixes[0];
+  const staticOrigin = catalog.origins.find(
+    (origin) => origin.kind === "static" && origin.suffixes.includes(suffix.id),
+  );
+  const httpOrigin = catalog.origins.find(
+    (origin) => origin.kind === "http" && origin.suffixes.includes(suffix.id),
+  );
+  const desiredLabel =
+    process.env.KRUN_HOSTNAME_TEST_LABEL ||
+    (process.env.KRUN_HOSTNAME_SCREENSHOTS ? "shop" : "shop-" + Date.now());
   const host = desiredLabel + "." + catalog.suffixes[0].domain;
   const screenshotDir = process.env.KRUN_HOSTNAME_SCREENSHOTS;
   if (screenshotDir) await mkdir(screenshotDir, { recursive: true });
@@ -56,6 +71,7 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
       const layer = document.createElement("div");
       layer.id = "documentation-annotation-layer";
       layer.style.cssText = "position:fixed;inset:0;z-index:10000;pointer-events:none";
+      layer.setAttribute("aria-hidden", "true");
       document.body.append(layer);
     });
     for (const [number, locator] of anchors) {
@@ -79,34 +95,57 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
   }
 
   await page.goto("/?page=workers&workspace=" + org.id);
-  const catalogTab = page.getByRole("tab", { name: "域名与路由" });
-  await catalogTab.click();
-  await page.getByRole("button", { name: "申请域名" }).click();
+  const domains = page.getByRole("button", { name: "域名", exact: true });
+  await domains.click();
+  const claim = page.getByRole("button", { name: "申请域名" });
+  await claim.click();
   const dialog = page.getByRole("dialog");
   const prefix = dialog.getByRole("textbox", { name: "域名前缀" });
-  await prefix.fill(desiredLabel);
-  await dialog.getByRole("button", { name: "添加路由" }).click();
-  await dialog.getByRole("textbox", { name: "目标 Worker" }).nth(0).fill("storefront");
-  await dialog.getByRole("button", { name: "添加路由" }).click();
-  await dialog.getByRole("textbox", { name: "目标 Worker" }).nth(1).fill("orders");
+  const submitClaim = dialog.getByRole("button", { name: "申请域名", exact: true });
   const save = dialog.getByRole("button", { name: "保存", exact: true });
+  await prefix.fill(desiredLabel);
   await screenshot("claim.png", [
-    [3, prefix],
-    [4, dialog.getByRole("textbox", { name: "目标 Worker" }).nth(1)],
-    [5, save],
+    [3, dialog.getByRole("combobox", { name: "域名后缀" })],
+    [4, prefix],
+    [5, submitClaim],
   ]);
   const claimed = page.waitForResponse(
-    (response) =>
-      response.url().endsWith("/worker-hostnames") && response.request().method() === "POST",
+    (response) => response.url().endsWith("/domains") && response.request().method() === "POST",
   );
-  await save.click();
+  await submitClaim.click();
   const response = await claimed;
   expect(response.status(), await response.text()).toBe(201);
 
   await expect(page.getByRole("link", { name: host })).toBeVisible();
   const edit = page.getByRole("button", { name: "编辑路由" });
+  await edit.click();
+  await dialog.getByRole("button", { name: "添加路由" }).click();
+  const targets = dialog.getByRole("combobox", { name: "目标类型" });
+  if (staticOrigin) {
+    await targets.nth(0).selectOption(staticOrigin.host);
+  } else {
+    await dialog.getByRole("textbox", { name: "目标 Worker" }).first().fill("storefront");
+  }
+  await dialog.getByRole("button", { name: "添加路由" }).click();
+  await dialog.getByRole("textbox", { name: "目标 Worker" }).last().fill("orders");
+  if (httpOrigin) {
+    await dialog.getByRole("button", { name: "添加路由" }).click();
+    await dialog.getByRole("textbox", { name: "请求路径" }).last().fill("/legacy");
+    await targets.last().selectOption(httpOrigin.host);
+  }
+  await save.scrollIntoViewIfNeeded();
+  await screenshot("routes.png", [
+    [6, dialog.getByRole("textbox", { name: "请求路径" }).nth(1)],
+    [7, targets.nth(0)],
+    [8, save],
+  ]);
+  await save.click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("/api", { exact: true })).toBeVisible();
+  if (staticOrigin) await expect(page.getByText(staticOrigin.host, { exact: true })).toBeVisible();
+  if (httpOrigin) await expect(page.getByText(httpOrigin.host, { exact: true })).toBeVisible();
   await screenshot("catalog.png", [
-    [1, catalogTab],
+    [1, domains],
     [2, edit],
   ]);
   await page.reload();
@@ -118,9 +157,8 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
 
   await page.goto("/?page=workers&workspace=" + org.id + "&worker=orders&worker_tab=routing");
   await expect(page.getByRole("link", { name: host })).toBeVisible();
-  await expect(page.getByRole("button", { name: "管理域名与路由" })).toBeVisible();
-  await page.getByRole("button", { name: "管理域名与路由" }).click();
-  await expect(catalogTab).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("link", { name: "管理域名与路由" }).click();
+  await expect(page).toHaveURL(/page=domains/);
 
   // Exercise both palettes while the real route table is rendered.
   await page.evaluate(() => document.documentElement.classList.add("dark"));

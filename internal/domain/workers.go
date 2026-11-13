@@ -108,9 +108,11 @@ type WorkerEnvironment struct {
 }
 
 type Worker struct {
-	PreviewBase        *WorkerEnvironment      `json:"previews_base,omitempty"`
-	Repository         *WorkerRepositorySource `json:"repository_source,omitempty"`
-	RepositoryRevision int                     `json:"repository_revision"`
+	WorkersDevDisabled  bool                    `json:"-"`
+	PreviewURLsDisabled bool                    `json:"-"`
+	PreviewBase         *WorkerEnvironment      `json:"previews_base,omitempty"`
+	Repository          *WorkerRepositorySource `json:"repository_source,omitempty"`
+	RepositoryRevision  int                     `json:"repository_revision"`
 	// DomainsRevision is the optimistic-concurrency token for replacing the
 	// worker's routing domains. PreviewRevision is internal coordination for
 	// changes to the preview-environment set; it prevents concurrent creates

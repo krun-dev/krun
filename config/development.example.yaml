@@ -39,6 +39,7 @@ providers:
   # HTTPS origin 不带路径，由部署方维护 DNS、TLS 和 /api/internal/workers/* 路由。
   # 预置后缀下开放用户选名：在 workers.domains 对应条目设置 managed_subdomains: true。
   # 通过 reserved_hosts 预留该后缀下的其他完整域名。
+  # 混合路由的静态站点和 HTTP 服务在 workers.managed_origins 登记，见 config/example.yaml。
   # 本地连接集群时在同一 workers: 段配置：
   # kubernetes_kubeconfig_file: /absolute/path/to/kubeconfig
   # kubernetes_context: test-cluster # 可省略，使用文件内 current-context。

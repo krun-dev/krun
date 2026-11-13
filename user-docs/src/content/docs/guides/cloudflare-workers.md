@@ -147,6 +147,9 @@ npx wrangler@4.155.0 secret list
 
 Worker 可以通过 `env.API_TOKEN` 读取该值。Secret 更新会基于当前部署生成并发布新版本；如果已有尚未部署的新版本，请先处理该版本。
 
+在平台已开放的 Zone 下，可以继续使用 Wrangler 的 `route`、`routes` 和 `custom_domain`。
+见[自定义子域名与路径路由](/docs/guides/workers-hostnames.html#cloudflare-api-与-wrangler)。
+
 ## 6. 常见错误对照
 
 Wrangler 的报错来自 krun 的 Cloudflare 兼容接口，错误码与平台语义的对应：

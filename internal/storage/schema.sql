@@ -285,6 +285,8 @@ CREATE TABLE IF NOT EXISTS krun_workers (
 	repository_revision integer NOT NULL DEFAULT 0,
 	domains_revision    integer NOT NULL DEFAULT 0,
 	preview_revision    integer NOT NULL DEFAULT 0,
+	workers_dev_disabled boolean NOT NULL DEFAULT false,
+	preview_urls_disabled boolean NOT NULL DEFAULT false,
 	active_build_count  integer NOT NULL DEFAULT 0 CHECK (active_build_count >= 0),
 	updated_at          timestamptz NOT NULL DEFAULT now()
 );
@@ -628,7 +630,8 @@ CREATE TABLE IF NOT EXISTS krun_worker_hostnames (
 	org_id text NOT NULL,
 	suffix_id text NOT NULL,
 	revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
-	retired boolean NOT NULL DEFAULT false
+	retired boolean NOT NULL DEFAULT false,
+	gateway_managed boolean NOT NULL DEFAULT false
 );
 CREATE INDEX IF NOT EXISTS krun_worker_hostnames_org ON krun_worker_hostnames(org_id, host) WHERE NOT retired;
 
@@ -637,8 +640,12 @@ CREATE TABLE IF NOT EXISTS krun_worker_hostname_routes (
 	match_type text NOT NULL CHECK (match_type IN ('exact', 'prefix')),
 	path text NOT NULL,
 	worker_id text NOT NULL,
+	origin text NOT NULL DEFAULT '',
+	cf_pattern text NOT NULL DEFAULT '',
+	custom_domain boolean NOT NULL DEFAULT false,
 	enabled boolean NOT NULL,
-	PRIMARY KEY (host, match_type, path)
+	PRIMARY KEY (host, match_type, path),
+	CHECK ((worker_id = '') <> (origin = ''))
 );
 CREATE INDEX IF NOT EXISTS krun_worker_hostname_routes_worker ON krun_worker_hostname_routes(worker_id, host);
 

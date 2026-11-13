@@ -314,16 +314,25 @@ await check(
       managedRoutes: [rule(web, "/"), rule(api, "/api"), rule(api, "/api/paused", false)],
       workerResponse: (request) =>
         Response.json(
-          { url: request.url },
+          { url: request.url, gatewayRoute: request.headers.get("x-krun-route") },
           { status: new URL(request.url).pathname.endsWith("/missing") ? 404 : 200 },
         ),
     });
     const handler = new (await freshEntry()).Private(managedEnv, {});
-    const invoke = (path) => handler.fetch(new Request("https://" + host + path));
+    const invoke = (path, gatewayRoute) =>
+      handler.fetch(
+        new Request("https://" + host + path, {
+          headers: gatewayRoute ? { "x-krun-route": gatewayRoute } : {},
+        }),
+      );
     const original = "/api/orders?limit=1";
-    const result = await invoke(original);
+    const result = await invoke(original, "api:prefix:/api");
     assert.equal(result.headers.get("x-krun-version"), api.id);
-    assert.equal((await result.json()).url, "https://" + host + original);
+    const served = await result.json();
+    assert.equal(served.url, "https://" + host + original);
+    assert.equal(served.gatewayRoute, null);
+    assert.equal((await invoke(original, "previous-worker:prefix:/api")).status, 404);
+    assert.equal((await invoke(original, "web:prefix:/")).status, 404);
     const fallback = await invoke("/apix");
     assert.equal(fallback.headers.get("x-krun-version"), web.id);
     const missing = await invoke("/api/missing");

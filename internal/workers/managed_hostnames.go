@@ -46,7 +46,19 @@ func (s *Service) ManagedHostnameCatalog(ctx context.Context, st *domain.State, 
 	if err != nil {
 		return nil, Read, err
 	}
-	return map[string]any{"items": items, "suffixes": suffixes, "can_manage": decision.Allowed}, Read, nil
+	type originOption struct {
+		Host     string   `json:"host"`
+		Kind     string   `json:"kind"`
+		Label    string   `json:"label"`
+		Suffixes []string `json:"suffixes"`
+	}
+	origins := []originOption{}
+	for _, origin := range s.Config.Workers.ManagedOrigins {
+		if slices.Contains(origin.Organizations, target.ID) {
+			origins = append(origins, originOption{origin.Host, origin.Kind, origin.Label, origin.Suffixes})
+		}
+	}
+	return map[string]any{"items": items, "suffixes": suffixes, "origins": origins, "can_manage": decision.Allowed}, Read, nil
 }
 
 func (s *Service) WorkerManagedHostnames(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef) (any, Outcome, error) {
@@ -77,7 +89,7 @@ func (s *Service) SaveManagedHostname(ctx context.Context, st *domain.State, p a
 	if err = s.require(st, p, "worker.hostname.manage", org); err != nil {
 		return nil, Read, err
 	}
-	item, err := s.managedHostnameForChange(ctx, org.ID, host, in)
+	item, err := s.ManagedHostnameForChange(ctx, org.ID, host, in)
 	if err != nil {
 		return nil, Read, err
 	}
@@ -89,8 +101,11 @@ func (s *Service) SaveManagedHostname(ctx context.Context, st *domain.State, p a
 			return nil, Read, domain.Invalid("HOSTNAME_ROUTE_INVALID", "Provide routes explicitly; use [] to remove all routes")
 		}
 		previous := item.Routes
-		item.Routes, err = s.managedHostnameRoutes(ctx, st, p, org.ID, item.SuffixID, in.Routes, previous)
+		item.Routes, err = s.ValidateManagedHostnameRoutes(ctx, st, p, org.ID, item.SuffixID, in.Routes, previous)
 		if err != nil {
+			return nil, Read, err
+		}
+		if err = PrepareGatewayHostname(&item); err != nil {
 			return nil, Read, err
 		}
 	}
@@ -119,7 +134,7 @@ func (s *Service) SaveManagedHostname(ctx context.Context, st *domain.State, p a
 	return item, Read, nil
 }
 
-func (s *Service) managedHostnameForChange(ctx context.Context, org, host string, in ManagedHostnameInput) (domain.ManagedHostname, error) {
+func (s *Service) ManagedHostnameForChange(ctx context.Context, org, host string, in ManagedHostnameInput) (domain.ManagedHostname, error) {
 	if host != "" {
 		if in.ExpectedRevision < 1 {
 			return domain.ManagedHostname{}, domain.Invalid("HOSTNAME_INVALID", "A positive expected_revision is required")
@@ -150,7 +165,7 @@ func (s *Service) managedHostnameForChange(ctx context.Context, org, host string
 	return domain.ManagedHostname{Host: host, Organization: org, SuffixID: suffix.ID}, nil
 }
 
-func (s *Service) managedHostnameRoutes(ctx context.Context, st *domain.State, p authorization.Principal, org, suffixID string, in, previous []domain.ManagedHostnameRoute) ([]domain.ManagedHostnameRoute, error) {
+func (s *Service) ValidateManagedHostnameRoutes(ctx context.Context, st *domain.State, p authorization.Principal, org, suffixID string, in, previous []domain.ManagedHostnameRoute) ([]domain.ManagedHostnameRoute, error) {
 	if len(in) > 64 {
 		return nil, domain.Invalid("HOSTNAME_ROUTE_INVALID", "A hostname supports at most 64 routes")
 	}
@@ -174,6 +189,31 @@ func (s *Service) managedHostnameRoutes(ctx context.Context, st *domain.State, p
 			return nil, domain.Conflict("HOSTNAME_ROUTE_CONFLICT", "A route already uses this match and path")
 		}
 		seen[key] = true
+		if rule.Origin != "" {
+			_, available := s.Config.Workers.ManagedOriginFor(org, suffixID, rule.Origin)
+			unchanged := slices.ContainsFunc(previous, func(old domain.ManagedHostnameRoute) bool {
+				return old.Match == rule.Match && old.Path == rule.Path && old.Origin == rule.Origin
+			})
+			if (!available && !unchanged) || rule.Worker != "" {
+				return nil, domain.Invalid("HOSTNAME_TARGET_INVALID", "Choose an origin available to this organization and suffix")
+			}
+			rule.WorkerLocator = ""
+			rule.CFPattern = ""
+			rule.CustomDomain = false
+			out = append(out, rule)
+			continue
+		}
+		// Protocol metadata is server-owned. Preserve it only for a rule
+		// that is still bound to the same Worker.
+		rule.CFPattern = ""
+		rule.CustomDomain = false
+		for _, old := range previous {
+			if old.Match == rule.Match && old.Path == rule.Path && old.Worker == rule.Worker {
+				rule.CFPattern = old.CFPattern
+				rule.CustomDomain = old.CustomDomain
+				break
+			}
+		}
 		if !slices.ContainsFunc(previous, func(old domain.ManagedHostnameRoute) bool {
 			return old.Match == rule.Match && old.Path == rule.Path && old.Worker == rule.Worker && old.Enabled == rule.Enabled
 		}) {
@@ -205,4 +245,21 @@ func (s *Service) resolveManagedTarget(ctx context.Context, st *domain.State, p 
 		return authorization.Target{}, err
 	}
 	return s.WorkerTarget(st, WorkerRef{Organization: org, Worker: id}, appconfig.WorkerBaseline, "worker.update", p)
+}
+
+// Gateway API allows at most sixteen rules, including the no-match response.
+func PrepareGatewayHostname(item *domain.ManagedHostname) error {
+	root := false
+	for _, rule := range item.Routes {
+		item.GatewayManaged = item.GatewayManaged || rule.Origin != ""
+		root = root || (rule.Match == "prefix" && rule.Path == "/")
+	}
+	limit := 15
+	if root {
+		limit = 16
+	}
+	if item.GatewayManaged && len(item.Routes) > limit {
+		return domain.Invalid("HOSTNAME_ROUTE_INVALID", "A gateway hostname exceeds the HTTPRoute rule limit")
+	}
+	return nil
 }

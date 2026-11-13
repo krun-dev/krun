@@ -24,12 +24,6 @@ func (s *Server) cfCreateWorker(w http.ResponseWriter, r *http.Request) {
 		s.WriteError(w, r, err)
 		return
 	}
-	// Disabled managed URLs are explicitly unsupported until routing can enforce
-	// this independently of the native environment's enabled state.
-	if in.Subdomain.Enabled != nil && !*in.Subdomain.Enabled || in.Subdomain.PreviewsEnabled != nil && !*in.Subdomain.PreviewsEnabled {
-		s.WriteError(w, r, domain.Problem(422, "UNSUPPORTED_SETTING", "Disabling managed URLs is not supported"))
-		return
-	}
 	_, err := s.cfEnsureScript(r, in.Name)
 	if err != nil {
 		s.WriteError(w, r, err)
@@ -42,10 +36,18 @@ func (s *Server) cfCreateWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var out any
-	err = s.cfCall(r, false, func(st *domain.State, p authorization.Principal) error {
-		var e error
-		out, _, e = s.cfScriptDetails(st, p, r)
-		return e
+	changeSubdomain := in.Subdomain.Enabled != nil || in.Subdomain.PreviewsEnabled != nil
+	err = s.cfCall(r, changeSubdomain, func(st *domain.State, p authorization.Principal) error {
+		if changeSubdomain {
+			target, err := s.WorkerTarget(st, r, "production", "worker.update", p)
+			if err != nil {
+				return err
+			}
+			s.Application(r).UpdateWorkerSubdomain(st, p, target, in.Subdomain.Enabled, in.Subdomain.PreviewsEnabled)
+		}
+		var err error
+		out, _, err = s.cfScriptDetails(st, p, r)
+		return err
 	})
 	if err != nil {
 		s.WriteError(w, r, err)
@@ -54,7 +56,8 @@ func (s *Server) cfCreateWorker(w http.ResponseWriter, r *http.Request) {
 	s.JSON(w, 200, Result(out))
 }
 func (s *Server) cfSubdomainUpdate(st *domain.State, p authorization.Principal, r *http.Request) (any, int, error) {
-	if _, err := s.WorkerTarget(st, r, "global", "worker.update", p); err != nil {
+	target, err := s.WorkerTarget(st, r, "production", "worker.update", p)
+	if err != nil {
 		return nil, 0, err
 	}
 	var in struct {
@@ -64,11 +67,8 @@ func (s *Server) cfSubdomainUpdate(st *domain.State, p authorization.Principal, 
 	if err := s.body(r, &in); err != nil {
 		return nil, 0, err
 	}
-	if in.Enabled != nil && !*in.Enabled || in.PreviewsEnabled != nil && !*in.PreviewsEnabled {
-		return nil, 0, domain.Problem(422, "UNSUPPORTED_SETTING", "Disabling managed URLs is not supported")
-	}
-	_, env, err := s.cfCurrent(st, p, r)
-	return map[string]any{"enabled": true, "previews_enabled": true, "url": s.cfURL(env)}, 200, err
+	service := s.Application(r).UpdateWorkerSubdomain(st, p, target, in.Enabled, in.PreviewsEnabled)
+	return s.cfSubdomain(r, service, service.Environments["production"]), 200, nil
 }
 func (s *Server) cfDeleteScript(w http.ResponseWriter, r *http.Request) {
 	var err error

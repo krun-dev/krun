@@ -2452,6 +2452,7 @@ async function serveWorkerRequest(
     "x-krun-scope",
     "x-forwarded-host",
     "x-internal",
+    "x-krun-route",
     krunVersionKey,
     cloudflareVersionKey,
     versionOverrides,
@@ -2593,7 +2594,11 @@ export class Private extends WorkerEntrypoint {
       if (route?.invalidPath) {
         return json({ error: "invalid path" }, 400);
       }
-      if (!route) {
+      const gatewayRoute = request.headers.get("x-krun-route");
+      if (
+        !route ||
+        (gatewayRoute && gatewayRoute !== route.worker_id + ":" + route.match + ":" + route.path)
+      ) {
         return json({ error: "unknown route" }, 404);
       }
 

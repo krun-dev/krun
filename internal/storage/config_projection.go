@@ -34,7 +34,7 @@ func (s *Store) EdgeConfigState(ctx context.Context, ids []string) (*domain.Stat
 			}
 		}
 	}
-	rows, err := tx.Query(ctx, `SELECT s.worker_id, s.org_id, s.network_profile, r.locator
+	rows, err := tx.Query(ctx, `SELECT s.worker_id, s.org_id, s.network_profile, r.locator, s.workers_dev_disabled, s.preview_urls_disabled
 		FROM krun_workers s
 		JOIN krun_resources r ON r.resource_id=s.worker_id AND r.kind='worker' AND r.org_id=s.org_id
 		JOIN krun_organizations o ON o.org_id=s.org_id
@@ -45,13 +45,14 @@ func (s *Store) EdgeConfigState(ctx context.Context, ids []string) (*domain.Stat
 	}
 	for rows.Next() {
 		var worker, organization, profile, locator string
-		if err = rows.Scan(&worker, &organization, &profile, &locator); err != nil {
+		var workersDevDisabled, previewURLsDisabled bool
+		if err = rows.Scan(&worker, &organization, &profile, &locator, &workersDevDisabled, &previewURLsDisabled); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		st.Organizations[organization] = domain.Organization{ID: organization}
 		st.Resources[worker] = domain.Resource{ID: worker, Kind: "worker", Organization: organization, Locator: locator}
-		st.Workers.Workers[worker] = domain.Worker{Worker: worker, Organization: organization, NetworkProfile: profile, Environments: map[string]domain.WorkerEnvironment{}}
+		st.Workers.Workers[worker] = domain.Worker{Worker: worker, Organization: organization, NetworkProfile: profile, WorkersDevDisabled: workersDevDisabled, PreviewURLsDisabled: previewURLsDisabled, Environments: map[string]domain.WorkerEnvironment{}}
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()

@@ -103,9 +103,9 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 			}
 			if !existed {
 				tag, err := tx.Exec(ctx, `INSERT INTO krun_workers
-					(worker_id, org_id, network_profile, repository, repository_revision, domains_revision, preview_revision)
-					VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (worker_id) DO NOTHING`, id, svc.Organization,
-					svc.NetworkProfile, repository, svc.RepositoryRevision, svc.DomainsRevision, svc.PreviewRevision)
+					(worker_id, org_id, network_profile, repository, repository_revision, domains_revision, preview_revision, workers_dev_disabled, preview_urls_disabled)
+					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (worker_id) DO NOTHING`, id, svc.Organization,
+					svc.NetworkProfile, repository, svc.RepositoryRevision, svc.DomainsRevision, svc.PreviewRevision, svc.WorkersDevDisabled, svc.PreviewURLsDisabled)
 				if err != nil {
 					return err
 				}
@@ -139,8 +139,8 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 				return domain.Conflict("REVISION_CONFLICT", "Domain configuration changed")
 			}
 			tag, err := tx.Exec(ctx, `UPDATE krun_workers
-				SET domains_revision=$2, network_profile=$4, updated_at=now()
-				WHERE worker_id=$1 AND domains_revision=$3`, id, svc.DomainsRevision, old.DomainsRevision, svc.NetworkProfile)
+				SET domains_revision=$2, network_profile=$4, workers_dev_disabled=$5, preview_urls_disabled=$6, updated_at=now()
+				WHERE worker_id=$1 AND domains_revision=$3`, id, svc.DomainsRevision, old.DomainsRevision, svc.NetworkProfile, svc.WorkersDevDisabled, svc.PreviewURLsDisabled)
 			if err != nil {
 				return err
 			}

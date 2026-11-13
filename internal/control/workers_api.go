@@ -63,12 +63,15 @@ func (s *Server) workersRoutes(m *recordingMux) {
 			return fn(st, p, r)
 		})
 	}
-	m.HandleFunc("GET "+hostnames, hostnameEndpoint(s.workerHostnameCatalog))
-	m.useScope(scopeWorkerHostnameTargets)
-	m.HandleFunc("POST "+hostnames, hostnameEndpoint(s.workerSaveHostname))
-	m.HandleFunc("PUT "+hostnames+"/{host}", hostnameEndpoint(s.workerSaveHostname))
-	m.useScope(scopeOrganization)
-	m.HandleFunc("DELETE "+hostnames+"/{host}", hostnameEndpoint(s.workerSaveHostname))
+	for _, base := range []string{hostnames, "/api/v1/orgs/{org}/domains"} {
+		m.useScope(scopeOrganization)
+		m.HandleFunc("GET "+base, hostnameEndpoint(s.workerHostnameCatalog))
+		m.useScope(scopeWorkerHostnameTargets)
+		m.HandleFunc("POST "+base, hostnameEndpoint(s.workerSaveHostname))
+		m.HandleFunc("PUT "+base+"/{host}", hostnameEndpoint(s.workerSaveHostname))
+		m.useScope(scopeOrganization)
+		m.HandleFunc("DELETE "+base+"/{host}", hostnameEndpoint(s.workerSaveHostname))
+	}
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/network-profiles", protect(false, s.workerNetworkProfiles))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/repository-providers", protect(false, s.workerRepositoryProviders))
 	m.HandleFunc("POST /api/v1/orgs/{org}/worker-repositories/{provider}/connect", protect(true, s.workerRepositoryConnect))
