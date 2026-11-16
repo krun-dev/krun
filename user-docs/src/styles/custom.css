@@ -457,6 +457,11 @@ html[data-has-toc] {
   --marker-left: 16.5%;
 }
 
+.krun-metrics-cpu {
+  --marker-top: 15.5%;
+  --marker-left: 32%;
+}
+
 .krun-metrics-figure figcaption {
   color: var(--sl-color-text);
   font-size: var(--sl-text-sm);

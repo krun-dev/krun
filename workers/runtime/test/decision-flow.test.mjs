@@ -460,6 +460,70 @@ await check(
     assert.equal((await call(metrics, "/validate")).status, 404);
   },
 );
+await check(
+  "CPU metrics accumulate completed Worker invocations without rounding or double counting",
+  async () => {
+    const mod = await freshEntry();
+    const local = makeEnv(null, [], "rel_cpu");
+    const ctx = { exports: { IsolateActivity: () => ({}) } };
+    const serving = new mod.Private(local, ctx);
+    assert.equal((await call(serving, "/api/cpu")).status, 200);
+    const beforeOutcome = await (await call(new mod.Metrics(local, {}), "/metrics")).text();
+    assert.doesNotMatch(beforeOutcome, /^krun_worker_version_cpu_seconds_total\{/m);
+    const tail = new mod.IsolateActivity(local, { props: { key: local.__loaderKey } });
+    const complete = tail.tailStream({ event: { entrypoint: "default" } });
+    complete({ event: { type: "outcome", cpuTime: 0.125 } });
+    complete({ event: { type: "outcome", cpuTime: 99 } });
+    const second = tail.tailStream({ event: { entrypoint: "default" } });
+    second({ event: { type: "outcome", cpuTime: 2.5 } });
+    const invalid = tail.tailStream({ event: { entrypoint: "default" } });
+    invalid({ event: { type: "outcome", cpuTime: NaN } });
+    const samples = await (await call(new mod.Metrics(local, {}), "/metrics")).text();
+    assert.match(samples, /^# TYPE krun_worker_version_cpu_seconds_total counter$/m);
+    assert.match(
+      samples,
+      /^krun_worker_version_cpu_seconds_total\{organization_id="org",worker_id="svc",environment="production",version_id="rel_cpu"\} 0\.002625$/m,
+    );
+  },
+);
+
+await check("CPU metrics remain separate across rollout versions", async () => {
+  const mod = await freshEntry();
+  const cpuCandidate = { ...version, id: "rel_cpu_candidate" };
+  const local = makeEnv(null, [], version.id, {
+    route: { candidate_version: cpuCandidate.id, candidate_weight: 50000 },
+    versions: { [cpuCandidate.id]: cpuCandidate },
+  });
+  const serving = new mod.Private(local, { exports: { IsolateActivity: () => ({}) } });
+  const loaderKeys = new Map();
+  for (let n = 0; n < 50 && loaderKeys.size < 2; n++) {
+    const response = await call(serving, "/api/cpu", { "Krun-Workers-Version-Key": `cpu-${n}` });
+    assert.equal(response.status, 200);
+    loaderKeys.set(response.headers.get("x-krun-version"), local.__loaderKey);
+  }
+  assert.equal(loaderKeys.size, 2);
+  for (const [id, milliseconds] of [
+    [version.id, 1],
+    [cpuCandidate.id, 3],
+  ]) {
+    const tail = new mod.IsolateActivity(local, { props: { key: loaderKeys.get(id) } });
+    tail.tailStream({ event: { entrypoint: "default" } })({
+      event: { type: "outcome", cpuTime: milliseconds },
+    });
+  }
+  const samples = await (await call(new mod.Metrics(local, {}), "/metrics")).text();
+  for (const [id, seconds] of [
+    [version.id, 0.001],
+    [cpuCandidate.id, 0.003],
+  ]) {
+    assert.ok(
+      samples.includes(
+        `krun_worker_version_cpu_seconds_total{organization_id="org",worker_id="svc",environment="production",version_id="${id}"} ${seconds}`,
+      ),
+    );
+  }
+});
+
 await check("non-navigation miss without SPA config goes to the worker", async () => {
   const noSpaEnv = makeEnv({ ...config, not_found_handling: "none" }, fileList, "rel_nospa");
   const noSpaEntry = await freshEntry();

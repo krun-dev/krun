@@ -46,27 +46,42 @@ function recordRequestMetrics(version, statusClass, startedAt) {
   requestsByStatusClass[statusClass]++;
   observeDuration(requestDuration, seconds);
 
-  if (!version.organization_id || !version.worker_id || !version.environment) {
-    return;
-  }
-  const metrics = versionRequests.get(version.id) ?? {
-    labels: [
-      `organization_id=${metricLabel(version.organization_id)}`,
-      `worker_id=${metricLabel(version.worker_id)}`,
-      `environment=${metricLabel(version.environment)}`,
-      `version_id=${metricLabel(version.id)}`,
-    ].join(","),
-    non5xx: 0,
-    errors5xx: 0,
-    duration: durationHistogram(),
-    lastSeen: 0,
-  };
+  const metrics = workerVersionMetrics(version);
+  if (!metrics) return;
   if (statusClass === "5xx") {
     metrics.errors5xx++;
   } else {
     metrics.non5xx++;
   }
   observeDuration(metrics.duration, seconds);
+  metrics.lastSeen = Date.now();
+  lruPut(versionRequests, version.id, metrics, versionMetricsMax);
+}
+
+function workerVersionMetrics(version) {
+  if (!version.organization_id || !version.worker_id || !version.environment) return null;
+  return (
+    versionRequests.get(version.id) ?? {
+      labels: [
+        `organization_id=${metricLabel(version.organization_id)}`,
+        `worker_id=${metricLabel(version.worker_id)}`,
+        `environment=${metricLabel(version.environment)}`,
+        `version_id=${metricLabel(version.id)}`,
+      ].join(","),
+      non5xx: 0,
+      errors5xx: 0,
+      duration: durationHistogram(),
+      cpuSeconds: null,
+      lastSeen: 0,
+    }
+  );
+}
+
+function recordWorkerCpu(version, milliseconds) {
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return;
+  const metrics = workerVersionMetrics(version);
+  if (!metrics) return;
+  metrics.cpuSeconds = (metrics.cpuSeconds ?? 0) + milliseconds / 1000;
   metrics.lastSeen = Date.now();
   lruPut(versionRequests, version.id, metrics, versionMetricsMax);
 }
@@ -127,6 +142,8 @@ export class Metrics extends WorkerEntrypoint {
       "# TYPE krun_worker_version_requests_total counter",
       "# HELP krun_worker_version_request_duration_seconds HTTP dispatch time to response by Worker version.",
       "# TYPE krun_worker_version_request_duration_seconds histogram",
+      "# HELP krun_worker_version_cpu_seconds_total CPU time attributed to completed Worker invocations.",
+      "# TYPE krun_worker_version_cpu_seconds_total counter",
     );
     const cutoff = Date.now() - versionMetricsIdleMs;
     for (const [id, metrics] of versionRequests) {
@@ -135,6 +152,9 @@ export class Metrics extends WorkerEntrypoint {
         continue;
       }
       const { labels } = metrics;
+      if (metrics.cpuSeconds !== null) {
+        samples.push(`krun_worker_version_cpu_seconds_total{${labels}} ${metrics.cpuSeconds}`);
+      }
       samples.push(
         `krun_worker_version_requests_total{${labels},outcome="non_5xx"} ${metrics.non5xx}`,
         `krun_worker_version_requests_total{${labels},outcome="5xx"} ${metrics.errors5xx}`,
@@ -1505,7 +1525,7 @@ const reservedBindings = new Set([
 const magicBindings = new Set(["__proto__", "prototype", "constructor"]);
 
 function workerKey(version, mode) {
-  return `${version.organization_id}/${version.worker_id}/${version.environment}/${version.id}/${mode}/workerd-20261116/workerd-bundle-v2`;
+  return `${version.organization_id}/${version.worker_id}/${version.environment}/${version.id}/${mode}/workerd-20261116-krun1/workerd-bundle-v2`;
 }
 
 function recordWorkerRequest(version, ctx) {
@@ -1515,6 +1535,12 @@ function recordWorkerRequest(version, ctx) {
     const suffix = crypto.randomUUID().replaceAll("-", "");
     entry = {
       version: version.id,
+      metricVersion: {
+        id: version.id,
+        organization_id: version.organization_id,
+        worker_id: version.worker_id,
+        environment: version.environment,
+      },
       key: `${workerKey(version, "serving")}/${++nextWorkerInstance}`,
       retirementEntrypoint: "KrunRetirement" + suffix,
       retirementToken: crypto.randomUUID(),
@@ -1577,9 +1603,12 @@ export class IsolateActivity extends WorkerEntrypoint {
     }
 
     entry.inFlight++;
+    let completed = false;
     return ({ event }) => {
-      if (event.type === "outcome") {
+      if (event.type === "outcome" && !completed) {
+        completed = true;
         entry.inFlight--;
+        recordWorkerCpu(entry.metricVersion, event.cpuTime);
       }
     };
   }
