@@ -92,7 +92,8 @@ type WorkerEnvironment struct {
 	Domains []string `json:"domains"`
 	// Hosts holds one route host per selected domain: {slug}-{env}.{domain}.
 	// Disabled environments keep their hosts so the runtime can answer 410.
-	Hosts []string `json:"hosts"`
+	Hosts        []string `json:"hosts"`
+	PreviewHosts []string `json:"preview_hosts,omitempty"`
 	// DisplayHosts maps domain id to the browser-facing form of its host.
 	// Presentation only: routing uses Hosts.
 	DisplayHosts   map[string]string `json:"display_hosts,omitempty"`
@@ -146,7 +147,12 @@ type WorkerPlacement struct {
 	Updated        time.Time `json:"updated_at"`
 }
 
+// WorkerVersionURLOperation validates an uploaded Version URL without changing the production deployment.
+const WorkerVersionURLOperation = "version-url"
+
 type WorkerVersion struct {
+	PreviewHosts       []string                        `json:"preview_hosts,omitempty"`
+	VersionURL         bool                            `json:"-"`
 	ServiceBindings    map[string]WorkerServiceBinding `json:"service_bindings,omitempty"`
 	SecretNames        []string                        `json:"secret_names,omitempty"`
 	Configuration      string                          `json:"configuration_id,omitempty"`

@@ -14,7 +14,22 @@ func TestManagedSuffixLoadsThroughMainConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := strings.Replace(string(raw), "managed_subdomains: false", "managed_subdomains: true", 1)
+	const typedSuffixes = `
+    - id: custom
+      types: [worker_custom]
+      domain: custom.example.com
+      access: public
+      labels: {exposure: external}
+      gateway: external
+    - id: apps
+      types: [application]
+      domain: apps.example.com
+      access: public
+      labels: {exposure: external}
+      gateway: external
+      reserved_hosts: []
+`
+	base := strings.Replace(string(raw), "      reserved_hosts: []\n", typedSuffixes, 1)
 	file := filepath.Join(t.TempDir(), "main.yaml")
 	write := func(text string) {
 		t.Helper()
@@ -23,18 +38,40 @@ func TestManagedSuffixLoadsThroughMainConfig(t *testing.T) {
 		}
 	}
 
-	write(strings.Replace(base, "reserved_hosts: []", "reserved_hosts: [reserved.workers.example.com]", 1))
+	write(strings.Replace(base, "reserved_hosts: []", "reserved_hosts: [reserved.apps.example.com]", 1))
 	cfg, err := LoadConfig(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Workers.Domains[0].ManagedSubdomains || !cfg.Workers.ManagedHostReserved("reserved.workers.example.com") {
+	shared := cfg.Workers.Domains[0]
+	if !shared.Allows(WorkerDomainDefault) || !shared.Allows(WorkerDomainCustom) || !cfg.Workers.ManagedHostReserved("w-reserved."+shared.Domain) {
+		t.Fatal("shared suffix is missing either use or the generated prefix reservation")
+	}
+	if !cfg.Workers.Domains[1].Allows(WorkerDomainCustom) || !cfg.Workers.Domains[2].Allows(WorkerDomainApplication) || !cfg.Workers.ManagedHostReserved("reserved.apps.example.com") {
 		t.Fatal("managed suffix or reserved hostname was not applied")
 	}
 
 	write(strings.Replace(base, "reserved_hosts: []", "reserved_hosts: [other.example.com]", 1))
 	if _, err = LoadConfig(file); err == nil || !strings.Contains(err.Error(), "invalid reserved host") {
 		t.Fatalf("reserved host outside its suffix: %v", err)
+	}
+
+	write(strings.Replace(base, "      types: [worker_default, worker_custom]\n", "", 1))
+	if _, err = LoadConfig(file); err == nil || !strings.Contains(err.Error(), "requires at least one type") {
+		t.Fatalf("untyped suffix accepted: %v", err)
+	}
+	for _, tc := range []struct{ types, message string }{
+		{"[worker_default, worker_default]", "duplicate type"},
+		{"[worker_default, other]", "unknown type"},
+	} {
+		write(strings.Replace(base, "[worker_default, worker_custom]", tc.types, 1))
+		if _, err = LoadConfig(file); err == nil || !strings.Contains(err.Error(), tc.message) {
+			t.Fatalf("invalid types %s: %v", tc.types, err)
+		}
+	}
+	write(strings.Replace(base, "domain: apps.example.com", "domain: apps.workers.example.com", 1))
+	if _, err = LoadConfig(file); err == nil || !strings.Contains(err.Error(), "overlap") {
+		t.Fatalf("overlapping suffixes accepted: %v", err)
 	}
 
 	const originBlock = `
@@ -46,7 +83,7 @@ func TestManagedSuffixLoadsThroughMainConfig(t *testing.T) {
       port: 80
       host_header: site.example.com
       organizations: [org-a]
-      suffixes: [public]
+      suffixes: [apps]
 `
 	withOrigin := strings.Replace(base, "  # managed_origins:\n", originBlock, 1)
 	write(withOrigin)
@@ -54,15 +91,15 @@ func TestManagedSuffixLoadsThroughMainConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	origin, ok := cfg.Workers.ManagedOriginFor("org-a", "public", "storefront.origin.example.com")
+	origin, ok := cfg.Workers.ManagedOriginFor("org-a", "apps", "storefront.origin.example.com")
 	if !ok || origin.Service != "storefront" || origin.Namespace != "web" || origin.HostHeader != "site.example.com" {
 		t.Fatalf("registered origin did not load: %+v", origin)
 	}
-	if _, ok = cfg.Workers.ManagedOriginFor("org-b", "public", origin.Host); ok {
+	if _, ok = cfg.Workers.ManagedOriginFor("org-b", "apps", origin.Host); ok {
 		t.Fatal("origin unexpectedly available outside the configured organizations")
 	}
-	write(strings.Replace(withOrigin, "suffixes: [public]", "suffixes: [unknown]", 1))
-	if _, err = LoadConfig(file); err == nil || !strings.Contains(err.Error(), "references unknown suffix") {
+	write(strings.Replace(withOrigin, "suffixes: [apps]", "suffixes: [unknown]", 1))
+	if _, err = LoadConfig(file); err == nil || !strings.Contains(err.Error(), "requires an application suffix") {
 		t.Fatalf("origin with unknown suffix: %v", err)
 	}
 }

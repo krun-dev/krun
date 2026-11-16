@@ -31,7 +31,7 @@ func WorkerBusy(st *domain.State, worker, env string) bool {
 	for _, op := range st.Workers.Operations {
 		// A committed operation is already durable and converging; a new
 		// publish or config change supersedes it instead of blocking.
-		if op.Worker == worker && op.Environment == env && !appconfig.WorkerTerminal(op.State) && op.State != "committed" {
+		if op.Kind != domain.WorkerVersionURLOperation && op.Worker == worker && op.Environment == env && !appconfig.WorkerTerminal(op.State) && op.State != "committed" {
 			return true
 		}
 	}
@@ -184,9 +184,13 @@ func queueWorkerDeployment(st *domain.State, p authorization.Principal, op domai
 	}
 	op.Created = time.Now().UTC()
 	st.Workers.Operations[op.ID] = op
-	RememberDeployment(st, op, messages...)
+	if op.Kind != domain.WorkerVersionURLOperation {
+		RememberDeployment(st, op, messages...)
+	}
 	st.Workers.OperationPrivate[op.ID] = domain.WorkerOperationPrivate{Actor: WorkerActor(p)}
-	WorkerRemember(st, key, input, op.ID)
+	if key != "" {
+		WorkerRemember(st, key, input, op.ID)
+	}
 	return op
 }
 

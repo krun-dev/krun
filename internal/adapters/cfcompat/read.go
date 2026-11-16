@@ -134,23 +134,30 @@ func (s *Server) cfURL(env domain.WorkerEnvironment) string {
 	if len(env.Hosts) == 0 {
 		return ""
 	}
-	scheme := "https://"
-	if s.Config.Development {
-		scheme = "http://"
-	}
-	return scheme + env.Hosts[0]
+	return s.cfHostURL(env.Hosts[0])
 }
+func (s *Server) cfHostURL(host string) string {
+	if s.Config.Development {
+		return "http://" + host
+	}
+	return "https://" + host
+}
+
 func (s *Server) cfSubdomain(r *http.Request, worker domain.Worker, env domain.WorkerEnvironment) map[string]any {
 	// Wrangler uses the URL when re-enabling a default address. Keep the
 	// prospective hostname in the subdomain API even while it is inactive.
 	if worker.WorkersDevDisabled {
 		s.Application(r).SyncEnvironmentHosts(&env, worker.Organization, worker.Worker, worker.Domains)
 	}
-	return map[string]any{
+	out := map[string]any{
 		"enabled":          !worker.WorkersDevDisabled,
 		"previews_enabled": !worker.PreviewURLsDisabled,
 		"url":              s.cfURL(env),
 	}
+	if suffixes := workerapp.VersionURLSuffixes(s.Config.Workers, worker); len(suffixes) > 0 {
+		out["preview_url_suffix"] = suffixes[0]
+	}
+	return out
 }
 
 func (s *Server) cfScriptDetails(st *domain.State, p authorization.Principal, r *http.Request) (any, int, error) {
@@ -176,7 +183,7 @@ func (s *Server) cfScriptDetails(st *domain.State, p authorization.Principal, r 
 	return map[string]any{"id": name, "name": name, "tag": workerID, "subdomain": subdomain, "previews_base_config": map[string]any{"env": cfEnvBindings(base)}, "default_environment": map[string]any{"environment": "production", "script": map[string]any{"id": name, "tag": workerID, "last_deployed_from": "api", "compatibility_date": version.CompatibilityDate, "compatibility_flags": version.CompatibilityFlags, "bindings": Bindings(env)}}}, 200, nil
 }
 func cfVersion(v domain.WorkerVersion, number int) map[string]any {
-	return map[string]any{"id": v.ID, "number": number, "metadata": map[string]any{"created_on": v.Created, "has_preview": false, "source": "api", "author_id": "krun", "author_email": ""}, "annotations": map[string]any{"workers/tag": v.Tag, "workers/message": v.Message}, "resources": map[string]any{"script": map[string]any{"etag": v.ArchiveDigest, "handlers": []string{"fetch"}}, "script_runtime": map[string]any{"compatibility_date": v.CompatibilityDate, "compatibility_flags": v.CompatibilityFlags}, "bindings": Bindings(domain.WorkerEnvironment{ServiceBindings: v.ServiceBindings, HyperdriveBindings: v.HyperdriveBindings, R2Bindings: v.R2Bindings, Variables: v.Variables, SecretVersions: v.SecretVersions, VersionMetadata: v.VersionMetadata, AssetsBinding: v.AssetsBinding})}}
+	return map[string]any{"id": v.ID, "number": number, "metadata": map[string]any{"created_on": v.Created, "has_preview": v.VersionURL, "source": "api", "author_id": "krun", "author_email": ""}, "annotations": map[string]any{"workers/tag": v.Tag, "workers/message": v.Message}, "resources": map[string]any{"script": map[string]any{"etag": v.ArchiveDigest, "handlers": []string{"fetch"}}, "script_runtime": map[string]any{"compatibility_date": v.CompatibilityDate, "compatibility_flags": v.CompatibilityFlags}, "bindings": Bindings(domain.WorkerEnvironment{ServiceBindings: v.ServiceBindings, HyperdriveBindings: v.HyperdriveBindings, R2Bindings: v.R2Bindings, Variables: v.Variables, SecretVersions: v.SecretVersions, VersionMetadata: v.VersionMetadata, AssetsBinding: v.AssetsBinding})}}
 }
 func (s *Server) cfVersions(st *domain.State, p authorization.Principal, r *http.Request) (any, int, error) {
 	out, _, err := s.Application(r).WorkerVersionList(r.Context(), st, p, workerRef(r))
@@ -186,6 +193,7 @@ func (s *Server) cfVersions(st *domain.State, p authorization.Principal, r *http
 	versions := out.(map[string]any)["items"].([]domain.WorkerVersion)
 	items := []any{}
 	for i, v := range versions {
+		v.VersionURL = len(v.PreviewHosts) > 0
 		if id := r.PathValue("version"); id != "" {
 			if id == v.ID {
 				return cfVersion(v, len(versions)-i), 200, nil
@@ -257,8 +265,11 @@ func (s *Server) cfSecrets(st *domain.State, p authorization.Principal, r *http.
 }
 func (s *Server) cfPreviewView(service domain.Worker, env domain.WorkerEnvironment) map[string]any {
 	urls := []string{}
-	if u := s.cfURL(env); u != "" {
-		urls = append(urls, u)
+	for _, host := range env.Hosts {
+		urls = append(urls, s.cfHostURL(host))
+	}
+	for _, host := range env.PreviewHosts {
+		urls = append(urls, s.cfHostURL(host))
 	}
 	return map[string]any{"name": env.Name, "id": env.Name, "env": cfEnvBindings(env), "urls": urls, "worker_id": service.Worker}
 }
@@ -282,6 +293,11 @@ func (s *Server) cfPreviews(st *domain.State, p authorization.Principal, r *http
 		}
 		env := out.(domain.WorkerEnvironment)
 		service := st.Workers.Workers[ref.Worker]
+		domains, err := app.CustomPreviewDomains(r.Context(), service)
+		if err != nil {
+			return nil, 0, err
+		}
+		env.PreviewHosts = workerapp.CustomPreviewHosts(domains, env.Name, "")
 		return s.cfPreviewView(service, env), 200, nil
 	}
 	if r.Method == http.MethodDelete {
@@ -337,24 +353,30 @@ func (s *Server) cfPreviewDeployments(st *domain.State, p authorization.Principa
 	out["annotations"] = map[string]string{"workers/tag": version.Tag, "workers/message": version.Message}
 	out["id"] = selected.ID
 	out["env"] = cfEnvBindings(domain.WorkerEnvironment{R2Bindings: st.Workers.Versions[selected.Version].R2Bindings, Variables: st.Workers.Versions[selected.Version].Variables, SecretVersions: st.Workers.Versions[selected.Version].SecretVersions, VersionMetadata: st.Workers.Versions[selected.Version].VersionMetadata, AssetsBinding: st.Workers.Versions[selected.Version].AssetsBinding})
-	out["urls"] = s.cfDeploymentURLs(st, selected)
-	return out, 200, nil
+	urls, err := s.cfDeploymentURLs(r, st, selected)
+	out["urls"] = urls
+	return out, 200, err
 }
-func (s *Server) cfDeploymentURLs(st *domain.State, d domain.WorkerDeployment) []string {
+func (s *Server) cfDeploymentURLs(r *http.Request, st *domain.State, d domain.WorkerDeployment) ([]string, error) {
 	service, ok := st.Workers.Workers[d.Worker]
 	if !ok {
-		return []string{}
+		return []string{}, nil
 	}
-	service = s.Application(nil).NormalizeWorker(service)
-	urls := []string{}
-	for _, host := range workerapp.DeploymentHosts(s.Config.Workers, service, d.ID) {
-		scheme := "https://"
-		if s.Config.Development {
-			scheme = "http://"
+	app := s.Application(r)
+	service = app.NormalizeWorker(service)
+	hosts := workerapp.DeploymentHosts(s.Config.Workers, service, d.ID)
+	if d.Environment != appconfig.WorkerBaseline {
+		domains, err := app.CustomPreviewDomains(r.Context(), service)
+		if err != nil {
+			return nil, err
 		}
-		urls = append(urls, scheme+host)
+		hosts = append(hosts, workerapp.CustomPreviewHosts(domains, d.Environment, d.ID)...)
 	}
-	return urls
+	urls := []string{}
+	for _, host := range hosts {
+		urls = append(urls, s.cfHostURL(host))
+	}
+	return urls, nil
 }
 
 func (s *Server) cfUser(st *domain.State, p authorization.Principal, r *http.Request) (any, int, error) {

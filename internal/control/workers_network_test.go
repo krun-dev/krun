@@ -47,8 +47,8 @@ func catalogConfig() *appconfig.WorkersConfig {
 			{ID: "external", Name: "workers-public", Namespace: "kgateway-system", Section: "public", Base: "http://127.0.0.1:38081"},
 		},
 		Domains: []appconfig.WorkerDomain{
-			{ID: "internal", Domain: "workers.test", Label: "办公网络", Access: "private", Gateway: "internal", Labels: map[string]string{"exposure": "internal"}, Default: true},
-			{ID: "external", Domain: "workers-out.example.test", Label: "互联网", Access: "public", Gateway: "external", Labels: map[string]string{"exposure": "external"}},
+			{ID: "internal", Types: []appconfig.WorkerDomainType{appconfig.WorkerDomainDefault}, Domain: "workers.test", Label: "办公网络", Access: "private", Gateway: "internal", Labels: map[string]string{"exposure": "internal"}, Default: true},
+			{ID: "external", Types: []appconfig.WorkerDomainType{appconfig.WorkerDomainDefault}, Domain: "workers-out.example.test", Label: "互联网", Access: "public", Gateway: "external", Labels: map[string]string{"exposure": "external"}},
 		},
 	}
 }
@@ -638,8 +638,8 @@ func TestWorkerConfigProjectionCoversEveryDomain(t *testing.T) {
 	ws.Domains = []string{"internal", "external"}
 	st.Workers.Workers["svc-a"] = ws
 	p := workerapp.EdgeConfigFromState(st, workerProjectionConfig([]appconfig.WorkerDomain{
-		{ID: "internal", Domain: "workers.test", Access: "private"},
-		{ID: "external", Domain: "workers-out.example.test", Access: "public"},
+		{ID: "internal", Types: []appconfig.WorkerDomainType{appconfig.WorkerDomainDefault}, Domain: "workers.test", Access: "private"},
+		{ID: "external", Types: []appconfig.WorkerDomainType{appconfig.WorkerDomainDefault}, Domain: "workers-out.example.test", Access: "public"},
 	}))
 	hosts := make([]string, 0, len(p.Routes))
 	for _, route := range p.Routes {

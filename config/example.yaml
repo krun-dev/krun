@@ -179,6 +179,7 @@ workers:
   # default: true 的域名会被新建环境默认选中。
   domains:
     - id: public
+      types: [worker_default, worker_custom]
       domain: workers.example.com
       label: 默认公网入口
       access: public
@@ -188,9 +189,20 @@ workers:
       default: true
       # 静态资产域名，留空则取 static.<domain>。
       static_domain: static.workers.example.com
-      # 通配 DNS 和 TLS 就绪后再开启。
-      managed_subdomains: false
       reserved_hosts: []
+  # 可选。可在 domains 列表追加专用后缀，并为它们配置通配 DNS 和 TLS。
+  #   - id: custom
+  #     types: [worker_custom]
+  #     domain: custom.example.com
+  #     access: public
+  #     labels: {exposure: external}
+  #     gateway: external
+  #   - id: apps
+  #     types: [application]
+  #     domain: apps.example.com
+  #     access: public
+  #     labels: {exposure: external}
+  #     gateway: external
   # 可选。把已部署的静态站点或 HTTP 服务登记为 Origin Rules 的目标。
   # managed_origins:
   #   - host: storefront.origin.example.com
@@ -200,7 +212,7 @@ workers:
   #     namespace: workers-mvp
   #     port: 80
   #     organizations: [replace-with-org-id]
-  #     suffixes: [public]
+  #     suffixes: [apps]
   # 资源池是部署侧的物理执行单元，组织用户看不到。一个网络档案可以匹配多个
   # pool；控制面使用稳定哈希选出 placement，并持久化选择结果。
   # 默认从业务 pool 的 Ready serving Pod 校验候选，不额外部署 validator。

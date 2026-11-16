@@ -31,6 +31,10 @@ func (s *Service) WorkerEnvironments(ctx context.Context, st *domain.State, p au
 		return nil, Read, e
 	}
 	ws := s.WorkerView(st, t)
+	customDomains, err := s.CustomPreviewDomains(ctx, ws)
+	if err != nil {
+		return nil, Read, err
+	}
 	out := []domain.WorkerEnvironment{}
 	for _, name := range workerEnvironmentNames(ws.Environments) {
 		d, e := authorization.Authorize(st, p, "worker.read", authorization.Target{Kind: "worker", ID: t.ID, Organization: t.Organization, Environment: name})
@@ -38,7 +42,9 @@ func (s *Service) WorkerEnvironments(ctx context.Context, st *domain.State, p au
 			return nil, Read, e
 		}
 		if d.Allowed {
-			out = append(out, ws.Environments[name])
+			env := ws.Environments[name]
+			env.PreviewHosts = CustomPreviewHosts(customDomains, name, "")
+			out = append(out, env)
 		}
 	}
 	return collection(out)

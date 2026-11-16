@@ -2,6 +2,7 @@ package workers
 
 import (
 	context "context"
+	"slices"
 	"sort"
 	"time"
 
@@ -155,6 +156,10 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 		return nil, Read, err
 	}
 	ws := s.WorkerView(st, t)
+	customDomains, err := s.CustomPreviewDomains(ctx, ws)
+	if err != nil {
+		return nil, Read, err
+	}
 
 	environments := []WorkerOverviewEnvironment{}
 	versionVisible := map[string]bool{}
@@ -168,6 +173,7 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 			continue
 		}
 		env := ws.Environments[name]
+		env.PreviewHosts = CustomPreviewHosts(customDomains, name, "")
 		entry := WorkerOverviewEnvironment{Environment: env, History: []domain.WorkerHistory{}}
 		versionVisible[name] = versions
 		if versions {
@@ -194,7 +200,7 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 
 	operations := []domain.WorkerOperation{}
 	for _, operation := range st.Workers.Operations {
-		if operation.Worker == t.ID && operation.Organization == t.Organization && versionVisible[operation.Environment] {
+		if operation.Kind != domain.WorkerVersionURLOperation && operation.Worker == t.ID && operation.Organization == t.Organization && versionVisible[operation.Environment] {
 			operations = append(operations, operation)
 		}
 	}
@@ -209,7 +215,7 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 	versions := map[string]domain.WorkerVersion{}
 	for id, version := range st.Workers.Versions {
 		if version.Worker == t.ID && version.Organization == t.Organization && versionVisible[version.Environment] {
-			versions[id] = PublicWorkerVersion(version)
+			versions[id] = s.versionView(ws, version)
 		}
 	}
 	return map[string]any{
@@ -243,7 +249,7 @@ func (s *Service) WorkerRoutingDomainsUpdate(ctx context.Context, st *domain.Sta
 		return nil, Read, domain.Conflict("WORKER_NETWORK_PROFILE_INVALID", "The worker network profile is no longer available")
 	}
 	allowed := map[string]bool{}
-	for _, domain := range s.Config.Workers.DomainsForProfile(profile) {
+	for _, domain := range s.Config.Workers.WorkerDefaultDomainsForProfile(profile) {
 		allowed[domain.ID] = true
 	}
 	seen := map[string]bool{}
@@ -331,7 +337,7 @@ func (s *Service) SyncEnvironmentHosts(env *domain.WorkerEnvironment, organizati
 	env.Hosts = make([]string, 0, len(selected))
 	env.DisplayHosts = map[string]string{}
 	for _, d := range c.Domains {
-		if !selected[d.ID] {
+		if !d.Allows(appconfig.WorkerDomainDefault) || !selected[d.ID] {
 			continue
 		}
 		host := appconfig.HostFor(slug, env.Name, d.Domain)
@@ -345,7 +351,7 @@ func (s *Service) SyncEnvironmentHosts(env *domain.WorkerEnvironment, organizati
 }
 
 func (s *Service) syncWorkerEnvironmentHosts(env *domain.WorkerEnvironment, worker domain.Worker) {
-	if env.Name == appconfig.WorkerBaseline && worker.WorkersDevDisabled {
+	if (env.Name == appconfig.WorkerBaseline && worker.WorkersDevDisabled) || (env.Name != appconfig.WorkerBaseline && worker.PreviewURLsDisabled) {
 		env.Domains = []string{}
 		env.Hosts = []string{}
 		env.DisplayHosts = map[string]string{}
@@ -375,18 +381,12 @@ func (s *Service) SyncWorkerDomains(ws domain.Worker) []string {
 	if s.Config.Workers == nil {
 		return ws.Domains
 	}
-	selected := map[string]bool{}
-	for _, id := range ws.Domains {
-		selected[id] = true
-	}
-	kept := make([]string, 0, len(selected))
+	normalized := s.Config.Workers.NormalizeWorkerNetwork(ws)
+	kept := make([]string, 0, len(normalized.Domains))
 	for _, d := range s.Config.Workers.Domains {
-		if selected[d.ID] {
+		if slices.Contains(normalized.Domains, d.ID) {
 			kept = append(kept, d.ID)
 		}
-	}
-	if len(kept) == 0 {
-		return s.Config.Workers.DefaultDomains()
 	}
 	return kept
 }
@@ -402,10 +402,11 @@ type WorkerSummary struct {
 // omits access classes, selectors, Gateway and pool identifiers: organization
 // users only see domains made available by their selected network profile.
 type WorkerDomainView struct {
-	ID      string `json:"id"`
-	Domain  string `json:"domain"`
-	Label   string `json:"label"`
-	Default bool   `json:"default"`
+	Types   []appconfig.WorkerDomainType `json:"types"`
+	ID      string                       `json:"id"`
+	Domain  string                       `json:"domain"`
+	Label   string                       `json:"label"`
+	Default bool                         `json:"default"`
 }
 
 type WorkerNetworkProfileView struct {
@@ -439,14 +440,14 @@ func (s *Service) WorkerNetworkProfiles(ctx context.Context, st *domain.State, p
 func (s *Service) DomainCatalog() []WorkerDomainView {
 	out := make([]WorkerDomainView, 0, len(s.Config.Workers.Domains))
 	for _, d := range s.Config.Workers.Domains {
-		out = append(out, WorkerDomainView{ID: d.ID, Domain: d.Domain, Label: d.Label, Default: d.Default})
+		out = append(out, WorkerDomainView{Types: d.Types, ID: d.ID, Domain: d.Domain, Label: d.Label, Default: d.Default})
 	}
 	return out
 }
 
 func (s *Service) DomainCatalogForProfile(profile appconfig.WorkerNetworkProfile) []WorkerDomainView {
 	allowed := map[string]bool{}
-	for _, domain := range s.Config.Workers.DomainsForProfile(profile) {
+	for _, domain := range s.Config.Workers.WorkerDefaultDomainsForProfile(profile) {
 		allowed[domain.ID] = true
 	}
 	out := []WorkerDomainView{}

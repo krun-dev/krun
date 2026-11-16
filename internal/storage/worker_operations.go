@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/krun-dev/krun/internal/domain"
 )
 
@@ -298,4 +299,50 @@ func (s *Store) FailClaimedOperation(ctx context.Context, claim OperationClaim, 
 		    ), steps)
 		WHERE `+activeOperationClaim, claim.id, claim.replica, claim.generation, workerClaimLease, message)
 	return err
+}
+
+// CommitVersionURL publishes only the validated immutable upload. It doesn't
+// update the deployment revision, traffic weights, or environment bindings.
+func (s *Store) CommitVersionURL(ctx context.Context, claim OperationClaim) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+
+	var worker, organization, environment, version string
+	err = tx.QueryRow(ctx, `SELECT worker_id, org_id, env_name, version_id
+		FROM krun_worker_operations WHERE `+activeOperationClaim+` FOR UPDATE`,
+		claim.id, claim.replica, claim.generation, workerClaimLease).Scan(&worker, &organization, &environment, &version)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE krun_worker_versions v SET version_url=true
+		WHERE version_id=$1 AND worker_id=$2 AND org_id=$3 AND env_name=$4
+		  AND EXISTS (SELECT 1 FROM krun_worker_environments e WHERE e.worker_id=$2 AND e.env_name=$4 AND e.enabled)`, version, worker, organization, environment)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.ConstraintName == "krun_worker_versions_url_prefix" {
+		_ = tx.Rollback(ctx)
+		return false, s.FailClaimedOperation(ctx, claim, "Version URL prefix conflicts with another version; upload again")
+	}
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		_ = tx.Rollback(ctx)
+		return false, s.FailClaimedOperation(ctx, claim, "Version or environment unavailable")
+	}
+	if _, err = tx.Exec(ctx, `UPDATE krun_worker_operations SET state='available', finished_at=now(), error='',
+		steps=(SELECT jsonb_agg(jsonb_set(step, '{state}', '"done"')) FROM jsonb_array_elements(steps) AS step)
+		WHERE operation_id=$1`, claim.id); err != nil {
+		return false, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	s.SignalConfig()
+	return true, nil
 }

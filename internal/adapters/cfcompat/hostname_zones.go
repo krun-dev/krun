@@ -58,7 +58,7 @@ func (s *Server) hostnameZones(st *domain.State, p authorization.Principal, r *h
 			if name != "" && name != suffix.Domain {
 				continue
 			}
-			if !suffix.ManagedSubdomains && r.PathValue("zone") == "" {
+			if !suffix.Allows(config.WorkerDomainCustom) && !suffix.Allows(config.WorkerDomainApplication) && r.PathValue("zone") == "" {
 				continue
 			}
 			out = append(out, hostnameZone{zoneID(org.ID, suffix.ID), suffix.Domain, "active", map[string]string{"id": org.ID, "name": org.Name}, suffix})

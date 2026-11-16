@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { OperationPanel } from "./version";
-import { Status } from "./shared";
+import { Status, workerURL } from "./shared";
 import { useCollectionPage } from "@/lib/collection-page";
 import { CollectionPagination, CollectionToolbar } from "@/components/collection-controls";
 import { VersionDetails } from "./version-details";
@@ -391,6 +391,17 @@ export function VersionsPanel({
                           {new Date(version.created_at).toLocaleString()}
                         </time>
                       </p>
+                      {version.preview_hosts?.map((host) => (
+                        <a
+                          key={host}
+                          href={workerURL(host)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-2 block break-all font-mono text-xs underline"
+                        >
+                          {host}
+                        </a>
+                      ))}
                       {version.message ? (
                         <p className="mt-2 whitespace-pre-wrap break-words text-sm">
                           {version.message}

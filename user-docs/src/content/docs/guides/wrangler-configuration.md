@@ -63,8 +63,8 @@ Wrangler 是 Cloudflare 的 Workers 开发和部署工具；krun CLI 是管理 k
 | `version_metadata.binding` | 在 krun 目标环境中配置版本元数据 binding | 支持注入 `id`、`tag`、`timestamp` |
 | `env.<name>` | 构建读取 Wrangler 顶层配置，运行配置来自选定的 krun 环境 | `--env` 由 Wrangler 解析，生成的不同 Script 名称对应不同 krun Worker |
 | `keep_vars` / `--keep-vars` | 不作为仓库产物配置导入 | 支持保留未提交的普通变量，同名新值仍覆盖；普通上传默认替换变量 |
-| `route`、`routes`、`custom_domain`、`zone_name`、`zone_id` | 在组织的域名页配置 | 使用平台开放的 Zone，见 [自定义子域名与路径路由](/docs/guides/workers-hostnames.html) |
-| `workers_dev`、`preview_urls` | 不由 krun 构建处理 | 控制默认生产地址和部署固定预览地址。命名 Preview 和自定义路由独立 |
+| `route`、`routes`、`custom_domain`、`zone_name`、`zone_id` | 在 Worker 详情绑定自定义域名，或在组织的应用域名页配置路径 | 使用平台开放的 Zone，见 [应用域名与 Worker 自定义域名](/docs/guides/workers-hostnames.html) |
+| `workers_dev`、`preview_urls` | 不由 krun 构建处理 | 分别控制默认生产地址和平台后缀上的 Preview、Version URL。自定义域名 Preview 单独由 `previews_enabled` 控制 |
 
 Secret 通过 krun 控制台或 `wrangler secret put` 设置，不写入配置或源码。仓库构建会拒绝 `.dev.vars`、`.env` 等本地凭据文件，它们不能作为生产 Secret 的来源。
 

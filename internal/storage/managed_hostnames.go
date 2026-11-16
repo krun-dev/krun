@@ -19,7 +19,7 @@ const configRouteInScope = `(r.worker_id=ANY($1) OR (r.route_key<>'' AND r.host 
 
 func edgeManagedHostnames(ctx context.Context, tx pgx.Tx, ids []string) ([]domain.ManagedHostname, error) {
 	return collectManagedHostnames(ctx, tx, managedConfigScope+`
-		SELECT h.host,h.org_id,h.suffix_id,h.revision,h.gateway_managed,r.match_type,r.path,r.worker_id,r.enabled,r.origin,r.cf_pattern,r.custom_domain,''
+		SELECT h.host,h.org_id,h.suffix_id,h.domain_type,h.revision,h.gateway_managed,r.match_type,r.path,r.worker_id,r.enabled,r.origin,r.cf_pattern,r.custom_domain,r.previews_enabled,''
 		FROM krun_worker_hostnames h JOIN krun_worker_hostname_routes r ON r.host=h.host
 		WHERE NOT h.retired AND ($1::text[] IS NULL OR h.host IN (SELECT host FROM touched_hosts))
 		ORDER BY h.host,r.match_type,r.path`, ids)
@@ -27,16 +27,33 @@ func edgeManagedHostnames(ctx context.Context, tx pgx.Tx, ids []string) ([]domai
 
 func (s *Store) ManagedHostnames(ctx context.Context, org string) ([]domain.ManagedHostname, error) {
 	return collectManagedHostnames(ctx, s.pool, `
-		SELECT h.host,h.org_id,h.suffix_id,h.revision,h.gateway_managed,r.match_type,r.path,r.worker_id,r.enabled,r.origin,r.cf_pattern,r.custom_domain,COALESCE(w.locator,'')
+		SELECT h.host,h.org_id,h.suffix_id,h.domain_type,h.revision,h.gateway_managed,r.match_type,r.path,r.worker_id,r.enabled,r.origin,r.cf_pattern,r.custom_domain,r.previews_enabled,COALESCE(w.locator,'')
 		FROM krun_worker_hostnames h LEFT JOIN krun_worker_hostname_routes r ON r.host=h.host
 		LEFT JOIN krun_resources w ON w.resource_id=r.worker_id AND w.org_id=h.org_id AND w.kind='worker'
 		WHERE h.org_id=$1 AND NOT h.retired
 		ORDER BY h.host,r.match_type,r.path`, org)
 }
 
+// ApplicationHostnameOptions lists eligible hostnames and their shared revisions
+// without loading routes that point to other targets.
+func (s *Store) ApplicationHostnameOptions(ctx context.Context, org string, suffixes []string) ([]domain.ManagedHostnameOption, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT host,revision FROM krun_worker_hostnames
+		WHERE org_id=$1 AND domain_type='application' AND NOT retired AND suffix_id=ANY($2)
+		ORDER BY host`, org, suffixes)
+	if err != nil {
+		return nil, err
+	}
+	options, err := pgx.CollectRows(rows, pgx.RowToStructByPos[domain.ManagedHostnameOption])
+	if options == nil && err == nil {
+		options = []domain.ManagedHostnameOption{}
+	}
+	return options, err
+}
+
 func (s *Store) WorkerManagedHostnames(ctx context.Context, org, worker string) ([]domain.ManagedHostname, error) {
 	return collectManagedHostnames(ctx, s.pool, `
-		SELECT h.host,h.org_id,h.suffix_id,h.revision,h.gateway_managed,r.match_type,r.path,r.worker_id,r.enabled,r.origin,r.cf_pattern,r.custom_domain,COALESCE(w.locator,'')
+		SELECT h.host,h.org_id,h.suffix_id,h.domain_type,h.revision,h.gateway_managed,r.match_type,r.path,r.worker_id,r.enabled,r.origin,r.cf_pattern,r.custom_domain,r.previews_enabled,COALESCE(w.locator,'')
 		FROM krun_worker_hostname_routes r JOIN krun_worker_hostnames h ON r.host=h.host
 		LEFT JOIN krun_resources w ON w.resource_id=r.worker_id AND w.org_id=h.org_id AND w.kind='worker'
 		WHERE r.worker_id=$1 AND h.org_id=$2 AND NOT h.retired
@@ -58,9 +75,9 @@ func collectManagedHostnames(ctx context.Context, db hostnameQueryer, query stri
 	for rows.Next() {
 		var item domain.ManagedHostname
 		var match, path, worker, origin, pattern *string
-		var enabled, customDomain *bool
+		var enabled, customDomain, previewsEnabled *bool
 		var locator string
-		err = rows.Scan(&item.Host, &item.Organization, &item.SuffixID, &item.Revision, &item.GatewayManaged, &match, &path, &worker, &enabled, &origin, &pattern, &customDomain, &locator)
+		err = rows.Scan(&item.Host, &item.Organization, &item.SuffixID, &item.Type, &item.Revision, &item.GatewayManaged, &match, &path, &worker, &enabled, &origin, &pattern, &customDomain, &previewsEnabled, &locator)
 		if err != nil {
 			return nil, err
 		}
@@ -72,7 +89,7 @@ func collectManagedHostnames(ctx context.Context, db hostnameQueryer, query stri
 			current := &out[len(out)-1]
 			current.Routes = append(current.Routes, domain.ManagedHostnameRoute{
 				Match: *match, Path: *path, Worker: *worker, WorkerLocator: locator, Enabled: *enabled,
-				Origin: *origin, CFPattern: *pattern, CustomDomain: *customDomain,
+				Origin: *origin, CFPattern: *pattern, CustomDomain: *customDomain, PreviewsEnabled: *previewsEnabled,
 			})
 		}
 	}
@@ -129,16 +146,16 @@ func saveManagedHostnameRow(ctx context.Context, tx pgx.Tx, item domain.ManagedH
 
 	if revision == 0 {
 		err = tx.QueryRow(ctx, `
-			INSERT INTO krun_worker_hostnames(host,org_id,suffix_id,gateway_managed) VALUES ($1,$2,$3,$4)
-			ON CONFLICT (host) DO NOTHING RETURNING revision`, item.Host, item.Organization, item.SuffixID, item.GatewayManaged).Scan(&item.Revision)
+			INSERT INTO krun_worker_hostnames(host,org_id,suffix_id,gateway_managed,domain_type) VALUES ($1,$2,$3,$4,$5)
+			ON CONFLICT (host) DO NOTHING RETURNING revision`, item.Host, item.Organization, item.SuffixID, item.GatewayManaged, item.Type).Scan(&item.Revision)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return item, domain.Conflict("HOSTNAME_UNAVAILABLE", "Hostname is unavailable")
 		}
 	} else {
 		err = tx.QueryRow(ctx, `
 			UPDATE krun_worker_hostnames SET revision=revision+1, retired=$4, gateway_managed=gateway_managed OR $5
-			WHERE host=$1 AND org_id=$2 AND revision=$3 AND NOT retired
-			RETURNING revision`, item.Host, item.Organization, revision, item.Retired, item.GatewayManaged).Scan(&item.Revision)
+			WHERE host=$1 AND org_id=$2 AND revision=$3 AND domain_type=$6 AND suffix_id=$7 AND NOT retired
+			RETURNING revision`, item.Host, item.Organization, revision, item.Retired, item.GatewayManaged, item.Type, item.SuffixID).Scan(&item.Revision)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return item, domain.Conflict("REVISION_CONFLICT", "Hostname configuration changed")
 		}
@@ -177,8 +194,8 @@ func writeManagedHostnameRoutes(ctx context.Context, tx pgx.Tx, item domain.Mana
 	}
 	batch := &pgx.Batch{}
 	for _, route := range item.Routes {
-		batch.Queue(`INSERT INTO krun_worker_hostname_routes(host,match_type,path,worker_id,enabled,origin,cf_pattern,custom_domain)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, item.Host, route.Match, route.Path, route.Worker, route.Enabled, route.Origin, route.CFPattern, route.CustomDomain)
+		batch.Queue(`INSERT INTO krun_worker_hostname_routes(host,match_type,path,worker_id,enabled,origin,cf_pattern,custom_domain,previews_enabled)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, item.Host, route.Match, route.Path, route.Worker, route.Enabled, route.Origin, route.CFPattern, route.CustomDomain, route.PreviewsEnabled)
 	}
 	if batch.Len() > 0 {
 		return tx.SendBatch(ctx, batch).Close()
@@ -188,7 +205,7 @@ func writeManagedHostnameRoutes(ctx context.Context, tx pgx.Tx, item domain.Mana
 
 func (s *Store) ManagedHostname(ctx context.Context, org, host string) (domain.ManagedHostname, error) {
 	items, err := collectManagedHostnames(ctx, s.pool, `
-		SELECT h.host,h.org_id,h.suffix_id,h.revision,h.gateway_managed,r.match_type,r.path,r.worker_id,r.enabled,r.origin,r.cf_pattern,r.custom_domain,COALESCE(w.locator,'')
+		SELECT h.host,h.org_id,h.suffix_id,h.domain_type,h.revision,h.gateway_managed,r.match_type,r.path,r.worker_id,r.enabled,r.origin,r.cf_pattern,r.custom_domain,r.previews_enabled,COALESCE(w.locator,'')
 		FROM krun_worker_hostnames h LEFT JOIN krun_worker_hostname_routes r ON r.host=h.host
 		LEFT JOIN krun_resources w ON w.resource_id=r.worker_id AND w.org_id=h.org_id AND w.kind='worker'
 		WHERE h.org_id=$1 AND h.host=$2 AND NOT h.retired
@@ -206,11 +223,11 @@ func (s *Store) ManagedHostname(ctx context.Context, org, host string) (domain.M
 // hosts keep their deny route so the shared wildcard cannot expose stale data.
 func (s *Store) GatewayManagedHostnames(ctx context.Context) ([]domain.ManagedHostname, error) {
 	return collectManagedHostnames(ctx, s.pool, `
-		SELECT h.host,h.org_id,h.suffix_id,h.revision,h.gateway_managed,
-			r.match_type,r.path,r.worker_id,r.enabled,r.origin,r.cf_pattern,r.custom_domain,''
+		SELECT h.host,h.org_id,h.suffix_id,h.domain_type,h.revision,h.gateway_managed,
+			r.match_type,r.path,r.worker_id,r.enabled,r.origin,r.cf_pattern,r.custom_domain,r.previews_enabled,''
 		FROM krun_worker_hostnames h
 		LEFT JOIN krun_organizations o ON o.org_id=h.org_id
 		LEFT JOIN krun_worker_hostname_routes r ON r.host=h.host AND o.org_id IS NOT NULL AND NOT h.retired
-		WHERE h.gateway_managed
+		WHERE h.gateway_managed OR r.previews_enabled
 		ORDER BY h.host,r.match_type,r.path`)
 }

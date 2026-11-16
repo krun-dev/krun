@@ -121,7 +121,7 @@ func Render(c config.Config, directory string) error {
 	for _, profile := range c.Workers.NetworkProfiles {
 		for _, domain := range c.Workers.DomainsForProfile(profile) {
 			for _, pool := range c.Workers.PoolsForProfile(profile.ID) {
-				domains = append(domains, map[string]any{"profile": profile.ID, "pool": pool.ID, "gateway": domain.Gateway, "worker_dns_suffix": domain.Domain, "static_domain": domain.StaticDomain})
+				domains = append(domains, map[string]any{"profile": profile.ID, "pool": pool.ID, "gateway": domain.Gateway, "worker_dns_suffix": domain.Domain, "types": domain.Types, "static_domain": domain.StaticDomain})
 			}
 		}
 	}

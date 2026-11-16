@@ -25,6 +25,7 @@ func preUploadDatabase(t *testing.T) (string, *pgxpool.Pool) {
 
 	if _, err := store.pool.Exec(ctx, `
 		DROP TABLE krun_worker_hostname_routes, krun_worker_hostnames;
+		ALTER TABLE krun_worker_versions DROP COLUMN version_url CASCADE;
 		ALTER TABLE worker_config_routes DROP CONSTRAINT worker_config_routes_pkey,
 			DROP COLUMN route_key, DROP COLUMN match_type, ADD PRIMARY KEY(host);
 		ALTER TABLE worker_config_ops DROP COLUMN route_key;
@@ -243,8 +244,9 @@ func TestPostgresSchemaUpgradePreservesManagedWorkerRoutes(t *testing.T) {
 	defer store.Close()
 	if _, err = store.pool.Exec(ctx, `
 		ALTER TABLE krun_workers DROP COLUMN workers_dev_disabled, DROP COLUMN preview_urls_disabled;
-		ALTER TABLE krun_worker_hostnames DROP COLUMN gateway_managed;
-		ALTER TABLE krun_worker_hostname_routes DROP COLUMN origin, DROP COLUMN cf_pattern, DROP COLUMN custom_domain;
+		ALTER TABLE krun_worker_hostnames DROP COLUMN gateway_managed, DROP COLUMN domain_type;
+		ALTER TABLE krun_worker_versions DROP COLUMN version_url CASCADE;
+		ALTER TABLE krun_worker_hostname_routes DROP COLUMN origin, DROP COLUMN cf_pattern, DROP COLUMN custom_domain CASCADE, DROP COLUMN previews_enabled;
 		INSERT INTO krun_workers(worker_id,org_id) VALUES ('old-worker','old-org');
 		INSERT INTO krun_worker_hostnames(host,org_id,suffix_id,revision)
 			VALUES ('shop.workers.example.com','old-org','public',5);
@@ -258,7 +260,7 @@ func TestPostgresSchemaUpgradePreservesManagedWorkerRoutes(t *testing.T) {
 		t.Fatalf("upgrade from Worker-only hostnames: applied=%t err=%v", applied, err)
 	}
 	host, err := store.ManagedHostname(ctx, "old-org", "shop.workers.example.com")
-	if err != nil || host.Revision != 5 || host.GatewayManaged || len(host.Routes) != 1 {
+	if err != nil || host.Revision != 5 || host.Type != "application" || host.GatewayManaged || len(host.Routes) != 1 {
 		t.Fatalf("legacy hostname was changed: %+v (%v)", host, err)
 	}
 	rule := host.Routes[0]
@@ -270,5 +272,57 @@ func TestPostgresSchemaUpgradePreservesManagedWorkerRoutes(t *testing.T) {
 		WHERE worker_id='old-worker'`).Scan(&workersDevDisabled, &previewURLsDisabled)
 	if err != nil || workersDevDisabled || previewURLsDisabled {
 		t.Fatalf("default addresses changed: disabled=%t/%t (%v)", workersDevDisabled, previewURLsDisabled, err)
+	}
+}
+
+func TestPostgresSchemaUpgradeRecordsManagedHostnameTypes(t *testing.T) {
+	schema := testpgx.NewSchema(t, "krun_hostname_types_upgrade")
+	ctx := t.Context()
+	store, err := Open(ctx, schema.DSN, RepositoryTokenKeys{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err = store.pool.Exec(ctx, `
+		ALTER TABLE krun_worker_hostnames DROP COLUMN domain_type;
+		ALTER TABLE krun_worker_hostname_routes DROP COLUMN previews_enabled;
+		ALTER TABLE krun_worker_versions DROP COLUMN version_url CASCADE;
+		INSERT INTO krun_worker_hostnames(host,org_id,suffix_id,gateway_managed)
+			VALUES ('custom.workers.example.com','old-org','public',false),
+			       ('mixed.workers.example.com','old-org','public',true),
+			       ('empty.workers.example.com','old-org','public',false);
+		INSERT INTO krun_worker_hostname_routes(host,match_type,path,worker_id,origin,custom_domain,enabled)
+			VALUES ('custom.workers.example.com','prefix','/','old-worker','',true,true),
+			       ('mixed.workers.example.com','prefix','/','old-worker','',true,true),
+			       ('mixed.workers.example.com','prefix','/static','','site.example.com',false,true);
+		UPDATE krun_meta SET value='5c08400c3a40273803d6423338e25adaade59c4db129072a0761113c9644b423' WHERE key='schema_baseline';
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if applied, err := MigrateSchema(ctx, schema.DSN); !applied || err != nil {
+		t.Fatalf("upgrade from shared hostnames: applied=%t err=%v", applied, err)
+	}
+	var dirty bool
+	if err := store.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM worker_config_dirty WHERE worker_id='old-worker')`).Scan(&dirty); err != nil || !dirty {
+		t.Fatalf("upgraded custom Preview was not queued for publication: dirty=%t err=%v", dirty, err)
+	}
+	for _, tc := range []struct {
+		label, kind string
+		routes      int
+		custom      bool
+	}{
+		{"custom", "worker_custom", 1, true},
+		{"mixed", "application", 2, false},
+		{"empty", "application", 0, false},
+	} {
+		item, err := store.ManagedHostname(ctx, "old-org", tc.label+".workers.example.com")
+		if err != nil || item.Type != tc.kind || len(item.Routes) != tc.routes {
+			t.Fatalf("%s: unexpected hostname %+v (%v)", tc.label, item, err)
+		}
+		for _, route := range item.Routes {
+			if route.CustomDomain != tc.custom || route.PreviewsEnabled != tc.custom {
+				t.Fatalf("%s: unexpected route %+v", tc.label, route)
+			}
+		}
 	}
 }

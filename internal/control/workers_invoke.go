@@ -63,7 +63,7 @@ func (s *Server) workerInvokeTarget(r *http.Request) (string, string, error) {
 			appErr = e
 			return nil
 		}
-		host, gatewayID, appErr = s.workerApplication(r).ResolveInvocation(st, principal, workerRef(r))
+		host, gatewayID, appErr = s.workerApplication(r).ResolveInvocation(r.Context(), st, principal, workerRef(r))
 		return nil
 	})
 	if err != nil {

@@ -16,6 +16,7 @@ import (
 	objectstore "github.com/krun-dev/krun/internal/adapters/objectstore"
 	appconfig "github.com/krun-dev/krun/internal/config"
 	domain "github.com/krun-dev/krun/internal/domain"
+	"github.com/krun-dev/krun/internal/storage"
 )
 
 type EdgeConfigSnapshot struct {
@@ -71,7 +72,7 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 			continue
 		}
 		pool := placement.Pool
-		hosts := WorkerHostPatterns(ws, config.Domains)
+		hosts := WorkerHostPatterns(ws, config)
 		for name, env := range ws.Environments {
 			// The map key is authoritative: Environment.Name is a denormalised
 			// copy; the key defines the environment identity.
@@ -86,7 +87,7 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 			if name == appconfig.WorkerBaseline {
 				managedTargets[id] = systemRoute
 			}
-			if (name != appconfig.WorkerBaseline || !ws.WorkersDevDisabled) &&
+			if ((name == appconfig.WorkerBaseline && !ws.WorkersDevDisabled) || (name != appconfig.WorkerBaseline && !ws.PreviewURLsDisabled)) &&
 				(st.Workers.ProjectionWorkers == nil || slices.Contains(st.Workers.ProjectionWorkers, id)) {
 				for _, host := range hosts {
 					if expanded := EnvHostName(host, name); expanded != "" {
@@ -112,9 +113,11 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 		}
 	}
 
+	previewDomains := map[string][]customPreviewDomain{}
 	for _, hostname := range st.Workers.ManagedHostnames {
 		suffix, ok := config.DomainForHost(hostname.Host)
-		if !ok || suffix.ID != hostname.SuffixID || hostname.Retired || config.ManagedHostReserved(hostname.Host) {
+		kind := appconfig.WorkerDomainType(hostname.Type)
+		if !ok || suffix.ID != hostname.SuffixID || !suffix.Allows(kind) || (kind != appconfig.WorkerDomainCustom && kind != appconfig.WorkerDomainApplication) || hostname.Retired || config.ManagedHostReserved(hostname.Host) {
 			continue
 		}
 		pool, err := config.DomainRuntimePool(suffix.ID)
@@ -122,7 +125,7 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 			continue
 		}
 		for _, rule := range hostname.Routes {
-			if rule.Origin != "" {
+			if rule.Origin != "" || (rule.CustomDomain != (kind == appconfig.WorkerDomainCustom)) {
 				continue
 			}
 			target := managedTargets[rule.Worker]
@@ -132,12 +135,37 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 				// not start handling this path just because a Worker was deleted.
 				target = domain.EdgeConfigRoute{Worker: rule.Worker, Pool: pool.ID}
 			}
+			if rule.PreviewsEnabled && target.Environment == appconfig.WorkerBaseline {
+				previewDomains[rule.Worker] = append(previewDomains[rule.Worker], customPreviewDomain{hostname.Host, suffix.Access == "public"})
+			}
+			if rule.CustomDomain && rule.PreviewsEnabled && !rule.Enabled {
+				continue
+			}
 			target.Host = hostname.Host
 			target.Public = suffix.Access == "public"
 			target.Match = rule.Match
 			target.Path = rule.Path
 			target.Enabled = target.Enabled && rule.Enabled
 			out.Routes = append(out.Routes, target)
+		}
+	}
+
+	for id, domains := range previewDomains {
+		worker := st.Workers.Workers[id]
+		base := managedTargets[id]
+		for name, env := range worker.Environments {
+			for _, binding := range domains {
+				host := customPreviewHost(binding.host, name, "")
+				if host == "" {
+					continue
+				}
+				out.Routes = append(out.Routes, domain.EdgeConfigRoute{
+					WorkerGradualRelease: env.WorkerGradualRelease,
+					Worker:               id, Host: host, Path: "/", Enabled: env.Enabled, Version: env.Version,
+					Pool: base.Pool, Environment: name, ScriptName: base.ScriptName, Public: binding.public,
+					Retained: env.RetainedAssets,
+				})
+			}
 		}
 	}
 
@@ -167,13 +195,39 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 		for _, host := range DeploymentHosts(config, worker, deployment.ID) {
 			out.Routes = append(out.Routes, domain.EdgeConfigRoute{Worker: worker.Worker, Host: host, Path: "/", Expires: &deployment.Expires, Enabled: env.Enabled, Version: version.ID, Pool: placement.Pool})
 		}
+		for _, binding := range previewDomains[worker.Worker] {
+			if host := customPreviewHost(binding.host, deployment.Environment, deployment.ID); host != "" {
+				out.Routes = append(out.Routes, domain.EdgeConfigRoute{Worker: worker.Worker, Host: host, Path: "/", Expires: &deployment.Expires, Enabled: env.Enabled, Version: version.ID, Pool: placement.Pool, Public: binding.public})
+			}
+		}
 		out.Versions[version.ID] = runtimeVersionDescriptor(version)
 	}
+	now := time.Now()
+	for _, version := range st.Workers.Versions {
+		if st.Workers.ProjectionWorkers != nil && !slices.Contains(st.Workers.ProjectionWorkers, version.Worker) {
+			continue
+		}
+		worker, ok := st.Workers.Workers[version.Worker]
+		if !ok || version.Organization != worker.Organization || !worker.Environments[version.Environment].Enabled {
+			continue
+		}
+		target, active := managedTargets[worker.Worker]
+		if !active {
+			continue
+		}
+		for _, host := range VersionURLHosts(config, worker, version, now) {
+			expires := version.Created.Add(storage.WorkerArtifactRetain)
+			out.Routes = append(out.Routes, domain.EdgeConfigRoute{Worker: worker.Worker, Host: host, Path: "/", Expires: &expires, Enabled: true, Version: version.ID, Pool: target.Pool, Public: publicWorkerHost(config, host)})
+			out.Versions[version.ID] = runtimeVersionDescriptor(version)
+		}
+	}
+
 	sort.Slice(out.Routes, func(i, j int) bool { return edgeRouteLess(out.Routes[i], out.Routes[j]) })
 	return out
 }
 
 func runtimeVersionDescriptor(version domain.WorkerVersion) domain.WorkerVersion {
+	version.VersionURL = false
 	version.ServiceBindings = maps.Clone(version.ServiceBindings)
 	for name, binding := range version.ServiceBindings {
 		binding.GrantedBy = nil
@@ -196,26 +250,19 @@ func EdgeConfigOpsForPool(in []domain.EdgeConfigOp, pool string) []domain.EdgeCo
 // domain, in catalog order. envHostName expands the environment segment. A
 // worker with no stored selection falls back to the catalog defaults, matching
 // what normalizeWorker does for the API and the route reconciler.
-func WorkerHostPatterns(ws domain.Worker, domains []appconfig.WorkerDomain) []string {
+func WorkerHostPatterns(ws domain.Worker, config *appconfig.WorkersConfig) []string {
 	selected := map[string]bool{}
 	selection := ws.Domains
 	if len(selection) == 0 {
-		for _, domain := range domains {
-			if domain.Default {
-				selection = append(selection, domain.ID)
-			}
-		}
-		if len(selection) == 0 && len(domains) > 0 {
-			selection = []string{domains[0].ID}
-		}
+		selection = config.NormalizeWorkerNetwork(ws).Domains
 	}
 	for _, id := range selection {
 		selected[id] = true
 	}
 	slug := appconfig.WorkerSlug(ws.Organization, ws.Worker)
 	out := []string{}
-	for _, d := range domains {
-		if selected[d.ID] {
+	for _, d := range config.Domains {
+		if d.Allows(appconfig.WorkerDomainDefault) && selected[d.ID] {
 			out = append(out, slug+"\x00"+d.Domain)
 		}
 	}

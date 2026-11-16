@@ -100,11 +100,34 @@ func (c *WorkersConfig) ValidateCatalog(dns *regexp.Regexp) error {
 		if err := ValidateWorkerLabels(d.Labels); err != nil {
 			return fmt.Errorf("Workers domain %s labels: %w", d.ID, err)
 		}
-		if d.StaticDomain == "" {
-			d.StaticDomain = "static." + d.Domain
+		if len(d.Types) == 0 {
+			return fmt.Errorf("Workers domain %s requires at least one type", d.ID)
 		}
-		if !dns.MatchString(d.StaticDomain) {
-			return fmt.Errorf("invalid Workers static domain for %s", d.ID)
+		slices.Sort(d.Types)
+		for i, kind := range d.Types {
+			switch kind {
+			case WorkerDomainDefault, WorkerDomainCustom, WorkerDomainApplication:
+			default:
+				return fmt.Errorf("Workers domain %s has unknown type %q", d.ID, kind)
+			}
+			if i > 0 && d.Types[i-1] == kind {
+				return fmt.Errorf("Workers domain %s has duplicate type %q", d.ID, kind)
+			}
+		}
+		if d.Allows(WorkerDomainDefault) {
+			if d.StaticDomain == "" {
+				d.StaticDomain = "static." + d.Domain
+			}
+			if !dns.MatchString(d.StaticDomain) {
+				return fmt.Errorf("invalid Workers static domain for %s", d.ID)
+			}
+		} else {
+			if d.StaticDomain != "" {
+				return fmt.Errorf("Workers domain %s can set static_domain only with type worker_default", d.ID)
+			}
+			if d.Default {
+				return fmt.Errorf("Workers domain %s can set default only with type worker_default", d.ID)
+			}
 		}
 		for _, host := range d.ReservedHosts {
 			if host != strings.ToLower(host) || !dns.MatchString(host) || !strings.HasSuffix(host, "."+d.Domain) {
@@ -112,21 +135,21 @@ func (c *WorkersConfig) ValidateCatalog(dns *regexp.Regexp) error {
 			}
 		}
 	}
-	for _, d := range c.Domains {
-		if !d.ManagedSubdomains {
-			continue
-		}
-		for _, other := range c.Domains {
-			if d.ID != other.ID && (d.Gateway != other.Gateway || d.Access != other.Access) &&
-				(strings.HasSuffix(d.Domain, "."+other.Domain) || strings.HasSuffix(other.Domain, "."+d.Domain)) {
-				return fmt.Errorf("Workers managed suffix %s overlaps another gateway or access scope", d.ID)
+	for i, d := range c.Domains {
+		for _, other := range c.Domains[i+1:] {
+			if strings.HasSuffix(d.Domain, "."+other.Domain) || strings.HasSuffix(other.Domain, "."+d.Domain) {
+				return fmt.Errorf("Workers domain suffixes %s and %s overlap", d.ID, other.ID)
 			}
 		}
 	}
-	if len(c.Domains) == 1 && !c.Domains[0].Default {
+	if len(c.Domains) == 1 && c.Domains[0].Allows(WorkerDomainDefault) {
 		c.Domains[0].Default = true
 	}
 	return nil
+}
+
+func (d WorkerDomain) Allows(kind WorkerDomainType) bool {
+	return slices.Contains(d.Types, kind)
 }
 
 // gateway returns the configured Gateway instance by id.
@@ -155,36 +178,39 @@ func (c *WorkersConfig) Domain(id string) (WorkerDomain, bool) {
 	return WorkerDomain{}, false
 }
 
-// domainForHost resolves which configured domain a route host belongs to. The
-// longest matching suffix wins so overlapping suffixes stay unambiguous.
+// DomainForHost finds the exact configured suffix after one DNS label.
 func (c *WorkersConfig) DomainForHost(host string) (WorkerDomain, bool) {
-	if c == nil || host == "" {
-		return WorkerDomain{}, false
-	}
-	var best WorkerDomain
-	found := false
-	bestLen := 0
-	for _, d := range c.Domains {
-		if strings.HasSuffix(host, "."+d.Domain) && len(d.Domain) > bestLen {
-			best, bestLen, found = d, len(d.Domain), true
+	_, suffix, ok := strings.Cut(host, ".")
+	if c != nil && ok {
+		for _, d := range c.Domains {
+			if d.Domain == suffix {
+				return d, true
+			}
 		}
 	}
-	return best, found
+	return WorkerDomain{}, false
 }
 
-// defaultDomains returns the ids newly created environments start with.
+// DefaultDomains returns the Worker default suffixes selected for new environments.
 func (c *WorkersConfig) DefaultDomains() []string {
 	out := []string{}
 	if c == nil {
 		return out
 	}
+	fallback := ""
 	for _, d := range c.Domains {
+		if !d.Allows(WorkerDomainDefault) {
+			continue
+		}
+		if fallback == "" {
+			fallback = d.ID
+		}
 		if d.Default {
 			out = append(out, d.ID)
 		}
 	}
-	if len(out) == 0 && len(c.Domains) > 0 {
-		out = append(out, c.Domains[0].ID)
+	if len(out) == 0 && fallback != "" {
+		out = append(out, fallback)
 	}
 	return out
 }
@@ -236,7 +262,7 @@ func WorkerTerminal(v string) bool {
 }
 
 func WorkerOperationAction(kind string) string {
-	if kind == "secret" {
+	if kind == "secret" || kind == "version-url" {
 		return "worker.publish"
 	}
 	return "worker." + kind
@@ -261,13 +287,15 @@ func WorkerVariablesValid(vars map[string]any) bool {
 	return size <= 16<<10
 }
 
+var versionURLLabel = regexp.MustCompile(`^[a-f0-9]{8}-w-[a-f0-9]{16}$`)
+
 func (c *WorkersConfig) ManagedHostReserved(host string) bool {
 	label, _, _ := strings.Cut(host, ".")
-	if strings.HasPrefix(label, "w-") || strings.HasPrefix(label, "xn--") {
+	if strings.HasPrefix(label, "xn--") || strings.HasPrefix(label, "w-") || versionURLLabel.MatchString(label) {
 		return true
 	}
 	for _, suffix := range c.Domains {
-		if host == suffix.Domain || host == suffix.StaticDomain || host == "static."+suffix.Domain ||
+		if host == suffix.Domain || host == suffix.StaticDomain ||
 			slices.Contains(suffix.ReservedHosts, host) {
 			return true
 		}

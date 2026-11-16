@@ -39,6 +39,7 @@ workers:
       section: ${KRUN_GATEWAY_LISTENER:-internal}
   domains:
     - id: internal
+      types: [worker_default]
       domain: ${KRUN_WORKER_DOMAIN:-workers.example.com}
       static_domain: ${KRUN_STATIC_DOMAIN:-static.workers.example.com}
       label: 公司内网

@@ -190,6 +190,9 @@ func databaseTLSOptions(filename string) (string, error) {
 func storageBindings(workers *config.WorkersConfig, pool config.WorkerRuntimePool) string {
 	domains := map[string]string{}
 	for _, domain := range workers.Domains {
+		if !domain.Allows(config.WorkerDomainDefault) {
+			continue
+		}
 		owner, err := workers.DomainRuntimePool(domain.ID)
 		if err != nil || owner.ID != pool.ID {
 			continue

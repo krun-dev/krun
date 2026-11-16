@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/krun-dev/krun/internal/authorization"
+	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/domain"
 	"github.com/krun-dev/krun/internal/securetoken"
 )
@@ -75,7 +76,7 @@ func (s *Server) originRuleset(items []domain.ManagedHostname, zone hostnameZone
 		Kind: "zone", Phase: originPhase, Rules: []cfOriginRule{},
 	}
 	for _, item := range items {
-		if item.SuffixID != zone.Suffix.ID {
+		if item.SuffixID != zone.Suffix.ID || item.Type != string(appconfig.WorkerDomainApplication) || !zone.Suffix.Allows(appconfig.WorkerDomainApplication) {
 			continue
 		}
 		for _, rule := range item.Routes {
@@ -115,6 +116,9 @@ func (s *Server) cfOriginRuleset(st *domain.State, p authorization.Principal, r 
 	if r.Method == http.MethodGet {
 		return result, http.StatusOK, nil
 	}
+	if !zone.Suffix.Allows(appconfig.WorkerDomainApplication) {
+		return nil, 0, domain.Invalid("HOSTNAME_INVALID", "Choose a suffix of type application")
+	}
 	return s.withHostnameTargets(r, p, func(st *domain.State) (any, int, error) {
 		changes, err := s.authorizeHostnameChanges(st, p, r)
 		if err != nil {
@@ -129,7 +133,7 @@ func (s *Server) cfOriginRuleset(st *domain.State, p authorization.Principal, r 
 			return nil, 0, domain.Invalid("HOSTNAME_ROUTE_INVALID", "Supply at most 100 zone Origin Rules")
 		}
 		for _, item := range items {
-			if item.SuffixID == zone.Suffix.ID && slices.ContainsFunc(item.Routes, func(rule domain.ManagedHostnameRoute) bool { return rule.Origin != "" }) {
+			if item.SuffixID == zone.Suffix.ID && item.Type == string(appconfig.WorkerDomainApplication) && slices.ContainsFunc(item.Routes, func(rule domain.ManagedHostnameRoute) bool { return rule.Origin != "" }) {
 				change := changes.edit(item)
 				change.item.Routes = slices.DeleteFunc(change.item.Routes, func(rule domain.ManagedHostnameRoute) bool { return rule.Origin != "" })
 			}
@@ -139,7 +143,7 @@ func (s *Server) cfOriginRuleset(st *domain.State, p authorization.Principal, r 
 			if err != nil {
 				return nil, 0, err
 			}
-			change, err := changes.hostname(host, zone)
+			change, err := changes.hostname(host, zone, appconfig.WorkerDomainApplication)
 			if err != nil {
 				return nil, 0, err
 			}

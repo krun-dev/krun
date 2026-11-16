@@ -16,7 +16,7 @@ func TestPostgresConfigDeltaStoresNormalizedEntitiesAndShards(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
 	seedPerformanceSites(t, store, 4)
-	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}})
+	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Types: []appconfig.WorkerDomainType{appconfig.WorkerDomainDefault}, Domain: "workers.test"}})
 	controller := &workerapp.Controller{Service: (&Server{Store: store}).workerApplication(nil), Config: config}
 	objects := map[string][]byte{}
 	controller.PutObject = func(_ context.Context, _, key string, r io.Reader, _ int64, _ minio.PutObjectOptions) (minio.UploadInfo, error) {
@@ -80,7 +80,7 @@ func TestPostgresWorkerConfigProjectionUsesCompactReadModel(t *testing.T) {
 	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_worker_operations(operation_id,kind,org_id,worker_id,env_name,state,steps,created_at) VALUES('broken','publish','tenant','site-000002','production','failed','{}'::jsonb,now())`); err != nil {
 		t.Fatal(err)
 	}
-	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}})
+	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Types: []appconfig.WorkerDomainType{appconfig.WorkerDomainDefault}, Domain: "workers.test"}})
 	projection, err := workerapp.LoadWorkerConfigProjection(ctx, store, []string{"site-000002"}, config)
 	if err != nil || len(projection.Routes) != 1 || projection.Routes[0].Worker != "site-000002" {
 		t.Fatalf("projection=%+v err=%v", projection, err)

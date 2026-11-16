@@ -239,6 +239,10 @@ func (s *Server) cfUpload(w http.ResponseWriter, r *http.Request) {
 		s.WriteError(w, r, err)
 		return
 	}
+	if meta.Annotations["workers/alias"] != "" {
+		s.WriteError(w, r, domain.Invalid("UNSUPPORTED_METADATA", "Version URL aliases are not supported"))
+		return
+	}
 	input, err := BindingInput(meta, r.PathValue("preview") != "")
 	if err != nil {
 		s.WriteError(w, r, err)
@@ -302,6 +306,10 @@ func (s *Server) cfUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		version = out.(domain.WorkerVersion)
 		if !deploy {
+			worker := app.WorkerView(st, authorization.Target{ID: ref.Worker, Organization: ref.Organization})
+			if len(workerapp.VersionURLSuffixes(s.Config.Workers, worker)) != 0 {
+				op = workerapp.QueueVersionURL(st, p, version)
+			}
 			return nil
 		}
 		target, e := s.WorkerTarget(st, r, ref.Environment, "worker.publish", p)
@@ -319,23 +327,28 @@ func (s *Server) cfUpload(w http.ResponseWriter, r *http.Request) {
 		s.WriteError(w, r, err)
 		return
 	}
-	if deploy {
+	if op.ID != "" {
 		if err = s.cfWait(r, op.ID); err != nil {
 			s.WriteError(w, r, err)
 			return
 		}
 	}
+	version.VersionURL = op.Kind == domain.WorkerVersionURLOperation
 	result := cfVersion(version, 1)
 	result["version_id"] = version.ID
 	result["id"] = version.ID
 	result["etag"] = version.ArchiveDigest
-	if op.ID != "" {
+	if deploy && op.ID != "" {
 		err = s.cfCall(r, false, func(st *domain.State, p authorization.Principal) error {
 			for _, d := range st.Workers.Deployments {
 				if d.Operation != op.ID {
 					continue
 				}
-				result["urls"] = s.cfDeploymentURLs(st, d)
+				urls, err := s.cfDeploymentURLs(r, st, d)
+				if err != nil {
+					return err
+				}
+				result["urls"] = urls
 				if r.PathValue("preview") != "" {
 					result["id"] = d.ID
 				} else {

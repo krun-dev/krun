@@ -96,7 +96,7 @@ func TestPostgresDeltaPublisherOnlyWritesChangedSite(t *testing.T) {
 	s := postgresTestStore(t)
 	seedPerformanceSites(t, s, 20)
 	ctx := context.Background()
-	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}})
+	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Types: []appconfig.WorkerDomainType{appconfig.WorkerDomainDefault}, Domain: "workers.test"}})
 
 	controller := &workerapp.Controller{Service: (&Server{Store: s}).workerApplication(nil), Config: config}
 	rev, err := controller.PublishConfig(ctx)
@@ -207,7 +207,7 @@ func TestPostgresStaleDirtyGenerationCannotPublishOrDropNewerWork(t *testing.T) 
 	if err != nil || len(remaining) != 2 {
 		t.Fatalf("new mutation was lost: %v %v", remaining, err)
 	}
-	controller := &workerapp.Controller{Service: (&Server{Store: s}).workerApplication(nil), Config: workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}})}
+	controller := &workerapp.Controller{Service: (&Server{Store: s}).workerApplication(nil), Config: workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Types: []appconfig.WorkerDomainType{appconfig.WorkerDomainDefault}, Domain: "workers.test"}})}
 	revision, err := controller.PublishConfig(ctx)
 	if err != nil || revision != 1 {
 		t.Fatal(err)

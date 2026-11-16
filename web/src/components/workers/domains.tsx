@@ -161,7 +161,7 @@ export function WorkerDomains({
           <CardContent className="grid gap-4 p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="font-medium">{t("访问域名后缀")}</h3>
+                <h3 className="font-medium">{t("默认域名后缀")}</h3>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {t(
                     "这里展示的是地址后缀，不是可直接访问的地址。平台会为每个环境生成独立子域名，实际地址见下方。",
@@ -260,11 +260,11 @@ export function WorkerDomains({
                     </Badge>
                   ) : null}
                 </div>
-                {e.hosts.length === 0 ? (
+                {e.hosts.length === 0 && !e.preview_hosts?.length ? (
                   <p className="text-xs text-muted-foreground">{t("未绑定域名")}</p>
                 ) : (
                   <div className="grid gap-1.5">
-                    {e.hosts.map((host, i) => {
+                    {[...e.hosts, ...(e.preview_hosts ?? [])].map((host, i) => {
                       const d = domains.find((x) => x.id === (e.domains || [])[i]);
                       return (
                         <div
@@ -275,7 +275,7 @@ export function WorkerDomains({
                             variant="secondary"
                             className="shrink-0 text-[10px]"
                           >
-                            {d?.label || t("域名")}
+                            {d?.label || (i >= e.hosts.length ? t("自定义 Preview") : t("域名"))}
                           </Badge>
                           <a
                             href={workerURL(host)}

@@ -227,6 +227,7 @@ type ConfigurationR2 struct {
 
 type Version struct {
 	bun.BaseModel      `bun:"table:krun_worker_versions,alias:krun_worker_versions"`
+	VersionURL         bool            `bun:"version_url"`
 	ServiceBindings    json.RawMessage `bun:"service_bindings,type:jsonb"`
 	ConfigurationID    string          `bun:"configuration_id"`
 	CreatedBy          string          `bun:"created_by"`
@@ -339,21 +340,23 @@ type Hostname struct {
 	Host           string `bun:"host,pk"`
 	OrgID          string `bun:"org_id"`
 	SuffixID       string `bun:"suffix_id"`
+	DomainType     string `bun:"domain_type"`
 	Revision       int    `bun:"revision"`
 	Retired        bool   `bun:"retired"`
 	GatewayManaged bool   `bun:"gateway_managed"`
 }
 
 type HostnameRoute struct {
-	bun.BaseModel `bun:"table:krun_worker_hostname_routes,alias:krun_worker_hostname_routes"`
-	Host          string `bun:"host,pk"`
-	MatchType     string `bun:"match_type,pk"`
-	Path          string `bun:"path,pk"`
-	WorkerID      string `bun:"worker_id"`
-	Origin        string `bun:"origin"`
-	CfPattern     string `bun:"cf_pattern"`
-	CustomDomain  bool   `bun:"custom_domain"`
-	Enabled       bool   `bun:"enabled"`
+	bun.BaseModel   `bun:"table:krun_worker_hostname_routes,alias:krun_worker_hostname_routes"`
+	Host            string `bun:"host,pk"`
+	MatchType       string `bun:"match_type,pk"`
+	Path            string `bun:"path,pk"`
+	WorkerID        string `bun:"worker_id"`
+	Origin          string `bun:"origin"`
+	CfPattern       string `bun:"cf_pattern"`
+	CustomDomain    bool   `bun:"custom_domain"`
+	PreviewsEnabled bool   `bun:"previews_enabled"`
+	Enabled         bool   `bun:"enabled"`
 }
 
 type Bucket struct {

@@ -338,18 +338,13 @@ krun workers repository providers
 
 #### GitHub 私库
 
-**第一步，授权 GitHub 账号。** 运行下面的命令，浏览器会自动打开 GitHub 授权页。核对 App 名称后，点图中标出的 **Authorize**。GitHub 随后会带你回到 krun。
+**第一步，授权 GitHub 账号。** 运行下面的命令，浏览器会自动打开 GitHub 授权页。核对实际 App 名称后，点 **Authorize**。下图来自 [GitHub 官方示例](https://docs.github.com/en/apps/using-github-apps/installing-a-github-app-from-a-third-party)。GitHub 随后会带你回到 krun。
 
 ```sh frame="terminal" title="打开 GitHub 授权"
 krun workers repository authorize --provider github
 ```
 
-<div class="krun-consent-screenshot">
-  <a href="/docs/screenshots/git-repositories/github-consent.png">
-    <img src="/docs/screenshots/git-repositories/github-consent.png" alt="GitHub 授权确认页，标记 1 指向 Authorize 按钮，账号已遮挡" loading="lazy" />
-    <span aria-hidden="true">1</span>
-  </a>
-</div>
+[![① GitHub 官方授权示例中的 Authorize 按钮](/docs/screenshots/git-repositories/github-consent.png)](/docs/screenshots/git-repositories/github-consent.png)
 
 **第二步，检查 GitHub App 的仓库范围。** 执行 `repository list`。能看到目标私库就可以绑定。如果没有，确认当前 GitHub 账号能读取该仓库，并通过 `providers` 返回的 `install_url` 安装 App 或调整其仓库范围。组织可能要求管理员批准。[GitHub App 安装与仓库范围](/docs/guides/github-integration.html#安装或管理-github-app)
 
@@ -361,18 +356,13 @@ krun workers repository set --worker WORKER_ID \
 
 #### GitLab 私库
 
-运行下面的命令，浏览器会打开所配置的 GitLab 实例的授权页。确认读取仓库和 API 的权限，点 **Authorize**，然后回到终端。
+运行下面的命令，浏览器会打开所配置的 GitLab 实例。如果出现登录页，先登录，再在授权页确认应用名称以及读取仓库和 API 的权限，点 **Authorize**，然后回到终端。图为 [Debian Salsa GitLab 的登录示例](https://salsa.debian.org/users/sign_in)。
 
 ```sh frame="terminal" title="打开 GitLab 授权"
 krun workers repository authorize --provider gitlab
 ```
 
-<div class="krun-gitlab-consent-screenshot">
-  <a href="/docs/screenshots/git-repositories/gitlab-consent.png">
-    <img src="/docs/screenshots/git-repositories/gitlab-consent.png" alt="GitLab 授权确认页，标记 1 指向 Authorize 按钮" loading="lazy" />
-    <span aria-hidden="true">1</span>
-  </a>
-</div>
+[![① 点击 Sign in 登录 GitLab](/docs/screenshots/git-repositories/gitlab-sign-in.png)](/docs/screenshots/git-repositories/gitlab-sign-in.png)
 
 ```sh frame="terminal" title="查找并绑定 GitLab 私库"
 krun workers repository list --provider gitlab

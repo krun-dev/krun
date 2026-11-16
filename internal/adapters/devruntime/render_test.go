@@ -35,7 +35,7 @@ func TestExternalRenderSeparatesRuntimeCredentialsAndEnablesVerifiedTLS(t *testi
 					ManagementToken: "fixture-management-token",
 				},
 			},
-			Domains: []config.WorkerDomain{{StaticDomain: "static.example.com", Access: "public"}},
+			Domains: []config.WorkerDomain{{Types: []config.WorkerDomainType{config.WorkerDomainDefault}, StaticDomain: "static.example.com", Access: "public"}},
 		},
 	}
 	if err := Render(cfg, "192.0.2.10", out); err != nil {

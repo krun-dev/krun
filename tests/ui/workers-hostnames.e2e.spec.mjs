@@ -95,7 +95,7 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
   }
 
   await page.goto("/?page=workers&workspace=" + org.id);
-  const domains = page.getByRole("button", { name: "域名", exact: true });
+  const domains = page.getByRole("button", { name: "应用域名", exact: true });
   await domains.click();
   const claim = page.getByRole("button", { name: "申请域名" });
   await claim.click();
@@ -104,7 +104,7 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
   const submitClaim = dialog.getByRole("button", { name: "申请域名", exact: true });
   const save = dialog.getByRole("button", { name: "保存", exact: true });
   await prefix.fill(desiredLabel);
-  await screenshot("claim.png", [
+  await screenshot("claim-domain-prefix-first.png", [
     [3, prefix],
     [4, dialog.getByRole("combobox", { name: "域名后缀" })],
     [5, submitClaim],
@@ -134,7 +134,7 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
     await targets.last().selectOption(httpOrigin.host);
   }
   await save.scrollIntoViewIfNeeded();
-  await screenshot("routes.png", [
+  await screenshot("edit-domain-routes.png", [
     [6, dialog.getByRole("textbox", { name: "请求路径" }).nth(1)],
     [7, targets.nth(0)],
     [8, save],
@@ -144,7 +144,7 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
   await expect(page.getByText("/api", { exact: true })).toBeVisible();
   if (staticOrigin) await expect(page.getByText(staticOrigin.host, { exact: true })).toBeVisible();
   if (httpOrigin) await expect(page.getByText(httpOrigin.host, { exact: true })).toBeVisible();
-  await screenshot("catalog.png", [
+  await screenshot("network-domain-list.png", [
     [1, domains],
     [2, edit],
   ]);
@@ -157,8 +157,48 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
 
   await page.goto("/?page=workers&workspace=" + org.id + "&worker=orders&worker_tab=routing");
   await expect(page.getByRole("link", { name: host })).toBeVisible();
-  await page.getByRole("link", { name: "管理域名与路由" }).click();
+  const bindings = await request(orgBase + "/workers/orders/hostnames");
+  expect(bindings.application_hosts.some((entry) => entry.host === host)).toBeTruthy();
+  const addAppRoute = page.getByRole("button", { name: "添加应用路由", exact: true });
+  await addAppRoute.click();
+  await dialog.getByRole("combobox", { name: "应用域名" }).selectOption(host);
+  const paths = dialog.getByRole("textbox", { name: "请求路径" });
+  await expect(paths.first()).toHaveValue("/api");
+  await expect(dialog.getByRole("textbox", { name: "目标 Worker" })).toHaveCount(0);
+  await paths.last().fill("/orders");
+  await save.click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("/orders", { exact: true })).toBeVisible();
+
+  await edit.click();
+  await paths.last().fill("/orders/status");
+  await dialog.getByRole("combobox", { name: "匹配方式" }).last().selectOption("exact");
+  await save.click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("/orders/status", { exact: true })).toBeVisible();
+  if (bindings.suffixes.length) {
+    const suffix = bindings.suffixes[0];
+    const customLabel = "orders-" + Date.now();
+    const customHost = customLabel + "." + suffix.domain;
+    await request(orgBase + "/workers/orders/environments", "POST", { name: "pr-123" });
+    await page.getByRole("button", { name: "绑定自定义域名", exact: true }).click();
+    await dialog.getByRole("textbox", { name: "域名前缀" }).fill(customLabel);
+    await expect(dialog.getByRole("combobox", { name: "域名后缀" })).toHaveValue(suffix.id);
+    await dialog.getByRole("button", { name: "绑定域名", exact: true }).click();
+    await expect(page.getByRole("link", { name: customHost, exact: true })).toBeVisible();
+    const preview = page.getByRole("link", { name: "pr-123." + customHost, exact: true });
+    await expect(preview).toBeVisible();
+    await expect(page.getByText("生产和 Preview", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "解绑自定义域名", exact: true }).click();
+    await dialog.getByRole("button", { name: "确认解绑" }).click();
+    await expect(preview).toHaveCount(0);
+  }
+  await page.getByRole("link", { name: "管理应用域名" }).click();
   await expect(page).toHaveURL(/page=domains/);
+  await expect(page.getByText("/orders/status", { exact: true })).toBeVisible();
+  await expect(page.getByText("/api", { exact: true })).toBeVisible();
+  if (staticOrigin) await expect(page.getByText(staticOrigin.host, { exact: true })).toBeVisible();
+  if (httpOrigin) await expect(page.getByText(httpOrigin.host, { exact: true })).toBeVisible();
 
   // Exercise both palettes while the real route table is rendered.
   await page.evaluate(() => document.documentElement.classList.add("dark"));

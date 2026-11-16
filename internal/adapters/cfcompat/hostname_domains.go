@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/krun-dev/krun/internal/authorization"
+	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/domain"
 	"github.com/krun-dev/krun/internal/securetoken"
 )
@@ -17,7 +18,7 @@ type cfDomainInput struct {
 	ZoneID          string `json:"zone_id,omitempty"`
 	ZoneName        string `json:"zone_name,omitempty"`
 	Enabled         *bool  `json:"enabled,omitempty"`
-	PreviewsEnabled bool   `json:"previews_enabled,omitempty"`
+	PreviewsEnabled *bool  `json:"previews_enabled,omitempty"`
 }
 
 type cfDomainRecord struct {
@@ -36,20 +37,20 @@ func (s *Server) domainRecord(item domain.ManagedHostname, rule domain.ManagedHo
 	return cfDomainRecord{
 		ID: securetoken.Digest("domain\x00" + item.Host)[:32], Hostname: item.Host,
 		Service: rule.WorkerLocator, Environment: "production",
-		ZoneID: zoneID(item.Organization, item.SuffixID), ZoneName: suffix.Domain, Enabled: rule.Enabled,
+		ZoneID: zoneID(item.Organization, item.SuffixID), ZoneName: suffix.Domain, Enabled: rule.Enabled, PreviewsEnabled: rule.PreviewsEnabled,
 	}
 }
 
 func (s *Server) addCustomDomain(changes *hostnameChanges, in cfDomainInput, override bool) (cfDomainRecord, error) {
-	if in.Service == "" || (in.Environment != "" && in.Environment != "production") || in.PreviewsEnabled {
-		return cfDomainRecord{}, domain.Invalid("HOSTNAME_TARGET_INVALID", "Custom Domains support a production Worker without preview URLs")
+	if in.Service == "" || (in.Environment != "" && in.Environment != "production") {
+		return cfDomainRecord{}, domain.Invalid("HOSTNAME_TARGET_INVALID", "Custom Domains require a production Worker")
 	}
 	org := changes.request.PathValue("org")
 	zone, err := s.routeZone(org, in.Hostname, in.ZoneID, in.ZoneName)
 	if err != nil {
 		return cfDomainRecord{}, err
 	}
-	change, err := changes.hostname(in.Hostname, zone)
+	change, err := changes.hostname(in.Hostname, zone, appconfig.WorkerDomainCustom)
 	if err != nil {
 		return cfDomainRecord{}, err
 	}
@@ -61,11 +62,10 @@ func (s *Server) addCustomDomain(changes *hostnameChanges, in cfDomainInput, ove
 	}
 	rule := rules[0]
 	rule.CustomDomain = true
+	rule.PreviewsEnabled = in.PreviewsEnabled == nil || *in.PreviewsEnabled
 	for i, old := range change.item.Routes {
-		if old.Match != "prefix" || old.Path != "/" {
-			continue
-		}
-		if !old.CustomDomain || (!override && old.Worker != rule.Worker) {
+		if len(change.item.Routes) != 1 || old.Match != "prefix" || old.Path != "/" ||
+			!old.CustomDomain || (!override && old.Worker != rule.Worker) {
 			return cfDomainRecord{}, domain.Conflict("HOSTNAME_ROUTE_CONFLICT", "A route already uses this match and path")
 		}
 		if old.Worker != rule.Worker {
@@ -114,6 +114,10 @@ func (s *Server) cfCustomDomains(st *domain.State, p authorization.Principal, r 
 	query := r.URL.Query()
 	list := []cfDomainRecord{}
 	for _, item := range items {
+		suffix, ok := s.Config.Workers.Domain(item.SuffixID)
+		if !ok || !suffix.Allows(appconfig.WorkerDomainCustom) || item.Type != string(appconfig.WorkerDomainCustom) {
+			continue
+		}
 		for i, rule := range item.Routes {
 			if !rule.CustomDomain || rule.WorkerLocator == "" {
 				continue
@@ -199,6 +203,10 @@ func (s *Server) replaceScriptCustomDomains(st *domain.State, p authorization.Pr
 	removed := []cfDomainRecord{}
 	existing := map[string]cfDomainRecord{}
 	for _, item := range items {
+		suffix, ok := s.Config.Workers.Domain(item.SuffixID)
+		if !ok || !suffix.Allows(appconfig.WorkerDomainCustom) || item.Type != string(appconfig.WorkerDomainCustom) {
+			continue
+		}
 		for _, rule := range item.Routes {
 			if rule.CustomDomain {
 				existing[item.Host] = s.domainRecord(item, rule)
@@ -218,14 +226,15 @@ func (s *Server) replaceScriptCustomDomains(st *domain.State, p authorization.Pr
 		}
 		result = append(result, record)
 		if old, ok := existing[record.Hostname]; ok {
-			updated = append(updated, map[string]any{"id": old.ID, "hostname": old.Hostname, "modified": old != record, "previews_enabled": false})
+			updated = append(updated, map[string]any{"id": old.ID, "hostname": old.Hostname, "modified": old != record, "previews_enabled": record.PreviewsEnabled})
 		} else {
 			added = append(added, record)
 		}
 	}
 	if dry || replaceScope {
 		for _, item := range items {
-			if seen[item.Host] {
+			suffix, ok := s.Config.Workers.Domain(item.SuffixID)
+			if seen[item.Host] || !ok || !suffix.Allows(appconfig.WorkerDomainCustom) || item.Type != string(appconfig.WorkerDomainCustom) {
 				continue
 			}
 			for i, rule := range item.Routes {

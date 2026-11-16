@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/krun-dev/krun/internal/authorization"
+	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/domain"
 	"github.com/krun-dev/krun/internal/securetoken"
 	workerapp "github.com/krun-dev/krun/internal/workers"
@@ -77,27 +78,31 @@ func (c *hostnameChanges) edit(item domain.ManagedHostname) *hostnameChange {
 	return change
 }
 
-func (c *hostnameChanges) hostname(host string, zone hostnameZone) (*hostnameChange, error) {
+func (c *hostnameChanges) hostname(host string, zone hostnameZone, kind appconfig.WorkerDomainType) (*hostnameChange, error) {
+	if !zone.Suffix.Allows(kind) {
+		return nil, domain.Invalid("HOSTNAME_INVALID", "Choose a suffix of type "+string(kind))
+	}
 	host = strings.ToLower(host)
 	label, ok := strings.CutSuffix(host, "."+zone.Name)
 	if !ok || label == "" || strings.Contains(label, ".") {
 		return nil, domain.Invalid("HOSTNAME_INVALID", "Choose a single subdomain label under the selected zone")
 	}
 	if change, ok := c.items[host]; ok {
+		if change.item.SuffixID != zone.Suffix.ID || change.item.Type != string(kind) {
+			return nil, domain.Conflict("HOSTNAME_UNAVAILABLE", "Hostname is unavailable")
+		}
 		return change, nil
 	}
 	org := c.request.PathValue("org")
 	item, err := c.app.Store.ManagedHostname(c.request.Context(), org, host)
 	var problem *domain.APIError
 	if errors.As(err, &problem) && problem.Kind == domain.ErrorNotFound {
-		item, err = c.app.ManagedHostnameForChange(c.request.Context(), org, "", workerapp.ManagedHostnameInput{
-			SuffixID: zone.Suffix.ID, Label: label,
-		})
+		item, err = c.app.NewManagedHostname(org, zone.Suffix.ID, label, kind)
 	}
 	if err != nil {
 		return nil, err
 	}
-	if item.SuffixID != zone.Suffix.ID {
+	if item.SuffixID != zone.Suffix.ID || item.Type != string(kind) {
 		return nil, domain.Conflict("HOSTNAME_UNAVAILABLE", "Hostname is unavailable")
 	}
 	return c.edit(item), nil
@@ -152,7 +157,7 @@ func (c *hostnameChanges) addWorkerRoute(in cfRouteInput, zone hostnameZone) (cf
 	if strings.ContainsAny(path, "*?#") {
 		return cfWorkerRoute{}, domain.Invalid("HOSTNAME_ROUTE_INVALID", "Use an exact path or a trailing /* path prefix")
 	}
-	change, err := c.hostname(host, zone)
+	change, err := c.hostname(host, zone, appconfig.WorkerDomainApplication)
 	if err != nil {
 		return cfWorkerRoute{}, err
 	}
@@ -189,7 +194,7 @@ func (s *Server) cfZoneWorkerRoutes(st *domain.State, p authorization.Principal,
 	index := -1
 	list := []cfWorkerRoute{}
 	for _, item := range items {
-		if item.SuffixID != zone.Suffix.ID {
+		if item.SuffixID != zone.Suffix.ID || item.Type != string(appconfig.WorkerDomainApplication) || !zone.Suffix.Allows(appconfig.WorkerDomainApplication) {
 			continue
 		}
 		for i, rule := range item.Routes {
@@ -279,6 +284,10 @@ func (s *Server) cfScriptWorkerRoutes(st *domain.State, p authorization.Principa
 		}
 		result := []cfWorkerRoute{}
 		for _, item := range items {
+			suffix, ok := s.Config.Workers.Domain(item.SuffixID)
+			if !ok || !suffix.Allows(appconfig.WorkerDomainApplication) || item.Type != string(appconfig.WorkerDomainApplication) {
+				continue
+			}
 			for _, rule := range item.Routes {
 				if !rule.CustomDomain {
 					result = append(result, workerRoute(item.Host, rule))
@@ -318,6 +327,10 @@ func (s *Server) replaceScriptWorkerRoutes(st *domain.State, p authorization.Pri
 	}
 	result := []cfWorkerRoute{}
 	for _, subset := range items {
+		suffix, ok := s.Config.Workers.Domain(subset.SuffixID)
+		if !ok || !suffix.Allows(appconfig.WorkerDomainApplication) || subset.Type != string(appconfig.WorkerDomainApplication) {
+			continue
+		}
 		if !slices.ContainsFunc(subset.Routes, func(rule domain.ManagedHostnameRoute) bool {
 			return !rule.CustomDomain && rule.CFPattern != ""
 		}) {

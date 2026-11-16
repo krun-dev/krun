@@ -19,13 +19,26 @@ import (
 	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
+func addTypedHostnameSuffixes(cfg *appconfig.WorkersConfig) (application, custom appconfig.WorkerDomain) {
+	defaultSuffix := cfg.Domains[0]
+	application = appconfig.WorkerDomain{
+		ID: "apps", Domain: "apps.test", Types: []appconfig.WorkerDomainType{appconfig.WorkerDomainApplication},
+		Access: defaultSuffix.Access, Gateway: defaultSuffix.Gateway, Labels: defaultSuffix.Labels,
+	}
+	custom = appconfig.WorkerDomain{
+		ID: "custom", Domain: "custom.test", Types: []appconfig.WorkerDomainType{appconfig.WorkerDomainCustom},
+		Access: defaultSuffix.Access, Gateway: defaultSuffix.Gateway, Labels: defaultSuffix.Labels,
+	}
+	cfg.Domains = append(cfg.Domains, application, custom)
+	return application, custom
+}
+
 func TestManagedHostnameOwnershipAndRuntimeProjection(t *testing.T) {
 	s, store, worker := workerTestServer(t)
 	ctx := t.Context()
 	cfg := s.Config.Workers
-	cfg.Domains[0].ManagedSubdomains = true
-	cfg.Domains[0].ReservedHosts = []string{"reserved." + cfg.Domains[0].Domain}
-	suffix := cfg.Domains[0]
+	suffix, _ := addTypedHostnameSuffixes(cfg)
+	cfg.Domains[1].ReservedHosts = []string{"reserved." + suffix.Domain}
 	host := "shop." + suffix.Domain
 	secondWorker := "svc-api"
 	err := store.Update(ctx, PartitionAll, func(st *State) error {
@@ -54,7 +67,6 @@ func TestManagedHostnameOwnershipAndRuntimeProjection(t *testing.T) {
 	}
 
 	do(http.MethodPost, base, "krun_cli_viewer", payload, 403, "PERMISSION_DENIED")
-	do(http.MethodPost, base, admin, strings.Replace(payload, "Shop", "w-owned", 1), 409, "HOSTNAME_UNAVAILABLE")
 	do(http.MethodPost, base, admin, strings.Replace(payload, "Shop", "reserved", 1), 409, "HOSTNAME_UNAVAILABLE")
 	do(http.MethodPost, base, admin, strings.Replace(payload, "Shop", "a.b", 1), 422, "HOSTNAME_INVALID")
 	do(http.MethodPost, base, admin, strings.Replace(payload, "Shop", "K", 1), 422, "HOSTNAME_INVALID")
@@ -143,10 +155,99 @@ func TestManagedHostnameOwnershipAndRuntimeProjection(t *testing.T) {
 	do(http.MethodPost, base, admin, payload, 409, "HOSTNAME_UNAVAILABLE")
 }
 
+func TestWorkerApplicationRoutesShareTableAndAuthorization(t *testing.T) {
+	s, store, worker := workerTestServer(t)
+	cfg := s.Config.Workers
+	suffix, customSuffix := addTypedHostnameSuffixes(cfg)
+	cfg.ManagedOrigins = []appconfig.ManagedOrigin{
+		{Host: "site.origin.example.com", Kind: "static", Service: "site", Port: 80, Organizations: []string{"org-a"}, Suffixes: []string{suffix.ID}},
+	}
+	if err := store.Update(t.Context(), PartitionAll, func(st *State) error {
+		st.Resources["svc-other"] = Resource{ID: "svc-other", Organization: "org-a", Kind: "worker", Locator: "other", Name: "Other Worker", Revision: 1}
+		s.worker(st, Target{ID: "svc-other", Organization: "org-a"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	const admin = "krun_cli_admin"
+	const catalog = "/api/v1/orgs/org-a/domains"
+	host := "shared." + suffix.Domain
+	scoped := worker + "/hostnames/" + host + "/routes"
+	do := func(method, path, token, body string, status int, code string) []byte {
+		t.Helper()
+		res := request(s, method, path, token, body)
+		if res.Code != status || (code != "" && !strings.Contains(res.Body.String(), code)) {
+			t.Fatalf("%s %s: expected %d %s, got %d %s", method, path, status, code, res.Code, res.Body.String())
+		}
+		return res.Body.Bytes()
+	}
+	do("POST", catalog, admin, fmt.Sprintf(`{"suffix_id":%q,"label":"shared","routes":[
+		{"match":"prefix","path":"/","origin":"site.origin.example.com","enabled":true},
+		{"match":"prefix","path":"/admin","worker_id":"svc-other","enabled":true}
+	]}`, suffix.ID), 201, host)
+	do("POST", "/api/v1/orgs/org-b/domains", admin, fmt.Sprintf(`{"suffix_id":%q,"label":"other-org"}`, suffix.ID), 201, "")
+	do("POST", worker+"/hostnames", admin, fmt.Sprintf(`{"suffix_id":%q,"label":"standalone"}`, customSuffix.ID), 201, "")
+
+	keyFor := func(orgActions, workerActions string) string {
+		t.Helper()
+		raw := do("POST", "/api/v1/orgs/org-a/api-keys", admin, fmt.Sprintf(`{
+			"name":"route-scope", "expires_in":3600, "policy":{"schema_version":1,"statements":[
+				{"effect":"allow","actions":%s,"resource":{"kind":"organization","organization_id":"org-a","ids":["org-a"]},"conditions":{}},
+				{"effect":"allow","actions":%s,"resource":{"kind":"worker","organization_id":"org-a","ids":["svc-a"]},"conditions":{"environments":["production"]}}
+			]}}`, orgActions, workerActions), 201, "")
+		var out struct{ Key string }
+		if err := json.Unmarshal(raw, &out); err != nil || out.Key == "" {
+			t.Fatal("invalid API key creation result", err)
+		}
+		return out.Key
+	}
+	editor := keyFor(`["worker.hostname.read","worker.hostname.manage"]`, `["worker.read","worker.update"]`)
+	withoutWorkerWrite := keyFor(`["worker.hostname.read","worker.hostname.manage"]`, `["worker.read"]`)
+	withoutOrgWrite := keyFor(`["worker.hostname.read"]`, `["worker.read","worker.update"]`)
+	selection := do("GET", worker+"/hostnames", editor, "", 200, "")
+	var choices struct {
+		Hosts []domain.ManagedHostnameOption `json:"application_hosts"`
+	}
+	if err := json.Unmarshal(selection, &choices); err != nil || len(choices.Hosts) != 1 ||
+		choices.Hosts[0] != (domain.ManagedHostnameOption{Host: host, Revision: 1}) ||
+		strings.Contains(string(selection), "svc-other") || strings.Contains(string(selection), "site.origin.example.com") {
+		t.Fatalf("unexpected Worker catalog: %s (%v)", selection, err)
+	}
+
+	add := `{"expected_revision":1,"routes":[{"match":"prefix","path":"/api/","enabled":true}]}`
+	do("PUT", scoped, withoutWorkerWrite, add, 403, "PERMISSION_DENIED")
+	do("PUT", scoped, withoutOrgWrite, add, 403, "PERMISSION_DENIED")
+	do("PUT", scoped, editor, strings.Replace(add, "/api/", "/admin/", 1), 409, "HOSTNAME_ROUTE_CONFLICT")
+	do("PUT", scoped, editor, strings.Replace(add, "/api/", "/", 1), 409, "HOSTNAME_ROUTE_CONFLICT")
+	do("PUT", scoped, editor, strings.Replace(add, `"enabled":true`, `"worker_id":"svc-other","enabled":true`, 1), 422, "HOSTNAME_TARGET_INVALID")
+	do("PUT", worker+"/hostnames/other-org."+suffix.Domain+"/routes", editor, add, 404, "")
+	do("PUT", worker+"/hostnames/standalone."+customSuffix.Domain+"/routes", editor, add, 404, "")
+	added := do("PUT", scoped, editor, add, 200, "")
+	var item domain.ManagedHostname
+	if err := json.Unmarshal(added, &item); err != nil || item.Revision != 2 || len(item.Routes) != 1 ||
+		item.Routes[0].Worker != "svc-a" || item.Routes[0].Path != "/api" {
+		t.Fatalf("unexpected scoped route write: %s (%v)", added, err)
+	}
+	do("PUT", scoped, editor, add, 409, "REVISION_CONFLICT")
+	do("PUT", catalog+"/"+host, editor, `{"expected_revision":2,"routes":[]}`, 403, "PERMISSION_DENIED")
+	do("PUT", scoped, editor, `{"expected_revision":2,"routes":[{"match":"exact","path":"/orders","enabled":false}]}`, 200, "")
+	full, err := store.ManagedHostname(t.Context(), "org-a", host)
+	if err != nil || full.Revision != 3 || len(full.Routes) != 3 ||
+		full.Routes[0].Path != "/orders" || full.Routes[0].Enabled ||
+		full.Routes[1].Origin != "site.origin.example.com" || full.Routes[2].Worker != "svc-other" {
+		t.Fatalf("route table after scoped edit: %+v (%v)", full, err)
+	}
+	do("PUT", scoped, editor, `{"expected_revision":3,"routes":[]}`, 200, "")
+	full, err = store.ManagedHostname(t.Context(), "org-a", host)
+	if err != nil || full.Revision != 4 || len(full.Routes) != 2 || !full.GatewayManaged {
+		t.Fatalf("route table after scoped removal: %+v (%v)", full, err)
+	}
+}
+
 func TestCLIManagedHostnameWorkflow(t *testing.T) {
 	s, _, _ := workerTestServer(t)
-	suffix := &s.Config.Workers.Domains[0]
-	suffix.ManagedSubdomains = true
+	suffix, customSuffix := addTypedHostnameSuffixes(s.Config.Workers)
 	server := httptest.NewServer(s)
 	defer server.Close()
 	t.Setenv("KRUN_ENDPOINT", server.URL)
@@ -159,7 +260,7 @@ func TestCLIManagedHostnameWorkflow(t *testing.T) {
 	run := func(args ...string) string {
 		t.Helper()
 		var out, diagnostics bytes.Buffer
-		flags := append([]string{"--no-update-check", "--profile", filepath.Join(dir, "profile.yaml"), "domains"}, args...)
+		flags := append([]string{"--no-update-check", "--profile", filepath.Join(dir, "profile.yaml")}, args...)
 		flags = append(flags, "--org", "org-a")
 		if err := kruncli.Run(t.Context(), flags, strings.NewReader(""), &out, &diagnostics); err != nil {
 			t.Fatalf("krun %v: %v (%s)", args, err, diagnostics.String())
@@ -168,29 +269,50 @@ func TestCLIManagedHostnameWorkflow(t *testing.T) {
 	}
 
 	var claimed domain.ManagedHostname
-	raw := run("claim", "--suffix", suffix.ID, "--label", "cli", "--routes", routes)
+	raw := run("domains", "claim", "--suffix", suffix.ID, "--label", "cli", "--routes", routes)
 	if err := json.Unmarshal([]byte(raw), &claimed); err != nil || claimed.Host != "cli."+suffix.Domain || claimed.Revision != 1 {
 		t.Fatalf("CLI claim result %q: %v", raw, err)
 	}
-	if out := run("list", "--worker", "svc-a"); !strings.Contains(out, claimed.Host) || !strings.Contains(out, "/api") {
+	if out := run("domains", "list", "--worker", "svc-a"); !strings.Contains(out, claimed.Host) || !strings.Contains(out, "/api") {
 		t.Fatalf("CLI Worker bindings did not include the new route: %s", out)
 	}
-	raw = run("set", "--host", claimed.Host, "--revision", "1", "--routes", routes)
+	raw = run("domains", "set", "--host", claimed.Host, "--revision", "1", "--routes", routes)
 	var updated domain.ManagedHostname
 	if err := json.Unmarshal([]byte(raw), &updated); err != nil || updated.Revision != 2 {
 		t.Fatalf("CLI update result %q: %v", raw, err)
 	}
-	run("retire", "--host", claimed.Host, "--revision", "2")
-	if out := run("list"); strings.Contains(out, claimed.Host) {
+	if err := os.WriteFile(routes, []byte(`[{"match":"exact","path":"/orders","enabled":true}]`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	raw = run("domains", "set", "--worker", "svc-a", "--host", claimed.Host, "--revision", "2", "--routes", routes)
+	if err := json.Unmarshal([]byte(raw), &updated); err != nil || updated.Revision != 3 ||
+		len(updated.Routes) != 1 || updated.Routes[0].Path != "/orders" {
+		t.Fatalf("CLI Worker route update result %q: %v", raw, err)
+	}
+	run("domains", "retire", "--host", claimed.Host, "--revision", "3")
+	if out := run("domains", "list"); strings.Contains(out, claimed.Host) {
 		t.Fatalf("CLI still lists a retired hostname: %s", out)
 	}
+	attached := run("workers", "custom-domains", "attach", "--worker", "svc-a", "--suffix", customSuffix.ID, "--label", "cli")
+	var custom domain.ManagedHostname
+	if err := json.Unmarshal([]byte(attached), &custom); err != nil || custom.Type != string(appconfig.WorkerDomainCustom) ||
+		custom.Host != "cli."+customSuffix.Domain || len(custom.Routes) != 1 || !custom.Routes[0].CustomDomain || !custom.Routes[0].PreviewsEnabled {
+		t.Fatalf("CLI custom domain result %q: %v", attached, err)
+	}
+	if out := run("domains", "list"); strings.Contains(out, custom.Host) {
+		t.Fatalf("custom domain leaked into application catalog: %s", out)
+	}
+	run("workers", "custom-domains", "detach", "--worker", "svc-a", "--host", custom.Host, "--revision", "1")
+	if out := run("workers", "custom-domains", "list", "--worker", "svc-a"); strings.Contains(out, custom.Host) {
+		t.Fatalf("detached custom domain still appears on Worker: %s", out)
+	}
+
 }
 
 func TestCloudflareHostnameAPIsShareOrganizationRoutes(t *testing.T) {
 	s, store, _ := workerTestServer(t)
 	cfg := s.Config.Workers
-	cfg.Domains[0].ManagedSubdomains = true
-	suffix := cfg.Domains[0]
+	suffix, customSuffix := addTypedHostnameSuffixes(cfg)
 	host := "shop." + suffix.Domain
 	cfg.ManagedOrigins = []appconfig.ManagedOrigin{
 		{Host: "shop-static.origin.example.com", Kind: "static", Service: "storefront", Port: 80, Organizations: []string{"org-a"}, Suffixes: []string{suffix.ID}},
@@ -249,7 +371,10 @@ func TestCloudflareHostnameAPIsShareOrganizationRoutes(t *testing.T) {
 		}
 	}
 
-	custom := "worker." + suffix.Domain
+	custom := "worker." + customSuffix.Domain
+	do(http.MethodPut, account+"/workers/domains", admin, fmt.Sprintf(`{"hostname":%q,"service":"storefront"}`, host), 422)
+	do(http.MethodPut, script+"/routes", admin, fmt.Sprintf(`[{"pattern":%q}]`, custom+"/api/*"), 422)
+	do(http.MethodPut, script+"/routes", admin, fmt.Sprintf(`[{"pattern":%q}]`, "test."+cfg.Domains[0].Domain+"/*"), 422)
 	do(http.MethodPost, script+"/domains/changeset?replace_state=true", admin, fmt.Sprintf(`[{"hostname":%q}]`, custom), 200)
 	do(http.MethodPut, script+"/domains/records", admin, fmt.Sprintf(`{"override_scope":true,"origins":[{"hostname":%q}]}`, custom), 200)
 	raw = do(http.MethodGet, account+"/workers/domains?hostname="+custom, admin, "", 200)
@@ -275,10 +400,13 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 	if binary == "" {
 		t.Skip("set KRUN_TEST_WRANGLER to the absolute path of the Wrangler CLI")
 	}
-	s, store, _ := workerTestServer(t)
-	s.Config.Workers.Domains[0].ManagedSubdomains = true
-	suffix := s.Config.Workers.Domains[0].Domain
-	host := "wrangler." + suffix
+	s, store, worker := workerTestServer(t)
+	network := s.Config.Workers
+	network.Domains[0].Types = append(network.Domains[0].Types, appconfig.WorkerDomainCustom, appconfig.WorkerDomainApplication)
+	suffix := network.Domains[0]
+	host := "wrangler-app." + suffix.Domain
+	custom := "wrangler-custom." + suffix.Domain
+	previewOnly := "wrangler-preview." + suffix.Domain
 	if _, err := postgresTestPool(store).Exec(t.Context(), `
 		UPDATE krun_resources SET locator='storefront' WHERE resource_id='svc-a';
 		UPDATE krun_organizations SET short_name='store-org' WHERE org_id='org-a';
@@ -290,9 +418,10 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 	defer server.Close()
 	dir := t.TempDir()
 	cfg := fmt.Sprintf(`{
-		"name":"storefront", "account_id":"store-org", "main":"index.js", "compatibility_date":"2026-09-28",
-		"routes":[{"pattern":%q,"zone_name":%q},{"pattern":%q,"custom_domain":true}]
-	}`, host+"/api/*", suffix, host)
+		"name":"storefront", "account_id":"store-org", "main":"index.js", "compatibility_date":"2026-09-28", "preview_urls":false,
+		"routes":[{"pattern":%q,"zone_name":%q},{"pattern":%q,"custom_domain":true},
+			{"pattern":%q,"custom_domain":true,"previews_enabled":true,"enabled":false}]
+	}`, host+"/api/*", suffix.Domain, custom, previewOnly)
 	if err := os.WriteFile(filepath.Join(dir, "wrangler.jsonc"), []byte(cfg), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +430,8 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for range 2 {
+	deployTriggers := func() {
+		t.Helper()
 		cmd := exec.CommandContext(t.Context(), binary, "triggers", "deploy", "--config", "wrangler.jsonc")
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(),
@@ -315,30 +445,94 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 			t.Fatalf("Wrangler triggers deploy: %v\n%s", err, out)
 		}
 	}
+	deployTriggers()
+	deployTriggers()
 	item, err := store.ManagedHostname(t.Context(), "org-a", host)
-	if err != nil || len(item.Routes) != 2 {
-		t.Fatalf("Wrangler did not publish both routes: %+v (%v)", item, err)
+	if err != nil || item.Type != string(appconfig.WorkerDomainApplication) || item.SuffixID != suffix.ID || len(item.Routes) != 1 || item.Routes[0].Path != "/api" {
+		t.Fatalf("Wrangler did not publish the application route: %+v (%v)", item, err)
+	}
+	item, err = store.ManagedHostname(t.Context(), "org-a", custom)
+	if err != nil || item.Type != string(appconfig.WorkerDomainCustom) || item.SuffixID != suffix.ID || len(item.Routes) != 1 || !item.Routes[0].CustomDomain || !item.Routes[0].PreviewsEnabled {
+		t.Fatalf("Wrangler did not publish the standalone Custom Domain: %+v (%v)", item, err)
+	}
+	for _, tc := range []struct{ method, path, body string }{
+		{"PUT", cfPrefix + "/accounts/org-a/workers/scripts/storefront/routes", fmt.Sprintf(`[{"pattern":%q,"zone_name":%q}]`, custom+"/api/*", suffix.Domain)},
+		{"PUT", cfPrefix + "/accounts/org-a/workers/domains", fmt.Sprintf(`{"hostname":%q,"service":"storefront"}`, host)},
+		{"POST", "/api/v1/orgs/org-a/worker-hostnames", fmt.Sprintf(`{"suffix_id":%q,"label":"wrangler-custom"}`, suffix.ID)},
+		{"POST", "/api/v1/orgs/org-a/worker-hostnames", fmt.Sprintf(`{"suffix_id":%q,"label":"w-generated"}`, suffix.ID)},
+	} {
+		resp := request(s, tc.method, tc.path, "krun_cli_admin", tc.body)
+		if resp.Code != 409 {
+			t.Fatalf("%s %s: expected hostname conflict, got %d %s", tc.method, tc.path, resp.Code, resp.Body.String())
+		}
 	}
 	resp := request(s, "GET", cfPrefix+"/accounts/org-a/workers/scripts/storefront/subdomain", "krun_cli_admin", "")
-	if resp.Code != 200 || !strings.Contains(resp.Body.String(), `"enabled":false,"previews_enabled":true`) {
+	if resp.Code != 200 || !strings.Contains(resp.Body.String(), `"enabled":false,"previews_enabled":false`) {
 		t.Fatalf("Wrangler's defaults did not persist: %d %s", resp.Code, resp.Body.String())
+	}
+	previewAPI := cfPrefix + "/accounts/org-a/workers/workers/storefront/previews"
+	resp = request(s, "POST", previewAPI, "krun_cli_admin", `{"name":"pr-123"}`)
+	var result struct {
+		Result struct{ URLs []string }
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &result); resp.Code != 200 || err != nil ||
+		len(result.Result.URLs) != 2 || !strings.HasSuffix(result.Result.URLs[0], "pr-123."+custom) ||
+		!strings.HasSuffix(result.Result.URLs[1], "pr-123."+previewOnly) {
+		t.Fatalf("preview-only API response: %d %s (%v)", resp.Code, resp.Body.String(), err)
 	}
 	state, err := store.EdgeConfigState(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	projection := workerapp.EdgeConfigFromState(state, s.Config.Workers)
-	found := 0
+	want := map[string]string{
+		host: "production", custom: "production",
+		"pr-123." + custom: "pr-123", "pr-123." + previewOnly: "pr-123",
+		"fix-demo." + custom: "fix-demo", "fix-demo." + previewOnly: "fix-demo",
+	}
 	for _, route := range projection.Routes {
-		if route.Worker != "svc-a" || route.Environment != "production" {
+		if route.Worker != "svc-a" {
 			continue
 		}
-		if route.Host != host {
-			t.Fatalf("disabled default URL is still in the runtime projection: %+v", route)
+		if want[route.Host] != route.Environment || !route.Enabled {
+			t.Fatalf("unexpected route: %+v", route)
 		}
-		found++
+		delete(want, route.Host)
 	}
-	if found != 2 {
-		t.Fatalf("expected two custom routes after disabling the default URL; got %d", found)
+	if len(want) != 0 {
+		t.Fatalf("missing routes: %v", want)
+	}
+
+	item, err = store.ManagedHostname(t.Context(), "org-a", host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scoped := worker + "/hostnames/" + host + "/routes"
+	edit := fmt.Sprintf(`{"expected_revision":%d,"routes":[
+		{"match":"prefix","path":"/api","enabled":true},
+		{"match":"exact","path":"/console-route","enabled":true}
+	]}`, item.Revision)
+	resp = request(s, "PUT", scoped, "krun_cli_admin", edit)
+	if resp.Code != 200 {
+		t.Fatalf("edit a Wrangler-managed hostname from the Worker page API: %d %s", resp.Code, resp.Body.String())
+	}
+	var scopedView domain.ManagedHostname
+	if err := json.Unmarshal(resp.Body.Bytes(), &scopedView); err != nil || len(scopedView.Routes) != 2 ||
+		scopedView.Routes[0].WorkerLocator != "storefront" || scopedView.Routes[1].WorkerLocator != "storefront" {
+		t.Fatalf("Worker route response lost its locator: %s (%v)", resp.Body.String(), err)
+	}
+	cfg = strings.Replace(cfg, host+"/api/*", host+"/api-v2/*", 1)
+	if err := os.WriteFile(filepath.Join(dir, "wrangler.jsonc"), []byte(cfg), 0600); err != nil {
+		t.Fatal(err)
+	}
+	deployTriggers()
+	item, err = store.ManagedHostname(t.Context(), "org-a", host)
+	if err != nil || len(item.Routes) != 2 || item.Routes[0].Path != "/console-route" ||
+		item.Routes[1].Path != "/api-v2" || item.Routes[1].CFPattern != host+"/api-v2/*" {
+		t.Fatalf("Wrangler did not update the shared table without removing the console route: %+v (%v)", item, err)
+	}
+	resp = request(s, "GET", worker+"/hostnames", "krun_cli_admin", "")
+	if resp.Code != 200 || !strings.Contains(resp.Body.String(), "/api-v2") || !strings.Contains(resp.Body.String(), "/console-route") {
+		t.Fatalf("Worker page API did not show routes from both sources: %d %s", resp.Code, resp.Body.String())
 	}
 }
