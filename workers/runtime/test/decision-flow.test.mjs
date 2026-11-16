@@ -516,7 +516,11 @@ await check("CPU metrics remain separate across rollout versions", async () => {
     [version.id, 0.001],
     [cpuCandidate.id, 0.003],
   ]) {
-    assert.ok(samples.includes(`version_id="${id}"} ${seconds}`));
+    assert.ok(
+      samples.includes(
+        `krun_worker_version_cpu_seconds_total{organization_id="org",worker_id="svc",environment="production",version_id="${id}"} ${seconds}`,
+      ),
+    );
   }
 });
 
