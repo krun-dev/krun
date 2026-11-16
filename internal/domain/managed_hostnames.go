@@ -1,5 +1,10 @@
 package domain
 
+type ManagedHostnameOption struct {
+	Host     string `json:"host"`
+	Revision int    `json:"revision"`
+}
+
 type ManagedHostname struct {
 	Type           string                 `json:"type"`
 	Host           string                 `json:"host"`

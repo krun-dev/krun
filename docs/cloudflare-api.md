@@ -111,8 +111,9 @@ Service Worker 格式仍超出兼容范围。资产路由支持 `run_worker_firs
 
 使用组织 ID 和 Zone 名查找 `zone_id`。兼容写入可在平台开放的后缀下自动申请单层子域；
 同名域名不能跨组织占用。普通 Routes 支持精确 Host、精确路径及尾部 `/*`，后者按完整路径段匹配，
-例如 `/api/*` 也匹配 `/api`。查询串不会参与精确匹配。普通 Routes 使用平台的
-启用 `application` 的后缀。Custom Domains 使用启用 `worker_custom` 的后缀，把整域绑定到一个
+例如 `/api/*` 也匹配 `/api`。查询串不会参与精确匹配。普通 Routes 使用平台启用 `application` 的后缀。
+Zone Routes、Worker 的路由与域名页及组织的应用域名页使用同一张路由表。按脚本提交
+`routes` 时，Wrangler 替换通过该接口为此 Worker 发布的路由，保留控制台独立添加的路由。Custom Domains 使用启用 `worker_custom` 的后缀，把整域绑定到一个
 生产 Worker。krun 默认开启 Custom Domain 的 Preview，并兼容显式的 `previews_enabled: false`
 和 `enabled: false`。
 `workers_dev` 控制默认生产地址，`preview_urls` 控制平台后缀上的 Preview 地址。

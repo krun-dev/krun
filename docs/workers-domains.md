@@ -70,6 +70,11 @@ Runtime 同时校验 Gateway 命中的规则和目标。匹配不到的请求返
 整域绑定且未使用专用 Gateway 路由的主机名记为 `worker_custom`，其余已有申请记为
 `application`。混合主机名原有的整域绑定保留为应用域名的根路由。
 
+组织的应用域名页管理完整路由表。Worker 详情页可以添加、修改和移除指向当前 Worker 的路由。
+两个入口使用同一个 Host revision、路由校验和权限检查，修改 Worker 路由需要组织的
+`worker.hostname.manage` 与对应生产 Worker 的 `worker.update`。Worker 入口提交的是当前
+Worker 在该域名下的完整规则集合，其余目标的规则保留。域名退役由组织域名页管理。
+
 域名变更按 Host revision 做并发保护，兼容 API 的批量操作一次提交。含非 Worker 目标的
 域名上限为 16 条路由；无根前缀时预留一条 404，只能配置 15 条。曾有非 Worker 目标的
 主机名继续保留精确 Host 路由和上述上限，退役时用于阻止请求落到通配入口。

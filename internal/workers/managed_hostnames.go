@@ -82,10 +82,6 @@ func (s *Service) WorkerManagedHostnames(ctx context.Context, st *domain.State, 
 	if err != nil {
 		return nil, Read, err
 	}
-	bindings, err := s.Store.WorkerManagedHostnames(ctx, target.Organization, target.ID)
-	if err != nil {
-		return nil, Read, err
-	}
 	org, err := s.orgTarget(st, ref)
 	if err != nil {
 		return nil, Read, err
@@ -103,7 +99,24 @@ func (s *Service) WorkerManagedHostnames(ctx context.Context, st *domain.State, 
 		return nil, Read, err
 	}
 	customSuffixes := []WorkerDomainView{}
+	canManage := manage.Allowed && update.Allowed
+	applicationHosts := []domain.ManagedHostnameOption{}
 	profile := s.WorkerView(st, target).NetworkProfile
+	if canManage && decision.Allowed {
+		suffixIDs := s.applicationSuffixesForWorker(st, target.ID, profile)
+		if len(suffixIDs) > 0 {
+			applicationHosts, err = s.Store.ApplicationHostnameOptions(ctx, org.ID, suffixIDs)
+			if err != nil {
+				return nil, Read, err
+			}
+		}
+	}
+	// Read bindings after the options so a stale empty selection cannot carry
+	// a revision newer than an intervening route added to this Worker.
+	bindings, err := s.Store.WorkerManagedHostnames(ctx, target.Organization, target.ID)
+	if err != nil {
+		return nil, Read, err
+	}
 	for _, suffix := range s.DomainCatalog() {
 		if slices.Contains(suffix.Types, appconfig.WorkerDomainCustom) && s.Config.Workers.ManagedDomainAllowsWorker(suffix.ID, profile) {
 			customSuffixes = append(customSuffixes, suffix)
@@ -111,8 +124,26 @@ func (s *Service) WorkerManagedHostnames(ctx context.Context, st *domain.State, 
 	}
 	return map[string]any{
 		"items":    s.typedHostnames(bindings, appconfig.WorkerDomainCustom, appconfig.WorkerDomainApplication),
-		"suffixes": customSuffixes, "can_manage": manage.Allowed && update.Allowed, "can_read_catalog": decision.Allowed,
+		"suffixes": customSuffixes, "application_hosts": applicationHosts,
+		"can_manage": canManage, "can_read_catalog": decision.Allowed,
 	}, Read, nil
+}
+
+func (s *Service) applicationSuffixesForWorker(st *domain.State, worker, profile string) []string {
+	placement, placed := domain.ActiveWorkerPlacement(st.Workers, worker)
+	if !placed || placement.NetworkProfile != profile {
+		return nil
+	}
+	var ids []string
+	for _, suffix := range s.Config.Workers.Domains {
+		if !suffix.Allows(appconfig.WorkerDomainApplication) || !s.Config.Workers.ManagedDomainAllowsWorker(suffix.ID, profile) {
+			continue
+		}
+		if pool, err := s.Config.Workers.DomainRuntimePool(suffix.ID); err == nil && pool.ID == placement.Pool {
+			ids = append(ids, suffix.ID)
+		}
+	}
+	return ids
 }
 
 func (s *Service) SaveManagedHostname(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, host string, in ManagedHostnameInput, retire bool) (any, Outcome, error) {
@@ -134,12 +165,7 @@ func (s *Service) SaveManagedHostname(ctx context.Context, st *domain.State, p a
 		if host != "" && in.Routes == nil {
 			return nil, Read, domain.Invalid("HOSTNAME_ROUTE_INVALID", "Provide routes explicitly; use [] to remove all routes")
 		}
-		previous := item.Routes
-		item.Routes, err = s.ValidateManagedHostnameRoutes(ctx, st, p, org.ID, item.SuffixID, in.Routes, previous)
-		if err != nil {
-			return nil, Read, err
-		}
-		if err = PrepareGatewayHostname(&item); err != nil {
+		if err = s.replaceApplicationRoutes(ctx, st, p, &item, in.Routes); err != nil {
 			return nil, Read, err
 		}
 	}
@@ -160,6 +186,77 @@ func (s *Service) SaveManagedHostname(ctx context.Context, st *domain.State, p a
 		return item, Created, nil
 	}
 	return item, Read, nil
+}
+
+func (s *Service) SaveWorkerApplicationRoutes(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, host string, in ManagedHostnameInput) (any, Outcome, error) {
+	org, err := s.orgTarget(st, ref)
+	if err != nil {
+		return nil, Read, err
+	}
+	if err = s.require(st, p, "worker.hostname.manage", org); err != nil {
+		return nil, Read, err
+	}
+	target, err := s.WorkerTarget(st, ref, appconfig.WorkerBaseline, "worker.update", p)
+	if err != nil {
+		return nil, Read, err
+	}
+	item, err := s.managedHostnameForChange(ctx, org.ID, host, in, appconfig.WorkerDomainApplication)
+	if err != nil {
+		return nil, Read, err
+	}
+	if in.Routes == nil {
+		return nil, Read, domain.Invalid("HOSTNAME_ROUTE_INVALID", "Provide routes explicitly; use [] to remove all routes")
+	}
+	routes := make([]domain.ManagedHostnameRoute, 0, len(item.Routes)+len(in.Routes))
+	for _, rule := range item.Routes {
+		if rule.Worker != target.ID {
+			routes = append(routes, rule)
+		}
+	}
+	for _, rule := range in.Routes {
+		if rule.Origin != "" || (rule.Worker != "" && rule.Worker != target.ID && rule.Worker != st.Resources[target.ID].Locator) {
+			return nil, Read, domain.Invalid("HOSTNAME_TARGET_INVALID", "The target must be the current Worker")
+		}
+		rule.Worker = target.ID
+		routes = append(routes, rule)
+	}
+	if err = s.replaceApplicationRoutes(ctx, st, p, &item, routes); err != nil {
+		return nil, Read, err
+	}
+	item, err = s.saveHostname(ctx, st, p, item, in.ExpectedRevision, "workers.hostnames.update")
+	if err != nil {
+		return nil, Read, err
+	}
+	item.Routes = slices.DeleteFunc(item.Routes, func(rule domain.ManagedHostnameRoute) bool {
+		return rule.Worker != target.ID
+	})
+	return item, Read, nil
+}
+
+func (s *Service) replaceApplicationRoutes(ctx context.Context, st *domain.State, p authorization.Principal, item *domain.ManagedHostname, routes []domain.ManagedHostnameRoute) error {
+	normalized, err := s.ValidateManagedHostnameRoutes(ctx, st, p, item.Organization, item.SuffixID, routes, item.Routes)
+	if err != nil {
+		return err
+	}
+	for _, old := range item.Routes {
+		resource, exists := st.Resources[old.Worker]
+		if !exists || resource.Kind != "worker" || resource.Organization != item.Organization {
+			continue
+		}
+		// Updating a route target or removing a route changes the old
+		// Worker's traffic as well. Leaving it in place needs no permission
+		// on that Worker, and deleted targets can still be cleaned up.
+		if !slices.ContainsFunc(normalized, func(rule domain.ManagedHostnameRoute) bool {
+			return rule.Match == old.Match && rule.Path == old.Path && rule.Worker == old.Worker
+		}) {
+			ref := WorkerRef{Organization: item.Organization, Worker: old.Worker}
+			if _, err := s.WorkerTarget(st, ref, appconfig.WorkerBaseline, "worker.update", p); err != nil {
+				return err
+			}
+		}
+	}
+	item.Routes = normalized
+	return PrepareGatewayHostname(item)
 }
 
 func (s *Service) saveHostname(ctx context.Context, st *domain.State, p authorization.Principal, item domain.ManagedHostname, revision int, action string) (domain.ManagedHostname, error) {
@@ -308,11 +405,13 @@ func (s *Service) ValidateManagedHostnameRoutes(ctx context.Context, st *domain.
 		}
 		// Protocol metadata is server-owned. Preserve it only for a rule
 		// that is still bound to the same Worker.
+		rule.WorkerLocator = ""
 		rule.CFPattern = ""
 		rule.CustomDomain = false
 		rule.PreviewsEnabled = false
 		for _, old := range previous {
 			if old.Match == rule.Match && old.Path == rule.Path && old.Worker == rule.Worker {
+				rule.WorkerLocator = old.WorkerLocator
 				rule.CFPattern = old.CFPattern
 				rule.CustomDomain = old.CustomDomain
 				break

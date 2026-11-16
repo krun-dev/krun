@@ -155,6 +155,96 @@ func TestManagedHostnameOwnershipAndRuntimeProjection(t *testing.T) {
 	do(http.MethodPost, base, admin, payload, 409, "HOSTNAME_UNAVAILABLE")
 }
 
+func TestWorkerApplicationRoutesShareTableAndAuthorization(t *testing.T) {
+	s, store, worker := workerTestServer(t)
+	cfg := s.Config.Workers
+	suffix, customSuffix := addTypedHostnameSuffixes(cfg)
+	cfg.ManagedOrigins = []appconfig.ManagedOrigin{
+		{Host: "site.origin.example.com", Kind: "static", Service: "site", Port: 80, Organizations: []string{"org-a"}, Suffixes: []string{suffix.ID}},
+	}
+	if err := store.Update(t.Context(), PartitionAll, func(st *State) error {
+		st.Resources["svc-other"] = Resource{ID: "svc-other", Organization: "org-a", Kind: "worker", Locator: "other", Name: "Other Worker", Revision: 1}
+		s.worker(st, Target{ID: "svc-other", Organization: "org-a"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	const admin = "krun_cli_admin"
+	const catalog = "/api/v1/orgs/org-a/domains"
+	host := "shared." + suffix.Domain
+	scoped := worker + "/hostnames/" + host + "/routes"
+	do := func(method, path, token, body string, status int, code string) []byte {
+		t.Helper()
+		res := request(s, method, path, token, body)
+		if res.Code != status || (code != "" && !strings.Contains(res.Body.String(), code)) {
+			t.Fatalf("%s %s: expected %d %s, got %d %s", method, path, status, code, res.Code, res.Body.String())
+		}
+		return res.Body.Bytes()
+	}
+	do("POST", catalog, admin, fmt.Sprintf(`{"suffix_id":%q,"label":"shared","routes":[
+		{"match":"prefix","path":"/","origin":"site.origin.example.com","enabled":true},
+		{"match":"prefix","path":"/admin","worker_id":"svc-other","enabled":true}
+	]}`, suffix.ID), 201, host)
+	do("POST", "/api/v1/orgs/org-b/domains", admin, fmt.Sprintf(`{"suffix_id":%q,"label":"other-org"}`, suffix.ID), 201, "")
+	do("POST", worker+"/hostnames", admin, fmt.Sprintf(`{"suffix_id":%q,"label":"standalone"}`, customSuffix.ID), 201, "")
+
+	keyFor := func(orgActions, workerActions string) string {
+		t.Helper()
+		raw := do("POST", "/api/v1/orgs/org-a/api-keys", admin, fmt.Sprintf(`{
+			"name":"route-scope", "expires_in":3600, "policy":{"schema_version":1,"statements":[
+				{"effect":"allow","actions":%s,"resource":{"kind":"organization","organization_id":"org-a","ids":["org-a"]},"conditions":{}},
+				{"effect":"allow","actions":%s,"resource":{"kind":"worker","organization_id":"org-a","ids":["svc-a"]},"conditions":{"environments":["production"]}}
+			]}}`, orgActions, workerActions), 201, "")
+		var out struct{ Key string }
+		if err := json.Unmarshal(raw, &out); err != nil || out.Key == "" {
+			t.Fatal("invalid API key creation result", err)
+		}
+		return out.Key
+	}
+	editor := keyFor(`["worker.hostname.read","worker.hostname.manage"]`, `["worker.read","worker.update"]`)
+	withoutWorkerWrite := keyFor(`["worker.hostname.read","worker.hostname.manage"]`, `["worker.read"]`)
+	withoutOrgWrite := keyFor(`["worker.hostname.read"]`, `["worker.read","worker.update"]`)
+	selection := do("GET", worker+"/hostnames", editor, "", 200, "")
+	var choices struct {
+		Hosts []domain.ManagedHostnameOption `json:"application_hosts"`
+	}
+	if err := json.Unmarshal(selection, &choices); err != nil || len(choices.Hosts) != 1 ||
+		choices.Hosts[0] != (domain.ManagedHostnameOption{Host: host, Revision: 1}) ||
+		strings.Contains(string(selection), "svc-other") || strings.Contains(string(selection), "site.origin.example.com") {
+		t.Fatalf("unexpected Worker catalog: %s (%v)", selection, err)
+	}
+
+	add := `{"expected_revision":1,"routes":[{"match":"prefix","path":"/api/","enabled":true}]}`
+	do("PUT", scoped, withoutWorkerWrite, add, 403, "PERMISSION_DENIED")
+	do("PUT", scoped, withoutOrgWrite, add, 403, "PERMISSION_DENIED")
+	do("PUT", scoped, editor, strings.Replace(add, "/api/", "/admin/", 1), 409, "HOSTNAME_ROUTE_CONFLICT")
+	do("PUT", scoped, editor, strings.Replace(add, "/api/", "/", 1), 409, "HOSTNAME_ROUTE_CONFLICT")
+	do("PUT", scoped, editor, strings.Replace(add, `"enabled":true`, `"worker_id":"svc-other","enabled":true`, 1), 422, "HOSTNAME_TARGET_INVALID")
+	do("PUT", worker+"/hostnames/other-org."+suffix.Domain+"/routes", editor, add, 404, "")
+	do("PUT", worker+"/hostnames/standalone."+customSuffix.Domain+"/routes", editor, add, 404, "")
+	added := do("PUT", scoped, editor, add, 200, "")
+	var item domain.ManagedHostname
+	if err := json.Unmarshal(added, &item); err != nil || item.Revision != 2 || len(item.Routes) != 1 ||
+		item.Routes[0].Worker != "svc-a" || item.Routes[0].Path != "/api" {
+		t.Fatalf("unexpected scoped route write: %s (%v)", added, err)
+	}
+	do("PUT", scoped, editor, add, 409, "REVISION_CONFLICT")
+	do("PUT", catalog+"/"+host, editor, `{"expected_revision":2,"routes":[]}`, 403, "PERMISSION_DENIED")
+	do("PUT", scoped, editor, `{"expected_revision":2,"routes":[{"match":"exact","path":"/orders","enabled":false}]}`, 200, "")
+	full, err := store.ManagedHostname(t.Context(), "org-a", host)
+	if err != nil || full.Revision != 3 || len(full.Routes) != 3 ||
+		full.Routes[0].Path != "/orders" || full.Routes[0].Enabled ||
+		full.Routes[1].Origin != "site.origin.example.com" || full.Routes[2].Worker != "svc-other" {
+		t.Fatalf("route table after scoped edit: %+v (%v)", full, err)
+	}
+	do("PUT", scoped, editor, `{"expected_revision":3,"routes":[]}`, 200, "")
+	full, err = store.ManagedHostname(t.Context(), "org-a", host)
+	if err != nil || full.Revision != 4 || len(full.Routes) != 2 || !full.GatewayManaged {
+		t.Fatalf("route table after scoped removal: %+v (%v)", full, err)
+	}
+}
+
 func TestCLIManagedHostnameWorkflow(t *testing.T) {
 	s, _, _ := workerTestServer(t)
 	suffix, customSuffix := addTypedHostnameSuffixes(s.Config.Workers)
@@ -191,7 +281,15 @@ func TestCLIManagedHostnameWorkflow(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &updated); err != nil || updated.Revision != 2 {
 		t.Fatalf("CLI update result %q: %v", raw, err)
 	}
-	run("domains", "retire", "--host", claimed.Host, "--revision", "2")
+	if err := os.WriteFile(routes, []byte(`[{"match":"exact","path":"/orders","enabled":true}]`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	raw = run("domains", "set", "--worker", "svc-a", "--host", claimed.Host, "--revision", "2", "--routes", routes)
+	if err := json.Unmarshal([]byte(raw), &updated); err != nil || updated.Revision != 3 ||
+		len(updated.Routes) != 1 || updated.Routes[0].Path != "/orders" {
+		t.Fatalf("CLI Worker route update result %q: %v", raw, err)
+	}
+	run("domains", "retire", "--host", claimed.Host, "--revision", "3")
 	if out := run("domains", "list"); strings.Contains(out, claimed.Host) {
 		t.Fatalf("CLI still lists a retired hostname: %s", out)
 	}
@@ -302,7 +400,7 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 	if binary == "" {
 		t.Skip("set KRUN_TEST_WRANGLER to the absolute path of the Wrangler CLI")
 	}
-	s, store, _ := workerTestServer(t)
+	s, store, worker := workerTestServer(t)
 	network := s.Config.Workers
 	network.Domains[0].Types = append(network.Domains[0].Types, appconfig.WorkerDomainCustom, appconfig.WorkerDomainApplication)
 	suffix := network.Domains[0]
@@ -332,7 +430,8 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for range 2 {
+	deployTriggers := func() {
+		t.Helper()
 		cmd := exec.CommandContext(t.Context(), binary, "triggers", "deploy", "--config", "wrangler.jsonc")
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(),
@@ -346,6 +445,8 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 			t.Fatalf("Wrangler triggers deploy: %v\n%s", err, out)
 		}
 	}
+	deployTriggers()
+	deployTriggers()
 	item, err := store.ManagedHostname(t.Context(), "org-a", host)
 	if err != nil || item.Type != string(appconfig.WorkerDomainApplication) || item.SuffixID != suffix.ID || len(item.Routes) != 1 || item.Routes[0].Path != "/api" {
 		t.Fatalf("Wrangler did not publish the application route: %+v (%v)", item, err)
@@ -400,5 +501,38 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Fatalf("missing routes: %v", want)
+	}
+
+	item, err = store.ManagedHostname(t.Context(), "org-a", host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scoped := worker + "/hostnames/" + host + "/routes"
+	edit := fmt.Sprintf(`{"expected_revision":%d,"routes":[
+		{"match":"prefix","path":"/api","enabled":true},
+		{"match":"exact","path":"/console-route","enabled":true}
+	]}`, item.Revision)
+	resp = request(s, "PUT", scoped, "krun_cli_admin", edit)
+	if resp.Code != 200 {
+		t.Fatalf("edit a Wrangler-managed hostname from the Worker page API: %d %s", resp.Code, resp.Body.String())
+	}
+	var scopedView domain.ManagedHostname
+	if err := json.Unmarshal(resp.Body.Bytes(), &scopedView); err != nil || len(scopedView.Routes) != 2 ||
+		scopedView.Routes[0].WorkerLocator != "storefront" || scopedView.Routes[1].WorkerLocator != "storefront" {
+		t.Fatalf("Worker route response lost its locator: %s (%v)", resp.Body.String(), err)
+	}
+	cfg = strings.Replace(cfg, host+"/api/*", host+"/api-v2/*", 1)
+	if err := os.WriteFile(filepath.Join(dir, "wrangler.jsonc"), []byte(cfg), 0600); err != nil {
+		t.Fatal(err)
+	}
+	deployTriggers()
+	item, err = store.ManagedHostname(t.Context(), "org-a", host)
+	if err != nil || len(item.Routes) != 2 || item.Routes[0].Path != "/console-route" ||
+		item.Routes[1].Path != "/api-v2" || item.Routes[1].CFPattern != host+"/api-v2/*" {
+		t.Fatalf("Wrangler did not update the shared table without removing the console route: %+v (%v)", item, err)
+	}
+	resp = request(s, "GET", worker+"/hostnames", "krun_cli_admin", "")
+	if resp.Code != 200 || !strings.Contains(resp.Body.String(), "/api-v2") || !strings.Contains(resp.Body.String(), "/console-route") {
+		t.Fatalf("Worker page API did not show routes from both sources: %d %s", resp.Code, resp.Body.String())
 	}
 }

@@ -35,7 +35,7 @@ description: 在 Worker 上绑定整域，或通过应用域名把路径分给�
 1. 在组织侧栏打开 **网络 → 应用域名** ①，点击 **申请域名**，填入前缀 ③，选择后缀 ④，再点击 **申请域名** ⑤。
 2. 找到已申请的域名，点击 **编辑路由** ②。添加路由后，填写匹配方式和请求路径 ⑥，再选择目标 ⑦。截图中的
    四条规则把 `/` 给静态站点、`/api` 和 `/api/admin` 给不同 Worker、`/legacy` 给 HTTP 服务。点击 **保存** ⑧。
-   目标 Worker 的 **路由与域名 → 应用域名** 可以查看分给它的路径。
+   这里展示并管理域名的完整路由表。
 3. 要停止特定路径，可取消勾选 **启用路由**。要移除整个域名的流量，在 **编辑路由** 中选择
    **退役域名** 并确认；域名继续保留，不能重新申请。
 
@@ -44,6 +44,14 @@ description: 在 Worker 上绑定整域，或通过应用域名把路径分给�
 [![③ 填写前缀，④ 选择后缀，⑤ 申请域名](/docs/screenshots/workers-hostnames/claim-domain-prefix-first.png)](/docs/screenshots/workers-hostnames/claim-domain-prefix-first.png)
 
 [![⑥ 填写路径，⑦ 选择目标，⑧ 保存路由](/docs/screenshots/workers-hostnames/edit-domain-routes.png)](/docs/screenshots/workers-hostnames/edit-domain-routes.png)
+
+打开目标 Worker 的 **路由与域名 → 应用域名**。为现有应用域名新增路径时，点击 **添加应用路由** ⑫，
+选择域名 ⑭，填写匹配方式和请求路径 ⑮，再点击 **保存** ⑯。修改已有绑定时，在对应域名上点击 **编辑路由** ⑬。
+这个入口编辑指向当前 Worker 的规则，保存后可回到应用域名页查看完整路由表。
+
+[![⑫ Worker 页添加应用路由，⑬ 编辑当前 Worker 的路由](/docs/screenshots/workers-hostnames/worker-application-routes.png)](/docs/screenshots/workers-hostnames/worker-application-routes.png)
+
+[![⑭ 选择应用域名，⑮ 填写匹配方式和请求路径，⑯ 保存](/docs/screenshots/workers-hostnames/worker-add-application-route.png)](/docs/screenshots/workers-hostnames/worker-add-application-route.png)
 
 要为一个 Worker 绑定整域，打开这个 Worker 的 **路由与域名**，在 **Worker 自定义域名** 点击
 **绑定自定义域名** ⑨，填写前缀、选择后缀 ⑩，然后点击 **绑定域名**。绑定后可在同一区域解绑。
@@ -61,7 +69,7 @@ description: 在 Worker 上绑定整域，或通过应用域名把路径分给�
 需要安装 krun CLI 和 curl。交互使用 `krun login`；CI 设置 `KRUN_ENDPOINT` 与
 `KRUN_TOKEN`。组织管理员可以操作，API Key 还需要在组织资源上允许
 `worker.hostname.read`、`worker.hostname.manage`，在目标 Worker 的 production
-环境上允许 `worker.read` 和 `worker.update`。按 [API Key 创建指南](/docs/guides/krun-cli.html) 授权，
+环境上允许 `worker.read` 和 `worker.update`。两个入口修改 Worker 路由时都使用这套权限；改绑时需要修改原目标与新目标的权限。按 [API Key 创建指南](/docs/guides/krun-cli.html) 授权，
 将以下策略中的 `ORG_ID`、`WEB_ID`、`API_ID` 替换为真实 ID：
 
 ```yaml
@@ -107,6 +115,21 @@ krun domains list --org "$ORG_ID" --worker "$API_WORKER"
 
 ```sh
 krun domains set --org "$ORG_ID" --host "$HOST" --revision "$REVISION" --routes hostname-routes.json
+```
+
+要从 Worker 的角度编辑，用 `krun domains list --worker` 查该 Worker 的绑定和可选域名
+`application_hosts`。把 `HOST` 和 `REVISION` 设为所选域名及其最新 revision。
+路由文件列出这个域名下指向当前 Worker 的全部规则，目标由 `--worker` 指定。
+
+```sh
+krun domains list --org "$ORG_ID" --worker "$API_WORKER"
+cat > worker-hostname-routes.json <<'EOF_WORKER_ROUTES'
+[
+  {"match":"prefix","path":"/api","enabled":true},
+  {"match":"exact","path":"/api/health","enabled":true}
+]
+EOF_WORKER_ROUTES
+krun domains set --org "$ORG_ID" --worker "$API_WORKER" --host "$HOST" --revision "$REVISION" --routes worker-hostname-routes.json
 ```
 
 要撤除全部流量并保留域名占用，从列表重新读取 revision 后执行：
@@ -159,7 +182,8 @@ npx wrangler@4.155.0 triggers deploy --config wrangler.jsonc
 
 把 `/api/*` 指给另一 Worker 时，先从现有 Worker 的路由中撤下这条规则，
 再放到 API Worker 的 Wrangler 配置中。只需更新路由时，
-也可直接调用 Zone 的 `/workers/routes` API。
+也可直接调用 Zone 的 `/workers/routes` API。Wrangler 与两个控制台入口使用同一张应用域名路由表。
+`triggers deploy` 更新该 Worker 通过 Wrangler 发布的路由集合，同时保留控制台独立添加的规则。
 
 - Zone 对应平台开放的后缀。兼容精确主机名及精确路径、末尾 `/*`；`/api/*` 按路径段
   匹配，也包含 `/api`。精确规则只比较路径。通配主机名、`/api*`、任意外部 Zone 和自带域名不在范围内。
@@ -193,7 +217,7 @@ curl -isS "https://$HOST/apix"
 | --- | --- |
 | HTTP 403 `PERMISSION_DENIED` | 检查组织域名权限以及目标 production 的 `worker.update`。 |
 | HTTP 409 `HOSTNAME_UNAVAILABLE` | 名称被占用或保留；换一个短名。 |
-| HTTP 409 `HOSTNAME_ROUTE_CONFLICT` | 删除重复匹配方式和路径，注意前缀会去掉尾斜杠。 |
+| HTTP 409 `HOSTNAME_ROUTE_CONFLICT` | 同一域名已有相同匹配方式和路径。在应用域名页确认占用规则，选择不同路径或修改原规则。路径段前缀会去掉尾斜杠。 |
 | HTTP 409 `REVISION_CONFLICT` | 刷新列表，按最新 revision 重新编辑。 |
 | HTTP 422 `HOSTNAME_INVALID`、`HOSTNAME_ROUTE_INVALID` 或 `HOSTNAME_TARGET_INVALID` | 检查是否使用已开放后缀、一层短名、合法路径，以及同组织且符合网络要求的目标。 |
 | 请求返回 404 `unknown route`、410 `environment disabled` 或 503 `environment not published` | 分别检查域名是否已同步及配置匹配路由、规则是否启用、目标是否已发布。 |

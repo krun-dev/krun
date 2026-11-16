@@ -89,6 +89,7 @@ func (s *Server) workersRoutes(m *recordingMux) {
 	m.HandleFunc("GET "+base+"/hostnames", hostnameEndpoint(s.workerManagedHostnames))
 	m.HandleFunc("POST "+base+"/hostnames", hostnameEndpoint(s.workerSaveCustomDomain))
 	m.HandleFunc("DELETE "+base+"/hostnames/{host}", hostnameEndpoint(s.workerSaveCustomDomain))
+	m.HandleFunc("PUT "+base+"/hostnames/{host}/routes", hostnameEndpoint(s.workerSaveApplicationRoutes))
 	m.HandleFunc("PUT "+base+"/domains", protect(false, s.workerRoutingDomainsUpdate))
 	m.HandleFunc("PUT "+base+"/network-profile", protect(false, s.workerNetworkProfileUpdate))
 	m.HandleFunc("GET "+base+"/repository", protect(false, s.workerRepositoryGet))

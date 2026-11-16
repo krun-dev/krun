@@ -32,6 +32,7 @@ type Hostname = {
   revision: number;
   routes: Route[];
 };
+type ApplicationHost = { host: string; revision: number };
 type Suffix = { id: string; domain: string; label: string };
 type Origin = { host: string; kind: "static" | "http"; label: string; suffixes: string[] };
 type Catalog = { items: Hostname[]; suffixes: Suffix[]; origins: Origin[]; can_manage: boolean };
@@ -40,6 +41,7 @@ type Bindings = {
   suffixes: Suffix[];
   can_manage: boolean;
   can_read_catalog: boolean;
+  application_hosts: ApplicationHost[];
 };
 
 export function WorkerHostnameBindings({
@@ -56,6 +58,7 @@ export function WorkerHostnameBindings({
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const [editor, setEditor] = useState<Hostname | "new" | null>(null);
+  const [applicationEditor, setApplicationEditor] = useState<Hostname | "new" | null>(null);
   useEffect(() => {
     const controller = new AbortController();
     setError("");
@@ -69,6 +72,7 @@ export function WorkerHostnameBindings({
 
   const custom = data?.items.filter((item) => item.type === "worker_custom") || [];
   const applications = data?.items.filter((item) => item.type === "application") || [];
+  const applicationHosts = data?.application_hosts ?? [];
 
   return (
     <>
@@ -110,27 +114,54 @@ export function WorkerHostnameBindings({
           <CardContent className="grid gap-3 p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="font-medium">{t("应用域名")}</h3>
-              {data?.can_read_catalog ? (
-                <Button
-                  variant="outline"
-                  asChild
-                >
-                  <a href={catalogHref}>{t("管理应用域名")}</a>
-                </Button>
-              ) : null}
+              <div className="flex flex-wrap gap-2">
+                {data?.can_read_catalog ? (
+                  <Button
+                    variant="outline"
+                    asChild
+                  >
+                    <a href={catalogHref}>{t("管理应用域名")}</a>
+                  </Button>
+                ) : null}
+                {data?.can_manage && applicationHosts.length > 0 ? (
+                  <Button onClick={() => setApplicationEditor("new")}>
+                    <Plus size={16} />
+                    {t("添加应用路由")}
+                  </Button>
+                ) : null}
+              </div>
             </div>
             {applications.length > 0 ? (
               applications.map((item) => (
                 <HostnameCard
                   key={item.host}
                   item={item}
+                  edit={data?.can_manage ? () => setApplicationEditor(item) : undefined}
                 />
               ))
             ) : (
-              <p className="text-sm text-muted-foreground">{t("此 Worker 尚无应用域名路由。")}</p>
+              <p className="text-sm text-muted-foreground">
+                {data?.can_manage && data.can_read_catalog && applicationHosts.length === 0
+                  ? t("请先在应用域名页申请此 Worker 可用的域名。")
+                  : t("此 Worker 尚无应用域名路由。")}
+              </p>
             )}
           </CardContent>
         </Card>
+      ) : null}
+      {applicationEditor ? (
+        <HostnameEditor
+          path={path}
+          item={applicationEditor === "new" ? undefined : applicationEditor}
+          workerScope={{ hosts: applicationHosts, bindings: applications }}
+          suffixes={[]}
+          origins={[]}
+          close={() => setApplicationEditor(null)}
+          saved={() => {
+            setApplicationEditor(null);
+            setRevision((value) => value + 1);
+          }}
+        />
       ) : null}
       {editor && data ? (
         <WorkerCustomDomainDialog
@@ -426,11 +457,22 @@ export function ManagedHostnames({ base }: { base: string }) {
   );
 }
 
+type WorkerRouteScope = { hosts: ApplicationHost[]; bindings: Hostname[] };
+
+function draftRoutes(item: Hostname | undefined, add: boolean) {
+  const routes = item?.routes ?? [];
+  const draft: Route[] = add
+    ? [...routes, { match: "prefix", path: "", worker_id: "", enabled: true }]
+    : routes;
+  return draft.map((route, key) => ({ ...route, key }));
+}
+
 function HostnameEditor({
   path,
   item,
   suffixes,
   origins,
+  workerScope,
   close,
   saved,
 }: {
@@ -438,14 +480,17 @@ function HostnameEditor({
   item?: Hostname;
   suffixes: Suffix[];
   origins: Origin[];
+  workerScope?: WorkerRouteScope;
   close: () => void;
   saved: (retired: boolean) => void;
 }) {
   const [suffix, setSuffix] = useState(suffixes[0]?.id || "");
   const [label, setLabel] = useState("");
-  const [routes, setRoutes] = useState(() =>
-    (item?.routes || []).map((route, key) => ({ ...route, key })),
-  );
+  const [host, setHost] = useState(item?.host ?? workerScope?.hosts[0]?.host ?? "");
+  const binding = item ?? workerScope?.bindings.find((entry) => entry.host === host);
+  const selected = binding ?? workerScope?.hosts.find((entry) => entry.host === host);
+  const choosingHost = Boolean(workerScope && !item);
+  const [routes, setRoutes] = useState(() => draftRoutes(binding, choosingHost));
   const availableOrigins = origins.filter((origin) =>
     origin.suffixes.includes(item?.suffix_id || suffix),
   );
@@ -454,10 +499,21 @@ function HostnameEditor({
   const [retiring, setRetiring] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const changesFallback = item?.routes.some(
+  const changesFallback = binding?.routes.some(
     (previous) =>
       !routes.some((route) => route.match === previous.match && route.path === previous.path),
   );
+
+  function selectHost(host: string) {
+    setHost(host);
+    const initial = draftRoutes(
+      workerScope?.bindings.find((entry) => entry.host === host),
+      true,
+    );
+    setRoutes(initial);
+    setNextKey(initial.length);
+    setError("");
+  }
 
   function changeRoute(key: number, update: Partial<Route>) {
     setRoutes((current) =>
@@ -472,7 +528,7 @@ function HostnameEditor({
       const input = routes.map(({ match, path, worker_id, origin, enabled }) => ({
         match,
         path,
-        ...(origin ? { origin } : { worker_id }),
+        ...(workerScope ? {} : origin ? { origin } : { worker_id }),
         enabled,
       }));
       if (item && retire) {
@@ -480,11 +536,10 @@ function HostnameEditor({
           path + "/" + encodeURIComponent(item.host) + "?revision=" + item.revision,
           "DELETE",
         );
-      } else if (item) {
-        await api(path + "/" + encodeURIComponent(item.host), "PUT", {
-          expected_revision: item.revision,
-          routes: input,
-        });
+      } else if (selected) {
+        const endpoint =
+          path + "/" + encodeURIComponent(selected.host) + (workerScope ? "/routes" : "");
+        await api(endpoint, "PUT", { expected_revision: selected.revision, routes: input });
       } else {
         await api(path, "POST", { suffix_id: suffix, label });
       }
@@ -509,11 +564,15 @@ function HostnameEditor({
     >
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{item ? item.host : t("申请域名")}</DialogTitle>
+          <DialogTitle>
+            {item?.host ?? (workerScope ? t("添加应用路由") : t("申请域名"))}
+          </DialogTitle>
           <DialogDescription>
-            {item
-              ? t("精确路径优先，其次匹配最长的路径段前缀。")
-              : t("申请后可在域名详情配置路由。")}
+            {workerScope
+              ? t("保存指向当前 Worker 的路由。")
+              : item
+                ? t("精确路径优先，其次匹配最长的路径段前缀。")
+                : t("申请后可在域名详情配置路由。")}
           </DialogDescription>
         </DialogHeader>
         <form
@@ -527,7 +586,23 @@ function HostnameEditor({
             <p className="text-sm">{t("退役会撤除所有路由，并继续保留该域名。")}</p>
           ) : (
             <>
-              {!item ? (
+              {choosingHost ? (
+                <SelectField
+                  label={t("应用域名")}
+                  value={host}
+                  onChange={selectHost}
+                >
+                  {workerScope?.hosts.map((entry) => (
+                    <option
+                      key={entry.host}
+                      value={entry.host}
+                    >
+                      {entry.host}
+                    </option>
+                  ))}
+                </SelectField>
+              ) : null}
+              {!item && !workerScope ? (
                 <HostnameFields
                   label={label}
                   setLabel={setLabel}
@@ -536,7 +611,7 @@ function HostnameEditor({
                   suffixes={suffixes}
                 />
               ) : null}
-              {item
+              {selected
                 ? routes.map((route, index) => (
                     <div
                       key={route.key}
@@ -564,39 +639,46 @@ function HostnameEditor({
                             }
                           />
                         </Field>
-                        <SelectField
-                          label={t("目标类型")}
-                          value={route.origin ?? ""}
-                          onChange={(origin) =>
-                            changeRoute(route.key, { origin: origin || undefined, worker_id: "" })
-                          }
-                        >
-                          <option value="">{t("Worker")}</option>
-                          {availableOrigins.map((origin) => (
-                            <option
-                              key={origin.host}
-                              value={origin.host}
-                            >
-                              {origin.kind === "static" ? t("静态站点") : t("HTTP 服务")} ·{" "}
-                              {origin.label || origin.host}
-                            </option>
-                          ))}
-                          {route.origin &&
-                          !availableOrigins.some((origin) => origin.host === route.origin) ? (
-                            <option value={route.origin}>{route.origin}</option>
-                          ) : null}
-                        </SelectField>
-                        {route.origin ? null : (
-                          <Field label={t("目标 Worker")}>
-                            <Input
-                              required
-                              value={route.worker_id}
-                              placeholder={t("Worker 短名或 ID")}
-                              onChange={(event) =>
-                                changeRoute(route.key, { worker_id: event.target.value })
+                        {workerScope ? null : (
+                          <>
+                            <SelectField
+                              label={t("目标类型")}
+                              value={route.origin ?? ""}
+                              onChange={(origin) =>
+                                changeRoute(route.key, {
+                                  origin: origin || undefined,
+                                  worker_id: "",
+                                })
                               }
-                            />
-                          </Field>
+                            >
+                              <option value="">{t("Worker")}</option>
+                              {availableOrigins.map((origin) => (
+                                <option
+                                  key={origin.host}
+                                  value={origin.host}
+                                >
+                                  {origin.kind === "static" ? t("静态站点") : t("HTTP 服务")} ·{" "}
+                                  {origin.label || origin.host}
+                                </option>
+                              ))}
+                              {route.origin &&
+                              !availableOrigins.some((origin) => origin.host === route.origin) ? (
+                                <option value={route.origin}>{route.origin}</option>
+                              ) : null}
+                            </SelectField>
+                            {route.origin ? null : (
+                              <Field label={t("目标 Worker")}>
+                                <Input
+                                  required
+                                  value={route.worker_id}
+                                  placeholder={t("Worker 短名或 ID")}
+                                  onChange={(event) =>
+                                    changeRoute(route.key, { worker_id: event.target.value })
+                                  }
+                                />
+                              </Field>
+                            )}
+                          </>
                         )}
                       </div>
                       <div className="flex items-center justify-between">
@@ -625,7 +707,7 @@ function HostnameEditor({
                     </div>
                   ))
                 : null}
-              {item ? (
+              {selected ? (
                 <Button
                   type="button"
                   variant="outline"
@@ -637,7 +719,7 @@ function HostnameEditor({
                       {
                         key: nextKey,
                         match: "prefix",
-                        path: current.length ? "/api" : "/",
+                        path: workerScope ? "" : current.length ? "/api" : "/",
                         worker_id: "",
                         enabled: true,
                       },
@@ -668,7 +750,7 @@ function HostnameEditor({
             </p>
           ) : null}
           <div className="flex flex-wrap justify-end gap-2">
-            {item && !retiring ? (
+            {item && !retiring && !workerScope ? (
               <Button
                 type="button"
                 variant="outline"
@@ -688,10 +770,10 @@ function HostnameEditor({
             </Button>
             <Button
               type="submit"
-              disabled={busy}
+              disabled={busy || (Boolean(workerScope) && !selected)}
               variant={retiring ? "destructive" : "default"}
             >
-              {retiring ? t("确认退役") : item ? t("保存") : t("申请域名")}
+              {retiring ? t("确认退役") : selected ? t("保存") : t("申请域名")}
             </Button>
           </div>
         </form>

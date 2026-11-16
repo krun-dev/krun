@@ -34,6 +34,23 @@ func (s *Store) ManagedHostnames(ctx context.Context, org string) ([]domain.Mana
 		ORDER BY h.host,r.match_type,r.path`, org)
 }
 
+// ApplicationHostnameOptions lists eligible hostnames and their shared revisions
+// without loading routes that point to other targets.
+func (s *Store) ApplicationHostnameOptions(ctx context.Context, org string, suffixes []string) ([]domain.ManagedHostnameOption, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT host,revision FROM krun_worker_hostnames
+		WHERE org_id=$1 AND domain_type='application' AND NOT retired AND suffix_id=ANY($2)
+		ORDER BY host`, org, suffixes)
+	if err != nil {
+		return nil, err
+	}
+	options, err := pgx.CollectRows(rows, pgx.RowToStructByPos[domain.ManagedHostnameOption])
+	if options == nil && err == nil {
+		options = []domain.ManagedHostnameOption{}
+	}
+	return options, err
+}
+
 func (s *Store) WorkerManagedHostnames(ctx context.Context, org, worker string) ([]domain.ManagedHostname, error) {
 	return collectManagedHostnames(ctx, s.pool, `
 		SELECT h.host,h.org_id,h.suffix_id,h.domain_type,h.revision,h.gateway_managed,r.match_type,r.path,r.worker_id,r.enabled,r.origin,r.cf_pattern,r.custom_domain,r.previews_enabled,COALESCE(w.locator,'')

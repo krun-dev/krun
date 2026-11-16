@@ -40,3 +40,12 @@ func (s *Server) workerSaveCustomDomain(st *State, p Principal, r *http.Request)
 	out, result, err := s.workerApplication(r).SaveWorkerCustomDomain(r.Context(), st, p, workerRef(r), r.PathValue("host"), in, revision)
 	return out, workerHTTPStatus(result), err
 }
+
+func (s *Server) workerSaveApplicationRoutes(st *State, p Principal, r *http.Request) (any, int, error) {
+	var in workerapp.ManagedHostnameInput
+	if err := bodyWithLimit(r, &in, apiJSONBodyMax); err != nil {
+		return nil, 0, err
+	}
+	out, result, err := s.workerApplication(r).SaveWorkerApplicationRoutes(r.Context(), st, p, workerRef(r), r.PathValue("host"), in)
+	return out, workerHTTPStatus(result), err
+}

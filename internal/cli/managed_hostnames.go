@@ -17,7 +17,8 @@ func (c *Client) managedHostnames(ctx context.Context, args []string) error {
 		_, err := fmt.Fprint(c.Out, `Usage: krun domains COMMAND [--org ID]
   list [--worker ID]                               List domains, optionally for a Worker
   claim --suffix ID --label LABEL [--routes FILE]  Claim an application hostname
-  set --host HOST --revision N --routes FILE       Replace the host's route table
+  set --host HOST --revision N --routes FILE [--worker ID]
+                                                   Replace all routes, or this Worker's routes
   retire --host HOST --revision N                  Remove routing and reserve the hostname
 `)
 		return err
@@ -39,6 +40,7 @@ func (c *Client) managedHostnames(ctx context.Context, args []string) error {
 		f.StringVar(&host, "host", "", "Full hostname")
 		f.IntVar(&revision, "revision", 0, "Current hostname revision")
 		if action == "set" {
+			f.StringVar(&worker, "worker", "", "Replace only routes targeting this Worker ID or locator")
 			f.StringVar(&routeFile, "routes", "", "JSON file containing an array of routes")
 		}
 	default:
@@ -84,6 +86,9 @@ func (c *Client) managedHostnames(ctx context.Context, args []string) error {
 	}
 	if routeFile == "" {
 		return errors.New("--routes is required")
+	}
+	if worker != "" {
+		path = base + "/workers/" + url.PathEscape(worker) + "/hostnames/" + url.PathEscape(host) + "/routes"
 	}
 	return c.call(ctx, http.MethodPut, path, map[string]any{"expected_revision": revision, "routes": routes})
 }

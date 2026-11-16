@@ -158,6 +158,24 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
   await page.goto("/?page=workers&workspace=" + org.id + "&worker=orders&worker_tab=routing");
   await expect(page.getByRole("link", { name: host })).toBeVisible();
   const bindings = await request(orgBase + "/workers/orders/hostnames");
+  expect(bindings.application_hosts.some((entry) => entry.host === host)).toBeTruthy();
+  const addAppRoute = page.getByRole("button", { name: "添加应用路由", exact: true });
+  await addAppRoute.click();
+  await dialog.getByRole("combobox", { name: "应用域名" }).selectOption(host);
+  const paths = dialog.getByRole("textbox", { name: "请求路径" });
+  await expect(paths.first()).toHaveValue("/api");
+  await expect(dialog.getByRole("textbox", { name: "目标 Worker" })).toHaveCount(0);
+  await paths.last().fill("/orders");
+  await save.click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("/orders", { exact: true })).toBeVisible();
+
+  await edit.click();
+  await paths.last().fill("/orders/status");
+  await dialog.getByRole("combobox", { name: "匹配方式" }).last().selectOption("exact");
+  await save.click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("/orders/status", { exact: true })).toBeVisible();
   if (bindings.suffixes.length) {
     const suffix = bindings.suffixes[0];
     const customLabel = "orders-" + Date.now();
@@ -177,6 +195,10 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
   }
   await page.getByRole("link", { name: "管理应用域名" }).click();
   await expect(page).toHaveURL(/page=domains/);
+  await expect(page.getByText("/orders/status", { exact: true })).toBeVisible();
+  await expect(page.getByText("/api", { exact: true })).toBeVisible();
+  if (staticOrigin) await expect(page.getByText(staticOrigin.host, { exact: true })).toBeVisible();
+  if (httpOrigin) await expect(page.getByText(httpOrigin.host, { exact: true })).toBeVisible();
 
   // Exercise both palettes while the real route table is rendered.
   await page.evaluate(() => document.documentElement.classList.add("dark"));
