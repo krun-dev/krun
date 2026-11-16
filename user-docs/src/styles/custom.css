@@ -475,3 +475,35 @@ html[data-has-toc] {
 .sidebar-content li li li summary .group-label .large {
   font-weight: 400;
 }
+.krun-image-preview {
+  max-width: none;
+  max-height: none;
+  width: 100vw;
+  height: 100dvh;
+  margin: 0;
+  padding: 3.5rem 1rem 1rem;
+  border: 0;
+  background: transparent;
+  text-align: center;
+}
+
+.krun-image-preview::backdrop {
+  background: rgb(0 0 0 / 85%);
+}
+
+.krun-image-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.krun-image-preview-close {
+  position: absolute;
+  top: 0.5rem;
+  right: 1rem;
+  border: 0;
+  background: transparent;
+  color: white;
+  font-size: 2rem;
+  cursor: pointer;
+}

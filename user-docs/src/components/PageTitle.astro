@@ -9,11 +9,10 @@ const source = `/docs/${id}.md${import.meta.env.DEV ? "" : ".txt"}`;
 const isInternal = id === "internal" || id.startsWith("internal/");
 const workerPages = [
   "guides/component-workers",
-  "guides/workers-gradual-deployments",
   "guides/workers-runtime-compatibility",
   "guides/workers-observability",
 ];
-const deploymentPages = ["guides/deploy-project", "guides/git-repositories", "guides/deploy-local-project"];
+const deploymentPages = ["guides/deploy-project", "guides/git-repositories", "guides/deploy-local-project", "guides/workers-gradual-deployments"];
 const gitProviderPages = ["guides/gitlab-integration", "guides/github-integration"];
 const wranglerPages = ["guides/cloudflare-workers", "guides/wrangler-configuration"];
 const section = isInternal
