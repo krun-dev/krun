@@ -144,7 +144,7 @@ kubectl --context "$CONTEXT" -n krun-observability rollout status deployment/gra
 - 业务指标需要同时更新 serving workerd 镜像和 runtime 配置。部署清单声明名为
   `metrics` 的 8084 端口，并允许 `krun-observability` 中的 vmagent Pod 访问该端口。
 
-支持 CPU 计量的 workerd 会通过该接口提供
+Linux AMD64 上支持 CPU 计量的 workerd 会通过该接口提供
 `krun_worker_version_cpu_seconds_total`，按组织、Worker、环境和版本区分。它是进程内的
 尽力计数，重启或采集丢失会导致少记，仅供监控。CPU 时间只包括请求执行线程，不包含
 I/O 等待、启动和其他线程。要检查单个 serving Pod 的原始指标，先将 `NAMESPACE` 换成
