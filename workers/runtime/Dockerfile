@@ -11,6 +11,7 @@ RUN npm ci --ignore-scripts --omit=dev \
     && cp "node_modules/@cloudflare/workerd-${workerd_arch}/bin/workerd" node_modules/workerd/bin/workerd
 COPY entry.js assets.js storage.js cache.js service.js ./
 COPY storage ./storage
+ENV WORKERD_EXPERIMENTAL_CPU_METRICS=1
 USER 1000:1000
 # Run the native binary directly so it receives container shutdown signals.
 CMD ["/app/node_modules/.bin/workerd","serve","/config/runtime.capnp","-I","/","--experimental"]

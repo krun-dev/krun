@@ -641,6 +641,7 @@ const protocol =
 const objectService =
   '(name="objects",external=(address=' + JSON.stringify(address) + "," + protocol + "))";
 const managementPort = await freePort();
+const metricsPort = await freePort();
 const staticDomains = JSON.stringify(JSON.stringify({ "static.fixture.test": "int" }));
 const objectBindings = sharedValidator
   ? '(name="VALIDATOR_ONLY",text="true")'
@@ -656,7 +657,7 @@ const config :W.Config=(services=[
  (name="platform",external=(address="127.0.0.1:${platformPort}",http=())),
  ${sharedValidator ? "" : objectService + ","}
  (name="network",network=(allow=["127.0.0.1/32"]))],
- sockets=[(name="management",address="127.0.0.1:${managementPort}",http=(),service=(name="entry",entrypoint="Management"))${privateSocket}]);`;
+ sockets=[(name="management",address="127.0.0.1:${managementPort}",http=(),service=(name="entry",entrypoint="Management")),(name="metrics",address="127.0.0.1:${metricsPort}",http=(),service=(name="entry",entrypoint="Metrics"))${privateSocket}]);`;
 // Use JSON escaping for the nested text binding instead of Cap'n Proto escapes.
 const configPath = path.join(directory, "runtime.capnp");
 writeFileSync(configPath, config);
@@ -1013,6 +1014,20 @@ try {
       ]);
       assert.equal(largeFinished, false, "cancelled download was fully drained " + output);
       objects.delete(largeKey);
+    }
+
+    if (process.env.KRUN_TEST_EXPECT_CPU_METRICS === "1") {
+      let cpuSeconds = 0;
+      for (let attempt = 0; attempt < 100 && cpuSeconds <= 0; attempt++) {
+        const samples = await (await fetch(`http://127.0.0.1:${metricsPort}/metrics`)).text();
+        const sample = samples.match(
+          /^krun_worker_version_cpu_seconds_total\{organization_id="org-test",worker_id="svc-test",environment="production",version_id="version-r2"\} ([\d.eE+-]+)$/m,
+        );
+        cpuSeconds = sample ? Number(sample[1]) : 0;
+        if (cpuSeconds <= 0) await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+      assert.ok(cpuSeconds > 0, "expected positive per-version CPU metric from the real Worker");
+      console.log(`Worker version CPU metric: ${cpuSeconds} seconds`);
     }
 
     console.log(

@@ -18,6 +18,7 @@ const workersHelp = `Usage: krun workers COMMAND [--org ID]
   domains                           Inspect and update routing domains
   network                           List and select network profiles
   repository                        Manage Git repository access and bindings
+  metrics                           Get the Worker metrics dashboard URL
   invoke                            Send a test request to a deployed Worker
 `
 
@@ -40,6 +41,14 @@ func (c *Client) workers(ctx context.Context, args []string) error {
 		return c.repository(ctx, rest)
 	case "invoke":
 		return c.invoke(ctx, rest)
+	case "metrics":
+		f := flags("workers metrics", c.Err)
+		target := c.workerFlags(f)
+		base, err := target.path(f, rest)
+		if err != nil {
+			return err
+		}
+		return c.call(ctx, "GET", base+"/metrics", nil)
 	default:
 		return fmt.Errorf("unknown workers command %q; use krun workers --help", action)
 	}

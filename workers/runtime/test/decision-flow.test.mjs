@@ -460,6 +460,33 @@ await check(
     assert.equal((await call(metrics, "/validate")).status, 404);
   },
 );
+await check(
+  "CPU metrics accumulate completed Worker invocations without rounding or double counting",
+  async () => {
+    const mod = await freshEntry();
+    const local = makeEnv(null, [], "rel_cpu");
+    const ctx = { exports: { IsolateActivity: () => ({}) } };
+    const serving = new mod.Private(local, ctx);
+    assert.equal((await call(serving, "/api/cpu")).status, 200);
+    const beforeOutcome = await (await call(new mod.Metrics(local, {}), "/metrics")).text();
+    assert.doesNotMatch(beforeOutcome, /^krun_worker_version_cpu_seconds_total\{/m);
+    const tail = new mod.IsolateActivity(local, { props: { key: local.__loaderKey } });
+    const complete = tail.tailStream({ event: { entrypoint: "default" } });
+    complete({ event: { type: "outcome", cpuTime: 0.125 } });
+    complete({ event: { type: "outcome", cpuTime: 99 } });
+    const second = tail.tailStream({ event: { entrypoint: "default" } });
+    second({ event: { type: "outcome", cpuTime: 2.5 } });
+    const invalid = tail.tailStream({ event: { entrypoint: "default" } });
+    invalid({ event: { type: "outcome", cpuTime: NaN } });
+    const samples = await (await call(new mod.Metrics(local, {}), "/metrics")).text();
+    assert.match(samples, /^# TYPE krun_worker_version_cpu_seconds_total counter$/m);
+    assert.match(
+      samples,
+      /^krun_worker_version_cpu_seconds_total\{organization_id="org",worker_id="svc",environment="production",version_id="rel_cpu"\} 0\.002625$/m,
+    );
+  },
+);
+
 await check("non-navigation miss without SPA config goes to the worker", async () => {
   const noSpaEnv = makeEnv({ ...config, not_found_handling: "none" }, fileList, "rel_nospa");
   const noSpaEntry = await freshEntry();
