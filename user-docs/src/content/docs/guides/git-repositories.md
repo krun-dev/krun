@@ -8,7 +8,7 @@ description: 连接 Git 平台并从仓库构建 Worker。
 - [内部 GitLab](/docs/guides/gitlab-integration.html)
 - [GitHub](/docs/guides/github-integration.html)
 
-[![1 选择组织，2 进入 Git 仓库授权，3 连接 GitHub 或公司 GitLab](/docs/screenshots/git-repositories/personal-settings.png)](/docs/screenshots/git-repositories/personal-settings.png)
+[![① 选择组织，② 进入 Git 仓库授权，③ 连接仓库账号](/docs/screenshots/git-repositories/personal-settings.png)](/docs/screenshots/git-repositories/personal-settings.png)
 
 ## 绑定仓库并构建
 
@@ -16,7 +16,7 @@ description: 连接 Git 平台并从仓库构建 Worker。
 2. 选择仓库平台，点 **选择已授权仓库**，选中目标仓库。
 3. 填写 **项目目录**，点 **保存仓库配置**。Wrangler 配置在仓库根目录时保留 `.`，在子目录时填相对路径，例如 `apps/edge-api`。
 
-[![1 打开代码源，2 选择已授权仓库，3 保存仓库配置](/docs/screenshots/git-repositories/worker-source.png)](/docs/screenshots/git-repositories/worker-source.png)
+[![① 打开代码源，② 选择已授权仓库，③ 保存仓库配置](/docs/screenshots/git-repositories/worker-source.png)](/docs/screenshots/git-repositories/worker-source.png)
 
 绑定后，进入 **构建 → 部署项目 → Git 仓库**，点击 **从仓库构建**，填写分支、Tag 或 Commit，再点击 **开始构建**。留空时使用绑定中的 Git ref。填写 `HEAD` 时使用仓库默认分支。构建成功后，在构建记录中点击 **发布** 并确认目标环境。
 

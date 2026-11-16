@@ -5,47 +5,17 @@ description: 在 Worker 详情中查看请求数、HTTP 5xx 比例和响应延�
 
 本指南可以直接阅读。在[控制台的 Workers 列表](/?page=workers)中打开你有权查看的 Worker，点击「指标」。看板默认使用详情页选中的环境，显示最近 1 小时的数据。
 
-下方截图使用样例数据。打开「指标」页后，可以看到同一生产环境中两个版本的请求数、5xx 比例和响应延迟。
+下方截图使用样例数据。打开「指标」页签 ①，可以看到同一生产环境中两个版本的请求数、5xx 比例和响应延迟。
 
-<figure class="krun-metrics-figure krun-metrics-overview">
-  <div class="krun-metrics-screenshot">
-    <img src="/docs/screenshots/workers-observability/workers-metrics-production.png" alt="Worker 详情的指标页，展示两个生产版本的三项指标" width="1164" height="780" loading="lazy" />
-    <span class="krun-metrics-tab" aria-hidden="true">1</span>
-    <span class="krun-metrics-filters" aria-hidden="true">2</span>
-    <span class="krun-metrics-time" aria-hidden="true">3</span>
-  </div>
-  <figcaption>
-    <ol>
-      <li>「指标」页签</li>
-      <li>环境与版本筛选</li>
-      <li>时间范围</li>
-    </ol>
-    <a href="/docs/screenshots/workers-observability/workers-metrics-production.png">查看原图</a>
-  </figcaption>
-</figure>
+[![① 指标页签，② 环境与版本筛选，③ 时间范围](/docs/screenshots/workers-observability/workers-metrics-production.png)](/docs/screenshots/workers-observability/workers-metrics-production.png)
 
-1. 在 Grafana 顶部用 **Environment** 选择生产或预览环境，用 **Version** 选择一个或多个版本。曲线按环境和实际处理请求的版本分组，可用于比较发布或回滚前后的流量。
-2. 用右上角的时间选择器覆盖要比较的部署时段。版本列表来自所选环境和时间范围内采集到的数据。如果找不到旧版本，先扩大时间范围。
+1. 在 Grafana 顶部的环境与版本筛选区 ②，用 **Environment** 选择生产或预览环境，用 **Version** 选择一个或多个版本。曲线按环境和实际处理请求的版本分组，可用于比较发布或回滚前后的流量。
+2. 用右上角的时间选择器 ③ 覆盖要比较的部署时段。版本列表来自所选环境和时间范围内采集到的数据。如果找不到旧版本，先扩大时间范围。
 3. 如果看板要求登录，点击「在 Grafana 中打开」，用有该数据源访问权限的 Grafana 账号登录，再回到「指标」页刷新。
 
-在 **Environment** 中选择 **All**，可以把生产环境和预览环境的版本放在同一张图里比较。
+在 **Environment** 中选择 **All**，可以同时比较生产和预览版本的请求数 ①、HTTP 5xx 比例 ②，以及 P50、P95 和 P99 响应延迟 ③。
 
-<figure class="krun-metrics-figure">
-  <div class="krun-metrics-screenshot">
-    <img src="/docs/screenshots/workers-observability/workers-metrics-environments.png" alt="指标看板同时展示两个生产版本和一个预览版本" width="1764" height="1026" loading="lazy" />
-    <span class="krun-metrics-requests" aria-hidden="true">1</span>
-    <span class="krun-metrics-errors" aria-hidden="true">2</span>
-    <span class="krun-metrics-latency" aria-hidden="true">3</span>
-  </div>
-  <figcaption>
-    <ol>
-      <li>请求数</li>
-      <li>HTTP 5xx 比例</li>
-      <li>P50、P95 和 P99 响应延迟</li>
-    </ol>
-    <a href="/docs/screenshots/workers-observability/workers-metrics-environments.png">查看原图</a>
-  </figcaption>
-</figure>
+[![① 请求数，② HTTP 5xx 比例，③ 响应延迟](/docs/screenshots/workers-observability/workers-metrics-environments.png)](/docs/screenshots/workers-observability/workers-metrics-environments.png)
 
 ## 指标口径
 

@@ -32,37 +32,38 @@ description: 在 Worker 上绑定整域，或通过应用域名把路径分给�
 
 ## 控制台
 
-1. 在组织侧栏打开 **网络 → 应用域名** ①，点击 **申请域名**，填入前缀 ③，选择后缀 ④，再点击 **申请域名** ⑤。
-2. 找到已申请的域名，点击 **编辑路由** ②。添加路由后，填写匹配方式和请求路径 ⑥，再选择目标 ⑦。截图中的
-   四条规则把 `/` 给静态站点、`/api` 和 `/api/admin` 给不同 Worker、`/legacy` 给 HTTP 服务。点击 **保存** ⑧。
-   这里展示并管理域名的完整路由表。
-3. 要停止特定路径，可取消勾选 **启用路由**。要移除整个域名的流量，在 **编辑路由** 中选择
-   **退役域名** 并确认；域名继续保留，不能重新申请。
+在组织侧栏打开 **网络 → 应用域名** ①。域名列表中的 **编辑路由** ② 打开完整路由表。
 
-[![① 网络分组下的域名入口，② 编辑路由](/docs/screenshots/workers-hostnames/network-domain-list.png)](/docs/screenshots/workers-hostnames/network-domain-list.png)
+[![① 网络分组下的应用域名入口，② 编辑路由](/docs/screenshots/workers-hostnames/network-domain-list.png)](/docs/screenshots/workers-hostnames/network-domain-list.png)
 
-[![③ 填写前缀，④ 选择后缀，⑤ 申请域名](/docs/screenshots/workers-hostnames/claim-domain-prefix-first.png)](/docs/screenshots/workers-hostnames/claim-domain-prefix-first.png)
+点击 **申请域名**，在弹窗填写前缀 ①，选择后缀 ②，再点击 **申请域名** ③。
 
-[![⑥ 填写路径，⑦ 选择目标，⑧ 保存路由](/docs/screenshots/workers-hostnames/edit-domain-routes.png)](/docs/screenshots/workers-hostnames/edit-domain-routes.png)
+[![① 填写前缀，② 选择后缀，③ 申请域名](/docs/screenshots/workers-hostnames/claim-domain-prefix-first.png)](/docs/screenshots/workers-hostnames/claim-domain-prefix-first.png)
 
-打开目标 Worker 的 **路由与域名 → 应用域名**。为现有应用域名新增路径时，点击 **添加应用路由** ⑫，
-选择域名 ⑭，填写匹配方式和请求路径 ⑮，再点击 **保存** ⑯。修改已有绑定时，在对应域名上点击 **编辑路由** ⑬。
-这个入口编辑指向当前 Worker 的规则，保存后可回到应用域名页查看完整路由表。
+打开已申请域名的 **编辑路由**，添加规则，填写匹配方式和请求路径 ①，再选择目标 ②，最后点击 **保存** ③。
+图中的四条规则把 `/` 给静态站点、`/api` 和 `/api/admin` 给不同 Worker、`/legacy` 给 HTTP 服务。
 
-[![⑫ Worker 页添加应用路由，⑬ 编辑当前 Worker 的路由](/docs/screenshots/workers-hostnames/worker-application-routes.png)](/docs/screenshots/workers-hostnames/worker-application-routes.png)
+[![① 填写匹配方式和路径，② 选择目标，③ 保存](/docs/screenshots/workers-hostnames/edit-domain-routes.png)](/docs/screenshots/workers-hostnames/edit-domain-routes.png)
 
-[![⑭ 选择应用域名，⑮ 填写匹配方式和请求路径，⑯ 保存](/docs/screenshots/workers-hostnames/worker-add-application-route.png)](/docs/screenshots/workers-hostnames/worker-add-application-route.png)
+要停止特定路径，可取消勾选 **启用路由**。要移除整个域名的流量，在 **编辑路由** 中选择
+**退役域名** 并确认。域名继续保留，不能重新申请。
 
-要为一个 Worker 绑定整域，打开这个 Worker 的 **路由与域名**，在 **Worker 自定义域名** 点击
-**绑定自定义域名** ⑨，填写前缀、选择后缀 ⑩，然后点击 **绑定域名**。绑定后可在同一区域解绑。
-绑定后默认提供生产和 Preview 地址 ⑪。命名 Preview `pr-123` 会获得
-`pr-123.orders.workers.example.com`。
-每次 Preview 部署也会显示一个固定的自定义地址。使用前让平台管理员为
-`*.orders.workers.example.com` 配置 DNS 和证书。
-应用域名的路径继续使用各自配置的服务。要长期验收整站，可为独立 staging Worker
-和测试站点配置一套显式路由，例如 `staging.apps.example.com/api/*`。
+打开目标 Worker 的 **路由与域名 → 应用域名**。为现有应用域名新增路径时，点击 **添加应用路由** ①。
+修改已有绑定时，在对应域名上点击 **编辑路由** ②。这个入口编辑指向当前 Worker 的规则。
 
-[![⑨ Worker 自定义域名入口，⑩ 选择后缀，⑪ 绑定后自动提供 Preview 地址](/docs/screenshots/workers-hostnames/worker-custom-domain.png)](/docs/screenshots/workers-hostnames/worker-custom-domain.png)
+[![① 添加应用路由，② 编辑当前 Worker 的路由](/docs/screenshots/workers-hostnames/worker-application-routes.png)](/docs/screenshots/workers-hostnames/worker-application-routes.png)
+
+在添加弹窗中，选择应用域名 ①，填写匹配方式和请求路径 ②，再点击 **保存** ③。保存后可回到应用域名页查看完整路由表。
+
+[![① 选择应用域名，② 填写匹配方式和请求路径，③ 保存](/docs/screenshots/workers-hostnames/worker-add-application-route.png)](/docs/screenshots/workers-hostnames/worker-add-application-route.png)
+
+在同一 Worker 页面，点击 **绑定自定义域名** ① 为 Worker 绑定整域。在弹窗中填写前缀、选择后缀 ②，然后点击 **绑定域名**。
+绑定后默认提供生产和 Preview 地址 ③，命名 Preview `pr-123` 会获得 `pr-123.orders.workers.example.com`。
+每次 Preview 部署也会显示一个固定的自定义地址。使用前让平台管理员为 `*.orders.workers.example.com` 配置 DNS 和证书。
+
+[![① 绑定自定义域名入口，② 选择后缀，③ 绑定后自动提供生产和 Preview 地址](/docs/screenshots/workers-hostnames/worker-custom-domain.png)](/docs/screenshots/workers-hostnames/worker-custom-domain.png)
+
+绑定后可在同一区域解绑。要长期验收整站，可为独立 staging Worker 和测试站点配置一套显式路由，例如 `staging.apps.example.com/api/*`。
 
 ## krun CLI
 
