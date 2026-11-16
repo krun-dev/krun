@@ -104,7 +104,7 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
   const submitClaim = dialog.getByRole("button", { name: "申请域名", exact: true });
   const save = dialog.getByRole("button", { name: "保存", exact: true });
   await prefix.fill(desiredLabel);
-  await screenshot("claim.png", [
+  await screenshot("claim-domain-prefix-first.png", [
     [3, prefix],
     [4, dialog.getByRole("combobox", { name: "域名后缀" })],
     [5, submitClaim],
@@ -134,7 +134,7 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
     await targets.last().selectOption(httpOrigin.host);
   }
   await save.scrollIntoViewIfNeeded();
-  await screenshot("routes.png", [
+  await screenshot("edit-domain-routes.png", [
     [6, dialog.getByRole("textbox", { name: "请求路径" }).nth(1)],
     [7, targets.nth(0)],
     [8, save],
@@ -144,7 +144,7 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
   await expect(page.getByText("/api", { exact: true })).toBeVisible();
   if (staticOrigin) await expect(page.getByText(staticOrigin.host, { exact: true })).toBeVisible();
   if (httpOrigin) await expect(page.getByText(httpOrigin.host, { exact: true })).toBeVisible();
-  await screenshot("catalog.png", [
+  await screenshot("network-domain-list.png", [
     [1, domains],
     [2, edit],
   ]);

@@ -33,11 +33,11 @@ description: 从平台提供的后缀申请域名，把同一域名的路径分�
 3. 要停止特定路径，可取消勾选 **启用路由**。要移除整个域名的流量，在 **编辑路由** 中选择
    **退役域名** 并确认；域名继续保留，不能重新申请。
 
-[![① 网络分组下的域名入口，② 编辑路由](/docs/screenshots/workers-hostnames/catalog.png)](/docs/screenshots/workers-hostnames/catalog.png)
+[![① 网络分组下的域名入口，② 编辑路由](/docs/screenshots/workers-hostnames/network-domain-list.png)](/docs/screenshots/workers-hostnames/network-domain-list.png)
 
-[![③ 填写前缀，④ 选择后缀，⑤ 申请域名](/docs/screenshots/workers-hostnames/claim.png)](/docs/screenshots/workers-hostnames/claim.png)
+[![③ 填写前缀，④ 选择后缀，⑤ 申请域名](/docs/screenshots/workers-hostnames/claim-domain-prefix-first.png)](/docs/screenshots/workers-hostnames/claim-domain-prefix-first.png)
 
-[![⑥ 填写路径，⑦ 选择目标，⑧ 保存路由](/docs/screenshots/workers-hostnames/routes.png)](/docs/screenshots/workers-hostnames/routes.png)
+[![⑥ 填写路径，⑦ 选择目标，⑧ 保存路由](/docs/screenshots/workers-hostnames/edit-domain-routes.png)](/docs/screenshots/workers-hostnames/edit-domain-routes.png)
 
 ## krun CLI
 
