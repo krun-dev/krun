@@ -22,11 +22,11 @@ import (
 func addTypedHostnameSuffixes(cfg *appconfig.WorkersConfig) (application, custom appconfig.WorkerDomain) {
 	defaultSuffix := cfg.Domains[0]
 	application = appconfig.WorkerDomain{
-		ID: "apps", Domain: "apps.test", Type: appconfig.WorkerDomainApplication,
+		ID: "apps", Domain: "apps.test", Types: []appconfig.WorkerDomainType{appconfig.WorkerDomainApplication},
 		Access: defaultSuffix.Access, Gateway: defaultSuffix.Gateway, Labels: defaultSuffix.Labels,
 	}
 	custom = appconfig.WorkerDomain{
-		ID: "custom", Domain: "custom.test", Type: appconfig.WorkerDomainCustom,
+		ID: "custom", Domain: "custom.test", Types: []appconfig.WorkerDomainType{appconfig.WorkerDomainCustom},
 		Access: defaultSuffix.Access, Gateway: defaultSuffix.Gateway, Labels: defaultSuffix.Labels,
 	}
 	cfg.Domains = append(cfg.Domains, application, custom)
@@ -303,10 +303,11 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 		t.Skip("set KRUN_TEST_WRANGLER to the absolute path of the Wrangler CLI")
 	}
 	s, store, _ := workerTestServer(t)
-	appSuffix, customSuffix := addTypedHostnameSuffixes(s.Config.Workers)
-	suffix := appSuffix.Domain
-	host := "wrangler." + suffix
-	custom := "wrangler." + customSuffix.Domain
+	network := s.Config.Workers
+	network.Domains[0].Types = append(network.Domains[0].Types, appconfig.WorkerDomainCustom, appconfig.WorkerDomainApplication)
+	suffix := network.Domains[0]
+	host := "wrangler-app." + suffix.Domain
+	custom := "wrangler-custom." + suffix.Domain
 	if _, err := postgresTestPool(store).Exec(t.Context(), `
 		UPDATE krun_resources SET locator='storefront' WHERE resource_id='svc-a';
 		UPDATE krun_organizations SET short_name='store-org' WHERE org_id='org-a';
@@ -320,7 +321,7 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 	cfg := fmt.Sprintf(`{
 		"name":"storefront", "account_id":"store-org", "main":"index.js", "compatibility_date":"2026-09-28",
 		"routes":[{"pattern":%q,"zone_name":%q},{"pattern":%q,"custom_domain":true}]
-	}`, host+"/api/*", suffix, custom)
+	}`, host+"/api/*", suffix.Domain, custom)
 	if err := os.WriteFile(filepath.Join(dir, "wrangler.jsonc"), []byte(cfg), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -344,12 +345,23 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 		}
 	}
 	item, err := store.ManagedHostname(t.Context(), "org-a", host)
-	if err != nil || len(item.Routes) != 1 || item.Routes[0].Path != "/api" {
+	if err != nil || item.Type != string(appconfig.WorkerDomainApplication) || item.SuffixID != suffix.ID || len(item.Routes) != 1 || item.Routes[0].Path != "/api" {
 		t.Fatalf("Wrangler did not publish the application route: %+v (%v)", item, err)
 	}
 	item, err = store.ManagedHostname(t.Context(), "org-a", custom)
-	if err != nil || len(item.Routes) != 1 || !item.Routes[0].CustomDomain {
+	if err != nil || item.Type != string(appconfig.WorkerDomainCustom) || item.SuffixID != suffix.ID || len(item.Routes) != 1 || !item.Routes[0].CustomDomain {
 		t.Fatalf("Wrangler did not publish the standalone Custom Domain: %+v (%v)", item, err)
+	}
+	for _, tc := range []struct{ method, path, body string }{
+		{"PUT", cfPrefix + "/accounts/org-a/workers/scripts/storefront/routes", fmt.Sprintf(`[{"pattern":%q,"zone_name":%q}]`, custom+"/api/*", suffix.Domain)},
+		{"PUT", cfPrefix + "/accounts/org-a/workers/domains", fmt.Sprintf(`{"hostname":%q,"service":"storefront"}`, host)},
+		{"POST", "/api/v1/orgs/org-a/worker-hostnames", fmt.Sprintf(`{"suffix_id":%q,"label":"wrangler-custom"}`, suffix.ID)},
+		{"POST", "/api/v1/orgs/org-a/worker-hostnames", fmt.Sprintf(`{"suffix_id":%q,"label":"w-generated"}`, suffix.ID)},
+	} {
+		resp := request(s, tc.method, tc.path, "krun_cli_admin", tc.body)
+		if resp.Code != 409 {
+			t.Fatalf("%s %s: expected hostname conflict, got %d %s", tc.method, tc.path, resp.Code, resp.Body.String())
+		}
 	}
 	resp := request(s, "GET", cfPrefix+"/accounts/org-a/workers/scripts/storefront/subdomain", "krun_cli_admin", "")
 	if resp.Code != 200 || !strings.Contains(resp.Body.String(), `"enabled":false,"previews_enabled":true`) {

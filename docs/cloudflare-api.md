@@ -112,9 +112,9 @@ Service Worker 格式仍超出兼容范围。资产路由支持 `run_worker_firs
 使用组织 ID 和 Zone 名查找 `zone_id`。兼容写入可在平台开放的后缀下自动申请单层子域；
 同名域名不能跨组织占用。普通 Routes 支持精确 Host、精确路径及尾部 `/*`，后者按完整路径段匹配，
 例如 `/api/*` 也匹配 `/api`。查询串不会参与精确匹配。普通 Routes 使用平台的
-`application` 后缀。Custom Domains 使用 `worker_custom` 后缀，把整域绑定到一个
-生产 Worker。默认地址使用 `worker_default` 后缀，由 `workers_dev` 控制。
-后缀类型由 krun 平台声明，Wrangler 字段沿用 Cloudflare 格式。
+启用 `application` 的后缀。Custom Domains 使用启用 `worker_custom` 的后缀，把整域绑定到一个
+生产 Worker。默认地址使用启用 `worker_default` 的后缀，由 `workers_dev` 控制。
+平台可以为同一个后缀启用多种用途，每个完整主机名只能用于一种。Wrangler 字段沿用 Cloudflare 格式。
 Wrangler 的路由配置和示例见
 [域名使用指南](../user-docs/src/content/docs/guides/workers-hostnames.md)。
 

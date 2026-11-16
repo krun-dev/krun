@@ -37,7 +37,7 @@ providers:
   #     port: 5432
   # database_origin_ca_file: /absolute/path/to/database-ca.pem # 可选，供渲染 workerd 配置使用。
   # HTTPS origin 不带路径，由部署方维护 DNS、TLS 和 /api/internal/workers/* 路由。
-  # 每条 workers.domains 必须声明 type: worker_default、worker_custom 或 application。
+  # 每条 workers.domains 的 types 可包含 worker_default、worker_custom、application 中的一项或多项。
   # 通过 reserved_hosts 预留该后缀下的其他完整域名。
   # 混合路由的静态站点和 HTTP 服务在 workers.managed_origins 登记，见 config/example.yaml。
   # 本地连接集群时在同一 workers: 段配置：

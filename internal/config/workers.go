@@ -149,16 +149,16 @@ const (
 	WorkerDomainApplication WorkerDomainType = "application"
 )
 
-// WorkerDomain is one platform suffix with an explicit purpose.
+// WorkerDomain is one platform suffix with explicitly enabled uses.
 // Access, Labels and Gateway are infrastructure metadata used to resolve a
 // Network Profile. Only the filtered domain id/name/display label is returned
 // to organization users.
 type WorkerDomain struct {
-	Type    WorkerDomainType `json:"type"`
-	ID      string           `json:"id"`
-	Domain  string           `json:"domain"`
-	Label   string           `json:"label"`
-	Gateway string           `json:"gateway"`
+	Types   []WorkerDomainType `json:"types"`
+	ID      string             `json:"id"`
+	Domain  string             `json:"domain"`
+	Label   string             `json:"label"`
+	Gateway string             `json:"gateway"`
 	// Access is a stable infrastructure primitive used by profile requirements.
 	// It is deliberately not returned to organization APIs.
 	Access string `json:"access"`

@@ -123,6 +123,23 @@ CREATE INDEX IF NOT EXISTS krun_worker_hostname_routes_worker ON krun_worker_hos
 			ADD COLUMN IF NOT EXISTS workers_dev_disabled boolean NOT NULL DEFAULT false,
 			ADD COLUMN IF NOT EXISTS preview_urls_disabled boolean NOT NULL DEFAULT false`,
 	},
+	{
+		from: "5c08400c3a40273803d6423338e25adaade59c4db129072a0761113c9644b423",
+		to:   "7e29e1e830f0e70ccaa2fc3ced5e414d3e58c02f7a160820a40066a99586fabe",
+		sql: `ALTER TABLE krun_worker_hostnames ADD COLUMN domain_type text NOT NULL DEFAULT 'application';
+		UPDATE krun_worker_hostnames h SET domain_type='worker_custom'
+		FROM (
+			SELECT host FROM krun_worker_hostname_routes GROUP BY host
+			HAVING count(*)=1 AND bool_and(custom_domain AND match_type='prefix' AND path='/' AND worker_id <> '')
+		) custom
+		WHERE h.host=custom.host AND NOT h.gateway_managed;
+		UPDATE krun_worker_hostname_routes r SET custom_domain=false
+		FROM krun_worker_hostnames h
+		WHERE h.host=r.host AND h.domain_type='application' AND r.custom_domain;
+		ALTER TABLE krun_worker_hostnames
+			ALTER COLUMN domain_type DROP DEFAULT,
+			ADD CHECK (domain_type IN ('worker_custom', 'application'))`,
+	},
 }
 
 // MigrateSchema upgrades an existing database while the control plane is

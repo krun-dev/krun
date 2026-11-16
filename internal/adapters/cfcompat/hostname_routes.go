@@ -79,7 +79,7 @@ func (c *hostnameChanges) edit(item domain.ManagedHostname) *hostnameChange {
 }
 
 func (c *hostnameChanges) hostname(host string, zone hostnameZone, kind appconfig.WorkerDomainType) (*hostnameChange, error) {
-	if zone.Suffix.Type != kind {
+	if !zone.Suffix.Allows(kind) {
 		return nil, domain.Invalid("HOSTNAME_INVALID", "Choose a suffix of type "+string(kind))
 	}
 	host = strings.ToLower(host)
@@ -88,6 +88,9 @@ func (c *hostnameChanges) hostname(host string, zone hostnameZone, kind appconfi
 		return nil, domain.Invalid("HOSTNAME_INVALID", "Choose a single subdomain label under the selected zone")
 	}
 	if change, ok := c.items[host]; ok {
+		if change.item.SuffixID != zone.Suffix.ID || change.item.Type != string(kind) {
+			return nil, domain.Conflict("HOSTNAME_UNAVAILABLE", "Hostname is unavailable")
+		}
 		return change, nil
 	}
 	org := c.request.PathValue("org")
@@ -99,7 +102,7 @@ func (c *hostnameChanges) hostname(host string, zone hostnameZone, kind appconfi
 	if err != nil {
 		return nil, err
 	}
-	if item.SuffixID != zone.Suffix.ID {
+	if item.SuffixID != zone.Suffix.ID || item.Type != string(kind) {
 		return nil, domain.Conflict("HOSTNAME_UNAVAILABLE", "Hostname is unavailable")
 	}
 	return c.edit(item), nil
@@ -191,7 +194,7 @@ func (s *Server) cfZoneWorkerRoutes(st *domain.State, p authorization.Principal,
 	index := -1
 	list := []cfWorkerRoute{}
 	for _, item := range items {
-		if item.SuffixID != zone.Suffix.ID {
+		if item.SuffixID != zone.Suffix.ID || item.Type != string(appconfig.WorkerDomainApplication) || !zone.Suffix.Allows(appconfig.WorkerDomainApplication) {
 			continue
 		}
 		for i, rule := range item.Routes {
@@ -282,7 +285,7 @@ func (s *Server) cfScriptWorkerRoutes(st *domain.State, p authorization.Principa
 		result := []cfWorkerRoute{}
 		for _, item := range items {
 			suffix, ok := s.Config.Workers.Domain(item.SuffixID)
-			if !ok || suffix.Type != appconfig.WorkerDomainApplication {
+			if !ok || !suffix.Allows(appconfig.WorkerDomainApplication) || item.Type != string(appconfig.WorkerDomainApplication) {
 				continue
 			}
 			for _, rule := range item.Routes {
@@ -325,7 +328,7 @@ func (s *Server) replaceScriptWorkerRoutes(st *domain.State, p authorization.Pri
 	result := []cfWorkerRoute{}
 	for _, subset := range items {
 		suffix, ok := s.Config.Workers.Domain(subset.SuffixID)
-		if !ok || suffix.Type != appconfig.WorkerDomainApplication {
+		if !ok || !suffix.Allows(appconfig.WorkerDomainApplication) || subset.Type != string(appconfig.WorkerDomainApplication) {
 			continue
 		}
 		if !slices.ContainsFunc(subset.Routes, func(rule domain.ManagedHostnameRoute) bool {

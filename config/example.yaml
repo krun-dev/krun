@@ -179,7 +179,7 @@ workers:
   # default: true 的域名会被新建环境默认选中。
   domains:
     - id: public
-      type: worker_default
+      types: [worker_default, worker_custom]
       domain: workers.example.com
       label: 默认公网入口
       access: public
@@ -190,15 +190,15 @@ workers:
       # 静态资产域名，留空则取 static.<domain>。
       static_domain: static.workers.example.com
       reserved_hosts: []
-  # 可选。在 domains 列表追加以下两种专用后缀，并为它们配置通配 DNS 和 TLS。
+  # 可选。可在 domains 列表追加专用后缀，并为它们配置通配 DNS 和 TLS。
   #   - id: custom
-  #     type: worker_custom
+  #     types: [worker_custom]
   #     domain: custom.example.com
   #     access: public
   #     labels: {exposure: external}
   #     gateway: external
   #   - id: apps
-  #     type: application
+  #     types: [application]
   #     domain: apps.example.com
   #     access: public
   #     labels: {exposure: external}

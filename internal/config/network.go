@@ -257,7 +257,7 @@ func (c *WorkersConfig) DomainsForProfile(profile WorkerNetworkProfile) []Worker
 
 func (c *WorkersConfig) WorkerDefaultDomainsForProfile(profile WorkerNetworkProfile) []WorkerDomain {
 	return slices.DeleteFunc(c.DomainsForProfile(profile), func(d WorkerDomain) bool {
-		return d.Type != WorkerDomainDefault
+		return !d.Allows(WorkerDomainDefault)
 	})
 }
 

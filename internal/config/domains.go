@@ -100,23 +100,34 @@ func (c *WorkersConfig) ValidateCatalog(dns *regexp.Regexp) error {
 		if err := ValidateWorkerLabels(d.Labels); err != nil {
 			return fmt.Errorf("Workers domain %s labels: %w", d.ID, err)
 		}
-		switch d.Type {
-		case WorkerDomainDefault:
+		if len(d.Types) == 0 {
+			return fmt.Errorf("Workers domain %s requires at least one type", d.ID)
+		}
+		slices.Sort(d.Types)
+		for i, kind := range d.Types {
+			switch kind {
+			case WorkerDomainDefault, WorkerDomainCustom, WorkerDomainApplication:
+			default:
+				return fmt.Errorf("Workers domain %s has unknown type %q", d.ID, kind)
+			}
+			if i > 0 && d.Types[i-1] == kind {
+				return fmt.Errorf("Workers domain %s has duplicate type %q", d.ID, kind)
+			}
+		}
+		if d.Allows(WorkerDomainDefault) {
 			if d.StaticDomain == "" {
 				d.StaticDomain = "static." + d.Domain
 			}
 			if !dns.MatchString(d.StaticDomain) {
 				return fmt.Errorf("invalid Workers static domain for %s", d.ID)
 			}
-		case WorkerDomainCustom, WorkerDomainApplication:
+		} else {
 			if d.StaticDomain != "" {
 				return fmt.Errorf("Workers domain %s can set static_domain only with type worker_default", d.ID)
 			}
 			if d.Default {
 				return fmt.Errorf("Workers domain %s can set default only with type worker_default", d.ID)
 			}
-		default:
-			return fmt.Errorf("Workers domain %s requires type worker_default, worker_custom or application", d.ID)
 		}
 		for _, host := range d.ReservedHosts {
 			if host != strings.ToLower(host) || !dns.MatchString(host) || !strings.HasSuffix(host, "."+d.Domain) {
@@ -131,10 +142,14 @@ func (c *WorkersConfig) ValidateCatalog(dns *regexp.Regexp) error {
 			}
 		}
 	}
-	if len(c.Domains) == 1 && !c.Domains[0].Default {
+	if len(c.Domains) == 1 && c.Domains[0].Allows(WorkerDomainDefault) {
 		c.Domains[0].Default = true
 	}
 	return nil
+}
+
+func (d WorkerDomain) Allows(kind WorkerDomainType) bool {
+	return slices.Contains(d.Types, kind)
 }
 
 // gateway returns the configured Gateway instance by id.
@@ -184,7 +199,7 @@ func (c *WorkersConfig) DefaultDomains() []string {
 	}
 	fallback := ""
 	for _, d := range c.Domains {
-		if d.Type != WorkerDomainDefault {
+		if !d.Allows(WorkerDomainDefault) {
 			continue
 		}
 		if fallback == "" {
@@ -274,7 +289,7 @@ func WorkerVariablesValid(vars map[string]any) bool {
 
 func (c *WorkersConfig) ManagedHostReserved(host string) bool {
 	label, _, _ := strings.Cut(host, ".")
-	if strings.HasPrefix(label, "xn--") {
+	if strings.HasPrefix(label, "xn--") || strings.HasPrefix(label, "w-") {
 		return true
 	}
 	for _, suffix := range c.Domains {

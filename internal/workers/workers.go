@@ -332,7 +332,7 @@ func (s *Service) SyncEnvironmentHosts(env *domain.WorkerEnvironment, organizati
 	env.Hosts = make([]string, 0, len(selected))
 	env.DisplayHosts = map[string]string{}
 	for _, d := range c.Domains {
-		if d.Type != appconfig.WorkerDomainDefault || !selected[d.ID] {
+		if !d.Allows(appconfig.WorkerDomainDefault) || !selected[d.ID] {
 			continue
 		}
 		host := appconfig.HostFor(slug, env.Name, d.Domain)
@@ -397,11 +397,11 @@ type WorkerSummary struct {
 // omits access classes, selectors, Gateway and pool identifiers: organization
 // users only see domains made available by their selected network profile.
 type WorkerDomainView struct {
-	Type    appconfig.WorkerDomainType `json:"type"`
-	ID      string                     `json:"id"`
-	Domain  string                     `json:"domain"`
-	Label   string                     `json:"label"`
-	Default bool                       `json:"default"`
+	Types   []appconfig.WorkerDomainType `json:"types"`
+	ID      string                       `json:"id"`
+	Domain  string                       `json:"domain"`
+	Label   string                       `json:"label"`
+	Default bool                         `json:"default"`
 }
 
 type WorkerNetworkProfileView struct {
@@ -435,7 +435,7 @@ func (s *Service) WorkerNetworkProfiles(ctx context.Context, st *domain.State, p
 func (s *Service) DomainCatalog() []WorkerDomainView {
 	out := make([]WorkerDomainView, 0, len(s.Config.Workers.Domains))
 	for _, d := range s.Config.Workers.Domains {
-		out = append(out, WorkerDomainView{Type: d.Type, ID: d.ID, Domain: d.Domain, Label: d.Label, Default: d.Default})
+		out = append(out, WorkerDomainView{Types: d.Types, ID: d.ID, Domain: d.Domain, Label: d.Label, Default: d.Default})
 	}
 	return out
 }

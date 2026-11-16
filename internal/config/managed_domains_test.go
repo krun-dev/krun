@@ -16,13 +16,13 @@ func TestManagedSuffixLoadsThroughMainConfig(t *testing.T) {
 	}
 	const typedSuffixes = `
     - id: custom
-      type: worker_custom
+      types: [worker_custom]
       domain: custom.example.com
       access: public
       labels: {exposure: external}
       gateway: external
     - id: apps
-      type: application
+      types: [application]
       domain: apps.example.com
       access: public
       labels: {exposure: external}
@@ -43,7 +43,11 @@ func TestManagedSuffixLoadsThroughMainConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Workers.Domains[1].Type != WorkerDomainCustom || cfg.Workers.Domains[2].Type != WorkerDomainApplication || !cfg.Workers.ManagedHostReserved("reserved.apps.example.com") {
+	shared := cfg.Workers.Domains[0]
+	if !shared.Allows(WorkerDomainDefault) || !shared.Allows(WorkerDomainCustom) || !cfg.Workers.ManagedHostReserved("w-reserved."+shared.Domain) {
+		t.Fatal("shared suffix is missing either use or the generated prefix reservation")
+	}
+	if !cfg.Workers.Domains[1].Allows(WorkerDomainCustom) || !cfg.Workers.Domains[2].Allows(WorkerDomainApplication) || !cfg.Workers.ManagedHostReserved("reserved.apps.example.com") {
 		t.Fatal("managed suffix or reserved hostname was not applied")
 	}
 
@@ -52,9 +56,18 @@ func TestManagedSuffixLoadsThroughMainConfig(t *testing.T) {
 		t.Fatalf("reserved host outside its suffix: %v", err)
 	}
 
-	write(strings.Replace(base, "      type: worker_default\n", "", 1))
-	if _, err = LoadConfig(file); err == nil || !strings.Contains(err.Error(), "requires type") {
+	write(strings.Replace(base, "      types: [worker_default, worker_custom]\n", "", 1))
+	if _, err = LoadConfig(file); err == nil || !strings.Contains(err.Error(), "requires at least one type") {
 		t.Fatalf("untyped suffix accepted: %v", err)
+	}
+	for _, tc := range []struct{ types, message string }{
+		{"[worker_default, worker_default]", "duplicate type"},
+		{"[worker_default, other]", "unknown type"},
+	} {
+		write(strings.Replace(base, "[worker_default, worker_custom]", tc.types, 1))
+		if _, err = LoadConfig(file); err == nil || !strings.Contains(err.Error(), tc.message) {
+			t.Fatalf("invalid types %s: %v", tc.types, err)
+		}
 	}
 	write(strings.Replace(base, "domain: apps.example.com", "domain: apps.workers.example.com", 1))
 	if _, err = LoadConfig(file); err == nil || !strings.Contains(err.Error(), "overlap") {

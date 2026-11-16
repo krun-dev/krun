@@ -3,12 +3,14 @@ title: 应用域名与 Worker 自定义域名
 description: 在 Worker 上绑定整域，或通过应用域名把路径分给多个 Worker、静态站点和 HTTP 服务。
 ---
 
-平台为每个后缀指定一种用途，申请时可选择对应后缀并填写一层前缀。平台负责通配 DNS 和 TLS。
+平台可以为同一个后缀开通多种用途，并负责通配 DNS 和 TLS。申请时可选择已开放的后缀并填写一层前缀。
+例如，Worker 的默认地址和 `orders.workers.example.com` 可以共用 `workers.example.com`。
+每个完整主机名只对应一种用途，`w-` 开头的前缀由平台保留。
 
 | 后缀类型 | 示例 | 在哪里配置 |
 | --- | --- | --- |
 | `worker_default` | `w-<hash>-production.workers.example.com` | Worker → 路由与域名 → 默认域名后缀。平台为环境生成前缀 |
-| `worker_custom` | `orders.custom.example.com` | Worker → 路由与域名 → Worker 自定义域名。整域指向当前 Worker 的生产环境 |
+| `worker_custom` | `orders.workers.example.com` | Worker → 路由与域名 → Worker 自定义域名。整域指向当前 Worker 的生产环境 |
 | `application` | `shop.apps.example.com` | 组织 → 网络 → 应用域名。组织配置同域的路径和目标 |
 
 同一域名可以把 `/` 给静态站点、`/api` 给 Worker、`/legacy` 给 HTTP 服务，
@@ -126,14 +128,14 @@ krun domains set --org "$ORG_ID" --host "$HOST" --revision "$REVISION" --routes 
 ## Cloudflare API 与 Wrangler
 
 沿用 [Cloudflare Workers Routes](https://developers.cloudflare.com/api/resources/workers/subresources/routes/)
-与 [Custom Domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/) 的字段。`custom_domain: true` 用于整域绑定，匹配 `worker_custom` 后缀。普通 `routes`
+与 [Custom Domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/) 的字段。`custom_domain: true` 用于整域绑定，使用启用 `worker_custom` 的后缀。普通 `routes`
 用于应用域名路径，匹配 `application` 后缀。同一个 Worker 可同时声明两种绑定。
 在已有 `wrangler.jsonc` 中加入这些字段，并将示例后缀换成平台开放的后缀。
 
 ```json
 {
   "routes": [
-    {"pattern": "orders.custom.example.com", "custom_domain": true},
+    {"pattern": "orders.workers.example.com", "custom_domain": true},
     {"pattern": "shop.apps.example.com/api/*", "zone_name": "apps.example.com"}
   ]
 }

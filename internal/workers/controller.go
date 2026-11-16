@@ -256,7 +256,7 @@ func (w *Controller) ReconcileRoutes(ctx context.Context) (map[string]bool, erro
 
 	desiredStatic := map[string]bool{}
 	for _, d := range w.Config.Domains {
-		if d.Type != appconfig.WorkerDomainDefault {
+		if !d.Allows(appconfig.WorkerDomainDefault) {
 			continue
 		}
 		desiredStatic["workers-static-"+d.ID] = true

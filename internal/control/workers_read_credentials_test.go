@@ -153,8 +153,8 @@ func TestPostgresPublicStaticGrantRequiresPublicRoute(t *testing.T) {
 	pool := &cfg.RuntimePools[0]
 	pool.Access = []string{"public", "private"}
 	cfg.Domains = append(cfg.Domains,
-		appconfig.WorkerDomain{Type: appconfig.WorkerDomainDefault, Domain: "public.example.test", Access: "public"},
-		appconfig.WorkerDomain{Type: appconfig.WorkerDomainDefault, Domain: "private.example.test", Access: "private"},
+		appconfig.WorkerDomain{Types: []appconfig.WorkerDomainType{appconfig.WorkerDomainDefault}, Domain: "public.example.test", Access: "public"},
+		appconfig.WorkerDomain{Types: []appconfig.WorkerDomainType{appconfig.WorkerDomainDefault}, Domain: "private.example.test", Access: "private"},
 	)
 	recorder := &readCredentialRecorder{}
 	server.workers = &workerapp.Controller{Config: cfg, ReadCredentials: recorder}

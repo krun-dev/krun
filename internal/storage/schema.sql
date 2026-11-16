@@ -629,6 +629,7 @@ CREATE TABLE IF NOT EXISTS krun_worker_hostnames (
 	host text PRIMARY KEY,
 	org_id text NOT NULL,
 	suffix_id text NOT NULL,
+	domain_type text NOT NULL CHECK (domain_type IN ('worker_custom', 'application')),
 	revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
 	retired boolean NOT NULL DEFAULT false,
 	gateway_managed boolean NOT NULL DEFAULT false

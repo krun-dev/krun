@@ -36,7 +36,7 @@ func TestPostgresDeploymentCommitPublishesPinnedRouteAndProtectsVersion(t *testi
 	if err := store.Update(ctx, PartitionWorkers, func(*State) error { return nil }); err != nil {
 		t.Fatalf("unchanged deployment lost instant equality: %v", err)
 	}
-	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Type: appconfig.WorkerDomainDefault, Domain: "workers.test"}})
+	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Types: []appconfig.WorkerDomainType{appconfig.WorkerDomainDefault}, Domain: "workers.test"}})
 	projection, err := workerapp.LoadWorkerConfigProjection(ctx, store, []string{version.Worker}, config)
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +106,7 @@ func TestPostgresGradualDeploymentQueueAndProjection(t *testing.T) {
 	if committed, err := store.CommitOperation(ctx, claim); err != nil || !committed {
 		t.Fatalf("commit = %v, %v", committed, err)
 	}
-	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Type: appconfig.WorkerDomainDefault, Domain: "workers.test"}})
+	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Types: []appconfig.WorkerDomainType{appconfig.WorkerDomainDefault}, Domain: "workers.test"}})
 	projection, err := workerapp.LoadWorkerConfigProjection(ctx, store, []string{worker}, config)
 	if err != nil || len(projection.Routes) != 1 || projection.Routes[0].CandidateWeight != 125 {
 		t.Fatalf("wrong split route: %+v %v", projection.Routes, err)

@@ -113,6 +113,10 @@ func (s *Server) cfCustomDomains(st *domain.State, p authorization.Principal, r 
 	query := r.URL.Query()
 	list := []cfDomainRecord{}
 	for _, item := range items {
+		suffix, ok := s.Config.Workers.Domain(item.SuffixID)
+		if !ok || !suffix.Allows(appconfig.WorkerDomainCustom) || item.Type != string(appconfig.WorkerDomainCustom) {
+			continue
+		}
 		for i, rule := range item.Routes {
 			if !rule.CustomDomain || rule.WorkerLocator == "" {
 				continue
@@ -198,6 +202,10 @@ func (s *Server) replaceScriptCustomDomains(st *domain.State, p authorization.Pr
 	removed := []cfDomainRecord{}
 	existing := map[string]cfDomainRecord{}
 	for _, item := range items {
+		suffix, ok := s.Config.Workers.Domain(item.SuffixID)
+		if !ok || !suffix.Allows(appconfig.WorkerDomainCustom) || item.Type != string(appconfig.WorkerDomainCustom) {
+			continue
+		}
 		for _, rule := range item.Routes {
 			if rule.CustomDomain {
 				existing[item.Host] = s.domainRecord(item, rule)
@@ -225,7 +233,7 @@ func (s *Server) replaceScriptCustomDomains(st *domain.State, p authorization.Pr
 	if dry || replaceScope {
 		for _, item := range items {
 			suffix, ok := s.Config.Workers.Domain(item.SuffixID)
-			if seen[item.Host] || !ok || suffix.Type != appconfig.WorkerDomainCustom {
+			if seen[item.Host] || !ok || !suffix.Allows(appconfig.WorkerDomainCustom) || item.Type != string(appconfig.WorkerDomainCustom) {
 				continue
 			}
 			for i, rule := range item.Routes {

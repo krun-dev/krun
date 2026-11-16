@@ -339,6 +339,7 @@ type Hostname struct {
 	Host           string `bun:"host,pk"`
 	OrgID          string `bun:"org_id"`
 	SuffixID       string `bun:"suffix_id"`
+	DomainType     string `bun:"domain_type"`
 	Revision       int    `bun:"revision"`
 	Retired        bool   `bun:"retired"`
 	GatewayManaged bool   `bun:"gateway_managed"`

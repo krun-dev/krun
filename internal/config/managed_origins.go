@@ -45,7 +45,7 @@ func (c *WorkersConfig) validateManagedOrigins() error {
 		}
 		for _, id := range origin.Suffixes {
 			suffix, ok := c.Domain(id)
-			if !ok || suffix.Type != WorkerDomainApplication {
+			if !ok || !suffix.Allows(WorkerDomainApplication) {
 				return fmt.Errorf("managed origin %s requires an application suffix: %s", origin.Host, id)
 			}
 		}

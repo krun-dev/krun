@@ -32,8 +32,8 @@ func (s *Service) typedHostnames(items []domain.ManagedHostname, types ...appcon
 	out := []domain.ManagedHostname{}
 	for _, item := range items {
 		suffix, ok := s.Config.Workers.Domain(item.SuffixID)
-		if ok && slices.Contains(types, suffix.Type) {
-			item.Type = string(suffix.Type)
+		kind := appconfig.WorkerDomainType(item.Type)
+		if ok && suffix.Allows(kind) && slices.Contains(types, kind) {
 			out = append(out, item)
 		}
 	}
@@ -54,7 +54,7 @@ func (s *Service) ManagedHostnameCatalog(ctx context.Context, st *domain.State, 
 	}
 	suffixes := []WorkerDomainView{}
 	for _, item := range s.DomainCatalog() {
-		if item.Type == appconfig.WorkerDomainApplication {
+		if slices.Contains(item.Types, appconfig.WorkerDomainApplication) {
 			suffixes = append(suffixes, item)
 		}
 	}
@@ -105,7 +105,7 @@ func (s *Service) WorkerManagedHostnames(ctx context.Context, st *domain.State, 
 	customSuffixes := []WorkerDomainView{}
 	profile := s.WorkerView(st, target).NetworkProfile
 	for _, suffix := range s.DomainCatalog() {
-		if suffix.Type == appconfig.WorkerDomainCustom && s.Config.Workers.ManagedDomainAllowsWorker(suffix.ID, profile) {
+		if slices.Contains(suffix.Types, appconfig.WorkerDomainCustom) && s.Config.Workers.ManagedDomainAllowsWorker(suffix.ID, profile) {
 			customSuffixes = append(customSuffixes, suffix)
 		}
 	}
@@ -202,7 +202,7 @@ func (s *Service) SaveWorkerCustomDomain(ctx context.Context, st *domain.State, 
 
 	existing, err := s.Store.ManagedHostname(ctx, org.ID, item.Host)
 	if err == nil {
-		if existing.SuffixID != item.SuffixID || len(existing.Routes) != 0 {
+		if existing.SuffixID != item.SuffixID || existing.Type != item.Type || len(existing.Routes) != 0 {
 			return nil, Read, domain.Conflict("HOSTNAME_UNAVAILABLE", "Hostname is unavailable")
 		}
 		item.Revision = existing.Revision
@@ -237,10 +237,9 @@ func (s *Service) managedHostnameForChange(ctx context.Context, org, host string
 			return item, domain.Conflict("REVISION_CONFLICT", "Hostname configuration changed")
 		}
 		suffix, ok := s.Config.Workers.Domain(item.SuffixID)
-		if !ok || suffix.Type != kind {
+		if !ok || !suffix.Allows(kind) || item.Type != string(kind) {
 			return domain.ManagedHostname{}, domain.NotFound()
 		}
-		item.Type = string(suffix.Type)
 		return item, nil
 	}
 
@@ -252,7 +251,7 @@ func (s *Service) managedHostnameForChange(ctx context.Context, org, host string
 
 func (s *Service) NewManagedHostname(org, suffixID, prefix string, kind appconfig.WorkerDomainType) (domain.ManagedHostname, error) {
 	suffix, ok := s.Config.Workers.Domain(suffixID)
-	if !ok || suffix.Type != kind || kind == appconfig.WorkerDomainDefault {
+	if !ok || !suffix.Allows(kind) || (kind != appconfig.WorkerDomainCustom && kind != appconfig.WorkerDomainApplication) {
 		return domain.ManagedHostname{}, domain.Invalid("HOSTNAME_INVALID", "Choose a suffix of type "+string(kind))
 	}
 	label := strings.ToLower(prefix)
@@ -264,7 +263,7 @@ func (s *Service) NewManagedHostname(org, suffixID, prefix string, kind appconfi
 	if s.Config.Workers.ManagedHostReserved(host) || (console != nil && strings.EqualFold(host, console.Hostname())) {
 		return domain.ManagedHostname{}, domain.Conflict("HOSTNAME_UNAVAILABLE", "Hostname is unavailable")
 	}
-	return domain.ManagedHostname{Host: host, Organization: org, SuffixID: suffix.ID, Type: string(suffix.Type)}, nil
+	return domain.ManagedHostname{Host: host, Organization: org, SuffixID: suffix.ID, Type: string(kind)}, nil
 }
 
 func (s *Service) ValidateManagedHostnameRoutes(ctx context.Context, st *domain.State, p authorization.Principal, org, suffixID string, in, previous []domain.ManagedHostnameRoute) ([]domain.ManagedHostnameRoute, error) {

@@ -114,7 +114,8 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 
 	for _, hostname := range st.Workers.ManagedHostnames {
 		suffix, ok := config.DomainForHost(hostname.Host)
-		if !ok || suffix.ID != hostname.SuffixID || suffix.Type == appconfig.WorkerDomainDefault || hostname.Retired || config.ManagedHostReserved(hostname.Host) {
+		kind := appconfig.WorkerDomainType(hostname.Type)
+		if !ok || suffix.ID != hostname.SuffixID || !suffix.Allows(kind) || (kind != appconfig.WorkerDomainCustom && kind != appconfig.WorkerDomainApplication) || hostname.Retired || config.ManagedHostReserved(hostname.Host) {
 			continue
 		}
 		pool, err := config.DomainRuntimePool(suffix.ID)
@@ -122,7 +123,7 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 			continue
 		}
 		for _, rule := range hostname.Routes {
-			if rule.Origin != "" || (suffix.Type == appconfig.WorkerDomainCustom && !rule.CustomDomain) {
+			if rule.Origin != "" || (rule.CustomDomain != (kind == appconfig.WorkerDomainCustom)) {
 				continue
 			}
 			target := managedTargets[rule.Worker]
@@ -208,7 +209,7 @@ func WorkerHostPatterns(ws domain.Worker, config *appconfig.WorkersConfig) []str
 	slug := appconfig.WorkerSlug(ws.Organization, ws.Worker)
 	out := []string{}
 	for _, d := range config.Domains {
-		if d.Type == appconfig.WorkerDomainDefault && selected[d.ID] {
+		if d.Allows(appconfig.WorkerDomainDefault) && selected[d.ID] {
 			out = append(out, slug+"\x00"+d.Domain)
 		}
 	}

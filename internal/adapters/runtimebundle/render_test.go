@@ -58,7 +58,7 @@ func TestRenderedServingAndValidatorStartInRealWorkerd(t *testing.T) {
 				},
 				Domains: []config.WorkerDomain{
 					{
-						Type: config.WorkerDomainDefault, StaticDomain: "static.example.com",
+						Types: []config.WorkerDomainType{config.WorkerDomainDefault}, StaticDomain: "static.example.com",
 						Access: "private",
 					},
 				},

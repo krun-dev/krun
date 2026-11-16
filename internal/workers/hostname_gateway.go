@@ -29,7 +29,7 @@ func (w *Controller) reconcileManagedHostnames(ctx context.Context, desired map[
 			continue
 		}
 		matched, ok := w.Config.DomainForHost(item.Host)
-		if !ok || matched.ID != suffix.ID || matched.Type != appconfig.WorkerDomainApplication || w.Config.ManagedHostReserved(item.Host) {
+		if !ok || matched.ID != suffix.ID || item.Type != string(appconfig.WorkerDomainApplication) || !matched.Allows(appconfig.WorkerDomainApplication) || w.Config.ManagedHostReserved(item.Host) {
 			continue
 		}
 		gateway, ok := w.Config.Gateway(suffix.Gateway)

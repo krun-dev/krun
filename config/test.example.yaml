@@ -49,7 +49,7 @@ workers:
       base: http://krun-public.kgateway-system.svc:80
   domains:
     - id: internal
-      type: worker_default
+      types: [worker_default]
       domain: ${KRUN_INTERNAL_WORKER_DOMAIN:-internal.workers.example.com}
       static_domain: ${KRUN_INTERNAL_STATIC_DOMAIN:-static.internal.workers.example.com}
       label: 内网
@@ -59,7 +59,7 @@ workers:
         exposure: internal
       default: true
     - id: office
-      type: worker_default
+      types: [worker_default]
       domain: ${KRUN_OFFICE_WORKER_DOMAIN:-office.workers.example.com}
       static_domain: ${KRUN_OFFICE_STATIC_DOMAIN:-static.office.workers.example.com}
       label: Office
@@ -69,7 +69,7 @@ workers:
         exposure: office
       default: false
     - id: public
-      type: worker_default
+      types: [worker_default]
       domain: ${KRUN_PUBLIC_WORKER_DOMAIN:-public.workers.example.com}
       static_domain: ${KRUN_PUBLIC_STATIC_DOMAIN:-static.public.workers.example.com}
       label: 公网
