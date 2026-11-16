@@ -262,7 +262,7 @@ func WorkerTerminal(v string) bool {
 }
 
 func WorkerOperationAction(kind string) string {
-	if kind == "secret" {
+	if kind == "secret" || kind == "version-url" {
 		return "worker.publish"
 	}
 	return "worker." + kind
@@ -287,9 +287,11 @@ func WorkerVariablesValid(vars map[string]any) bool {
 	return size <= 16<<10
 }
 
+var versionURLLabel = regexp.MustCompile(`^[a-f0-9]{8}-w-[a-f0-9]{16}$`)
+
 func (c *WorkersConfig) ManagedHostReserved(host string) bool {
 	label, _, _ := strings.Cut(host, ".")
-	if strings.HasPrefix(label, "xn--") || strings.HasPrefix(label, "w-") {
+	if strings.HasPrefix(label, "xn--") || strings.HasPrefix(label, "w-") || versionURLLabel.MatchString(label) {
 		return true
 	}
 	for _, suffix := range c.Domains {

@@ -12,12 +12,13 @@ type ManagedHostname struct {
 }
 
 type ManagedHostnameRoute struct {
-	Match         string `json:"match"`
-	Path          string `json:"path"`
-	Worker        string `json:"worker_id"`
-	WorkerLocator string `json:"worker_locator,omitempty"`
-	Origin        string `json:"origin,omitempty"`
-	CFPattern     string `json:"cf_pattern,omitempty"`
-	CustomDomain  bool   `json:"custom_domain,omitempty"`
-	Enabled       bool   `json:"enabled"`
+	Match           string `json:"match"`
+	Path            string `json:"path"`
+	Worker          string `json:"worker_id"`
+	WorkerLocator   string `json:"worker_locator,omitempty"`
+	Origin          string `json:"origin,omitempty"`
+	CFPattern       string `json:"cf_pattern,omitempty"`
+	PreviewsEnabled bool   `json:"previews_enabled,omitempty"`
+	CustomDomain    bool   `json:"custom_domain,omitempty"`
+	Enabled         bool   `json:"enabled"`
 }

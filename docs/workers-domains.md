@@ -7,7 +7,7 @@
 | `types` 中的值 | 示例后缀 | 用途 |
 | --- | --- | --- |
 | `worker_default` | `workers.example.com` | 平台为 Worker 环境生成前缀。启用此类型后可以设置 `default` 或 `static_domain` |
-| `worker_custom` | `workers.example.com` | 用户填写前缀，在 Worker 详情绑定整域，目标为当前 Worker 的生产环境 |
+| `worker_custom` | `workers.example.com` | 用户填写前缀，在 Worker 详情绑定整域，默认开放当前 Worker 的生产和 Preview |
 | `application` | `apps.example.com` | 组织申请域名并配置路径，目标可以是同组织的 Worker 或平台登记的静态站点、HTTP 服务 |
 
 例如，`types: [worker_default, worker_custom]` 允许同一个后缀同时提供
@@ -23,9 +23,14 @@ Profile 和运行池。
 
 Worker 的环境默认地址格式为 `w-<worker-hash>-<environment>.<domain-suffix>`。
 主机名由组织、Worker ID、环境和 Network Profile 允许的后缀共同推导。
-Cloudflare 兼容接口的 `workers_dev` 可关闭默认生产地址，`preview_urls` 可关闭部署版本的
-固定预览地址；显式创建的命名 Preview、Custom Domains、Workers Routes 和 Service Bindings
-独立工作。控制台的默认生产地址调用随 `workers_dev` 关闭；可通过配置的生产路由访问。
+Cloudflare 兼容接口的 `workers_dev` 控制默认生产地址，`preview_urls` 控制默认后缀上的
+命名 Preview、部署固定地址和上传后的 Version URL。上传版本通过独立运行时校验后，
+Version URL 可访问该版本，生产部署保留原状。Version URL 自上传起保留 30 天。
+
+Custom Domain 默认开放命名地址 `<preview>.<custom-domain>` 和固定部署地址。
+Wrangler 可用 `previews_enabled: false` 关闭预览，或用 `enabled: false` 只开放 Preview。控制面将 `*.<custom-domain>` 作为 HTTPRoute 绑定到该后缀的
+Gateway。DNS 与 TLS 由部署侧提供，单层证书 `*.<domain-suffix>` 只覆盖生产自定义域名。
+应用域名的生产路由继续使用配置的目标；整站 staging 需要在独立主机名配置自己的路径和各目标。
 
 部署侧需配置 `*.<domain-suffix>` 的 DNS 和 TLS，保留完整 Host；如果从展示域改写到测试域，
 只替换后缀。不同访问边界使用不同 Gateway listener 和互不重叠的通配域名。

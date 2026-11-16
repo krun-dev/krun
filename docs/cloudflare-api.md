@@ -63,7 +63,7 @@ Runtime 配置分发和保留期。浏览器会话需要原有 CSRF 校验；CLI
 | `POST/GET .../scripts/{script}/deployments`、`GET .../deployments/{id}` | 单版本 100% 或双版本百分比分流，查询实际版本权重和说明 |
 | `GET/PUT .../scripts/{script}/secrets`、`DELETE .../secrets/{name}` | Secret 元数据、修改及删除 |
 | `PATCH .../scripts/{script}/secrets-bulk` | 有界 Secret 批量修改 |
-| `GET/POST .../scripts/{script}/subdomain` | 读取和切换默认生产、固定预览地址 |
+| `GET/POST .../scripts/{script}/subdomain` | 读取和切换默认生产、平台后缀 Preview 地址 |
 | `GET /zones`、`GET /zones/{zone}` | 发现平台已开放的域名后缀 |
 | `GET/POST /zones/{zone}/workers/routes`、`GET/PUT/DELETE .../routes/{id}` | Workers Routes 的查询、创建、替换和删除 |
 | `GET/PUT .../scripts/{script}/routes` | Wrangler 使用的脚本路由批量查询和替换 |
@@ -113,7 +113,11 @@ Service Worker 格式仍超出兼容范围。资产路由支持 `run_worker_firs
 同名域名不能跨组织占用。普通 Routes 支持精确 Host、精确路径及尾部 `/*`，后者按完整路径段匹配，
 例如 `/api/*` 也匹配 `/api`。查询串不会参与精确匹配。普通 Routes 使用平台的
 启用 `application` 的后缀。Custom Domains 使用启用 `worker_custom` 的后缀，把整域绑定到一个
-生产 Worker。默认地址使用启用 `worker_default` 的后缀，由 `workers_dev` 控制。
+生产 Worker。krun 默认开启 Custom Domain 的 Preview，并兼容显式的 `previews_enabled: false`
+和 `enabled: false`。
+`workers_dev` 控制默认生产地址，`preview_urls` 控制平台后缀上的 Preview 地址。
+Version URL 在 `wrangler versions upload` 的版本校验完成后生成，且不会改变生产发布。
+上传时指定 Version URL 别名会返回 HTTP 422 `UNSUPPORTED_METADATA`，去掉 `--preview-alias` 后可使用固定版本地址。
 平台可以为同一个后缀启用多种用途，每个完整主机名只能用于一种。Wrangler 字段沿用 Cloudflare 格式。
 Wrangler 的路由配置和示例见
 [域名使用指南](../user-docs/src/content/docs/guides/workers-hostnames.md)。

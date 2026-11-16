@@ -1233,6 +1233,7 @@ function WorkerDetail({
             <WorkerHostnameBindings
               base={base}
               catalogHref={domainCatalogHref}
+              reload={reload}
             />
             <WorkerDomains
               base={base}

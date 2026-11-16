@@ -16,6 +16,7 @@ import (
 	objectstore "github.com/krun-dev/krun/internal/adapters/objectstore"
 	appconfig "github.com/krun-dev/krun/internal/config"
 	domain "github.com/krun-dev/krun/internal/domain"
+	"github.com/krun-dev/krun/internal/storage"
 )
 
 type EdgeConfigSnapshot struct {
@@ -86,7 +87,7 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 			if name == appconfig.WorkerBaseline {
 				managedTargets[id] = systemRoute
 			}
-			if (name != appconfig.WorkerBaseline || !ws.WorkersDevDisabled) &&
+			if ((name == appconfig.WorkerBaseline && !ws.WorkersDevDisabled) || (name != appconfig.WorkerBaseline && !ws.PreviewURLsDisabled)) &&
 				(st.Workers.ProjectionWorkers == nil || slices.Contains(st.Workers.ProjectionWorkers, id)) {
 				for _, host := range hosts {
 					if expanded := EnvHostName(host, name); expanded != "" {
@@ -112,6 +113,7 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 		}
 	}
 
+	previewDomains := map[string][]customPreviewDomain{}
 	for _, hostname := range st.Workers.ManagedHostnames {
 		suffix, ok := config.DomainForHost(hostname.Host)
 		kind := appconfig.WorkerDomainType(hostname.Type)
@@ -133,12 +135,37 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 				// not start handling this path just because a Worker was deleted.
 				target = domain.EdgeConfigRoute{Worker: rule.Worker, Pool: pool.ID}
 			}
+			if rule.PreviewsEnabled && target.Environment == appconfig.WorkerBaseline {
+				previewDomains[rule.Worker] = append(previewDomains[rule.Worker], customPreviewDomain{hostname.Host, suffix.Access == "public"})
+			}
+			if rule.CustomDomain && rule.PreviewsEnabled && !rule.Enabled {
+				continue
+			}
 			target.Host = hostname.Host
 			target.Public = suffix.Access == "public"
 			target.Match = rule.Match
 			target.Path = rule.Path
 			target.Enabled = target.Enabled && rule.Enabled
 			out.Routes = append(out.Routes, target)
+		}
+	}
+
+	for id, domains := range previewDomains {
+		worker := st.Workers.Workers[id]
+		base := managedTargets[id]
+		for name, env := range worker.Environments {
+			for _, binding := range domains {
+				host := customPreviewHost(binding.host, name, "")
+				if host == "" {
+					continue
+				}
+				out.Routes = append(out.Routes, domain.EdgeConfigRoute{
+					WorkerGradualRelease: env.WorkerGradualRelease,
+					Worker:               id, Host: host, Path: "/", Enabled: env.Enabled, Version: env.Version,
+					Pool: base.Pool, Environment: name, ScriptName: base.ScriptName, Public: binding.public,
+					Retained: env.RetainedAssets,
+				})
+			}
 		}
 	}
 
@@ -168,13 +195,39 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 		for _, host := range DeploymentHosts(config, worker, deployment.ID) {
 			out.Routes = append(out.Routes, domain.EdgeConfigRoute{Worker: worker.Worker, Host: host, Path: "/", Expires: &deployment.Expires, Enabled: env.Enabled, Version: version.ID, Pool: placement.Pool})
 		}
+		for _, binding := range previewDomains[worker.Worker] {
+			if host := customPreviewHost(binding.host, deployment.Environment, deployment.ID); host != "" {
+				out.Routes = append(out.Routes, domain.EdgeConfigRoute{Worker: worker.Worker, Host: host, Path: "/", Expires: &deployment.Expires, Enabled: env.Enabled, Version: version.ID, Pool: placement.Pool, Public: binding.public})
+			}
+		}
 		out.Versions[version.ID] = runtimeVersionDescriptor(version)
 	}
+	now := time.Now()
+	for _, version := range st.Workers.Versions {
+		if st.Workers.ProjectionWorkers != nil && !slices.Contains(st.Workers.ProjectionWorkers, version.Worker) {
+			continue
+		}
+		worker, ok := st.Workers.Workers[version.Worker]
+		if !ok || version.Organization != worker.Organization || !worker.Environments[version.Environment].Enabled {
+			continue
+		}
+		target, active := managedTargets[worker.Worker]
+		if !active {
+			continue
+		}
+		for _, host := range VersionURLHosts(config, worker, version, now) {
+			expires := version.Created.Add(storage.WorkerArtifactRetain)
+			out.Routes = append(out.Routes, domain.EdgeConfigRoute{Worker: worker.Worker, Host: host, Path: "/", Expires: &expires, Enabled: true, Version: version.ID, Pool: target.Pool, Public: publicWorkerHost(config, host)})
+			out.Versions[version.ID] = runtimeVersionDescriptor(version)
+		}
+	}
+
 	sort.Slice(out.Routes, func(i, j int) bool { return edgeRouteLess(out.Routes[i], out.Routes[j]) })
 	return out
 }
 
 func runtimeVersionDescriptor(version domain.WorkerVersion) domain.WorkerVersion {
+	version.VersionURL = false
 	version.ServiceBindings = maps.Clone(version.ServiceBindings)
 	for name, binding := range version.ServiceBindings {
 		binding.GrantedBy = nil

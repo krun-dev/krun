@@ -25,6 +25,7 @@ func preUploadDatabase(t *testing.T) (string, *pgxpool.Pool) {
 
 	if _, err := store.pool.Exec(ctx, `
 		DROP TABLE krun_worker_hostname_routes, krun_worker_hostnames;
+		ALTER TABLE krun_worker_versions DROP COLUMN version_url CASCADE;
 		ALTER TABLE worker_config_routes DROP CONSTRAINT worker_config_routes_pkey,
 			DROP COLUMN route_key, DROP COLUMN match_type, ADD PRIMARY KEY(host);
 		ALTER TABLE worker_config_ops DROP COLUMN route_key;
@@ -244,7 +245,8 @@ func TestPostgresSchemaUpgradePreservesManagedWorkerRoutes(t *testing.T) {
 	if _, err = store.pool.Exec(ctx, `
 		ALTER TABLE krun_workers DROP COLUMN workers_dev_disabled, DROP COLUMN preview_urls_disabled;
 		ALTER TABLE krun_worker_hostnames DROP COLUMN gateway_managed, DROP COLUMN domain_type;
-		ALTER TABLE krun_worker_hostname_routes DROP COLUMN origin, DROP COLUMN cf_pattern, DROP COLUMN custom_domain;
+		ALTER TABLE krun_worker_versions DROP COLUMN version_url CASCADE;
+		ALTER TABLE krun_worker_hostname_routes DROP COLUMN origin, DROP COLUMN cf_pattern, DROP COLUMN custom_domain CASCADE, DROP COLUMN previews_enabled;
 		INSERT INTO krun_workers(worker_id,org_id) VALUES ('old-worker','old-org');
 		INSERT INTO krun_worker_hostnames(host,org_id,suffix_id,revision)
 			VALUES ('shop.workers.example.com','old-org','public',5);
@@ -283,6 +285,8 @@ func TestPostgresSchemaUpgradeRecordsManagedHostnameTypes(t *testing.T) {
 	defer store.Close()
 	if _, err = store.pool.Exec(ctx, `
 		ALTER TABLE krun_worker_hostnames DROP COLUMN domain_type;
+		ALTER TABLE krun_worker_hostname_routes DROP COLUMN previews_enabled;
+		ALTER TABLE krun_worker_versions DROP COLUMN version_url CASCADE;
 		INSERT INTO krun_worker_hostnames(host,org_id,suffix_id,gateway_managed)
 			VALUES ('custom.workers.example.com','old-org','public',false),
 			       ('mixed.workers.example.com','old-org','public',true),
@@ -298,6 +302,10 @@ func TestPostgresSchemaUpgradeRecordsManagedHostnameTypes(t *testing.T) {
 	if applied, err := MigrateSchema(ctx, schema.DSN); !applied || err != nil {
 		t.Fatalf("upgrade from shared hostnames: applied=%t err=%v", applied, err)
 	}
+	var dirty bool
+	if err := store.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM worker_config_dirty WHERE worker_id='old-worker')`).Scan(&dirty); err != nil || !dirty {
+		t.Fatalf("upgraded custom Preview was not queued for publication: dirty=%t err=%v", dirty, err)
+	}
 	for _, tc := range []struct {
 		label, kind string
 		routes      int
@@ -312,7 +320,7 @@ func TestPostgresSchemaUpgradeRecordsManagedHostnameTypes(t *testing.T) {
 			t.Fatalf("%s: unexpected hostname %+v (%v)", tc.label, item, err)
 		}
 		for _, route := range item.Routes {
-			if route.CustomDomain != tc.custom {
+			if route.CustomDomain != tc.custom || route.PreviewsEnabled != tc.custom {
 				t.Fatalf("%s: unexpected route %+v", tc.label, route)
 			}
 		}

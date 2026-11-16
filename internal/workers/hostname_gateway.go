@@ -19,22 +19,39 @@ func (w *Controller) reconcileManagedHostnames(ctx context.Context, desired map[
 	if err != nil || len(items) == 0 {
 		return err
 	}
-	if err = w.Kube.EnsureHostnameResponses(ctx); err != nil {
-		return err
-	}
 	var failures []error
+	responsesReady := false
 	for _, item := range items {
 		suffix, ok := w.Config.Domain(item.SuffixID)
 		if !ok {
 			continue
 		}
 		matched, ok := w.Config.DomainForHost(item.Host)
-		if !ok || matched.ID != suffix.ID || item.Type != string(appconfig.WorkerDomainApplication) || !matched.Allows(appconfig.WorkerDomainApplication) || w.Config.ManagedHostReserved(item.Host) {
+		if !ok || matched.ID != suffix.ID || !matched.Allows(appconfig.WorkerDomainType(item.Type)) || w.Config.ManagedHostReserved(item.Host) {
 			continue
 		}
 		gateway, ok := w.Config.Gateway(suffix.Gateway)
 		if !ok {
 			continue
+		}
+		if item.Type == string(appconfig.WorkerDomainCustom) {
+			pool, err := w.Config.DomainRuntimePool(suffix.ID)
+			if err != nil {
+				failures = append(failures, err)
+				continue
+			}
+			name := "workers-preview-" + securetoken.Digest(item.Host)[:24]
+			desired[name] = true
+			if _, err = w.Kube.EnsureRoute(ctx, name, pool.RuntimeService, gateway, []string{"*." + item.Host}); err != nil {
+				failures = append(failures, fmt.Errorf("preview hostname %s: %w", item.Host, err))
+			}
+			continue
+		}
+		if !responsesReady {
+			if err = w.Kube.EnsureHostnameResponses(ctx); err != nil {
+				return err
+			}
+			responsesReady = true
 		}
 		name := "workers-hostname-" + securetoken.Digest(item.Host)[:24]
 		desired[name] = true

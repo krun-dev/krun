@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/krun-dev/krun/internal/domain"
@@ -147,15 +148,15 @@ func (s *Store) EdgeConfigState(ctx context.Context, ids []string) (*domain.Stat
 	rows, err = tx.Query(ctx, `SELECT rel.version_id, rel.org_id, rel.worker_id, rel.env_name,
 		rel.artifact_id, rel.profile, rel.archive_digest, rel.module_digest,
 		rel.compatibility_date, rel.compatibility_flags, rel.config_revision,
-		rel.variables, rel.secret_digest, rel.created_at, rel.version_metadata, rel.assets_binding, rel.tag, rel.message, rel.created_by, rel.created_by_name, rel.configuration_id, rel.hyperdrive_bindings, rel.service_bindings
+		rel.variables, rel.secret_digest, rel.created_at, rel.version_metadata, rel.assets_binding, rel.tag, rel.message, rel.created_by, rel.created_by_name, rel.configuration_id, rel.hyperdrive_bindings, rel.service_bindings, rel.version_url
 		FROM krun_worker_versions rel
-		JOIN krun_worker_environments e ON (rel.version_id IN (e.version_id,e.candidate_version_id) OR EXISTS(SELECT 1 FROM krun_worker_retained_assets a WHERE a.worker_id=e.worker_id AND a.env_name=e.env_name AND a.version_id=rel.version_id AND a.expires_at>now()) OR EXISTS(SELECT 1 FROM krun_worker_deployments d WHERE d.candidate_version_id='' AND rel.version_id=d.version_id AND d.committed_at IS NOT NULL AND d.expires_at>now()))
+		JOIN krun_worker_environments e ON ((rel.version_url AND rel.created_at>$2 AND e.enabled) OR rel.version_id IN (e.version_id,e.candidate_version_id) OR EXISTS(SELECT 1 FROM krun_worker_retained_assets a WHERE a.worker_id=e.worker_id AND a.env_name=e.env_name AND a.version_id=rel.version_id AND a.expires_at>now()) OR EXISTS(SELECT 1 FROM krun_worker_deployments d WHERE d.candidate_version_id='' AND rel.version_id=d.version_id AND d.committed_at IS NOT NULL AND d.expires_at>now()))
 			AND e.worker_id=rel.worker_id AND e.env_name=rel.env_name
 		JOIN krun_workers s ON s.worker_id=e.worker_id AND s.org_id=rel.org_id
 		JOIN krun_resources r ON r.resource_id=s.worker_id AND r.kind='worker' AND r.org_id=s.org_id
 		JOIN krun_organizations o ON o.org_id=s.org_id
 		WHERE ($1::text[] IS NULL OR s.worker_id=ANY($1))
-		ORDER BY rel.version_id`, targetIDs)
+		ORDER BY rel.version_id`, targetIDs, time.Now().Add(-WorkerArtifactRetain))
 	if err != nil {
 		return nil, err
 	}

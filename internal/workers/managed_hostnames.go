@@ -219,6 +219,7 @@ func (s *Service) SaveWorkerCustomDomain(ctx context.Context, st *domain.State, 
 		return nil, Read, err
 	}
 	rules[0].CustomDomain = true
+	rules[0].PreviewsEnabled = true
 	item.Routes = rules
 	out, err := s.saveHostname(ctx, st, p, item, item.Revision, "workers.custom-domains.attach")
 	return out, Created, err
@@ -301,6 +302,7 @@ func (s *Service) ValidateManagedHostnameRoutes(ctx context.Context, st *domain.
 			rule.WorkerLocator = ""
 			rule.CFPattern = ""
 			rule.CustomDomain = false
+			rule.PreviewsEnabled = false
 			out = append(out, rule)
 			continue
 		}
@@ -308,6 +310,7 @@ func (s *Service) ValidateManagedHostnameRoutes(ctx context.Context, st *domain.
 		// that is still bound to the same Worker.
 		rule.CFPattern = ""
 		rule.CustomDomain = false
+		rule.PreviewsEnabled = false
 		for _, old := range previous {
 			if old.Match == rule.Match && old.Path == rule.Path && old.Worker == rule.Worker {
 				rule.CFPattern = old.CFPattern

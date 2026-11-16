@@ -156,6 +156,10 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 		return nil, Read, err
 	}
 	ws := s.WorkerView(st, t)
+	customDomains, err := s.CustomPreviewDomains(ctx, ws)
+	if err != nil {
+		return nil, Read, err
+	}
 
 	environments := []WorkerOverviewEnvironment{}
 	versionVisible := map[string]bool{}
@@ -169,6 +173,7 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 			continue
 		}
 		env := ws.Environments[name]
+		env.PreviewHosts = CustomPreviewHosts(customDomains, name, "")
 		entry := WorkerOverviewEnvironment{Environment: env, History: []domain.WorkerHistory{}}
 		versionVisible[name] = versions
 		if versions {
@@ -195,7 +200,7 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 
 	operations := []domain.WorkerOperation{}
 	for _, operation := range st.Workers.Operations {
-		if operation.Worker == t.ID && operation.Organization == t.Organization && versionVisible[operation.Environment] {
+		if operation.Kind != domain.WorkerVersionURLOperation && operation.Worker == t.ID && operation.Organization == t.Organization && versionVisible[operation.Environment] {
 			operations = append(operations, operation)
 		}
 	}
@@ -210,7 +215,7 @@ func (s *Service) WorkerOverview(ctx context.Context, st *domain.State, p author
 	versions := map[string]domain.WorkerVersion{}
 	for id, version := range st.Workers.Versions {
 		if version.Worker == t.ID && version.Organization == t.Organization && versionVisible[version.Environment] {
-			versions[id] = PublicWorkerVersion(version)
+			versions[id] = s.versionView(ws, version)
 		}
 	}
 	return map[string]any{
@@ -346,7 +351,7 @@ func (s *Service) SyncEnvironmentHosts(env *domain.WorkerEnvironment, organizati
 }
 
 func (s *Service) syncWorkerEnvironmentHosts(env *domain.WorkerEnvironment, worker domain.Worker) {
-	if env.Name == appconfig.WorkerBaseline && worker.WorkersDevDisabled {
+	if (env.Name == appconfig.WorkerBaseline && worker.WorkersDevDisabled) || (env.Name != appconfig.WorkerBaseline && worker.PreviewURLsDisabled) {
 		env.Domains = []string{}
 		env.Hosts = []string{}
 		env.DisplayHosts = map[string]string{}

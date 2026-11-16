@@ -125,16 +125,18 @@ func versionSnapshot(org, worker, environment string, artifact domain.WorkerArti
 	}
 }
 func (s *Service) WorkerVersionList(ctx context.Context, st *domain.State, p authorization.Principal, ref WorkerRef, options ...VersionPageOptions) (any, Outcome, error) {
-	if _, err := s.WorkerCollectionTarget(st, ref, "worker.version.read", p); err != nil {
+	target, err := s.WorkerCollectionTarget(st, ref, "worker.version.read", p)
+	if err != nil {
 		return nil, Read, err
 	}
+	worker := s.WorkerView(st, target)
 	out := []domain.WorkerVersion{}
 	for _, v := range st.Workers.Versions {
 		if v.Organization != ref.Organization || v.Worker != ref.Worker || ref.Environment != "" && v.Environment != ref.Environment {
 			continue
 		}
 		if _, err := s.WorkerTarget(st, ref, v.Environment, "worker.version.read", p); err == nil {
-			out = append(out, v)
+			out = append(out, s.versionView(worker, v))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

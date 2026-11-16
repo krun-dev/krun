@@ -162,14 +162,18 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
     const suffix = bindings.suffixes[0];
     const customLabel = "orders-" + Date.now();
     const customHost = customLabel + "." + suffix.domain;
+    await request(orgBase + "/workers/orders/environments", "POST", { name: "pr-123" });
     await page.getByRole("button", { name: "绑定自定义域名", exact: true }).click();
     await dialog.getByRole("textbox", { name: "域名前缀" }).fill(customLabel);
     await expect(dialog.getByRole("combobox", { name: "域名后缀" })).toHaveValue(suffix.id);
     await dialog.getByRole("button", { name: "绑定域名", exact: true }).click();
-    await expect(page.getByRole("link", { name: customHost })).toBeVisible();
+    await expect(page.getByRole("link", { name: customHost, exact: true })).toBeVisible();
+    const preview = page.getByRole("link", { name: "pr-123." + customHost, exact: true });
+    await expect(preview).toBeVisible();
+    await expect(page.getByText("生产和 Preview", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "解绑自定义域名", exact: true }).click();
     await dialog.getByRole("button", { name: "确认解绑" }).click();
-    await expect(page.getByRole("link", { name: customHost })).toHaveCount(0);
+    await expect(preview).toHaveCount(0);
   }
   await page.getByRole("link", { name: "管理应用域名" }).click();
   await expect(page).toHaveURL(/page=domains/);

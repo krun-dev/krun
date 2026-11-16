@@ -59,6 +59,7 @@ export type Environment = {
   domains: string[];
   /** One route host per selected domain, in the same order. */
   hosts: string[];
+  preview_hosts?: string[];
   configuration_revision: number;
   variables: Record<string, unknown>;
   version_metadata?: string;
@@ -92,6 +93,7 @@ export type WorkerRouting = {
   network_profile: WorkerNetworkProfile;
 };
 export type Version = {
+  preview_hosts?: string[];
   secret_names?: string[];
   configuration_id?: string;
   created_by?: string;

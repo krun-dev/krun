@@ -140,6 +140,23 @@ CREATE INDEX IF NOT EXISTS krun_worker_hostname_routes_worker ON krun_worker_hos
 			ALTER COLUMN domain_type DROP DEFAULT,
 			ADD CHECK (domain_type IN ('worker_custom', 'application'))`,
 	},
+
+	{
+		from: "7e29e1e830f0e70ccaa2fc3ced5e414d3e58c02f7a160820a40066a99586fabe",
+		to:   "82934894c84ba5a9ebef6ff99f2038684c8649d07d0bc79c30b27ea939d0f9a1",
+		sql: `ALTER TABLE krun_worker_hostname_routes
+			ADD COLUMN previews_enabled boolean NOT NULL DEFAULT false CHECK (NOT previews_enabled OR custom_domain);
+		UPDATE krun_worker_hostname_routes SET previews_enabled=true WHERE custom_domain AND enabled;
+		INSERT INTO worker_config_dirty(worker_id)
+			SELECT DISTINCT worker_id FROM krun_worker_hostname_routes WHERE previews_enabled
+			ON CONFLICT(worker_id) DO UPDATE SET generation=nextval('worker_dirty_seq');
+		ALTER TABLE krun_worker_versions ADD COLUMN version_url boolean NOT NULL DEFAULT false;
+		CREATE UNIQUE INDEX krun_worker_versions_url_prefix ON krun_worker_versions(worker_id,left(version_id,8)) WHERE version_url;
+		CREATE TRIGGER version_url_update_dirty AFTER UPDATE OF version_url ON krun_worker_versions
+			FOR EACH ROW WHEN (OLD.version_url IS DISTINCT FROM NEW.version_url) EXECUTE FUNCTION krun_mark_worker_config_dirty();
+		CREATE TRIGGER version_url_delete_dirty AFTER DELETE ON krun_worker_versions
+			FOR EACH ROW WHEN (OLD.version_url) EXECUTE FUNCTION krun_mark_worker_config_dirty()`,
+	},
 }
 
 // MigrateSchema upgrades an existing database while the control plane is

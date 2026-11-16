@@ -1,12 +1,13 @@
 package workers
 
 import (
+	"context"
 	"github.com/krun-dev/krun/internal/authorization"
 	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/domain"
 )
 
-func (s *Service) ResolveInvocation(st *domain.State, principal authorization.Principal, ref WorkerRef) (string, string, error) {
+func (s *Service) ResolveInvocation(ctx context.Context, st *domain.State, principal authorization.Principal, ref WorkerRef) (string, string, error) {
 	env := ref.Environment
 	if !appconfig.WorkerEnvValid(env) {
 		return "", "", domain.NotFound()
@@ -22,6 +23,20 @@ func (s *Service) ResolveInvocation(st *domain.State, principal authorization.Pr
 	}
 	if !current.Enabled || current.Version == "" {
 		return "", "", domain.Conflict("WORKER_NOT_PUBLISHED", "Publish this enabled environment first")
+	}
+	if env != appconfig.WorkerBaseline && worker.PreviewURLsDisabled {
+		domains, err := s.CustomPreviewDomains(ctx, s.NormalizeWorker(worker))
+		if err != nil {
+			return "", "", err
+		}
+		for _, domain := range domains {
+			if host := customPreviewHost(domain, env, ""); host != "" {
+				if suffix, ok := s.Config.Workers.DomainForHost(domain); ok {
+					return host, suffix.Gateway, nil
+				}
+			}
+		}
+		return "", "", domain.Conflict("WORKER_NOT_PUBLISHED", "Environment has no routable domain")
 	}
 	// Invoke through the first selected domain of the worker. The domain's
 	// Gateway decides which instance to address. Hosts are derived, not

@@ -10,7 +10,7 @@ description: 在 Worker 上绑定整域，或通过应用域名把路径分给�
 | 后缀类型 | 示例 | 在哪里配置 |
 | --- | --- | --- |
 | `worker_default` | `w-<hash>-production.workers.example.com` | Worker → 路由与域名 → 默认域名后缀。平台为环境生成前缀 |
-| `worker_custom` | `orders.workers.example.com` | Worker → 路由与域名 → Worker 自定义域名。整域指向当前 Worker 的生产环境 |
+| `worker_custom` | `orders.workers.example.com` | Worker → 路由与域名 → Worker 自定义域名。整域绑定当前 Worker，默认提供生产和 Preview |
 | `application` | `shop.apps.example.com` | 组织 → 网络 → 应用域名。组织配置同域的路径和目标 |
 
 同一域名可以把 `/` 给静态站点、`/api` 给 Worker、`/legacy` 给 HTTP 服务，
@@ -47,9 +47,14 @@ description: 在 Worker 上绑定整域，或通过应用域名把路径分给�
 
 要为一个 Worker 绑定整域，打开这个 Worker 的 **路由与域名**，在 **Worker 自定义域名** 点击
 **绑定自定义域名** ⑨，填写前缀、选择后缀 ⑩，然后点击 **绑定域名**。绑定后可在同一区域解绑。
-页内的「默认域名后缀」用于平台生成地址，绑定自定义域名时可以继续保留。
+绑定后默认提供生产和 Preview 地址 ⑪。命名 Preview `pr-123` 会获得
+`pr-123.orders.workers.example.com`。
+每次 Preview 部署也会显示一个固定的自定义地址。使用前让平台管理员为
+`*.orders.workers.example.com` 配置 DNS 和证书。
+应用域名的路径继续使用各自配置的服务。要长期验收整站，可为独立 staging Worker
+和测试站点配置一套显式路由，例如 `staging.apps.example.com/api/*`。
 
-[![⑨ Worker 自定义域名入口，⑩ 选择自定义域名后缀](/docs/screenshots/workers-hostnames/worker-custom-domain.png)](/docs/screenshots/workers-hostnames/worker-custom-domain.png)
+[![⑨ Worker 自定义域名入口，⑩ 选择后缀，⑪ 绑定后自动提供 Preview 地址](/docs/screenshots/workers-hostnames/worker-custom-domain.png)](/docs/screenshots/workers-hostnames/worker-custom-domain.png)
 
 ## krun CLI
 
@@ -74,7 +79,7 @@ statements:
 
 要绑定整域，先把 `ORG_ID` 设为组织 ID，`WORKER` 设为 Worker 短名或 ID。从 `list`
 的 `suffixes` 读取 Worker 自定义后缀 ID，设为 `CUSTOM_SUFFIX_ID`。绑定成功后，可从
-`items` 中读取该域名及最新 revision，设为 `CUSTOM_HOST`、`CUSTOM_REVISION` 后解绑。
+`items` 中读取域名和 revision，设为 `CUSTOM_HOST`、`CUSTOM_REVISION` 后解绑。
 
 ```sh
 krun workers custom-domains list --org "$ORG_ID" --worker "$WORKER"
@@ -159,14 +164,17 @@ npx wrangler@4.155.0 triggers deploy --config wrangler.jsonc
 - Zone 对应平台开放的后缀。兼容精确主机名及精确路径、末尾 `/*`；`/api/*` 按路径段
   匹配，也包含 `/api`。精确规则只比较路径。通配主机名、`/api*`、任意外部 Zone 和自带域名不在范围内。
   应用域名内，同一匹配方式和路径只能配置一个目标。两类后缀各自使用对应的 API。
-  Custom Domain 不为命名 Preview 自动生成更深一层的子域。
+  普通 Routes 始终匹配配置的 Worker。Custom Domain 默认打开 Preview，Wrangler 可显式设置
+  `previews_enabled: false` 关闭，或设置 `enabled: false` 只开放 Preview。
 - 静态站点与 HTTP 服务使用 [Origin Rules](https://developers.cloudflare.com/rules/origin-rules/create-api/)
   的 `http_request_origin` 入口 API，也可在控制台或 `krun domains` 中编辑。表达式仅支持
   精确 Host 加精确路径或路径段前缀；按路径优先级选一个目标。停用的规则返回 410。
   不执行通用 Ruleset，也不会把同一次请求自动串联转发给多个目标。
   非 Worker 目标的域名最多 16 条路由；无根前缀时最多 15 条。
-- `workers_dev` 控制默认生产地址，`preview_urls` 控制部署固定预览地址。
-  这两个字段不改变 Custom Domain、Workers Route 或显式创建的命名 Preview。
+- `workers_dev` 控制默认生产地址。显式设置 `preview_urls` 控制平台后缀上的命名 Preview、固定部署地址和 Version URL。
+  自定义域名上的 Preview 独立使用该域名的 `previews_enabled`。
+- 在平台后缀的 Preview 地址已开启时，`npx wrangler@4.155.0 versions upload --config wrangler.jsonc`
+  会在校验完成后返回 Version URL，可直接请求该版本，生产流量继续使用当前部署。平台保留该地址 30 天。
 
 ## 验证
 

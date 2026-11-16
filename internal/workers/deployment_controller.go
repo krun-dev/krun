@@ -51,6 +51,10 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 	if !committed {
 		return lost
 	}
+	if op.Kind == domain.WorkerVersionURLOperation {
+		_, err = w.PublishConfig(context.WithValue(ctx, storage.WorkerConfigPriorityKey{}, op.Worker))
+		return err
+	}
 	op.EdgeRevision = 0
 	return w.observeOperation(ctx, op, state, routesReady)
 }
@@ -236,6 +240,9 @@ func (w *Controller) validateOperation(ctx context.Context, op domain.WorkerOper
 	}
 	if auth != nil {
 		return fail("Version permission revoked")
+	}
+	if op.Kind == domain.WorkerVersionURLOperation {
+		return w.Service.Store.CommitVersionURL(ctx, claim)
 	}
 	retention := time.Duration(w.Config.GradualAssetRetentionSeconds) * time.Second
 	if retention == 0 {

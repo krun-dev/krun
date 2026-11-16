@@ -506,6 +506,7 @@ CREATE TABLE IF NOT EXISTS krun_worker_configuration_r2 (
 );
 
 CREATE TABLE IF NOT EXISTS krun_worker_versions (
+ version_url boolean NOT NULL DEFAULT false,
  service_bindings jsonb NOT NULL DEFAULT '{}'::jsonb,
  configuration_id text NOT NULL DEFAULT '',
  created_by text NOT NULL DEFAULT '',
@@ -530,6 +531,7 @@ CREATE TABLE IF NOT EXISTS krun_worker_versions (
 	secret_digest   text NOT NULL DEFAULT '',
 	created_at      timestamptz NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX IF NOT EXISTS krun_worker_versions_url_prefix ON krun_worker_versions(worker_id, left(version_id, 8)) WHERE version_url;
 CREATE INDEX IF NOT EXISTS krun_worker_versions_configuration ON krun_worker_versions(configuration_id) WHERE configuration_id<>'';
 CREATE INDEX IF NOT EXISTS krun_worker_versions_worker ON krun_worker_versions (worker_id, env_name, created_at DESC);
 
@@ -644,6 +646,7 @@ CREATE TABLE IF NOT EXISTS krun_worker_hostname_routes (
 	origin text NOT NULL DEFAULT '',
 	cf_pattern text NOT NULL DEFAULT '',
 	custom_domain boolean NOT NULL DEFAULT false,
+	previews_enabled boolean NOT NULL DEFAULT false CHECK (NOT previews_enabled OR custom_domain),
 	enabled boolean NOT NULL,
 	PRIMARY KEY (host, match_type, path),
 	CHECK ((worker_id = '') <> (origin = ''))
@@ -752,6 +755,10 @@ BEGIN
  END IF;
  RETURN NULL;
 END $$;
+CREATE OR REPLACE TRIGGER version_url_update_dirty AFTER UPDATE OF version_url ON krun_worker_versions
+ FOR EACH ROW WHEN (OLD.version_url IS DISTINCT FROM NEW.version_url) EXECUTE FUNCTION krun_mark_worker_config_dirty();
+CREATE OR REPLACE TRIGGER version_url_delete_dirty AFTER DELETE ON krun_worker_versions
+ FOR EACH ROW WHEN (OLD.version_url) EXECUTE FUNCTION krun_mark_worker_config_dirty();
 CREATE OR REPLACE TRIGGER workers_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_workers FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
 CREATE OR REPLACE TRIGGER worker_env_config_dirty AFTER INSERT OR DELETE OR UPDATE OF enabled,version_id,candidate_version_id,candidate_weight ON krun_worker_environments FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
 CREATE OR REPLACE TRIGGER worker_domains_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_domains FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();

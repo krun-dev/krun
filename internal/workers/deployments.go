@@ -53,6 +53,11 @@ func (s *Service) WorkerDeployments(ctx context.Context, st *domain.State, p aut
 	if _, err := s.WorkerCollectionTarget(st, ref, "worker.version.read", p); err != nil {
 		return nil, Read, err
 	}
+	worker := s.WorkerView(st, authorization.Target{ID: ref.Worker, Organization: ref.Organization})
+	customDomains, err := s.CustomPreviewDomains(ctx, worker)
+	if err != nil {
+		return nil, Read, err
+	}
 	out := []DeploymentView{}
 	for _, d := range st.Workers.Deployments {
 		if d.Organization != ref.Organization || d.Worker != ref.Worker || ref.Item != "" && ref.Item != d.ID || ref.Environment != "" && ref.Environment != d.Environment {
@@ -61,7 +66,6 @@ func (s *Service) WorkerDeployments(ctx context.Context, st *domain.State, p aut
 		if _, err := s.WorkerTarget(st, ref, d.Environment, "worker.version.read", p); err != nil {
 			continue
 		}
-		worker := s.WorkerView(st, authorization.Target{ID: ref.Worker, Organization: ref.Organization})
 		state := st.Workers.Operations[d.Operation].State
 		if state == "" {
 			state = "available"
@@ -69,6 +73,7 @@ func (s *Service) WorkerDeployments(ctx context.Context, st *domain.State, p aut
 		hosts := []string{}
 		if d.Committed != nil && d.Expires.After(time.Now()) && d.Candidate == "" {
 			hosts = DeploymentHosts(s.Config.Workers, worker, d.ID)
+			hosts = append(hosts, CustomPreviewHosts(customDomains, d.Environment, d.ID)...)
 		}
 		view := DeploymentView{WorkerDeployment: d, State: state, Hosts: hosts}
 		if ref.Item != "" {

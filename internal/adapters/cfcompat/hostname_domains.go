@@ -18,7 +18,7 @@ type cfDomainInput struct {
 	ZoneID          string `json:"zone_id,omitempty"`
 	ZoneName        string `json:"zone_name,omitempty"`
 	Enabled         *bool  `json:"enabled,omitempty"`
-	PreviewsEnabled bool   `json:"previews_enabled,omitempty"`
+	PreviewsEnabled *bool  `json:"previews_enabled,omitempty"`
 }
 
 type cfDomainRecord struct {
@@ -37,13 +37,13 @@ func (s *Server) domainRecord(item domain.ManagedHostname, rule domain.ManagedHo
 	return cfDomainRecord{
 		ID: securetoken.Digest("domain\x00" + item.Host)[:32], Hostname: item.Host,
 		Service: rule.WorkerLocator, Environment: "production",
-		ZoneID: zoneID(item.Organization, item.SuffixID), ZoneName: suffix.Domain, Enabled: rule.Enabled,
+		ZoneID: zoneID(item.Organization, item.SuffixID), ZoneName: suffix.Domain, Enabled: rule.Enabled, PreviewsEnabled: rule.PreviewsEnabled,
 	}
 }
 
 func (s *Server) addCustomDomain(changes *hostnameChanges, in cfDomainInput, override bool) (cfDomainRecord, error) {
-	if in.Service == "" || (in.Environment != "" && in.Environment != "production") || in.PreviewsEnabled {
-		return cfDomainRecord{}, domain.Invalid("HOSTNAME_TARGET_INVALID", "Custom Domains support a production Worker without preview URLs")
+	if in.Service == "" || (in.Environment != "" && in.Environment != "production") {
+		return cfDomainRecord{}, domain.Invalid("HOSTNAME_TARGET_INVALID", "Custom Domains require a production Worker")
 	}
 	org := changes.request.PathValue("org")
 	zone, err := s.routeZone(org, in.Hostname, in.ZoneID, in.ZoneName)
@@ -62,6 +62,7 @@ func (s *Server) addCustomDomain(changes *hostnameChanges, in cfDomainInput, ove
 	}
 	rule := rules[0]
 	rule.CustomDomain = true
+	rule.PreviewsEnabled = in.PreviewsEnabled == nil || *in.PreviewsEnabled
 	for i, old := range change.item.Routes {
 		if len(change.item.Routes) != 1 || old.Match != "prefix" || old.Path != "/" ||
 			!old.CustomDomain || (!override && old.Worker != rule.Worker) {
@@ -225,7 +226,7 @@ func (s *Server) replaceScriptCustomDomains(st *domain.State, p authorization.Pr
 		}
 		result = append(result, record)
 		if old, ok := existing[record.Hostname]; ok {
-			updated = append(updated, map[string]any{"id": old.ID, "hostname": old.Hostname, "modified": old != record, "previews_enabled": false})
+			updated = append(updated, map[string]any{"id": old.ID, "hostname": old.Hostname, "modified": old != record, "previews_enabled": record.PreviewsEnabled})
 		} else {
 			added = append(added, record)
 		}

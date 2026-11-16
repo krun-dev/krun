@@ -260,11 +260,11 @@ export function WorkerDomains({
                     </Badge>
                   ) : null}
                 </div>
-                {e.hosts.length === 0 ? (
+                {e.hosts.length === 0 && !e.preview_hosts?.length ? (
                   <p className="text-xs text-muted-foreground">{t("未绑定域名")}</p>
                 ) : (
                   <div className="grid gap-1.5">
-                    {e.hosts.map((host, i) => {
+                    {[...e.hosts, ...(e.preview_hosts ?? [])].map((host, i) => {
                       const d = domains.find((x) => x.id === (e.domains || [])[i]);
                       return (
                         <div
@@ -275,7 +275,7 @@ export function WorkerDomains({
                             variant="secondary"
                             className="shrink-0 text-[10px]"
                           >
-                            {d?.label || t("域名")}
+                            {d?.label || (i >= e.hosts.length ? t("自定义 Preview") : t("域名"))}
                           </Badge>
                           <a
                             href={workerURL(host)}

@@ -22,6 +22,7 @@ type Route = {
   worker_locator?: string;
   origin?: string;
   custom_domain?: boolean;
+  previews_enabled?: boolean;
   enabled: boolean;
 };
 type Hostname = {
@@ -44,9 +45,11 @@ type Bindings = {
 export function WorkerHostnameBindings({
   base,
   catalogHref,
+  reload,
 }: {
   base: string;
   catalogHref: string;
+  reload: () => void;
 }) {
   const path = base + "/hostnames";
   const [data, setData] = useState<Bindings>();
@@ -138,6 +141,7 @@ export function WorkerHostnameBindings({
           saved={() => {
             setEditor(null);
             setRevision((value) => value + 1);
+            reload();
           }}
         />
       ) : null}
@@ -194,7 +198,7 @@ function WorkerCustomDomainDialog({
           <DialogDescription>
             {item
               ? t("解绑后，该域名将停止转发到此 Worker。")
-              : t("该域名的所有路径均指向此 Worker 的生产环境。")}
+              : t("绑定后自动提供生产和 Preview 地址。")}
           </DialogDescription>
         </DialogHeader>
         <form
@@ -250,14 +254,18 @@ function HostnameCard({ item, edit }: { item: Hostname; edit?: () => void }) {
   return (
     <div className="rounded-lg border p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <a
-          className="break-all font-mono text-sm font-medium hover:underline"
-          href={"https://" + item.host}
-          target="_blank"
-          rel="noreferrer"
-        >
-          {item.host}
-        </a>
+        {item.routes[0]?.previews_enabled && !item.routes[0].enabled ? (
+          <code className="break-all text-sm font-medium">{item.host}</code>
+        ) : (
+          <a
+            className="break-all font-mono text-sm font-medium hover:underline"
+            href={"https://" + item.host}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {item.host}
+          </a>
+        )}
         {edit ? (
           <Button
             variant="outline"
@@ -269,8 +277,20 @@ function HostnameCard({ item, edit }: { item: Hostname; edit?: () => void }) {
         ) : null}
       </div>
       {item.type === "worker_custom" ? (
-        item.routes[0]?.enabled === false ? (
-          <Badge variant="secondary">{t("已停用")}</Badge>
+        item.routes[0]?.previews_enabled ? (
+          <Badge
+            variant="secondary"
+            className="mt-2"
+          >
+            {item.routes[0].enabled ? t("生产和 Preview") : t("仅 Preview")}
+          </Badge>
+        ) : item.routes[0]?.enabled === false ? (
+          <Badge
+            variant="secondary"
+            className="mt-2"
+          >
+            {t("已停用")}
+          </Badge>
         ) : null
       ) : item.routes.length > 0 ? (
         <ul className="mt-3 divide-y">

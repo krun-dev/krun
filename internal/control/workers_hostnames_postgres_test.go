@@ -198,7 +198,7 @@ func TestCLIManagedHostnameWorkflow(t *testing.T) {
 	attached := run("workers", "custom-domains", "attach", "--worker", "svc-a", "--suffix", customSuffix.ID, "--label", "cli")
 	var custom domain.ManagedHostname
 	if err := json.Unmarshal([]byte(attached), &custom); err != nil || custom.Type != string(appconfig.WorkerDomainCustom) ||
-		custom.Host != "cli."+customSuffix.Domain || len(custom.Routes) != 1 || !custom.Routes[0].CustomDomain {
+		custom.Host != "cli."+customSuffix.Domain || len(custom.Routes) != 1 || !custom.Routes[0].CustomDomain || !custom.Routes[0].PreviewsEnabled {
 		t.Fatalf("CLI custom domain result %q: %v", attached, err)
 	}
 	if out := run("domains", "list"); strings.Contains(out, custom.Host) {
@@ -308,6 +308,7 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 	suffix := network.Domains[0]
 	host := "wrangler-app." + suffix.Domain
 	custom := "wrangler-custom." + suffix.Domain
+	previewOnly := "wrangler-preview." + suffix.Domain
 	if _, err := postgresTestPool(store).Exec(t.Context(), `
 		UPDATE krun_resources SET locator='storefront' WHERE resource_id='svc-a';
 		UPDATE krun_organizations SET short_name='store-org' WHERE org_id='org-a';
@@ -319,9 +320,10 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 	defer server.Close()
 	dir := t.TempDir()
 	cfg := fmt.Sprintf(`{
-		"name":"storefront", "account_id":"store-org", "main":"index.js", "compatibility_date":"2026-09-28",
-		"routes":[{"pattern":%q,"zone_name":%q},{"pattern":%q,"custom_domain":true}]
-	}`, host+"/api/*", suffix.Domain, custom)
+		"name":"storefront", "account_id":"store-org", "main":"index.js", "compatibility_date":"2026-09-28", "preview_urls":false,
+		"routes":[{"pattern":%q,"zone_name":%q},{"pattern":%q,"custom_domain":true},
+			{"pattern":%q,"custom_domain":true,"previews_enabled":true,"enabled":false}]
+	}`, host+"/api/*", suffix.Domain, custom, previewOnly)
 	if err := os.WriteFile(filepath.Join(dir, "wrangler.jsonc"), []byte(cfg), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +351,7 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 		t.Fatalf("Wrangler did not publish the application route: %+v (%v)", item, err)
 	}
 	item, err = store.ManagedHostname(t.Context(), "org-a", custom)
-	if err != nil || item.Type != string(appconfig.WorkerDomainCustom) || item.SuffixID != suffix.ID || len(item.Routes) != 1 || !item.Routes[0].CustomDomain {
+	if err != nil || item.Type != string(appconfig.WorkerDomainCustom) || item.SuffixID != suffix.ID || len(item.Routes) != 1 || !item.Routes[0].CustomDomain || !item.Routes[0].PreviewsEnabled {
 		t.Fatalf("Wrangler did not publish the standalone Custom Domain: %+v (%v)", item, err)
 	}
 	for _, tc := range []struct{ method, path, body string }{
@@ -364,25 +366,39 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 		}
 	}
 	resp := request(s, "GET", cfPrefix+"/accounts/org-a/workers/scripts/storefront/subdomain", "krun_cli_admin", "")
-	if resp.Code != 200 || !strings.Contains(resp.Body.String(), `"enabled":false,"previews_enabled":true`) {
+	if resp.Code != 200 || !strings.Contains(resp.Body.String(), `"enabled":false,"previews_enabled":false`) {
 		t.Fatalf("Wrangler's defaults did not persist: %d %s", resp.Code, resp.Body.String())
+	}
+	previewAPI := cfPrefix + "/accounts/org-a/workers/workers/storefront/previews"
+	resp = request(s, "POST", previewAPI, "krun_cli_admin", `{"name":"pr-123"}`)
+	var result struct {
+		Result struct{ URLs []string }
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &result); resp.Code != 200 || err != nil ||
+		len(result.Result.URLs) != 2 || !strings.HasSuffix(result.Result.URLs[0], "pr-123."+custom) ||
+		!strings.HasSuffix(result.Result.URLs[1], "pr-123."+previewOnly) {
+		t.Fatalf("preview-only API response: %d %s (%v)", resp.Code, resp.Body.String(), err)
 	}
 	state, err := store.EdgeConfigState(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	projection := workerapp.EdgeConfigFromState(state, s.Config.Workers)
-	found := 0
+	want := map[string]string{
+		host: "production", custom: "production",
+		"pr-123." + custom: "pr-123", "pr-123." + previewOnly: "pr-123",
+		"fix-demo." + custom: "fix-demo", "fix-demo." + previewOnly: "fix-demo",
+	}
 	for _, route := range projection.Routes {
-		if route.Worker != "svc-a" || route.Environment != "production" {
+		if route.Worker != "svc-a" {
 			continue
 		}
-		if route.Host != host && route.Host != custom {
-			t.Fatalf("disabled default URL is still in the runtime projection: %+v", route)
+		if want[route.Host] != route.Environment || !route.Enabled {
+			t.Fatalf("unexpected route: %+v", route)
 		}
-		found++
+		delete(want, route.Host)
 	}
-	if found != 2 {
-		t.Fatalf("expected two custom routes after disabling the default URL; got %d", found)
+	if len(want) != 0 {
+		t.Fatalf("missing routes: %v", want)
 	}
 }
