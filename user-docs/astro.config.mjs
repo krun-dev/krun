@@ -90,6 +90,7 @@ export default defineConfig({
             },
             "guides/component-object-storage",
             { label: "数据库", items: ["guides/workers-hyperdrive"] },
+            { label: "网络", items: ["guides/workers-hostnames"] },
           ],
         },
         {

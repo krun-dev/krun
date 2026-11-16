@@ -329,6 +329,11 @@ func (r *renderer) rbac() {
 				},
 			},
 			map[string]any{
+				"apiGroups": []string{"gateway.kgateway.dev"},
+				"resources": []string{"directresponses"},
+				"verbs":     []string{"get", "create", "patch"},
+			},
+			map[string]any{
 				"apiGroups": []string{"gateway.networking.k8s.io"},
 				"resources": []string{
 					"httproutes",

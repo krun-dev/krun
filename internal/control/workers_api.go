@@ -54,6 +54,24 @@ func (s *Server) workersRoutes(m *recordingMux) {
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers", s.protectedWorkersWithBodyLimit(false, apiJSONBodyMax, s.workerList))
 	m.useScope(scopeOrganization)
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/domains", protect(false, s.workerDomains))
+	hostnames := "/api/v1/orgs/{org}/worker-hostnames"
+	hostnameEndpoint := func(fn endpoint) http.HandlerFunc {
+		return s.protectedWith(false, PartitionAll, 0, apiJSONBodyMax, func(st *State, p Principal, r *http.Request) (any, int, error) {
+			if s.Config.Workers == nil {
+				return nil, 0, problem(503, "WORKERS_NOT_CONFIGURED", "Workers is not configured")
+			}
+			return fn(st, p, r)
+		})
+	}
+	for _, base := range []string{hostnames, "/api/v1/orgs/{org}/domains"} {
+		m.useScope(scopeOrganization)
+		m.HandleFunc("GET "+base, hostnameEndpoint(s.workerHostnameCatalog))
+		m.useScope(scopeWorkerHostnameTargets)
+		m.HandleFunc("POST "+base, hostnameEndpoint(s.workerSaveHostname))
+		m.HandleFunc("PUT "+base+"/{host}", hostnameEndpoint(s.workerSaveHostname))
+		m.useScope(scopeOrganization)
+		m.HandleFunc("DELETE "+base+"/{host}", hostnameEndpoint(s.workerSaveHostname))
+	}
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/network-profiles", protect(false, s.workerNetworkProfiles))
 	m.HandleFunc("GET /api/v1/orgs/{org}/workers/repository-providers", protect(false, s.workerRepositoryProviders))
 	m.HandleFunc("POST /api/v1/orgs/{org}/worker-repositories/{provider}/connect", protect(true, s.workerRepositoryConnect))
@@ -68,6 +86,7 @@ func (s *Server) workersRoutes(m *recordingMux) {
 	m.HandleFunc("GET "+base+"/activity", protect(false, s.workerActivity))
 	m.useScope(scopeWorker)
 	m.HandleFunc("GET "+base+"/domains", protect(false, s.workerRoutingDomains))
+	m.HandleFunc("GET "+base+"/hostnames", protect(false, s.workerManagedHostnames))
 	m.HandleFunc("PUT "+base+"/domains", protect(false, s.workerRoutingDomainsUpdate))
 	m.HandleFunc("PUT "+base+"/network-profile", protect(false, s.workerNetworkProfileUpdate))
 	m.HandleFunc("GET "+base+"/repository", protect(false, s.workerRepositoryGet))

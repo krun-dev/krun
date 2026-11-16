@@ -167,7 +167,7 @@ func (s *Service) Route(ctx context.Context, host, pool string) (workerapp.EdgeC
 		return workerapp.EdgeConfigSnapshot{}, domain.NotFound()
 	}
 	projection, position, err := s.Store.RuntimeConfigRoute(ctx, host, pool)
-	return workerapp.EdgeConfigSnapshot{Pool: pool, EdgeConfigCursor: position, Routes: projection.Routes, Versions: projection.Versions}, err
+	return workerapp.NewEdgeConfigSnapshot(pool, position, projection), err
 }
 
 // StaticAssetCredentials authorizes the same pub/int visibility as the static

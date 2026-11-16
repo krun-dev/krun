@@ -80,7 +80,7 @@ func (s *Service) WorkerEnvironmentCreate(ctx context.Context, st *domain.State,
 		env.SecretVersions = domain.CloneStringsMap(ws.PreviewBase.SecretVersions)
 		env.SecretNames = domain.WorkerSecretNames(env.SecretVersions)
 	}
-	s.SyncEnvironmentHosts(&env, t.Organization, t.ID, ws.Domains)
+	s.syncWorkerEnvironmentHosts(&env, ws)
 	ws.Environments[in.Name] = env
 	ws.PreviewRevision++
 	st.Workers.Workers[t.ID] = ws
@@ -146,7 +146,7 @@ func (s *Service) WorkerEnvironmentUpdate(ctx context.Context, st *domain.State,
 	if in.Variables != nil {
 		current.Variables = in.Variables
 	}
-	s.SyncEnvironmentHosts(&current, t.Organization, t.ID, ws.Domains)
+	s.syncWorkerEnvironmentHosts(&current, ws)
 	if in.AssetRetentionSeconds != nil {
 		if *in.AssetRetentionSeconds < 0 || *in.AssetRetentionSeconds > 90*24*60*60 {
 			return nil, Read, domain.Invalid("ENVIRONMENT_INVALID", "Invalid asset retention window")

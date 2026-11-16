@@ -124,7 +124,7 @@ func (s *Service) NormalizeWorker(ws domain.Worker) domain.Worker {
 			env.SecretVersions = map[string]string{}
 		}
 		env.SecretNames = domain.WorkerSecretNames(env.SecretVersions)
-		s.SyncEnvironmentHosts(&env, ws.Organization, ws.Worker, ws.Domains)
+		s.syncWorkerEnvironmentHosts(&env, ws)
 		ws.Environments[name] = env
 	}
 	return ws
@@ -344,6 +344,16 @@ func (s *Service) SyncEnvironmentHosts(env *domain.WorkerEnvironment, organizati
 	}
 }
 
+func (s *Service) syncWorkerEnvironmentHosts(env *domain.WorkerEnvironment, worker domain.Worker) {
+	if env.Name == appconfig.WorkerBaseline && worker.WorkersDevDisabled {
+		env.Domains = []string{}
+		env.Hosts = []string{}
+		env.DisplayHosts = map[string]string{}
+		return
+	}
+	s.SyncEnvironmentHosts(env, worker.Organization, worker.Worker, worker.Domains)
+}
+
 // syncWorkerHosts applies the worker's domain selection to every environment
 // and returns the normalised (catalog-ordered) selection.
 func (s *Service) SyncWorkerHosts(ws *domain.Worker) []string {
@@ -352,7 +362,7 @@ func (s *Service) SyncWorkerHosts(ws *domain.Worker) []string {
 	}
 	ws.Domains = s.SyncWorkerDomains(*ws)
 	for name, env := range ws.Environments {
-		s.SyncEnvironmentHosts(&env, ws.Organization, ws.Worker, ws.Domains)
+		s.syncWorkerEnvironmentHosts(&env, *ws)
 		ws.Environments[name] = env
 	}
 	return ws.Domains
@@ -508,7 +518,7 @@ func (s *Service) WorkerList(ctx context.Context, st *domain.State, p authorizat
 				// Hosts are derived for display; the persisted row is not rewritten
 				// from a read path.
 				if s.Config.Workers != nil {
-					s.SyncEnvironmentHosts(&current, resource.Organization, resource.ID, s.SyncWorkerDomains(worker))
+					s.syncWorkerEnvironmentHosts(&current, worker)
 				}
 				summary.Environments = append(summary.Environments, WorkerEnvironmentSummary{Name: env, Domains: current.Domains, Hosts: current.Hosts, Enabled: current.Enabled, Version: current.Version, Confirmed: current.Confirmed})
 			}
@@ -605,4 +615,24 @@ func (s *Service) repositoryBinding(ctx context.Context, worker domain.Worker, o
 	}
 	out["authorization_status"] = status
 	return out, Read, nil
+}
+
+func (s *Service) UpdateWorkerSubdomain(st *domain.State, p authorization.Principal, target authorization.Target, enabled, previewsEnabled *bool) domain.Worker {
+	ws := s.Worker(st, target)
+	workersDevDisabled := ws.WorkersDevDisabled
+	previewURLsDisabled := ws.PreviewURLsDisabled
+	if enabled != nil {
+		workersDevDisabled = !*enabled
+	}
+	if previewsEnabled != nil {
+		previewURLsDisabled = !*previewsEnabled
+	}
+	if ws.WorkersDevDisabled != workersDevDisabled || ws.PreviewURLsDisabled != previewURLsDisabled {
+		ws.WorkersDevDisabled = workersDevDisabled
+		ws.PreviewURLsDisabled = previewURLsDisabled
+		ws.DomainsRevision++
+		st.Workers.Workers[target.ID] = ws
+		s.audit(st, p, "workers.subdomain.update", target.ID, true)
+	}
+	return ws
 }

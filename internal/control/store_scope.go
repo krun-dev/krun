@@ -42,6 +42,9 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 		// Organization catalogs and bindings do not need build, version or
 		// operation rows; only the organization's Worker/resource rows.
 		scope.Summary = true
+	case scopeWorkerHostnameTargets:
+		scope.Summary = true
+		scope.WorkerHostnameTargets = true
 	case scopeOrganizationWide:
 		scope.OrganizationWide = true
 		scope.Summary = true
@@ -53,6 +56,11 @@ func (s *Server) scopedRequest(r *http.Request, c authCredentials) (*http.Reques
 		// Script-scoped endpoints need the Worker's versions, builds and
 		// deployments; organization-level endpoints only need the catalog.
 		scope.Summary = scope.Worker == "" || strings.HasSuffix(r.URL.Path, "/workers")
+		if strings.HasSuffix(r.URL.Path, "/routes") || strings.Contains(r.URL.Path, "/workers/domains") ||
+			strings.Contains(r.URL.Path, "/domains/") {
+			scope.Summary = true
+			scope.WorkerHostnameTargets = true
+		}
 	case scopeCloudflareAccounts:
 		scope.ActorOnly = true
 		scope.AllOrganizations = true

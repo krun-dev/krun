@@ -106,6 +106,22 @@ func (c *WorkersConfig) ValidateCatalog(dns *regexp.Regexp) error {
 		if !dns.MatchString(d.StaticDomain) {
 			return fmt.Errorf("invalid Workers static domain for %s", d.ID)
 		}
+		for _, host := range d.ReservedHosts {
+			if host != strings.ToLower(host) || !dns.MatchString(host) || !strings.HasSuffix(host, "."+d.Domain) {
+				return fmt.Errorf("invalid reserved host for Workers domain %s", d.ID)
+			}
+		}
+	}
+	for _, d := range c.Domains {
+		if !d.ManagedSubdomains {
+			continue
+		}
+		for _, other := range c.Domains {
+			if d.ID != other.ID && (d.Gateway != other.Gateway || d.Access != other.Access) &&
+				(strings.HasSuffix(d.Domain, "."+other.Domain) || strings.HasSuffix(other.Domain, "."+d.Domain)) {
+				return fmt.Errorf("Workers managed suffix %s overlaps another gateway or access scope", d.ID)
+			}
+		}
 	}
 	if len(c.Domains) == 1 && !c.Domains[0].Default {
 		c.Domains[0].Default = true
@@ -243,4 +259,31 @@ func WorkerVariablesValid(vars map[string]any) bool {
 		size += len(k) + len(raw)
 	}
 	return size <= 16<<10
+}
+
+func (c *WorkersConfig) ManagedHostReserved(host string) bool {
+	label, _, _ := strings.Cut(host, ".")
+	if strings.HasPrefix(label, "w-") || strings.HasPrefix(label, "xn--") {
+		return true
+	}
+	for _, suffix := range c.Domains {
+		if host == suffix.Domain || host == suffix.StaticDomain || host == "static."+suffix.Domain ||
+			slices.Contains(suffix.ReservedHosts, host) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *WorkersConfig) ManagedDomainAllowsWorker(suffixID, profileID string) bool {
+	profile, ok := c.NetworkProfile(profileID)
+	if !ok {
+		return false
+	}
+	for _, suffix := range c.DomainsForProfile(profile) {
+		if suffix.ID == suffixID {
+			return true
+		}
+	}
+	return false
 }

@@ -57,8 +57,9 @@ type WorkersConfig struct {
 	// Gateways and Domains are the routing catalog. Neither carries a network
 	// classification: a domain is just a suffix plus which Gateway instance
 	// serves it. Label is display text and never participates in routing.
-	Gateways []WorkerGateway `json:"gateways"`
-	Domains  []WorkerDomain  `json:"domains"`
+	Gateways       []WorkerGateway `json:"gateways"`
+	Domains        []WorkerDomain  `json:"domains"`
+	ManagedOrigins []ManagedOrigin `json:"managed_origins,omitempty"`
 	// SecretsKeys is a versioned ring of base64-encoded 32-byte AES keys used
 	// only by the control plane. Keep old versions while retained Versions
 	// reference them; new writes use SecretsActiveKey.
@@ -159,7 +160,9 @@ type WorkerDomain struct {
 	Default bool `json:"default"`
 	// StaticDomain overrides the static-asset host served through this domain's
 	// Gateway. Empty derives "static." + Domain.
-	StaticDomain string `json:"static_domain"`
+	StaticDomain      string   `json:"static_domain"`
+	ManagedSubdomains bool     `json:"managed_subdomains,omitempty"`
+	ReservedHosts     []string `json:"reserved_hosts,omitempty"`
 }
 
 type WorkerDatabaseEgress struct {

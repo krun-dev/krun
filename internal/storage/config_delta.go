@@ -37,7 +37,7 @@ func (s *Store) DirtyWorkers(ctx context.Context) ([]DirtyWorker, error) {
 
 func (s *Store) PublishedWorkers(ctx context.Context, ids []string) (domain.EdgeConfigProjection, error) {
 	out := domain.EdgeConfigProjection{Routes: []domain.EdgeConfigRoute{}, Versions: map[string]domain.WorkerVersion{}}
-	rows, err := s.pool.Query(ctx, "SELECT "+edgeRouteColumns+" FROM worker_config_routes r WHERE r.worker_id=ANY($1) ORDER BY r.host", ids)
+	rows, err := s.pool.Query(ctx, managedConfigScope+"SELECT "+edgeRouteColumns+" FROM worker_config_routes r WHERE "+configRouteInScope+" ORDER BY r.host,r.route_key", ids)
 	if err != nil {
 		return out, err
 	}
@@ -54,7 +54,7 @@ func (s *Store) PublishedWorkers(ctx context.Context, ids []string) (domain.Edge
 	if err != nil {
 		return out, err
 	}
-	rows, err = s.pool.Query(ctx, `SELECT DISTINCT c.version_id,c.payload FROM worker_config_versions c JOIN worker_config_routes r ON r.pool=c.pool AND (`+edgeRouteReferencesVersion+`) WHERE r.worker_id=ANY($1)`, ids)
+	rows, err = s.pool.Query(ctx, managedConfigScope+`SELECT DISTINCT c.version_id,c.payload FROM worker_config_versions c JOIN worker_config_routes r ON r.pool=c.pool AND (`+edgeRouteReferencesVersion+`) WHERE `+configRouteInScope, ids)
 	if err != nil {
 		return out, err
 	}
@@ -162,7 +162,7 @@ func (s *Store) EdgeConfigShard(ctx context.Context, pool, shard string) (domain
 	if err = tx.QueryRow(ctx, readConfigPosition).Scan(&position.Epoch, &position.Revision); err != nil {
 		return out, position, err
 	}
-	rows, err := tx.Query(ctx, "SELECT "+edgeRouteColumns+" FROM worker_config_routes r WHERE r.pool=$1 AND r.shard=$2 ORDER BY r.host", pool, shard)
+	rows, err := tx.Query(ctx, "SELECT "+edgeRouteColumns+" FROM worker_config_routes r WHERE r.pool=$1 AND r.shard=$2 ORDER BY r.host,r.route_key", pool, shard)
 	if err != nil {
 		return out, position, err
 	}

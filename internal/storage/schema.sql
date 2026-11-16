@@ -285,6 +285,8 @@ CREATE TABLE IF NOT EXISTS krun_workers (
 	repository_revision integer NOT NULL DEFAULT 0,
 	domains_revision    integer NOT NULL DEFAULT 0,
 	preview_revision    integer NOT NULL DEFAULT 0,
+	workers_dev_disabled boolean NOT NULL DEFAULT false,
+	preview_urls_disabled boolean NOT NULL DEFAULT false,
 	active_build_count  integer NOT NULL DEFAULT 0 CHECK (active_build_count >= 0),
 	updated_at          timestamptz NOT NULL DEFAULT now()
 );
@@ -623,7 +625,33 @@ CREATE TABLE IF NOT EXISTS krun_worker_retained_assets (
 );
 CREATE INDEX IF NOT EXISTS krun_worker_retained_assets_expiry ON krun_worker_retained_assets(expires_at);
 
+CREATE TABLE IF NOT EXISTS krun_worker_hostnames (
+	host text PRIMARY KEY,
+	org_id text NOT NULL,
+	suffix_id text NOT NULL,
+	revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
+	retired boolean NOT NULL DEFAULT false,
+	gateway_managed boolean NOT NULL DEFAULT false
+);
+CREATE INDEX IF NOT EXISTS krun_worker_hostnames_org ON krun_worker_hostnames(org_id, host) WHERE NOT retired;
+
+CREATE TABLE IF NOT EXISTS krun_worker_hostname_routes (
+	host text NOT NULL,
+	match_type text NOT NULL CHECK (match_type IN ('exact', 'prefix')),
+	path text NOT NULL,
+	worker_id text NOT NULL,
+	origin text NOT NULL DEFAULT '',
+	cf_pattern text NOT NULL DEFAULT '',
+	custom_domain boolean NOT NULL DEFAULT false,
+	enabled boolean NOT NULL,
+	PRIMARY KEY (host, match_type, path),
+	CHECK ((worker_id = '') <> (origin = ''))
+);
+CREATE INDEX IF NOT EXISTS krun_worker_hostname_routes_worker ON krun_worker_hostname_routes(worker_id, host);
+
 CREATE TABLE IF NOT EXISTS worker_config_routes (
+ route_key text NOT NULL DEFAULT '',
+ match_type text NOT NULL DEFAULT '' CHECK (match_type IN ('', 'exact', 'prefix')),
  script_name text NOT NULL DEFAULT '',
  env_name text NOT NULL DEFAULT '',
  public boolean NOT NULL DEFAULT false,
@@ -633,11 +661,12 @@ CREATE TABLE IF NOT EXISTS worker_config_routes (
  expires_at timestamptz,
  worker_id text NOT NULL,
  shard text NOT NULL CHECK(shard ~ '^[0-9a-f]{2}$'),
-	host       text PRIMARY KEY,
+	host       text NOT NULL,
 	pool       text NOT NULL,
 	path       text NOT NULL DEFAULT '',
 	enabled    boolean NOT NULL,
-	version_id text NOT NULL DEFAULT ''
+	version_id text NOT NULL DEFAULT '',
+	PRIMARY KEY (host, route_key)
 );
 
 CREATE TABLE IF NOT EXISTS worker_config_versions (
@@ -653,6 +682,7 @@ CREATE TABLE IF NOT EXISTS worker_config_ops (
 	pool            text NOT NULL,
 	op_type         text NOT NULL CHECK (op_type IN ('version_put','route_upsert','route_delete')),
 	host            text NOT NULL DEFAULT '',
+	route_key       text NOT NULL DEFAULT '',
 	version_id      text NOT NULL DEFAULT '',
 	payload         jsonb CHECK (payload IS NULL OR jsonb_typeof(payload) = 'object'),
 	PRIMARY KEY (config_revision, ordinal),

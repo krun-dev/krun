@@ -32,6 +32,9 @@ func DeploymentID(operation string) string {
 func DeploymentEnvironment(id string) string { return "d-" + securetoken.Digest(id)[:20] }
 func DeploymentHosts(config *appconfig.WorkersConfig, worker domain.Worker, id string) []string {
 	hosts := []string{}
+	if worker.PreviewURLsDisabled {
+		return hosts
+	}
 	for _, pattern := range WorkerHostPatterns(worker, config.Domains) {
 		if host := EnvHostName(pattern, DeploymentEnvironment(id)); host != "" {
 			hosts = append(hosts, host)

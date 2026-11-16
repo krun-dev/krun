@@ -13,6 +13,7 @@ import {
   Database,
   KeyRound,
   GitBranch,
+  Globe,
   LayoutDashboard,
   Layers3,
   LogOut,
@@ -78,6 +79,9 @@ const AuditPage = lazy(() =>
 const WorkersPage = lazy(() =>
   import("@/components/workers").then((m) => ({ default: m.WorkersPage })),
 );
+const DomainsPage = lazy(() =>
+  import("@/components/workers/managed-hostnames").then((m) => ({ default: m.ManagedHostnames })),
+);
 const BucketsPage = lazy(() =>
   import("@/components/buckets").then((module) => ({
     default: module.BucketsPage,
@@ -101,6 +105,7 @@ const navigation: {
   { id: "workers", name: "Workers", icon: Layers3, group: "计算服务" },
   { id: "buckets", name: "对象存储", icon: Database, group: "存储服务" },
   { id: "hyperdrive", name: "Hyperdrive", icon: Database, group: "数据库" },
+  { id: "domains", name: "域名", icon: Globe, group: "网络" },
   { id: "members", name: "组织成员", icon: Users, group: "组织管理" },
   { id: "groups", name: "用户组", icon: UsersRound, group: "组织管理" },
   { id: "roles", name: "角色授权", icon: ShieldCheck, group: "组织管理" },
@@ -147,7 +152,15 @@ export default function App() {
       new URLSearchParams(window.location.search).get("workspace") || "",
     ),
     [section, setSection] = useState<Section>(() => {
-      const page = new URLSearchParams(window.location.search).get("page");
+      const params = new URLSearchParams(window.location.search);
+      const page = params.get("page");
+      if (
+        page === "workers" &&
+        params.get("workers_tab") === "hostnames" &&
+        !params.has("worker")
+      ) {
+        return "domains";
+      }
       const known: Section[] = [
         "overview",
         "orgs",
@@ -160,6 +173,7 @@ export default function App() {
         "audit",
         "users",
         "workers",
+        "domains",
         "buckets",
         "system-config",
         "hyperdrive",
@@ -388,7 +402,7 @@ export default function App() {
   const canOpen = (page: Section) =>
     // Hyperdrive is a built-in capability: the database section ships with
     // Workers and no longer hides behind hyperdrive_configured.
-    (page !== "git-authorizations" || me?.workers_configured !== false) &&
+    ((page !== "git-authorizations" && page !== "domains") || me?.workers_configured !== false) &&
     canOpenSection(
       page,
       system,
@@ -589,6 +603,7 @@ export default function App() {
                 ...navigation.filter((n) => n.group === "计算服务"),
                 ...navigation.filter((n) => n.group === "存储服务"),
                 ...navigation.filter((n) => n.group === "数据库"),
+                ...navigation.filter((n) => n.group === "网络"),
                 ...navigation.filter((n) => n.group === "组织管理"),
                 ...navigation.filter((n) => n.group === "个人设置"),
               ]
@@ -976,6 +991,11 @@ export default function App() {
             />
           ) : selection && !canUseResource ? (
             <Loading />
+          ) : section === "domains" ? (
+            <DomainsPage
+              key={base}
+              base={base}
+            />
           ) : section === "workers" ? (
             me.workers_configured === false ? (
               <Empty
@@ -998,6 +1018,7 @@ export default function App() {
                 base={resourceBase}
                 detail={detailNavigation}
                 canCreate={permissions?.actions["worker.create"] === true}
+                domainCatalogHref={`/?${new URLSearchParams({ page: "domains", workspace: inventoryOrg?.short_name || inventoryOrg?.id || orgReference })}`}
                 notify={notify}
               />
             )

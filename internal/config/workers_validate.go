@@ -80,6 +80,9 @@ func (c *WorkersConfig) Validate() error {
 	if e := c.ValidateCatalog(dns); e != nil {
 		return e
 	}
+	if err := c.validateManagedOrigins(); err != nil {
+		return err
+	}
 	if c.S3Region == "" {
 		c.S3Region = "us-east-1"
 	}

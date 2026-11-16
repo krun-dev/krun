@@ -73,6 +73,7 @@ import {
 import { VersionConfiguration } from "./workers/version-configuration";
 import { OperationPanel, VersionSummary } from "./workers/version";
 import { WorkerDomains } from "./workers/domains";
+import { WorkerHostnameBindings } from "./workers/managed-hostnames";
 import { EnvironmentSettings, Invocation } from "./workers/environment";
 
 function initialNetworkProfile(profiles: WorkerNetworkProfile[]) {
@@ -87,11 +88,13 @@ export function WorkersPage({
   base,
   detail,
   canCreate,
+  domainCatalogHref,
   notify,
 }: {
   base: string;
   detail?: { id: string; back: () => void };
   canCreate: boolean;
+  domainCatalogHref: string;
   notify: (message: string) => void;
 }) {
   useTranslation();
@@ -195,6 +198,7 @@ export function WorkersPage({
     else url.searchParams.delete("worker");
     url.searchParams.delete("environment");
     url.searchParams.delete("worker_tab");
+    url.searchParams.delete("workers_tab");
     history.pushState(null, "", url);
     setWorker(id);
     if (!id) setRevision((v) => v + 1);
@@ -352,6 +356,7 @@ export function WorkersPage({
             organizationBase={base}
             worker={selected}
             networkProfiles={networkProfiles}
+            domainCatalogHref={domainCatalogHref}
             notify={notify}
           />
         </>
@@ -590,12 +595,14 @@ function WorkerDetail({
   organizationBase,
   worker,
   networkProfiles,
+  domainCatalogHref,
   notify,
 }: {
   base: string;
   organizationBase: string;
   worker: WorkerSummary;
   networkProfiles: WorkerNetworkProfile[];
+  domainCatalogHref: string;
   notify: (s: string) => void;
 }) {
   const [revision, setRevision] = useState(0);
@@ -1223,6 +1230,10 @@ function WorkerDetail({
             value="routing"
             className="mt-5 grid gap-5"
           >
+            <WorkerHostnameBindings
+              base={base}
+              catalogHref={domainCatalogHref}
+            />
             <WorkerDomains
               base={base}
               domains={domains}

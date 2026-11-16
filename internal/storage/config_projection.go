@@ -19,24 +19,40 @@ func (s *Store) EdgeConfigState(ctx context.Context, ids []string) (*domain.Stat
 	defer tx.Rollback(ctx)
 
 	st := domain.NewState()
-	rows, err := tx.Query(ctx, `SELECT s.worker_id, s.org_id, s.network_profile, r.locator
+	st.Workers.ProjectionWorkers = ids
+	hostnames, err := edgeManagedHostnames(ctx, tx, ids)
+	if err != nil {
+		return nil, err
+	}
+	st.Workers.ManagedHostnames = hostnames
+	targetIDs := ids
+	if ids != nil {
+		targetIDs = append([]string{}, ids...)
+		for _, hostname := range hostnames {
+			for _, route := range hostname.Routes {
+				targetIDs = append(targetIDs, route.Worker)
+			}
+		}
+	}
+	rows, err := tx.Query(ctx, `SELECT s.worker_id, s.org_id, s.network_profile, r.locator, s.workers_dev_disabled, s.preview_urls_disabled
 		FROM krun_workers s
 		JOIN krun_resources r ON r.resource_id=s.worker_id AND r.kind='worker' AND r.org_id=s.org_id
 		JOIN krun_organizations o ON o.org_id=s.org_id
 		WHERE ($1::text[] IS NULL OR s.worker_id=ANY($1))
-		ORDER BY s.worker_id`, ids)
+		ORDER BY s.worker_id`, targetIDs)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var worker, organization, profile, locator string
-		if err = rows.Scan(&worker, &organization, &profile, &locator); err != nil {
+		var workersDevDisabled, previewURLsDisabled bool
+		if err = rows.Scan(&worker, &organization, &profile, &locator, &workersDevDisabled, &previewURLsDisabled); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		st.Organizations[organization] = domain.Organization{ID: organization}
 		st.Resources[worker] = domain.Resource{ID: worker, Kind: "worker", Organization: organization, Locator: locator}
-		st.Workers.Workers[worker] = domain.Worker{Worker: worker, Organization: organization, NetworkProfile: profile, Environments: map[string]domain.WorkerEnvironment{}}
+		st.Workers.Workers[worker] = domain.Worker{Worker: worker, Organization: organization, NetworkProfile: profile, WorkersDevDisabled: workersDevDisabled, PreviewURLsDisabled: previewURLsDisabled, Environments: map[string]domain.WorkerEnvironment{}}
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()
@@ -51,7 +67,7 @@ func (s *Store) EdgeConfigState(ctx context.Context, ids []string) (*domain.Stat
 		JOIN krun_resources r ON r.resource_id=s.worker_id AND r.kind='worker' AND r.org_id=s.org_id
 		JOIN krun_organizations o ON o.org_id=s.org_id
 		WHERE ($1::text[] IS NULL OR s.worker_id=ANY($1))
-		ORDER BY p.worker_id, p.pool_id`, ids)
+		ORDER BY p.worker_id, p.pool_id`, targetIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +92,7 @@ func (s *Store) EdgeConfigState(ctx context.Context, ids []string) (*domain.Stat
 		JOIN krun_resources r ON r.resource_id=s.worker_id AND r.kind='worker' AND r.org_id=s.org_id
 		JOIN krun_organizations o ON o.org_id=s.org_id
 		WHERE ($1::text[] IS NULL OR s.worker_id=ANY($1))
-		ORDER BY d.worker_id, d.ordinal`, ids)
+		ORDER BY d.worker_id, d.ordinal`, targetIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +120,7 @@ func (s *Store) EdgeConfigState(ctx context.Context, ids []string) (*domain.Stat
 		JOIN krun_resources r ON r.resource_id=s.worker_id AND r.kind='worker' AND r.org_id=s.org_id
 		JOIN krun_organizations o ON o.org_id=s.org_id
 		WHERE e.env_name<>'@previews-base' AND ($1::text[] IS NULL OR s.worker_id=ANY($1))
-		ORDER BY e.worker_id, e.env_name`, ids)
+		ORDER BY e.worker_id, e.env_name`, targetIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +155,7 @@ func (s *Store) EdgeConfigState(ctx context.Context, ids []string) (*domain.Stat
 		JOIN krun_resources r ON r.resource_id=s.worker_id AND r.kind='worker' AND r.org_id=s.org_id
 		JOIN krun_organizations o ON o.org_id=s.org_id
 		WHERE ($1::text[] IS NULL OR s.worker_id=ANY($1))
-		ORDER BY rel.version_id`, ids)
+		ORDER BY rel.version_id`, targetIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +164,7 @@ func (s *Store) EdgeConfigState(ctx context.Context, ids []string) (*domain.Stat
 		return nil, err
 	}
 	rows.Close()
-	rows, err = tx.Query(ctx, `SELECT deployment_id,org_id,worker_id,env_name,version_id,operation_id,created_at,expires_at,committed_at,candidate_version_id,candidate_weight,message FROM krun_worker_deployments WHERE committed_at IS NOT NULL AND expires_at>now() AND ($1::text[] IS NULL OR worker_id=ANY($1))`, ids)
+	rows, err = tx.Query(ctx, `SELECT deployment_id,org_id,worker_id,env_name,version_id,operation_id,created_at,expires_at,committed_at,candidate_version_id,candidate_weight,message FROM krun_worker_deployments WHERE committed_at IS NOT NULL AND expires_at>now() AND ($1::text[] IS NULL OR worker_id=ANY($1))`, targetIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +175,7 @@ func (s *Store) EdgeConfigState(ctx context.Context, ids []string) (*domain.Stat
 	rows.Close()
 	rows, err = tx.Query(ctx, `SELECT worker_id,env_name,version_id,expires_at FROM krun_worker_retained_assets
 		WHERE expires_at>now() AND ($1::text[] IS NULL OR worker_id=ANY($1))
-		ORDER BY worker_id,env_name,expires_at DESC,version_id`, ids)
+		ORDER BY worker_id,env_name,expires_at DESC,version_id`, targetIDs)
 	if err != nil {
 		return nil, err
 	}

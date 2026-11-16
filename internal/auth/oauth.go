@@ -54,8 +54,8 @@ func NormalizeOAuthScopes(client, raw string) (string, error) {
 	if OAuthClientName(client) == "" {
 		return "", oauthError("unauthorized_client", "Unknown OAuth client")
 	}
-	supported := []string{"account:read", "user:read", "workers:write", "workers_scripts:write", "offline_access"}
-	unsupported := strings.Fields("k2.read k2.write workers_kv:write workers_routes:write workers_tail:read d1:write pages:write zone:read ssl_certs:write ai:write ai-search:write ai-search:run agent-memory:write queues:write pipelines:write secrets_store:write artifacts:write flagship:write containers:write cloudchamber:write connectivity:admin email_routing:write email_sending:write browser:write challenge-widgets.write")
+	supported := []string{"account:read", "user:read", "workers:write", "workers_scripts:write", "workers_routes:write", "zone:read", "offline_access"}
+	unsupported := strings.Fields("k2.read k2.write workers_kv:write workers_tail:read d1:write pages:write ssl_certs:write ai:write ai-search:write ai-search:run agent-memory:write queues:write pipelines:write secrets_store:write artifacts:write flagship:write containers:write cloudchamber:write connectivity:admin email_routing:write email_sending:write browser:write challenge-widgets.write")
 	out := []string{}
 	for _, scope := range strings.Fields(raw) {
 		allowed := false
@@ -91,6 +91,12 @@ func OAuthActions(scope string) []string {
 	}
 	if slices.Contains(scopes, "workers:write") || slices.Contains(scopes, "workers_scripts:write") {
 		out = append(out, "worker.list", "worker.create", "worker.read", "worker.update", "worker.delete", "worker.publish", "worker.rollback", "worker.version.read", "worker.version.create", "worker.invoke", "build.start", "source.read", "binding.attach", "binding.detach")
+	}
+	if slices.Contains(scopes, "zone:read") || slices.Contains(scopes, "workers_routes:write") {
+		out = append(out, "worker.hostname.read")
+	}
+	if slices.Contains(scopes, "workers_routes:write") {
+		out = append(out, "worker.hostname.manage")
 	}
 	return out
 }

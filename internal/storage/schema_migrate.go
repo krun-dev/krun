@@ -82,6 +82,47 @@ var schemaMigrations = []schemaMigration{
 		INSERT INTO worker_config_dirty(worker_id) SELECT worker_id FROM krun_workers
 			ON CONFLICT(worker_id) DO UPDATE SET generation=nextval('worker_dirty_seq')`,
 	},
+	{
+		from: "0774eee652005060dfd1d3a5dc98e009808e98ec212ec21c8c7a07a8186ec760",
+		to:   "23c469b3647eb09d4a9e9355d92f4d9e70f230381b56c25408fc141c1927e5c3",
+		sql: `CREATE TABLE IF NOT EXISTS krun_worker_hostnames (
+	host text PRIMARY KEY,
+	org_id text NOT NULL,
+	suffix_id text NOT NULL,
+	revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
+	retired boolean NOT NULL DEFAULT false
+);
+CREATE INDEX IF NOT EXISTS krun_worker_hostnames_org ON krun_worker_hostnames(org_id, host) WHERE NOT retired;
+
+CREATE TABLE IF NOT EXISTS krun_worker_hostname_routes (
+	host text NOT NULL,
+	match_type text NOT NULL CHECK (match_type IN ('exact', 'prefix')),
+	path text NOT NULL,
+	worker_id text NOT NULL,
+	enabled boolean NOT NULL,
+	PRIMARY KEY (host, match_type, path)
+);
+CREATE INDEX IF NOT EXISTS krun_worker_hostname_routes_worker ON krun_worker_hostname_routes(worker_id, host);
+		ALTER TABLE worker_config_routes
+			ADD COLUMN route_key text NOT NULL DEFAULT '',
+			ADD COLUMN match_type text NOT NULL DEFAULT '' CHECK (match_type IN ('', 'exact', 'prefix')),
+			DROP CONSTRAINT worker_config_routes_pkey,
+			ADD PRIMARY KEY(host,route_key);
+		ALTER TABLE worker_config_ops ADD COLUMN route_key text NOT NULL DEFAULT ''`,
+	},
+	{
+		from: "23c469b3647eb09d4a9e9355d92f4d9e70f230381b56c25408fc141c1927e5c3",
+		to:   "5c08400c3a40273803d6423338e25adaade59c4db129072a0761113c9644b423",
+		sql: `ALTER TABLE krun_worker_hostnames ADD COLUMN IF NOT EXISTS gateway_managed boolean NOT NULL DEFAULT false;
+		ALTER TABLE krun_worker_hostname_routes
+			ADD COLUMN IF NOT EXISTS origin text NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS cf_pattern text NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS custom_domain boolean NOT NULL DEFAULT false,
+			ADD CHECK ((worker_id = '') <> (origin = ''));
+		ALTER TABLE krun_workers
+			ADD COLUMN IF NOT EXISTS workers_dev_disabled boolean NOT NULL DEFAULT false,
+			ADD COLUMN IF NOT EXISTS preview_urls_disabled boolean NOT NULL DEFAULT false`,
+	},
 }
 
 // MigrateSchema upgrades an existing database while the control plane is

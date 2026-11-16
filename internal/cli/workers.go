@@ -16,6 +16,7 @@ const workersHelp = `Usage: krun workers COMMAND [--org ID]
   previews-base                     Configure defaults for new previews
   configurations                    Save and deploy environment configuration snapshots
   domains                           Inspect and update routing domains
+  hostnames                         Claim custom subdomains and manage their routes
   network                           List and select network profiles
   repository                        Manage Git repository access and bindings
   invoke                            Send a test request to a deployed Worker
@@ -34,6 +35,8 @@ func (c *Client) workers(ctx context.Context, args []string) error {
 		return c.environments(ctx, action, rest)
 	case "configurations":
 		return c.configurations(ctx, rest)
+	case "hostnames":
+		return c.managedHostnames(ctx, rest)
 	case "domains", "network":
 		return c.routing(ctx, action, rest)
 	case "repository":

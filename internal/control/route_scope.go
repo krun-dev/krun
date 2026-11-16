@@ -29,6 +29,8 @@ const (
 	scopeWorkerActivity
 	// scopeWorkerSummary bounds the Worker list and its search/cursor options.
 	scopeWorkerSummary
+	// scopeWorkerHostnameTargets loads the organization Worker catalog for route authorization.
+	scopeWorkerHostnameTargets
 	// scopeCloudflareOrganization is the Cloudflare API's organization scope.
 	// Its list handlers own pagination and need full organization collections.
 	scopeCloudflareOrganization

@@ -7,6 +7,7 @@ const hasSections = toc?.items.some((item) => item.slug !== "_top" || item.child
 const id = entry.id.replace(/\.(md|mdx)$/, "") || "index";
 const source = `/docs/${id}.md${import.meta.env.DEV ? "" : ".txt"}`;
 const isInternal = id === "internal" || id.startsWith("internal/");
+const isNetworkPage = id === "guides/workers-hostnames";
 const workerPages = [
   "guides/component-workers",
   "guides/workers-runtime-compatibility",
@@ -29,8 +30,10 @@ const section = isInternal
             ? ["组件", "计算 · Workers"]
             : id === "guides/component-object-storage"
               ? ["组件"]
-              : ["开始使用"];
-const eyebrow = isInternal ? "● INTERNAL ONLY" : "● GETTING STARTED";
+              : isNetworkPage
+                ? ["组件", "网络"]
+                : ["开始使用"];
+const eyebrow = isInternal ? "● INTERNAL ONLY" : isNetworkPage ? "● NETWORKING" : "● GETTING STARTED";
 ---
 <div class="krun-breadcrumb">文档 <span>/</span> {section.map((label) => <>{label} <span>/</span>{" "}</>)} {Astro.locals.starlightRoute.entry.data.title}</div>
 <div class="krun-title-row">

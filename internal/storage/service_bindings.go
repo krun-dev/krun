@@ -58,7 +58,7 @@ func (s *Store) ServiceBindingTarget(ctx context.Context, organization string, b
 		JOIN krun_resources w ON w.resource_id=e.worker_id AND w.org_id=$1 AND w.kind='worker'
 		JOIN krun_worker_placements p ON p.worker_id=e.worker_id AND p.org_id=w.org_id AND p.role='primary' AND p.state='active'
 		JOIN worker_config_routes r ON r.worker_id=e.worker_id AND r.env_name=e.env_name
-			AND r.pool=p.pool_id AND r.enabled AND r.expires_at IS NULL
+			AND r.pool=p.pool_id AND r.enabled AND r.expires_at IS NULL AND r.route_key=''
 		WHERE e.worker_id=$2 AND e.env_name=$3 AND e.enabled AND e.version_id<>''
 		AND ($4='' OR EXISTS(SELECT 1 FROM krun_worker_versions v WHERE v.version_id=$4
 			AND v.worker_id=e.worker_id AND v.org_id=w.org_id AND v.env_name=e.env_name))

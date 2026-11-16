@@ -8,14 +8,14 @@ import (
 	"github.com/krun-dev/krun/internal/domain"
 )
 
-const edgeRouteColumns = "r.worker_id,r.host,r.pool,r.path,r.enabled,r.version_id,r.expires_at,r.candidate_version_id,r.candidate_weight,r.script_name,r.env_name,r.public,r.retained_versions"
+const edgeRouteColumns = "r.worker_id,r.host,r.pool,r.path,r.enabled,r.version_id,r.expires_at,r.candidate_version_id,r.candidate_weight,r.script_name,r.env_name,r.public,r.retained_versions,r.match_type"
 const edgeRouteReferencesVersion = `c.version_id IN (r.version_id,r.candidate_version_id)
 	OR r.retained_versions @> jsonb_build_array(jsonb_build_object('version_id', c.version_id))`
 
 func scanEdgeRoute(row rowScanner) (domain.EdgeConfigRoute, error) {
 	var r domain.EdgeConfigRoute
 	err := row.Scan(&r.Worker, &r.Host, &r.Pool, &r.Path, &r.Enabled, &r.Version, &r.Expires,
-		&r.Candidate, &r.CandidateWeight, &r.ScriptName, &r.Environment, &r.Public, &r.Retained)
+		&r.Candidate, &r.CandidateWeight, &r.ScriptName, &r.Environment, &r.Public, &r.Retained, &r.Match)
 	if len(r.Retained) == 0 {
 		r.Retained = nil
 	}

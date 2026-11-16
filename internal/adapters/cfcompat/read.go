@@ -140,6 +140,19 @@ func (s *Server) cfURL(env domain.WorkerEnvironment) string {
 	}
 	return scheme + env.Hosts[0]
 }
+func (s *Server) cfSubdomain(r *http.Request, worker domain.Worker, env domain.WorkerEnvironment) map[string]any {
+	// Wrangler uses the URL when re-enabling a default address. Keep the
+	// prospective hostname in the subdomain API even while it is inactive.
+	if worker.WorkersDevDisabled {
+		s.Application(r).SyncEnvironmentHosts(&env, worker.Organization, worker.Worker, worker.Domains)
+	}
+	return map[string]any{
+		"enabled":          !worker.WorkersDevDisabled,
+		"previews_enabled": !worker.PreviewURLsDisabled,
+		"url":              s.cfURL(env),
+	}
+}
+
 func (s *Server) cfScriptDetails(st *domain.State, p authorization.Principal, r *http.Request) (any, int, error) {
 	service, env, err := s.cfCurrent(st, p, r)
 	if err != nil {
@@ -149,7 +162,7 @@ func (s *Server) cfScriptDetails(st *domain.State, p authorization.Principal, r 
 	workerID := r.PathValue("resource")
 	version := st.Workers.Versions[env.Version]
 	settings := map[string]any{"bindings": Bindings(env), "compatibility_date": version.CompatibilityDate, "compatibility_flags": version.CompatibilityFlags, "logpush": false, "tail_consumers": []any{}}
-	subdomain := map[string]any{"enabled": true, "previews_enabled": true, "url": s.cfURL(env)}
+	subdomain := s.cfSubdomain(r, service, env)
 	if strings.HasSuffix(r.URL.Path, "/settings") || strings.HasSuffix(r.URL.Path, "/script-settings") {
 		return settings, 200, nil
 	}

@@ -16,7 +16,7 @@ type ReadScope struct {
 	Summary                                      bool
 	ActorOnly, AllOrganizations                  bool
 	OrganizationWide                             bool
-	WorkerActivityOnly                           bool
+	WorkerActivityOnly, WorkerHostnameTargets    bool
 }
 
 type ReadScopeKey struct{}
@@ -56,6 +56,9 @@ func scopePredicate(table string, scope ReadScope) string {
 		return organizationWidePredicate(table)
 	}
 	resources := `SELECT resource_id FROM krun_resources WHERE org_id=$2 AND kind=$5 AND ($3='' OR resource_id=$3) AND ($3<>'' OR resource_id COLLATE "C">$6 COLLATE "C") AND ($8='' OR strpos(lower(name),lower($8))>0 OR strpos(lower(resource_id),lower($8))>0 OR strpos(lower(locator),lower($8))>0) ORDER BY resource_id COLLATE "C" LIMIT $7`
+	if scope.WorkerHostnameTargets {
+		resources = `SELECT resource_id FROM krun_resources WHERE org_id=$2 AND kind='worker'`
+	}
 	workers := `worker_id IN (` + resources + `)`
 	pred := "false"
 	switch table {

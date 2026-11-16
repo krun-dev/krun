@@ -9,16 +9,18 @@ import (
 )
 
 type Worker struct {
-	bun.BaseModel      `bun:"table:krun_workers,alias:krun_workers"`
-	WorkerID           string          `bun:"worker_id,pk"`
-	OrgID              string          `bun:"org_id"`
-	NetworkProfile     string          `bun:"network_profile"`
-	Repository         json.RawMessage `bun:"repository,type:jsonb"`
-	RepositoryRevision int             `bun:"repository_revision"`
-	DomainsRevision    int             `bun:"domains_revision"`
-	PreviewRevision    int             `bun:"preview_revision"`
-	ActiveBuildCount   int             `bun:"active_build_count"`
-	UpdatedAt          time.Time       `bun:"updated_at"`
+	bun.BaseModel       `bun:"table:krun_workers,alias:krun_workers"`
+	WorkerID            string          `bun:"worker_id,pk"`
+	OrgID               string          `bun:"org_id"`
+	NetworkProfile      string          `bun:"network_profile"`
+	Repository          json.RawMessage `bun:"repository,type:jsonb"`
+	RepositoryRevision  int             `bun:"repository_revision"`
+	DomainsRevision     int             `bun:"domains_revision"`
+	PreviewRevision     int             `bun:"preview_revision"`
+	WorkersDevDisabled  bool            `bun:"workers_dev_disabled"`
+	PreviewUrlsDisabled bool            `bun:"preview_urls_disabled"`
+	ActiveBuildCount    int             `bun:"active_build_count"`
+	UpdatedAt           time.Time       `bun:"updated_at"`
 }
 
 type Placement struct {
@@ -330,6 +332,28 @@ type RetainedAsset struct {
 	EnvName        string    `bun:"env_name,pk"`
 	VersionID      string    `bun:"version_id,pk"`
 	ExpiresAt      time.Time `bun:"expires_at"`
+}
+
+type Hostname struct {
+	bun.BaseModel  `bun:"table:krun_worker_hostnames,alias:krun_worker_hostnames"`
+	Host           string `bun:"host,pk"`
+	OrgID          string `bun:"org_id"`
+	SuffixID       string `bun:"suffix_id"`
+	Revision       int    `bun:"revision"`
+	Retired        bool   `bun:"retired"`
+	GatewayManaged bool   `bun:"gateway_managed"`
+}
+
+type HostnameRoute struct {
+	bun.BaseModel `bun:"table:krun_worker_hostname_routes,alias:krun_worker_hostname_routes"`
+	Host          string `bun:"host,pk"`
+	MatchType     string `bun:"match_type,pk"`
+	Path          string `bun:"path,pk"`
+	WorkerID      string `bun:"worker_id"`
+	Origin        string `bun:"origin"`
+	CfPattern     string `bun:"cf_pattern"`
+	CustomDomain  bool   `bun:"custom_domain"`
+	Enabled       bool   `bun:"enabled"`
 }
 
 type Bucket struct {
