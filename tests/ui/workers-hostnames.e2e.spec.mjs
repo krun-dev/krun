@@ -105,8 +105,8 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
   const save = dialog.getByRole("button", { name: "保存", exact: true });
   await prefix.fill(desiredLabel);
   await screenshot("claim.png", [
-    [3, dialog.getByRole("combobox", { name: "域名后缀" })],
-    [4, prefix],
+    [3, prefix],
+    [4, dialog.getByRole("combobox", { name: "域名后缀" })],
     [5, submitClaim],
   ]);
   const claimed = page.waitForResponse(

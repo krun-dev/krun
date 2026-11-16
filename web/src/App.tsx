@@ -102,10 +102,10 @@ const navigation: {
   group: string;
 }[] = [
   { id: "overview", name: "概览", icon: LayoutDashboard, group: "" },
-  { id: "domains", name: "域名", icon: Globe, group: "" },
   { id: "workers", name: "Workers", icon: Layers3, group: "计算服务" },
   { id: "buckets", name: "对象存储", icon: Database, group: "存储服务" },
   { id: "hyperdrive", name: "Hyperdrive", icon: Database, group: "数据库" },
+  { id: "domains", name: "域名", icon: Globe, group: "网络" },
   { id: "members", name: "组织成员", icon: Users, group: "组织管理" },
   { id: "groups", name: "用户组", icon: UsersRound, group: "组织管理" },
   { id: "roles", name: "角色授权", icon: ShieldCheck, group: "组织管理" },
@@ -603,6 +603,7 @@ export default function App() {
                 ...navigation.filter((n) => n.group === "计算服务"),
                 ...navigation.filter((n) => n.group === "存储服务"),
                 ...navigation.filter((n) => n.group === "数据库"),
+                ...navigation.filter((n) => n.group === "网络"),
                 ...navigation.filter((n) => n.group === "组织管理"),
                 ...navigation.filter((n) => n.group === "个人设置"),
               ]

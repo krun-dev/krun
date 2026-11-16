@@ -26,16 +26,16 @@ description: 从平台提供的后缀申请域名，把同一域名的路径分�
 
 ## 控制台
 
-1. 在组织侧栏打开 **域名** ①，点击 **申请域名**，选择后缀 ③，填入前缀 ④，再点击 **申请域名** ⑤。
+1. 在组织侧栏打开 **网络 → 域名** ①，点击 **申请域名**，填入前缀 ③，选择后缀 ④，再点击 **申请域名** ⑤。
 2. 找到已申请的域名，点击 **编辑路由** ②。添加路由后，填写匹配方式和请求路径 ⑥，再选择目标 ⑦。截图中的
-   三条规则把 `/` 给静态站点、`/api` 给 Worker、`/legacy` 给 HTTP 服务。点击 **保存** ⑧。
+   四条规则把 `/` 给静态站点、`/api` 和 `/api/admin` 给不同 Worker、`/legacy` 给 HTTP 服务。点击 **保存** ⑧。
    目标 Worker 的 **路由与域名** 页仍可查看绑定。
 3. 要停止特定路径，可取消勾选 **启用路由**。要移除整个域名的流量，在 **编辑路由** 中选择
    **退役域名** 并确认；域名继续保留，不能重新申请。
 
-[![① 组织域名入口，② 编辑路由](/docs/screenshots/workers-hostnames/catalog.png)](/docs/screenshots/workers-hostnames/catalog.png)
+[![① 网络分组下的域名入口，② 编辑路由](/docs/screenshots/workers-hostnames/catalog.png)](/docs/screenshots/workers-hostnames/catalog.png)
 
-[![③ 选择后缀，④ 填写前缀，⑤ 申请域名](/docs/screenshots/workers-hostnames/claim.png)](/docs/screenshots/workers-hostnames/claim.png)
+[![③ 填写前缀，④ 选择后缀，⑤ 申请域名](/docs/screenshots/workers-hostnames/claim.png)](/docs/screenshots/workers-hostnames/claim.png)
 
 [![⑥ 填写路径，⑦ 选择目标，⑧ 保存路由](/docs/screenshots/workers-hostnames/routes.png)](/docs/screenshots/workers-hostnames/routes.png)
 

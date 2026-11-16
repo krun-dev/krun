@@ -350,6 +350,15 @@ function HostnameEditor({
               {!item ? (
                 <>
                   <div className="grid gap-3 sm:grid-cols-2">
+                    <Field label={t("域名前缀")}>
+                      <Input
+                        required
+                        maxLength={63}
+                        value={label}
+                        onChange={(event) => setLabel(event.target.value)}
+                        placeholder="shop"
+                      />
+                    </Field>
                     <SelectField
                       label={t("域名后缀")}
                       value={suffix}
@@ -364,15 +373,6 @@ function HostnameEditor({
                         </option>
                       ))}
                     </SelectField>
-                    <Field label={t("域名前缀")}>
-                      <Input
-                        required
-                        maxLength={63}
-                        value={label}
-                        onChange={(event) => setLabel(event.target.value)}
-                        placeholder="shop"
-                      />
-                    </Field>
                   </div>
                   <code className="break-all text-sm text-muted-foreground">
                     {label.toLowerCase() || "shop"}.{preview}
