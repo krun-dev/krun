@@ -487,6 +487,39 @@ await check(
   },
 );
 
+await check("CPU metrics remain separate across rollout versions", async () => {
+  const mod = await freshEntry();
+  const cpuCandidate = { ...version, id: "rel_cpu_candidate" };
+  const local = makeEnv(null, [], version.id, {
+    route: { candidate_version: cpuCandidate.id, candidate_weight: 50000 },
+    versions: { [cpuCandidate.id]: cpuCandidate },
+  });
+  const serving = new mod.Private(local, { exports: { IsolateActivity: () => ({}) } });
+  const loaderKeys = new Map();
+  for (let n = 0; n < 50 && loaderKeys.size < 2; n++) {
+    const response = await call(serving, "/api/cpu", { "Krun-Workers-Version-Key": `cpu-${n}` });
+    assert.equal(response.status, 200);
+    loaderKeys.set(response.headers.get("x-krun-version"), local.__loaderKey);
+  }
+  assert.equal(loaderKeys.size, 2);
+  for (const [id, milliseconds] of [
+    [version.id, 1],
+    [cpuCandidate.id, 3],
+  ]) {
+    const tail = new mod.IsolateActivity(local, { props: { key: loaderKeys.get(id) } });
+    tail.tailStream({ event: { entrypoint: "default" } })({
+      event: { type: "outcome", cpuTime: milliseconds },
+    });
+  }
+  const samples = await (await call(new mod.Metrics(local, {}), "/metrics")).text();
+  for (const [id, seconds] of [
+    [version.id, 0.001],
+    [cpuCandidate.id, 0.003],
+  ]) {
+    assert.ok(samples.includes(`version_id="${id}"} ${seconds}`));
+  }
+});
+
 await check("non-navigation miss without SPA config goes to the worker", async () => {
   const noSpaEnv = makeEnv({ ...config, not_found_handling: "none" }, fileList, "rel_nospa");
   const noSpaEntry = await freshEntry();
