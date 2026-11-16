@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/krun-dev/krun/internal/adapters/kubernetes"
+	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/domain"
 	"github.com/krun-dev/krun/internal/securetoken"
 )
@@ -28,7 +29,7 @@ func (w *Controller) reconcileManagedHostnames(ctx context.Context, desired map[
 			continue
 		}
 		matched, ok := w.Config.DomainForHost(item.Host)
-		if !ok || matched.ID != suffix.ID || w.Config.ManagedHostReserved(item.Host) {
+		if !ok || matched.ID != suffix.ID || matched.Type != appconfig.WorkerDomainApplication || w.Config.ManagedHostReserved(item.Host) {
 			continue
 		}
 		gateway, ok := w.Config.Gateway(suffix.Gateway)

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/krun-dev/krun/internal/authorization"
+	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/domain"
 	"github.com/krun-dev/krun/internal/securetoken"
 )
@@ -49,7 +50,7 @@ func (s *Server) addCustomDomain(changes *hostnameChanges, in cfDomainInput, ove
 	if err != nil {
 		return cfDomainRecord{}, err
 	}
-	change, err := changes.hostname(in.Hostname, zone)
+	change, err := changes.hostname(in.Hostname, zone, appconfig.WorkerDomainCustom)
 	if err != nil {
 		return cfDomainRecord{}, err
 	}
@@ -62,10 +63,8 @@ func (s *Server) addCustomDomain(changes *hostnameChanges, in cfDomainInput, ove
 	rule := rules[0]
 	rule.CustomDomain = true
 	for i, old := range change.item.Routes {
-		if old.Match != "prefix" || old.Path != "/" {
-			continue
-		}
-		if !old.CustomDomain || (!override && old.Worker != rule.Worker) {
+		if len(change.item.Routes) != 1 || old.Match != "prefix" || old.Path != "/" ||
+			!old.CustomDomain || (!override && old.Worker != rule.Worker) {
 			return cfDomainRecord{}, domain.Conflict("HOSTNAME_ROUTE_CONFLICT", "A route already uses this match and path")
 		}
 		if old.Worker != rule.Worker {
@@ -225,7 +224,8 @@ func (s *Server) replaceScriptCustomDomains(st *domain.State, p authorization.Pr
 	}
 	if dry || replaceScope {
 		for _, item := range items {
-			if seen[item.Host] {
+			suffix, ok := s.Config.Workers.Domain(item.SuffixID)
+			if seen[item.Host] || !ok || suffix.Type != appconfig.WorkerDomainCustom {
 				continue
 			}
 			for i, rule := range item.Routes {

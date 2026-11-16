@@ -71,7 +71,7 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 			continue
 		}
 		pool := placement.Pool
-		hosts := WorkerHostPatterns(ws, config.Domains)
+		hosts := WorkerHostPatterns(ws, config)
 		for name, env := range ws.Environments {
 			// The map key is authoritative: Environment.Name is a denormalised
 			// copy; the key defines the environment identity.
@@ -114,7 +114,7 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 
 	for _, hostname := range st.Workers.ManagedHostnames {
 		suffix, ok := config.DomainForHost(hostname.Host)
-		if !ok || suffix.ID != hostname.SuffixID || hostname.Retired || config.ManagedHostReserved(hostname.Host) {
+		if !ok || suffix.ID != hostname.SuffixID || suffix.Type == appconfig.WorkerDomainDefault || hostname.Retired || config.ManagedHostReserved(hostname.Host) {
 			continue
 		}
 		pool, err := config.DomainRuntimePool(suffix.ID)
@@ -122,7 +122,7 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 			continue
 		}
 		for _, rule := range hostname.Routes {
-			if rule.Origin != "" {
+			if rule.Origin != "" || (suffix.Type == appconfig.WorkerDomainCustom && !rule.CustomDomain) {
 				continue
 			}
 			target := managedTargets[rule.Worker]
@@ -196,26 +196,19 @@ func EdgeConfigOpsForPool(in []domain.EdgeConfigOp, pool string) []domain.EdgeCo
 // domain, in catalog order. envHostName expands the environment segment. A
 // worker with no stored selection falls back to the catalog defaults, matching
 // what normalizeWorker does for the API and the route reconciler.
-func WorkerHostPatterns(ws domain.Worker, domains []appconfig.WorkerDomain) []string {
+func WorkerHostPatterns(ws domain.Worker, config *appconfig.WorkersConfig) []string {
 	selected := map[string]bool{}
 	selection := ws.Domains
 	if len(selection) == 0 {
-		for _, domain := range domains {
-			if domain.Default {
-				selection = append(selection, domain.ID)
-			}
-		}
-		if len(selection) == 0 && len(domains) > 0 {
-			selection = []string{domains[0].ID}
-		}
+		selection = config.NormalizeWorkerNetwork(ws).Domains
 	}
 	for _, id := range selection {
 		selected[id] = true
 	}
 	slug := appconfig.WorkerSlug(ws.Organization, ws.Worker)
 	out := []string{}
-	for _, d := range domains {
-		if selected[d.ID] {
+	for _, d := range config.Domains {
+		if d.Type == appconfig.WorkerDomainDefault && selected[d.ID] {
 			out = append(out, slug+"\x00"+d.Domain)
 		}
 	}

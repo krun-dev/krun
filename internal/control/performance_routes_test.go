@@ -66,7 +66,7 @@ func TestSharedGatewayRouteCountIndependentOfSites(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test", Gateway: "edge"}})
+	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Type: appconfig.WorkerDomainDefault, Domain: "workers.test", Gateway: "edge"}})
 	config.Gateways = []appconfig.WorkerGateway{{ID: "edge", Name: "edge", Namespace: "test", Section: "http"}}
 
 	controller := &workerapp.Controller{Config: config, Kube: &kubernetes.Client{Base: server.URL, Client: server.Client(), Namespace: "test"}}

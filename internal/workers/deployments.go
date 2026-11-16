@@ -35,7 +35,7 @@ func DeploymentHosts(config *appconfig.WorkersConfig, worker domain.Worker, id s
 	if worker.PreviewURLsDisabled {
 		return hosts
 	}
-	for _, pattern := range WorkerHostPatterns(worker, config.Domains) {
+	for _, pattern := range WorkerHostPatterns(worker, config) {
 		if host := EnvHostName(pattern, DeploymentEnvironment(id)); host != "" {
 			hosts = append(hosts, host)
 		}

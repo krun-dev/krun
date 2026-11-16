@@ -141,15 +141,24 @@ type WorkerGateway struct {
 	Base string `json:"base"`
 }
 
-// WorkerDomain is one browser-facing suffix users can attach to a service.
+type WorkerDomainType string
+
+const (
+	WorkerDomainDefault     WorkerDomainType = "worker_default"
+	WorkerDomainCustom      WorkerDomainType = "worker_custom"
+	WorkerDomainApplication WorkerDomainType = "application"
+)
+
+// WorkerDomain is one platform suffix with an explicit purpose.
 // Access, Labels and Gateway are infrastructure metadata used to resolve a
 // Network Profile. Only the filtered domain id/name/display label is returned
 // to organization users.
 type WorkerDomain struct {
-	ID      string `json:"id"`
-	Domain  string `json:"domain"`
-	Label   string `json:"label"`
-	Gateway string `json:"gateway"`
+	Type    WorkerDomainType `json:"type"`
+	ID      string           `json:"id"`
+	Domain  string           `json:"domain"`
+	Label   string           `json:"label"`
+	Gateway string           `json:"gateway"`
 	// Access is a stable infrastructure primitive used by profile requirements.
 	// It is deliberately not returned to organization APIs.
 	Access string `json:"access"`
@@ -160,9 +169,8 @@ type WorkerDomain struct {
 	Default bool `json:"default"`
 	// StaticDomain overrides the static-asset host served through this domain's
 	// Gateway. Empty derives "static." + Domain.
-	StaticDomain      string   `json:"static_domain"`
-	ManagedSubdomains bool     `json:"managed_subdomains,omitempty"`
-	ReservedHosts     []string `json:"reserved_hosts,omitempty"`
+	StaticDomain  string   `json:"static_domain"`
+	ReservedHosts []string `json:"reserved_hosts,omitempty"`
 }
 
 type WorkerDatabaseEgress struct {

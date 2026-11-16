@@ -1,11 +1,15 @@
 ---
-title: 自定义子域名与路径路由
-description: 从平台提供的后缀申请域名，把同一域名的路径分给 Worker、静态站点或 HTTP 服务。
+title: 应用域名与 Worker 自定义域名
+description: 在 Worker 上绑定整域，或通过应用域名把路径分给多个 Worker、静态站点和 HTTP 服务。
 ---
 
-平台开放 `apps.example.com` 时，填写 `shop` 即可申请 `shop.apps.example.com`。
-平台维护通配 DNS 和 TLS，组织持有完整域名。短名只允许一层 ASCII DNS 标签，大小写等价；
-`w-` 开头的名字、平台保留名和已占用的名字不可申请。
+平台为每个后缀指定一种用途，申请时可选择对应后缀并填写一层前缀。平台负责通配 DNS 和 TLS。
+
+| 后缀类型 | 示例 | 在哪里配置 |
+| --- | --- | --- |
+| `worker_default` | `w-<hash>-production.workers.example.com` | Worker → 路由与域名 → 默认域名后缀。平台为环境生成前缀 |
+| `worker_custom` | `orders.custom.example.com` | Worker → 路由与域名 → Worker 自定义域名。整域指向当前 Worker 的生产环境 |
+| `application` | `shop.apps.example.com` | 组织 → 网络 → 应用域名。组织配置同域的路径和目标 |
 
 同一域名可以把 `/` 给静态站点、`/api` 给 Worker、`/legacy` 给 HTTP 服务，
 也可以把不同路径分别给多个 Worker。Worker 必须属于同一组织，使用后缀允许的网络，
@@ -26,10 +30,10 @@ description: 从平台提供的后缀申请域名，把同一域名的路径分�
 
 ## 控制台
 
-1. 在组织侧栏打开 **网络 → 域名** ①，点击 **申请域名**，填入前缀 ③，选择后缀 ④，再点击 **申请域名** ⑤。
+1. 在组织侧栏打开 **网络 → 应用域名** ①，点击 **申请域名**，填入前缀 ③，选择后缀 ④，再点击 **申请域名** ⑤。
 2. 找到已申请的域名，点击 **编辑路由** ②。添加路由后，填写匹配方式和请求路径 ⑥，再选择目标 ⑦。截图中的
    四条规则把 `/` 给静态站点、`/api` 和 `/api/admin` 给不同 Worker、`/legacy` 给 HTTP 服务。点击 **保存** ⑧。
-   目标 Worker 的 **路由与域名** 页仍可查看绑定。
+   目标 Worker 的 **路由与域名 → 应用域名** 可以查看分给它的路径。
 3. 要停止特定路径，可取消勾选 **启用路由**。要移除整个域名的流量，在 **编辑路由** 中选择
    **退役域名** 并确认；域名继续保留，不能重新申请。
 
@@ -38,6 +42,12 @@ description: 从平台提供的后缀申请域名，把同一域名的路径分�
 [![③ 填写前缀，④ 选择后缀，⑤ 申请域名](/docs/screenshots/workers-hostnames/claim-domain-prefix-first.png)](/docs/screenshots/workers-hostnames/claim-domain-prefix-first.png)
 
 [![⑥ 填写路径，⑦ 选择目标，⑧ 保存路由](/docs/screenshots/workers-hostnames/edit-domain-routes.png)](/docs/screenshots/workers-hostnames/edit-domain-routes.png)
+
+要为一个 Worker 绑定整域，打开这个 Worker 的 **路由与域名**，在 **Worker 自定义域名** 点击
+**绑定自定义域名** ⑨，填写前缀、选择后缀 ⑩，然后点击 **绑定域名**。绑定后可在同一区域解绑。
+页内的「默认域名后缀」用于平台生成地址，绑定自定义域名时可以继续保留。
+
+[![⑨ Worker 自定义域名入口，⑩ 选择自定义域名后缀](/docs/screenshots/workers-hostnames/worker-custom-domain.png)](/docs/screenshots/workers-hostnames/worker-custom-domain.png)
 
 ## krun CLI
 
@@ -58,6 +68,16 @@ statements:
     actions: [worker.read, worker.update]
     resource: {organization_id: ORG_ID, kind: worker, ids: [WEB_ID, API_ID]}
     conditions: {environments: [production]}
+```
+
+要绑定整域，先把 `ORG_ID` 设为组织 ID，`WORKER` 设为 Worker 短名或 ID。从 `list`
+的 `suffixes` 读取 Worker 自定义后缀 ID，设为 `CUSTOM_SUFFIX_ID`。绑定成功后，可从
+`items` 中读取该域名及最新 revision，设为 `CUSTOM_HOST`、`CUSTOM_REVISION` 后解绑。
+
+```sh
+krun workers custom-domains list --org "$ORG_ID" --worker "$WORKER"
+krun workers custom-domains attach --org "$ORG_ID" --worker "$WORKER" --suffix "$CUSTOM_SUFFIX_ID" --label orders
+krun workers custom-domains detach --org "$ORG_ID" --worker "$WORKER" --host "$CUSTOM_HOST" --revision "$CUSTOM_REVISION"
 ```
 
 先把 `ORG_ID` 设为组织 ID，执行 `list`，从 `suffixes` 中取得后缀 ID。
@@ -106,15 +126,14 @@ krun domains set --org "$ORG_ID" --host "$HOST" --revision "$REVISION" --routes 
 ## Cloudflare API 与 Wrangler
 
 沿用 [Cloudflare Workers Routes](https://developers.cloudflare.com/api/resources/workers/subresources/routes/)
-与 [Custom Domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/) 的
-字段：`routes` 配置路径，`custom_domain: true` 把整站入口指给一个生产 Worker，
-同一域名的更具体 Routes 仍可匹配其他 Worker。以已部署 Worker 为例，在原有
-`wrangler.jsonc` 中加上这些字段，示例的主机名和 Zone 换成平台开放的后缀：
+与 [Custom Domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/) 的字段。`custom_domain: true` 用于整域绑定，匹配 `worker_custom` 后缀。普通 `routes`
+用于应用域名路径，匹配 `application` 后缀。同一个 Worker 可同时声明两种绑定。
+在已有 `wrangler.jsonc` 中加入这些字段，并将示例后缀换成平台开放的后缀。
 
 ```json
 {
   "routes": [
-    {"pattern": "shop.apps.example.com", "custom_domain": true},
+    {"pattern": "orders.custom.example.com", "custom_domain": true},
     {"pattern": "shop.apps.example.com/api/*", "zone_name": "apps.example.com"}
   ]
 }
@@ -132,12 +151,12 @@ npx wrangler@4.155.0 triggers deploy --config wrangler.jsonc
 ```
 
 把 `/api/*` 指给另一 Worker 时，先从现有 Worker 的路由中撤下这条规则，
-再放到 API Worker 的 Wrangler 配置中；根 Custom Domain 可以保留。只需更新路由时，
+再放到 API Worker 的 Wrangler 配置中。只需更新路由时，
 也可直接调用 Zone 的 `/workers/routes` API。
 
 - Zone 对应平台开放的后缀。兼容精确主机名及精确路径、末尾 `/*`；`/api/*` 按路径段
   匹配，也包含 `/api`。精确规则只比较路径。通配主机名、`/api*`、任意外部 Zone 和自带域名不在范围内。
-  同一匹配方式和路径只能配置一个目标；不能把同一个 `/*` 同时配置为 Workers Route 和 Custom Domain。
+  应用域名内，同一匹配方式和路径只能配置一个目标。两类后缀各自使用对应的 API。
   Custom Domain 不为命名 Preview 自动生成更深一层的子域。
 - 静态站点与 HTTP 服务使用 [Origin Rules](https://developers.cloudflare.com/rules/origin-rules/create-api/)
   的 `http_request_origin` 入口 API，也可在控制台或 `krun domains` 中编辑。表达式仅支持

@@ -161,7 +161,7 @@ export function WorkerDomains({
           <CardContent className="grid gap-4 p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="font-medium">{t("访问域名后缀")}</h3>
+                <h3 className="font-medium">{t("默认域名后缀")}</h3>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {t(
                     "这里展示的是地址后缀，不是可直接访问的地址。平台会为每个环境生成独立子域名，实际地址见下方。",

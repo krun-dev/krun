@@ -1,6 +1,7 @@
 package domain
 
 type ManagedHostname struct {
+	Type           string                 `json:"type,omitempty"`
 	Host           string                 `json:"host"`
 	Organization   string                 `json:"-"`
 	SuffixID       string                 `json:"suffix_id"`

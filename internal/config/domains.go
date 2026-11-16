@@ -100,11 +100,23 @@ func (c *WorkersConfig) ValidateCatalog(dns *regexp.Regexp) error {
 		if err := ValidateWorkerLabels(d.Labels); err != nil {
 			return fmt.Errorf("Workers domain %s labels: %w", d.ID, err)
 		}
-		if d.StaticDomain == "" {
-			d.StaticDomain = "static." + d.Domain
-		}
-		if !dns.MatchString(d.StaticDomain) {
-			return fmt.Errorf("invalid Workers static domain for %s", d.ID)
+		switch d.Type {
+		case WorkerDomainDefault:
+			if d.StaticDomain == "" {
+				d.StaticDomain = "static." + d.Domain
+			}
+			if !dns.MatchString(d.StaticDomain) {
+				return fmt.Errorf("invalid Workers static domain for %s", d.ID)
+			}
+		case WorkerDomainCustom, WorkerDomainApplication:
+			if d.StaticDomain != "" {
+				return fmt.Errorf("Workers domain %s can set static_domain only with type worker_default", d.ID)
+			}
+			if d.Default {
+				return fmt.Errorf("Workers domain %s can set default only with type worker_default", d.ID)
+			}
+		default:
+			return fmt.Errorf("Workers domain %s requires type worker_default, worker_custom or application", d.ID)
 		}
 		for _, host := range d.ReservedHosts {
 			if host != strings.ToLower(host) || !dns.MatchString(host) || !strings.HasSuffix(host, "."+d.Domain) {
@@ -112,14 +124,10 @@ func (c *WorkersConfig) ValidateCatalog(dns *regexp.Regexp) error {
 			}
 		}
 	}
-	for _, d := range c.Domains {
-		if !d.ManagedSubdomains {
-			continue
-		}
-		for _, other := range c.Domains {
-			if d.ID != other.ID && (d.Gateway != other.Gateway || d.Access != other.Access) &&
-				(strings.HasSuffix(d.Domain, "."+other.Domain) || strings.HasSuffix(other.Domain, "."+d.Domain)) {
-				return fmt.Errorf("Workers managed suffix %s overlaps another gateway or access scope", d.ID)
+	for i, d := range c.Domains {
+		for _, other := range c.Domains[i+1:] {
+			if strings.HasSuffix(d.Domain, "."+other.Domain) || strings.HasSuffix(other.Domain, "."+d.Domain) {
+				return fmt.Errorf("Workers domain suffixes %s and %s overlap", d.ID, other.ID)
 			}
 		}
 	}
@@ -155,36 +163,39 @@ func (c *WorkersConfig) Domain(id string) (WorkerDomain, bool) {
 	return WorkerDomain{}, false
 }
 
-// domainForHost resolves which configured domain a route host belongs to. The
-// longest matching suffix wins so overlapping suffixes stay unambiguous.
+// DomainForHost finds the exact configured suffix after one DNS label.
 func (c *WorkersConfig) DomainForHost(host string) (WorkerDomain, bool) {
-	if c == nil || host == "" {
-		return WorkerDomain{}, false
-	}
-	var best WorkerDomain
-	found := false
-	bestLen := 0
-	for _, d := range c.Domains {
-		if strings.HasSuffix(host, "."+d.Domain) && len(d.Domain) > bestLen {
-			best, bestLen, found = d, len(d.Domain), true
+	_, suffix, ok := strings.Cut(host, ".")
+	if c != nil && ok {
+		for _, d := range c.Domains {
+			if d.Domain == suffix {
+				return d, true
+			}
 		}
 	}
-	return best, found
+	return WorkerDomain{}, false
 }
 
-// defaultDomains returns the ids newly created environments start with.
+// DefaultDomains returns the Worker default suffixes selected for new environments.
 func (c *WorkersConfig) DefaultDomains() []string {
 	out := []string{}
 	if c == nil {
 		return out
 	}
+	fallback := ""
 	for _, d := range c.Domains {
+		if d.Type != WorkerDomainDefault {
+			continue
+		}
+		if fallback == "" {
+			fallback = d.ID
+		}
 		if d.Default {
 			out = append(out, d.ID)
 		}
 	}
-	if len(out) == 0 && len(c.Domains) > 0 {
-		out = append(out, c.Domains[0].ID)
+	if len(out) == 0 && fallback != "" {
+		out = append(out, fallback)
 	}
 	return out
 }
@@ -263,11 +274,11 @@ func WorkerVariablesValid(vars map[string]any) bool {
 
 func (c *WorkersConfig) ManagedHostReserved(host string) bool {
 	label, _, _ := strings.Cut(host, ".")
-	if strings.HasPrefix(label, "w-") || strings.HasPrefix(label, "xn--") {
+	if strings.HasPrefix(label, "xn--") {
 		return true
 	}
 	for _, suffix := range c.Domains {
-		if host == suffix.Domain || host == suffix.StaticDomain || host == "static."+suffix.Domain ||
+		if host == suffix.Domain || host == suffix.StaticDomain ||
 			slices.Contains(suffix.ReservedHosts, host) {
 			return true
 		}

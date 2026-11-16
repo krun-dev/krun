@@ -24,11 +24,22 @@ type Route = {
   custom_domain?: boolean;
   enabled: boolean;
 };
-type Hostname = { host: string; suffix_id: string; revision: number; routes: Route[] };
+type Hostname = {
+  host: string;
+  suffix_id: string;
+  type: "worker_custom" | "application";
+  revision: number;
+  routes: Route[];
+};
 type Suffix = { id: string; domain: string; label: string };
 type Origin = { host: string; kind: "static" | "http"; label: string; suffixes: string[] };
 type Catalog = { items: Hostname[]; suffixes: Suffix[]; origins: Origin[]; can_manage: boolean };
-type Bindings = { items: Hostname[]; can_read_catalog: boolean };
+type Bindings = {
+  items: Hostname[];
+  suffixes: Suffix[];
+  can_manage: boolean;
+  can_read_catalog: boolean;
+};
 
 export function WorkerHostnameBindings({
   base,
@@ -37,53 +48,201 @@ export function WorkerHostnameBindings({
   base: string;
   catalogHref: string;
 }) {
+  const path = base + "/hostnames";
   const [data, setData] = useState<Bindings>();
   const [error, setError] = useState("");
+  const [revision, setRevision] = useState(0);
+  const [editor, setEditor] = useState<Hostname | "new" | null>(null);
   useEffect(() => {
     const controller = new AbortController();
-    void api<Bindings>(base + "/hostnames", "GET", undefined, controller.signal)
+    setError("");
+    void api<Bindings>(path, "GET", undefined, controller.signal)
       .then(setData)
       .catch((cause) => {
         if (!controller.signal.aborted) setError(errorMessage(cause));
       });
     return () => controller.abort();
-  }, [base]);
+  }, [path, revision]);
+
+  const custom = data?.items.filter((item) => item.type === "worker_custom") || [];
+  const applications = data?.items.filter((item) => item.type === "application") || [];
 
   return (
-    <Card className="py-0 shadow-none">
-      <CardContent className="grid gap-3 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h3 className="font-medium">{t("自定义子域名")}</h3>
-          {data?.can_read_catalog ? (
-            <Button
-              variant="outline"
-              asChild
+    <>
+      <Card className="py-0 shadow-none">
+        <CardContent className="grid gap-3 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 className="font-medium">{t("Worker 自定义域名")}</h3>
+            {data?.can_manage && data.suffixes.length > 0 ? (
+              <Button onClick={() => setEditor("new")}>
+                <Plus size={16} />
+                {t("绑定自定义域名")}
+              </Button>
+            ) : null}
+          </div>
+          {error ? (
+            <p
+              role="alert"
+              className="text-sm text-destructive"
             >
-              <a href={catalogHref}>{t("管理域名与路由")}</a>
-            </Button>
-          ) : null}
-        </div>
-        {error ? (
-          <p
-            role="alert"
-            className="text-sm text-destructive"
-          >
-            {error}
-          </p>
-        ) : !data ? (
-          <Loading />
-        ) : data.items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t("此 Worker 尚未绑定自定义子域名。")}</p>
-        ) : (
-          data.items.map((item) => (
-            <HostnameCard
-              key={item.host}
-              item={item}
+              {error}
+            </p>
+          ) : !data ? (
+            <Loading />
+          ) : custom.length === 0 ? (
+            <p className="text-sm text-muted-foreground">{t("此 Worker 尚未绑定自定义子域名。")}</p>
+          ) : (
+            custom.map((item) => (
+              <HostnameCard
+                key={item.host}
+                item={item}
+                edit={data.can_manage ? () => setEditor(item) : undefined}
+              />
+            ))
+          )}
+        </CardContent>
+      </Card>
+      {applications.length > 0 || data?.can_read_catalog ? (
+        <Card className="py-0 shadow-none">
+          <CardContent className="grid gap-3 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="font-medium">{t("应用域名")}</h3>
+              {data?.can_read_catalog ? (
+                <Button
+                  variant="outline"
+                  asChild
+                >
+                  <a href={catalogHref}>{t("管理应用域名")}</a>
+                </Button>
+              ) : null}
+            </div>
+            {applications.length > 0 ? (
+              applications.map((item) => (
+                <HostnameCard
+                  key={item.host}
+                  item={item}
+                />
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground">{t("此 Worker 尚无应用域名路由。")}</p>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
+      {editor && data ? (
+        <WorkerCustomDomainDialog
+          path={path}
+          item={editor === "new" ? undefined : editor}
+          suffixes={data.suffixes}
+          close={() => setEditor(null)}
+          saved={() => {
+            setEditor(null);
+            setRevision((value) => value + 1);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function WorkerCustomDomainDialog({
+  path,
+  item,
+  suffixes,
+  close,
+  saved,
+}: {
+  path: string;
+  item?: Hostname;
+  suffixes: Suffix[];
+  close: () => void;
+  saved: () => void;
+}) {
+  const [suffix, setSuffix] = useState(suffixes[0]?.id || "");
+  const [label, setLabel] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function submit() {
+    setBusy(true);
+    setError("");
+    try {
+      if (item) {
+        await api(
+          path + "/" + encodeURIComponent(item.host) + "?revision=" + item.revision,
+          "DELETE",
+        );
+      } else {
+        await api(path, "POST", { suffix_id: suffix, label });
+      }
+      saved();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !busy) close();
+      }}
+    >
+      <DialogContent className="sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>{item ? t("解绑自定义域名") : t("绑定自定义域名")}</DialogTitle>
+          <DialogDescription>
+            {item
+              ? t("解绑后，该域名将停止转发到此 Worker。")
+              : t("该域名的所有路径均指向此 Worker 的生产环境。")}
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="grid gap-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
+          }}
+        >
+          {item ? (
+            <code>{item.host}</code>
+          ) : (
+            <HostnameFields
+              label={label}
+              setLabel={setLabel}
+              suffix={suffix}
+              setSuffix={setSuffix}
+              suffixes={suffixes}
             />
-          ))
-        )}
-      </CardContent>
-    </Card>
+          )}
+          {error ? (
+            <p
+              role="alert"
+              className="text-sm text-destructive"
+            >
+              {error}
+            </p>
+          ) : null}
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={close}
+            >
+              {t("取消")}
+            </Button>
+            <Button
+              type="submit"
+              disabled={busy}
+              variant={item ? "destructive" : "default"}
+            >
+              {item ? t("确认解绑") : t("绑定域名")}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -105,11 +264,15 @@ function HostnameCard({ item, edit }: { item: Hostname; edit?: () => void }) {
             size="sm"
             onClick={edit}
           >
-            {t("编辑路由")}
+            {item.type === "worker_custom" ? t("解绑自定义域名") : t("编辑路由")}
           </Button>
         ) : null}
       </div>
-      {item.routes.length > 0 ? (
+      {item.type === "worker_custom" ? (
+        item.routes[0]?.enabled === false ? (
+          <Badge variant="secondary">{t("已停用")}</Badge>
+        ) : null
+      ) : item.routes.length > 0 ? (
         <ul className="mt-3 divide-y">
           {item.routes.map((route) => (
             <li
@@ -168,15 +331,13 @@ export function ManagedHostnames({ base }: { base: string }) {
   return (
     <>
       <PageHeader
-        title={t("域名")}
-        description={t("申请平台子域名，为每个域名配置 HTTP 路由。")}
+        title={t("应用域名")}
+        description={t("按路径把同一域名的流量分给 Worker、静态站点和 HTTP 服务。")}
       />
       <Card className="py-0 shadow-none">
         <CardContent className="grid gap-4 p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 className="font-semibold">{t("自定义子域名")}</h2>
-            </div>
+            <h2 className="font-semibold">{t("应用域名列表")}</h2>
             {catalog?.can_manage && catalog.suffixes.length > 0 ? (
               <Button onClick={() => setEditor("new")}>
                 <Plus size={16} />
@@ -211,7 +372,7 @@ export function ManagedHostnames({ base }: { base: string }) {
           ) : catalog.items.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               {catalog.suffixes.length
-                ? t("还没有自定义子域名。")
+                ? t("还没有应用域名。")
                 : t("平台尚未开放可申请的域名后缀。")}
             </p>
           ) : (
@@ -273,7 +434,6 @@ function HostnameEditor({
   const [retiring, setRetiring] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const preview = suffixes.find((value) => value.id === suffix)?.domain;
   const changesFallback = item?.routes.some(
     (previous) =>
       !routes.some((route) => route.match === previous.match && route.path === previous.path),
@@ -348,36 +508,13 @@ function HostnameEditor({
           ) : (
             <>
               {!item ? (
-                <>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <Field label={t("域名前缀")}>
-                      <Input
-                        required
-                        maxLength={63}
-                        value={label}
-                        onChange={(event) => setLabel(event.target.value)}
-                        placeholder="shop"
-                      />
-                    </Field>
-                    <SelectField
-                      label={t("域名后缀")}
-                      value={suffix}
-                      onChange={setSuffix}
-                    >
-                      {suffixes.map((value) => (
-                        <option
-                          key={value.id}
-                          value={value.id}
-                        >
-                          {value.domain}
-                        </option>
-                      ))}
-                    </SelectField>
-                  </div>
-                  <code className="break-all text-sm text-muted-foreground">
-                    {label.toLowerCase() || "shop"}.{preview}
-                  </code>
-                </>
+                <HostnameFields
+                  label={label}
+                  setLabel={setLabel}
+                  suffix={suffix}
+                  setSuffix={setSuffix}
+                  suffixes={suffixes}
+                />
               ) : null}
               {item
                 ? routes.map((route, index) => (
@@ -540,5 +677,53 @@ function HostnameEditor({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function HostnameFields({
+  label,
+  setLabel,
+  suffix,
+  setSuffix,
+  suffixes,
+}: {
+  label: string;
+  setLabel: (label: string) => void;
+  suffix: string;
+  setSuffix: (suffix: string) => void;
+  suffixes: Suffix[];
+}) {
+  const preview = suffixes.find((value) => value.id === suffix)?.domain;
+  return (
+    <>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label={t("域名前缀")}>
+          <Input
+            required
+            maxLength={63}
+            value={label}
+            onChange={(event) => setLabel(event.target.value)}
+            placeholder="shop"
+          />
+        </Field>
+        <SelectField
+          label={t("域名后缀")}
+          value={suffix}
+          onChange={setSuffix}
+        >
+          {suffixes.map((value) => (
+            <option
+              key={value.id}
+              value={value.id}
+            >
+              {value.domain}
+            </option>
+          ))}
+        </SelectField>
+      </div>
+      <code className="break-all text-sm text-muted-foreground">
+        {label.toLowerCase() || "shop"}.{preview}
+      </code>
+    </>
   );
 }

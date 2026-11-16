@@ -68,7 +68,7 @@ func workerProjectionConfig(domains []appconfig.WorkerDomain) *appconfig.Workers
 
 func TestWorkerConfigProjection(t *testing.T) {
 	st := workerConfigFixture()
-	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}})
+	config := workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Type: appconfig.WorkerDomainDefault, Domain: "workers.test"}})
 	p := workerapp.EdgeConfigFromState(st, config)
 	if len(p.Routes) != 3 {
 		t.Fatalf("routes: %+v", p.Routes)
@@ -94,7 +94,7 @@ func TestWorkerConfigProjection(t *testing.T) {
 
 func TestWorkerConfigDiffOrdering(t *testing.T) {
 	st := workerConfigFixture()
-	first := workerapp.EdgeConfigFromState(st, workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Domain: "workers.test"}}))
+	first := workerapp.EdgeConfigFromState(st, workerProjectionConfig([]appconfig.WorkerDomain{{ID: "internal", Type: appconfig.WorkerDomainDefault, Domain: "workers.test"}}))
 	ops := workerapp.DiffWorkerConfig(nil, first)
 	seenRoute := false
 	for _, op := range ops {

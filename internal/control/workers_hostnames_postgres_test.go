@@ -19,13 +19,26 @@ import (
 	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
+func addTypedHostnameSuffixes(cfg *appconfig.WorkersConfig) (application, custom appconfig.WorkerDomain) {
+	defaultSuffix := cfg.Domains[0]
+	application = appconfig.WorkerDomain{
+		ID: "apps", Domain: "apps.test", Type: appconfig.WorkerDomainApplication,
+		Access: defaultSuffix.Access, Gateway: defaultSuffix.Gateway, Labels: defaultSuffix.Labels,
+	}
+	custom = appconfig.WorkerDomain{
+		ID: "custom", Domain: "custom.test", Type: appconfig.WorkerDomainCustom,
+		Access: defaultSuffix.Access, Gateway: defaultSuffix.Gateway, Labels: defaultSuffix.Labels,
+	}
+	cfg.Domains = append(cfg.Domains, application, custom)
+	return application, custom
+}
+
 func TestManagedHostnameOwnershipAndRuntimeProjection(t *testing.T) {
 	s, store, worker := workerTestServer(t)
 	ctx := t.Context()
 	cfg := s.Config.Workers
-	cfg.Domains[0].ManagedSubdomains = true
-	cfg.Domains[0].ReservedHosts = []string{"reserved." + cfg.Domains[0].Domain}
-	suffix := cfg.Domains[0]
+	suffix, _ := addTypedHostnameSuffixes(cfg)
+	cfg.Domains[1].ReservedHosts = []string{"reserved." + suffix.Domain}
 	host := "shop." + suffix.Domain
 	secondWorker := "svc-api"
 	err := store.Update(ctx, PartitionAll, func(st *State) error {
@@ -54,7 +67,6 @@ func TestManagedHostnameOwnershipAndRuntimeProjection(t *testing.T) {
 	}
 
 	do(http.MethodPost, base, "krun_cli_viewer", payload, 403, "PERMISSION_DENIED")
-	do(http.MethodPost, base, admin, strings.Replace(payload, "Shop", "w-owned", 1), 409, "HOSTNAME_UNAVAILABLE")
 	do(http.MethodPost, base, admin, strings.Replace(payload, "Shop", "reserved", 1), 409, "HOSTNAME_UNAVAILABLE")
 	do(http.MethodPost, base, admin, strings.Replace(payload, "Shop", "a.b", 1), 422, "HOSTNAME_INVALID")
 	do(http.MethodPost, base, admin, strings.Replace(payload, "Shop", "K", 1), 422, "HOSTNAME_INVALID")
@@ -145,8 +157,7 @@ func TestManagedHostnameOwnershipAndRuntimeProjection(t *testing.T) {
 
 func TestCLIManagedHostnameWorkflow(t *testing.T) {
 	s, _, _ := workerTestServer(t)
-	suffix := &s.Config.Workers.Domains[0]
-	suffix.ManagedSubdomains = true
+	suffix, customSuffix := addTypedHostnameSuffixes(s.Config.Workers)
 	server := httptest.NewServer(s)
 	defer server.Close()
 	t.Setenv("KRUN_ENDPOINT", server.URL)
@@ -159,7 +170,7 @@ func TestCLIManagedHostnameWorkflow(t *testing.T) {
 	run := func(args ...string) string {
 		t.Helper()
 		var out, diagnostics bytes.Buffer
-		flags := append([]string{"--no-update-check", "--profile", filepath.Join(dir, "profile.yaml"), "domains"}, args...)
+		flags := append([]string{"--no-update-check", "--profile", filepath.Join(dir, "profile.yaml")}, args...)
 		flags = append(flags, "--org", "org-a")
 		if err := kruncli.Run(t.Context(), flags, strings.NewReader(""), &out, &diagnostics); err != nil {
 			t.Fatalf("krun %v: %v (%s)", args, err, diagnostics.String())
@@ -168,29 +179,42 @@ func TestCLIManagedHostnameWorkflow(t *testing.T) {
 	}
 
 	var claimed domain.ManagedHostname
-	raw := run("claim", "--suffix", suffix.ID, "--label", "cli", "--routes", routes)
+	raw := run("domains", "claim", "--suffix", suffix.ID, "--label", "cli", "--routes", routes)
 	if err := json.Unmarshal([]byte(raw), &claimed); err != nil || claimed.Host != "cli."+suffix.Domain || claimed.Revision != 1 {
 		t.Fatalf("CLI claim result %q: %v", raw, err)
 	}
-	if out := run("list", "--worker", "svc-a"); !strings.Contains(out, claimed.Host) || !strings.Contains(out, "/api") {
+	if out := run("domains", "list", "--worker", "svc-a"); !strings.Contains(out, claimed.Host) || !strings.Contains(out, "/api") {
 		t.Fatalf("CLI Worker bindings did not include the new route: %s", out)
 	}
-	raw = run("set", "--host", claimed.Host, "--revision", "1", "--routes", routes)
+	raw = run("domains", "set", "--host", claimed.Host, "--revision", "1", "--routes", routes)
 	var updated domain.ManagedHostname
 	if err := json.Unmarshal([]byte(raw), &updated); err != nil || updated.Revision != 2 {
 		t.Fatalf("CLI update result %q: %v", raw, err)
 	}
-	run("retire", "--host", claimed.Host, "--revision", "2")
-	if out := run("list"); strings.Contains(out, claimed.Host) {
+	run("domains", "retire", "--host", claimed.Host, "--revision", "2")
+	if out := run("domains", "list"); strings.Contains(out, claimed.Host) {
 		t.Fatalf("CLI still lists a retired hostname: %s", out)
 	}
+	attached := run("workers", "custom-domains", "attach", "--worker", "svc-a", "--suffix", customSuffix.ID, "--label", "cli")
+	var custom domain.ManagedHostname
+	if err := json.Unmarshal([]byte(attached), &custom); err != nil || custom.Type != string(appconfig.WorkerDomainCustom) ||
+		custom.Host != "cli."+customSuffix.Domain || len(custom.Routes) != 1 || !custom.Routes[0].CustomDomain {
+		t.Fatalf("CLI custom domain result %q: %v", attached, err)
+	}
+	if out := run("domains", "list"); strings.Contains(out, custom.Host) {
+		t.Fatalf("custom domain leaked into application catalog: %s", out)
+	}
+	run("workers", "custom-domains", "detach", "--worker", "svc-a", "--host", custom.Host, "--revision", "1")
+	if out := run("workers", "custom-domains", "list", "--worker", "svc-a"); strings.Contains(out, custom.Host) {
+		t.Fatalf("detached custom domain still appears on Worker: %s", out)
+	}
+
 }
 
 func TestCloudflareHostnameAPIsShareOrganizationRoutes(t *testing.T) {
 	s, store, _ := workerTestServer(t)
 	cfg := s.Config.Workers
-	cfg.Domains[0].ManagedSubdomains = true
-	suffix := cfg.Domains[0]
+	suffix, customSuffix := addTypedHostnameSuffixes(cfg)
 	host := "shop." + suffix.Domain
 	cfg.ManagedOrigins = []appconfig.ManagedOrigin{
 		{Host: "shop-static.origin.example.com", Kind: "static", Service: "storefront", Port: 80, Organizations: []string{"org-a"}, Suffixes: []string{suffix.ID}},
@@ -249,7 +273,10 @@ func TestCloudflareHostnameAPIsShareOrganizationRoutes(t *testing.T) {
 		}
 	}
 
-	custom := "worker." + suffix.Domain
+	custom := "worker." + customSuffix.Domain
+	do(http.MethodPut, account+"/workers/domains", admin, fmt.Sprintf(`{"hostname":%q,"service":"storefront"}`, host), 422)
+	do(http.MethodPut, script+"/routes", admin, fmt.Sprintf(`[{"pattern":%q}]`, custom+"/api/*"), 422)
+	do(http.MethodPut, script+"/routes", admin, fmt.Sprintf(`[{"pattern":%q}]`, "test."+cfg.Domains[0].Domain+"/*"), 422)
 	do(http.MethodPost, script+"/domains/changeset?replace_state=true", admin, fmt.Sprintf(`[{"hostname":%q}]`, custom), 200)
 	do(http.MethodPut, script+"/domains/records", admin, fmt.Sprintf(`{"override_scope":true,"origins":[{"hostname":%q}]}`, custom), 200)
 	raw = do(http.MethodGet, account+"/workers/domains?hostname="+custom, admin, "", 200)
@@ -276,9 +303,10 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 		t.Skip("set KRUN_TEST_WRANGLER to the absolute path of the Wrangler CLI")
 	}
 	s, store, _ := workerTestServer(t)
-	s.Config.Workers.Domains[0].ManagedSubdomains = true
-	suffix := s.Config.Workers.Domains[0].Domain
+	appSuffix, customSuffix := addTypedHostnameSuffixes(s.Config.Workers)
+	suffix := appSuffix.Domain
 	host := "wrangler." + suffix
+	custom := "wrangler." + customSuffix.Domain
 	if _, err := postgresTestPool(store).Exec(t.Context(), `
 		UPDATE krun_resources SET locator='storefront' WHERE resource_id='svc-a';
 		UPDATE krun_organizations SET short_name='store-org' WHERE org_id='org-a';
@@ -292,7 +320,7 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 	cfg := fmt.Sprintf(`{
 		"name":"storefront", "account_id":"store-org", "main":"index.js", "compatibility_date":"2026-09-28",
 		"routes":[{"pattern":%q,"zone_name":%q},{"pattern":%q,"custom_domain":true}]
-	}`, host+"/api/*", suffix, host)
+	}`, host+"/api/*", suffix, custom)
 	if err := os.WriteFile(filepath.Join(dir, "wrangler.jsonc"), []byte(cfg), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -316,8 +344,12 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 		}
 	}
 	item, err := store.ManagedHostname(t.Context(), "org-a", host)
-	if err != nil || len(item.Routes) != 2 {
-		t.Fatalf("Wrangler did not publish both routes: %+v (%v)", item, err)
+	if err != nil || len(item.Routes) != 1 || item.Routes[0].Path != "/api" {
+		t.Fatalf("Wrangler did not publish the application route: %+v (%v)", item, err)
+	}
+	item, err = store.ManagedHostname(t.Context(), "org-a", custom)
+	if err != nil || len(item.Routes) != 1 || !item.Routes[0].CustomDomain {
+		t.Fatalf("Wrangler did not publish the standalone Custom Domain: %+v (%v)", item, err)
 	}
 	resp := request(s, "GET", cfPrefix+"/accounts/org-a/workers/scripts/storefront/subdomain", "krun_cli_admin", "")
 	if resp.Code != 200 || !strings.Contains(resp.Body.String(), `"enabled":false,"previews_enabled":true`) {
@@ -333,7 +365,7 @@ func TestOfficialWranglerHostnameTriggers(t *testing.T) {
 		if route.Worker != "svc-a" || route.Environment != "production" {
 			continue
 		}
-		if route.Host != host {
+		if route.Host != host && route.Host != custom {
 			t.Fatalf("disabled default URL is still in the runtime projection: %+v", route)
 		}
 		found++

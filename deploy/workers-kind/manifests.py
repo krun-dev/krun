@@ -93,6 +93,7 @@ workers:
       section: public
   domains:
     - id: internal
+      type: worker_default
       domain: workers.test
       label: 内网
       access: private
@@ -102,6 +103,7 @@ workers:
       default: true
       static_domain: static.workers.test
     - id: external
+      type: worker_default
       # A sibling suffix keeps the private Gateway wildcard from matching public hosts.
       domain: public-workers.test
       label: 公网
@@ -111,6 +113,7 @@ workers:
       gateway: external
       static_domain: static.public-workers.test
     - id: isolated
+      type: worker_default
       domain: isolated-workers.test
       label: 隔离池内网
       access: private

@@ -145,8 +145,8 @@ func (c *WorkersConfig) ValidateNetworkProfiles() error {
 		if profile.Visibility != "public" && profile.Visibility != "granted-only" && profile.Visibility != "assigned-only" {
 			return fmt.Errorf("invalid Workers network profile visibility")
 		}
-		if len(c.DomainsForProfile(*profile)) == 0 {
-			return fmt.Errorf("Workers network profile %s selects no domains", profile.ID)
+		if len(c.WorkerDefaultDomainsForProfile(*profile)) == 0 {
+			return fmt.Errorf("Workers network profile %s selects no worker_default domains", profile.ID)
 		}
 		if len(c.PoolsForProfile(profile.ID)) == 0 {
 			return fmt.Errorf("Workers network profile %s must resolve to at least one runtime pool", profile.ID)
@@ -228,7 +228,7 @@ func (c *WorkersConfig) NormalizeWorkerNetwork(ws domain.Worker) domain.Worker {
 		ws.NetworkProfile = profile.ID
 	}
 	eligible := map[string]bool{}
-	for _, domain := range c.DomainsForProfile(profile) {
+	for _, domain := range c.WorkerDefaultDomainsForProfile(profile) {
 		eligible[domain.ID] = true
 	}
 	selected := make([]string, 0, len(ws.Domains))
@@ -255,8 +255,14 @@ func (c *WorkersConfig) DomainsForProfile(profile WorkerNetworkProfile) []Worker
 	return out
 }
 
+func (c *WorkersConfig) WorkerDefaultDomainsForProfile(profile WorkerNetworkProfile) []WorkerDomain {
+	return slices.DeleteFunc(c.DomainsForProfile(profile), func(d WorkerDomain) bool {
+		return d.Type != WorkerDomainDefault
+	})
+}
+
 func (c *WorkersConfig) DefaultDomainsForProfile(profile WorkerNetworkProfile) []string {
-	eligible := c.DomainsForProfile(profile)
+	eligible := c.WorkerDefaultDomainsForProfile(profile)
 	out := []string{}
 	for _, domain := range eligible {
 		if domain.Default {

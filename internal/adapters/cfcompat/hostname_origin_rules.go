@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/krun-dev/krun/internal/authorization"
+	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/domain"
 	"github.com/krun-dev/krun/internal/securetoken"
 )
@@ -115,6 +116,9 @@ func (s *Server) cfOriginRuleset(st *domain.State, p authorization.Principal, r 
 	if r.Method == http.MethodGet {
 		return result, http.StatusOK, nil
 	}
+	if zone.Suffix.Type != appconfig.WorkerDomainApplication {
+		return nil, 0, domain.Invalid("HOSTNAME_INVALID", "Choose a suffix of type application")
+	}
 	return s.withHostnameTargets(r, p, func(st *domain.State) (any, int, error) {
 		changes, err := s.authorizeHostnameChanges(st, p, r)
 		if err != nil {
@@ -139,7 +143,7 @@ func (s *Server) cfOriginRuleset(st *domain.State, p authorization.Principal, r 
 			if err != nil {
 				return nil, 0, err
 			}
-			change, err := changes.hostname(host, zone)
+			change, err := changes.hostname(host, zone, appconfig.WorkerDomainApplication)
 			if err != nil {
 				return nil, 0, err
 			}

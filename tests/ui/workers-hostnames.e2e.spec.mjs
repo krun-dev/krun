@@ -95,7 +95,7 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
   }
 
   await page.goto("/?page=workers&workspace=" + org.id);
-  const domains = page.getByRole("button", { name: "域名", exact: true });
+  const domains = page.getByRole("button", { name: "应用域名", exact: true });
   await domains.click();
   const claim = page.getByRole("button", { name: "申请域名" });
   await claim.click();
@@ -157,7 +157,21 @@ test("claim and edit a shared hostname through the console", async ({ page, cont
 
   await page.goto("/?page=workers&workspace=" + org.id + "&worker=orders&worker_tab=routing");
   await expect(page.getByRole("link", { name: host })).toBeVisible();
-  await page.getByRole("link", { name: "管理域名与路由" }).click();
+  const bindings = await request(orgBase + "/workers/orders/hostnames");
+  if (bindings.suffixes.length) {
+    const suffix = bindings.suffixes[0];
+    const customLabel = "orders-" + Date.now();
+    const customHost = customLabel + "." + suffix.domain;
+    await page.getByRole("button", { name: "绑定自定义域名", exact: true }).click();
+    await dialog.getByRole("textbox", { name: "域名前缀" }).fill(customLabel);
+    await expect(dialog.getByRole("combobox", { name: "域名后缀" })).toHaveValue(suffix.id);
+    await dialog.getByRole("button", { name: "绑定域名", exact: true }).click();
+    await expect(page.getByRole("link", { name: customHost })).toBeVisible();
+    await page.getByRole("button", { name: "解绑自定义域名", exact: true }).click();
+    await dialog.getByRole("button", { name: "确认解绑" }).click();
+    await expect(page.getByRole("link", { name: customHost })).toHaveCount(0);
+  }
+  await page.getByRole("link", { name: "管理应用域名" }).click();
   await expect(page).toHaveURL(/page=domains/);
 
   // Exercise both palettes while the real route table is rendered.

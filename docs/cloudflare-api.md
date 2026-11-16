@@ -111,9 +111,10 @@ Service Worker 格式仍超出兼容范围。资产路由支持 `run_worker_firs
 
 使用组织 ID 和 Zone 名查找 `zone_id`。兼容写入可在平台开放的后缀下自动申请单层子域；
 同名域名不能跨组织占用。普通 Routes 支持精确 Host、精确路径及尾部 `/*`，后者按完整路径段匹配，
-例如 `/api/*` 也匹配 `/api`。查询串不会参与精确匹配。Custom Domain 绑定生产 Worker，
-相当于根路径入口；更具体路径可由另一个 Worker 处理。相同匹配方式和路径只有一个目标，
-不能在根路径把 Route 和 Custom Domain 叠成两层，也不为命名 Preview 自动生成更深的子域。
+例如 `/api/*` 也匹配 `/api`。查询串不会参与精确匹配。普通 Routes 使用平台的
+`application` 后缀。Custom Domains 使用 `worker_custom` 后缀，把整域绑定到一个
+生产 Worker。默认地址使用 `worker_default` 后缀，由 `workers_dev` 控制。
+后缀类型由 krun 平台声明，Wrangler 字段沿用 Cloudflare 格式。
 Wrangler 的路由配置和示例见
 [域名使用指南](../user-docs/src/content/docs/guides/workers-hostnames.md)。
 
@@ -138,7 +139,7 @@ Worker 的 `worker.update`，读取脚本需 `worker.read`。Wrangler OAuth 会�
 `10000` 为认证或权限错误，`10007` 为资源不可见或不存在，`10021` 为其他请求错误；
 发生冲突或不支持的匹配时可读取 `errors[].message`。
 
-有本地 Node 和隔离 PostgreSQL 测试库时，可运行同域 Route 与 Custom Domain 的原版
+有本地 Node 和隔离 PostgreSQL 测试库时，可运行应用 Route 与独立 Custom Domain 的原版
 Wrangler 集成测试。将 `KRUN_TEST_POSTGRES_URL` 指向该测试库，再执行：
 
 ```sh

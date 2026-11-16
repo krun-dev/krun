@@ -548,7 +548,7 @@ func testWorkersConfig() *appconfig.WorkersConfig {
 			{ID: "internal", Name: "workers-mvp", Namespace: "kgateway-system", Section: "private"},
 		},
 		Domains: []appconfig.WorkerDomain{
-			{ID: "internal", Domain: "workers.test", Label: "内网", Access: "private", Gateway: "internal", Default: true},
+			{ID: "internal", Type: appconfig.WorkerDomainDefault, Domain: "workers.test", Label: "内网", Access: "private", Gateway: "internal", Default: true},
 		},
 	}
 }
