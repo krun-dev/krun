@@ -1605,7 +1605,7 @@ const reservedBindings = new Set([
 const magicBindings = new Set(["__proto__", "prototype", "constructor"]);
 
 function workerKey(version, mode) {
-  return `${version.organization_id}/${version.worker_id}/${version.environment}/${version.id}/${mode}/workerd-20261116-krun1/workerd-bundle-v2`;
+  return `${version.organization_id}/${version.worker_id}/${version.environment}/${version.id}/${mode}/workerd-20261116-krun2/workerd-bundle-v2`;
 }
 
 function recordWorkerRequest(version, ctx) {
