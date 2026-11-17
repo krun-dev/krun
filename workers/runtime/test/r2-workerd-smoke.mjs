@@ -1016,6 +1016,15 @@ try {
       objects.delete(largeKey);
     }
 
+    if (process.env.KRUN_TEST_EXPECT_MEMORY_METRICS === "1") {
+      const samples = await (await fetch(`http://127.0.0.1:${metricsPort}/metrics`)).text();
+      const sample = samples.match(
+        /^krun_worker_version_v8_memory_bytes\{organization_id="org-test",worker_id="svc-test",environment="production",version_id="version-r2"\} (\d+)$/m,
+      );
+      assert.ok(Number(sample?.[1]) > 0, "expected positive V8 memory from the real Worker");
+      console.log(`Worker version V8 memory gauge: ${sample[1]} bytes`);
+    }
+
     if (process.env.KRUN_TEST_EXPECT_CPU_METRICS === "1") {
       let cpuSeconds = 0;
       for (let attempt = 0; attempt < 100 && cpuSeconds <= 0; attempt++) {

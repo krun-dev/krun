@@ -161,6 +161,13 @@ kubectl -n "$NAMESPACE" port-forward "pod/$POD" 18084:8084
 有已完成的 Worker 调用且启用了 CPU 计量后，输出应包含带版本标签的非负计数；无输出时，
 检查是否已部署支持该功能的 workerd、启用了计量并向 Worker 发送过请求。
 
+启用内存采样的 workerd 还会导出 `krun_worker_version_v8_memory_bytes`。同一 Pod 内
+按版本汇总 Loader 中仍在缓存的具名 serving isolate，单位为字节。数值取最近一次 V8 堆
+和外部内存采样。加载失败、验证实例和已移出 Loader 的实例不会出现在该指标中。
+在 **Worker V8 memory by Pod** 面板中按环境、版本和 Pod 查看。没有数据时，先确认新版
+Linux AMD64 runtime 已开启 `WORKERD_EXPERIMENTAL_MEMORY_METRICS=1`，再向目标版本发送一个
+会进入 Worker 的请求并等待一个采集周期。容器内存工作集继续由 cAdvisor 提供。
+
 在仓库根目录执行。将 `<context>` 换成目标集群的 kubectl context。只在首次安装时创建
 Grafana 管理员 Secret。
 

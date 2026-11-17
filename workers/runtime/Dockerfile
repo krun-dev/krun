@@ -16,6 +16,7 @@ RUN npm ci --ignore-scripts --omit=dev \
 COPY entry.js assets.js storage.js cache.js service.js ./
 COPY storage ./storage
 ENV WORKERD_EXPERIMENTAL_CPU_METRICS=1
+ENV WORKERD_EXPERIMENTAL_MEMORY_METRICS=1
 USER 1000:1000
 # Run the native binary directly so it receives container shutdown signals.
 CMD ["/app/node_modules/.bin/workerd","serve","/config/runtime.capnp","-I","/","--experimental"]
