@@ -58,22 +58,44 @@ function recordRequestMetrics(version, statusClass, startedAt) {
   lruPut(versionRequests, version.id, metrics, versionMetricsMax);
 }
 
-function workerVersionMetrics(version) {
+function workerVersionLabels(version) {
   if (!version.organization_id || !version.worker_id || !version.environment) return null;
-  return (
-    versionRequests.get(version.id) ?? {
-      labels: [
-        `organization_id=${metricLabel(version.organization_id)}`,
-        `worker_id=${metricLabel(version.worker_id)}`,
-        `environment=${metricLabel(version.environment)}`,
-        `version_id=${metricLabel(version.id)}`,
-      ].join(","),
-      non5xx: 0,
-      errors5xx: 0,
-      duration: durationHistogram(),
-      cpuSeconds: null,
-      lastSeen: 0,
-    }
+  return [
+    `organization_id=${metricLabel(version.organization_id)}`,
+    `worker_id=${metricLabel(version.worker_id)}`,
+    `environment=${metricLabel(version.environment)}`,
+    `version_id=${metricLabel(version.id)}`,
+  ].join(",");
+}
+
+function workerVersionMetrics(version) {
+  const existing = versionRequests.get(version.id);
+  if (existing) return existing;
+  const labels = workerVersionLabels(version);
+  if (!labels) return null;
+  return {
+    labels,
+    non5xx: 0,
+    errors5xx: 0,
+    duration: durationHistogram(),
+    cpuSeconds: null,
+    lastSeen: 0,
+  };
+}
+
+function workerMemorySamples(env) {
+  const memoryByVersion = new Map();
+  const isolateSamples = env?.LOADER?.getMemoryUsage?.() ?? [];
+  for (const { id, bytes } of isolateSamples) {
+    const entry = loadedWorkers.get(id);
+    if (!entry || entry.retirementProbe || !Number.isSafeInteger(bytes) || bytes <= 0) continue;
+
+    const labels = workerVersionLabels(entry.metricVersion);
+    if (labels) memoryByVersion.set(labels, (memoryByVersion.get(labels) ?? 0) + bytes);
+  }
+  return Array.from(
+    memoryByVersion,
+    ([labels, bytes]) => `krun_worker_version_v8_memory_bytes{${labels}} ${bytes}`,
   );
 }
 
@@ -144,6 +166,9 @@ export class Metrics extends WorkerEntrypoint {
       "# TYPE krun_worker_version_request_duration_seconds histogram",
       "# HELP krun_worker_version_cpu_seconds_total CPU time attributed to completed Worker invocations.",
       "# TYPE krun_worker_version_cpu_seconds_total counter",
+      "# HELP krun_worker_version_v8_memory_bytes Last sampled V8 heap and external memory of named serving isolates in the Loader.",
+      "# TYPE krun_worker_version_v8_memory_bytes gauge",
+      ...workerMemorySamples(this.env),
     );
     const cutoff = Date.now() - versionMetricsIdleMs;
     for (const [id, metrics] of versionRequests) {
@@ -1580,7 +1605,7 @@ const reservedBindings = new Set([
 const magicBindings = new Set(["__proto__", "prototype", "constructor"]);
 
 function workerKey(version, mode) {
-  return `${version.organization_id}/${version.worker_id}/${version.environment}/${version.id}/${mode}/workerd-20261116-krun1/workerd-bundle-v2`;
+  return `${version.organization_id}/${version.worker_id}/${version.environment}/${version.id}/${mode}/workerd-20261116-krun2/workerd-bundle-v2`;
 }
 
 function recordWorkerRequest(version, ctx) {
@@ -1610,6 +1635,7 @@ function recordWorkerRequest(version, ctx) {
       retirementAllowed: null,
       retirementInspectionRetryAt: 0,
       retirementPending: false,
+      retirementProbe: false,
       retirementError: "",
     };
     servingWorkers.set(version.id, entry);
@@ -1788,14 +1814,17 @@ async function retireIdleWorkers(env, ctx, startedAt) {
     try {
       // A key may have disappeared on its own. In that case, load only the
       // retirement entrypoint so the check never downloads or runs user code.
-      const stub = env.LOADER.get(entry.key, () => ({
-        compatibilityDate: "2026-09-28",
-        mainModule: RETIRE_MODULE,
-        modules: { [RETIRE_MODULE]: { js: retirementSource(entry) } },
-        allowExperimental: true,
-        streamingTails: [ctx.exports.IsolateActivity({ props: { key: entry.key } })],
-        globalOutbound: null,
-      }));
+      const stub = env.LOADER.get(entry.key, () => {
+        entry.retirementProbe = true;
+        return {
+          compatibilityDate: "2026-09-28",
+          mainModule: RETIRE_MODULE,
+          modules: { [RETIRE_MODULE]: { js: retirementSource(entry) } },
+          allowExperimental: true,
+          streamingTails: [ctx.exports.IsolateActivity({ props: { key: entry.key } })],
+          globalOutbound: null,
+        };
+      });
       const response = await retirementEntrypoint(stub, entry).fetch("http://retirement/", {
         signal: AbortSignal.timeout(2_000),
       });

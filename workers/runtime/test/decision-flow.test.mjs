@@ -576,6 +576,33 @@ await check("CPU metrics remain separate across rollout versions", async () => {
   }
 });
 
+await check("memory gauge follows the current Loader snapshot by version", async () => {
+  const mod = await freshEntry();
+  const local = makeEnv(null, [], "rel_memory");
+  const serving = new mod.Private(local, {});
+  assert.equal((await call(serving, "/api/hello")).status, 200);
+
+  let snapshot = [
+    { id: local.__loaderKey, bytes: 8 * 1024 * 1024 },
+    { id: "unknown-or-validation-key", bytes: 4 * 1024 * 1024 },
+  ];
+  local.LOADER.getMemoryUsage = () => snapshot;
+
+  const metrics = new mod.Metrics(local, {});
+  const scrape = async () => {
+    const response = await call(metrics, "/metrics");
+    assert.equal(response.status, 200);
+    return (await response.text())
+      .split("\n")
+      .filter((line) => line.startsWith("krun_worker_version_v8_memory_bytes{"));
+  };
+  assert.deepEqual(await scrape(), [
+    'krun_worker_version_v8_memory_bytes{organization_id="org",worker_id="svc",environment="production",version_id="rel_memory"} 8388608',
+  ]);
+  snapshot = [];
+  assert.deepEqual(await scrape(), [], "an unloaded isolate must disappear on the next scrape");
+});
+
 await check("non-navigation miss without SPA config goes to the worker", async () => {
   const noSpaEnv = makeEnv({ ...config, not_found_handling: "none" }, fileList, "rel_nospa");
   const noSpaEntry = await freshEntry();
