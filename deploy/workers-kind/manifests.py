@@ -262,6 +262,8 @@ const config :W.Config = (
    (name="R2_XML_SOURCE",text=embed "/app/storage/xml.js"),
    (name="LOADER",workerLoader=(id="workers-mvp-{pool}")),
    (name="PLATFORM",service="platform"),
+   (name="POOL_SLOT",text="krun-unassigned-slot"),
+   (name="POOL_COORDINATOR",service="pool-coordinator"),
    (name="POD_NAME",text=embed "/pod/name"),
    (name="POD_UID",text=embed "/pod/uid"),
    (name="RUNTIME_TOKEN",text=embed "/secrets/KRUN_RUNTIME_TOKEN"),
@@ -275,11 +277,13 @@ const config :W.Config = (
    (name="ASSETS_CACHE_MAX",text="67108864")
   ],globalOutbound="storage")),
   (name="platform",external=(address="backend:9001",http=())),
+  (name="pool-coordinator",external=(address="127.0.0.1:8085",http=())),
   (name="storage",network=(allow=["10.96.0.0/12","192.168.0.0/16"])),
   (name="deny",network=(allow=[]))
  ], sockets=[
   (name="private",address="*:8081",http=(),service=(name="entry",entrypoint="Private")),
-  (name="management",address="*:8083",http=(),service=(name="entry",entrypoint="Management"))
+  (name="management",address="*:8083",http=(),service=(name="entry",entrypoint="Management")),
+  (name="metrics",address="*:8084",http=(),service=(name="entry",entrypoint="Metrics"))
  ]
 );'''
 validator_capnp='''using W = import "/workerd/workerd.capnp";
@@ -319,6 +323,7 @@ const config :W.Config = (
 );'''
 def serving_runtime(pool, replicas, runtime_token, management_token):
  name=f'runtime-{pool}'
+ peer_name='krun-execution-'+hashlib.sha256(pool.encode()).hexdigest()[:20]
  config_name='runtime-config' if pool == 'default' else f'{name}-config'
  items.append(resource('ConfigMap',config_name,data={'runtime.capnp':serving_config(pool)}))
  secrets=[{'key':runtime_token,'path':'KRUN_RUNTIME_TOKEN'},
@@ -328,19 +333,43 @@ def serving_runtime(pool, replicas, runtime_token, management_token):
   'name':'workerd',
   'image':f'krun-worker-runtime:{tag}',
   'imagePullPolicy':'Never',
+  'command':['/usr/local/bin/krun-runtime-supervisor','--serving','/app/node_modules/.bin/workerd','/config/runtime.capnp'],
+  'env':[
+   {'name':'POOL_PEER_DNS','value':peer_name},
+   {'name':'POOL_POD_IP','valueFrom':{'fieldRef':{'fieldPath':'status.podIP'}}},
+   {'name':'POOL_CPU_RESERVE_MCPU','value':'100'},
+   {'name':'POOL_MEMORY_RESERVE_MIB','value':'200'},
+   {'name':'POOL_MAX_LOADED','value':'650'},
+   {'name':'POOL_CPU_HIGH_MCPU','value':'750'},
+   {'name':'POOL_ORDINARY_IN_FLIGHT','value':'16'},
+   {'name':'POOL_COMPUTE_IN_FLIGHT','value':'2'},
+   {'name':'POOL_PEER_ORDINARY_IN_FLIGHT','value':'16'},
+   {'name':'POOL_PEER_COMPUTE_IN_FLIGHT','value':'4'},
+   {'name':'POOL_PEER_COOLDOWN_MS','value':'15'},
+   {'name':'POOL_PEER_SELECTION','value':'capacity'},
+  ],
   'securityContext':secure(),
-  'volumeMounts':[{'name':'config','mountPath':'/config','readOnly':True},
+  'volumeMounts':[{'name':'tmp','mountPath':'/tmp'},
+                  {'name':'config','mountPath':'/config','readOnly':True},
                   {'name':'pod','mountPath':'/pod','readOnly':True},
                   {'name':'secrets','mountPath':'/secrets','readOnly':True}],
-  'readinessProbe':{'httpGet':{'path':'/ready','port':8083},'periodSeconds':1,'timeoutSeconds':5,'failureThreshold':2},
+  'readinessProbe':{'httpGet':{'path':'/healthz','port':8083},'periodSeconds':1,'timeoutSeconds':5,'failureThreshold':2},
   'resources':limits('1Gi'),
  }],replicas=replicas,labels={'role':'krun-runtime','pool':pool},volumes=[
   {'name':'config','configMap':{'name':config_name}},
   {'name':'pod','downwardAPI':{'items':[{'path':'name','fieldRef':{'fieldPath':'metadata.name'}},
                                       {'path':'uid','fieldRef':{'fieldPath':'metadata.uid'}}]}},
   {'name':'secrets','secret':{'secretName':'workers-credentials','items':secrets}},
- ],terminationGracePeriodSeconds=10)
+  {'name':'tmp','emptyDir':{'sizeLimit':'128Mi'}},
+ ],terminationGracePeriodSeconds=10,securityContext={'fsGroup':1000})
  service(name,[8081,8083])
+ items.append(resource('Service',peer_name,spec={
+  'clusterIP':'None','selector':{'app':name},'ports':[{'name':'execution','port':8082,'targetPort':8082}],
+ }))
+ items.append(resource('BackendConfigPolicy',name,apiVersion='gateway.kgateway.dev/v1alpha1',spec={
+  'targetRefs':[{'group':'','kind':'Service','name':name}],
+  'loadBalancer':{'healthyPanicThreshold':0,'ringHash':{'hashPolicies':[{'header':{'name':':authority'}}]}},
+ }))
 
 serving_runtime('default',2,'KRUN_RUNTIME_TOKEN','KRUN_MANAGEMENT_TOKEN')
 serving_runtime('isolated',1,'KRUN_ISOLATED_RUNTIME_TOKEN','KRUN_ISOLATED_MANAGEMENT_TOKEN')
@@ -380,6 +409,9 @@ gw_selector=[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':
 policy('minio',{'app':'minio'},ingress=[{'from':[selector('backend'),selector('krun-builder'),selector('runtime-default'),selector('runtime-isolated'),selector('runtime-validator-default'),selector('tester')],'ports':[tcp(9000)]},{'from':gw_selector,'ports':[tcp(9000)]}])
 policy('builder',{'app':'krun-builder'},egress=[{'to':[selector('minio')],'ports':[tcp(9000)]}])
 policy('runtime',{'role':'krun-runtime'},ingress=[{'from':gw_selector,'ports':[tcp(8081)]},{'from':[selector('backend')],'ports':[tcp(8083)]}],egress=[{'to':[selector('backend')],'ports':[tcp(9001)]},{'to':[selector('minio')],'ports':[tcp(9000)]}])
+for pool in ['default','isolated']:
+ runtime=f'runtime-{pool}'
+ policy(f'{runtime}-execution',{'app':runtime},ingress=[{'from':[selector(runtime)],'ports':[tcp(8082)]}],egress=[{'to':[selector(runtime)],'ports':[tcp(8082)]}])
 policy('validator',{'role':'krun-validator'},ingress=[{'from':[selector('backend')],'ports':[tcp(8083)]}],egress=[{'to':[selector('backend')],'ports':[tcp(9001)]},{'to':[selector('minio')],'ports':[tcp(9000)]}])
 policy('tester',{'app':'tester'},egress=[{'to':[selector('minio')],'ports':[tcp(9000)]},{'to':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}}}],'ports':[tcp(8080)]}])
 # Private instance: the only Gateway any private host may attach to.

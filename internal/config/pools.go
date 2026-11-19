@@ -32,6 +32,9 @@ func (c *WorkersConfig) ValidateRuntimePools(dns *regexp.Regexp) error {
 		if !Slug.MatchString(pool.ID) || !dns.MatchString(pool.RuntimeService) || (pool.ValidatorService != "" && !dns.MatchString(pool.ValidatorService)) {
 			return fmt.Errorf("invalid Workers runtime pool")
 		}
+		if err := pool.Execution.validate(); err != nil {
+			return fmt.Errorf("Workers runtime pool %s execution: %w", pool.ID, err)
+		}
 		if pool.RuntimeService == pool.ValidatorService {
 			return fmt.Errorf("Workers runtime pool validator service must be distinct from the serving runtime service")
 		}
@@ -144,4 +147,30 @@ func (c *WorkersConfig) DefaultRuntimePool() WorkerRuntimePool {
 
 func (c *WorkersConfig) ConfiguredRuntimePools() []WorkerRuntimePool {
 	return c.RuntimePools
+}
+
+func (e WorkerExecutionPool) validate() error {
+	if e.ComputeProcesses != nil && (*e.ComputeProcesses < 0 || *e.ComputeProcesses > 2) {
+		return fmt.Errorf("compute_processes must be between 0 and 2")
+	}
+	for _, quota := range []int{e.OrdinaryInFlight, e.ComputeInFlight, e.PeerOrdinaryInFlight, e.PeerComputeInFlight} {
+		if quota < 0 || quota > 4096 {
+			return fmt.Errorf("in-flight quota must be between 0 and 4096")
+		}
+	}
+	if e.PeerCooldownMS < 0 || e.PeerCooldownMS > 60000 {
+		return fmt.Errorf("peer_cooldown_ms must be between 0 and 60000")
+	}
+	if e.CPUHighMilli < 0 || e.CPUHighMilli > 1000 || e.CPUReserveMilli < 0 || e.CPUReserveMilli >= 4000 {
+		return fmt.Errorf("invalid CPU high watermark or reserve")
+	}
+	if e.MemoryReserveMiB < 0 || e.MemoryReserveMiB >= 8192 || e.MaxColdInFlight < 0 || e.MaxColdInFlight > 1024 || e.MaxLoadedPerProcess < 0 || e.MaxLoadedPerProcess > 100000 {
+		return fmt.Errorf("invalid memory reserve or cold load quota")
+	}
+	for _, host := range e.ComputeHosts {
+		if len(host) > 253 || !originDNS.MatchString(host) {
+			return fmt.Errorf("invalid compute host")
+		}
+	}
+	return nil
 }

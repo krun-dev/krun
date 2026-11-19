@@ -2,7 +2,7 @@
 
 在同一个 4 核 8 GiB 容器里运行 Rust/Pingora 和多个常驻 workerd。Rust 分别为普通和计算请求选执行位置，优先复用热实例。本地无法接单时，入口可以单跳转发到健康的同池容器，目标只做本地准入。workerd 使用 Dynamic Worker Loader 按需装载合成业务。
 
-这是通过 `cargo build` 和实验脚本主动运行的独立原型。实验按测试域名区分执行组。纯轻量发压在客户端固定每个域名的入口，多容器实验用同机 loopback 和独立 cgroup。
+这是通过实验脚本运行的独立压测。实验按测试域名区分执行组。纯轻量发压在客户端固定每个域名的入口，多容器实验用同机 loopback 和独立 cgroup。
 
 ## 复现
 
@@ -14,8 +14,8 @@ cd experiments/workerd-execution-pool
 gh release download v1.20261116.1-krun.3 --repo krun-dev/workerd --pattern workerd-linux-64.gz
 gzip -dc workerd-linux-64.gz > workerd-krun.3
 chmod +x workerd-krun.3
-cargo build --release --locked
-cargo test --locked
+cargo build --manifest-path ../../workers/runtime/supervisor/Cargo.toml --target-dir target --release --locked
+cargo test --manifest-path ../../workers/runtime/supervisor/Cargo.toml --target-dir target --locked
 ```
 
 20 入口、64 个轻量域名的在途与冷却对照。每组启动独立的 20 容器，先用 1 万 QPS 热身，然后逐档发压。每行参数只需替换 `ordinary` 和 `cooldown` 两个值。脚本退出时回收本轮容器。

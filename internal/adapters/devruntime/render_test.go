@@ -279,7 +279,7 @@ func TestLocalDatabaseEgressIsOnlyGrantedToServingPods(t *testing.T) {
 						dns = dns || port.Port == 53
 					}
 				}
-				if database != allow || dns != allow {
+				if database != allow || dns != (role == "krun-runtime") {
 					t.Fatalf("%s must match serving database and DNS policy: database=%t, DNS=%t", role, database, dns)
 				}
 			}

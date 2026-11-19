@@ -3,6 +3,8 @@ package deployment
 import (
 	"net"
 
+	"github.com/krun-dev/krun/internal/adapters/runtimebundle"
+
 	"github.com/krun-dev/krun/internal/config"
 )
 
@@ -172,6 +174,11 @@ func (r *renderer) networkPolicies() {
 				}
 			}
 			outgoing := configuredEgress(r.cfg.Deployment.Network.Runtime)
+			if !validator {
+				members := []any{peer(name)}
+				incoming = append(incoming, ingress(members, runtimebundle.ExecutionPort))
+				outgoing = append(outgoing, egress(members, runtimebundle.ExecutionPort))
+			}
 			if apiPort != 0 {
 				outgoing = append(outgoing, egress([]any{gatewayPeer(r.gateway)}, apiPort))
 			}

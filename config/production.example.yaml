@@ -64,6 +64,19 @@ workers:
       runtime_token: ${KRUN_RUNTIME_TOKEN}
       management_token: ${KRUN_MANAGEMENT_TOKEN}
       default: true
+      execution:
+        compute_processes: 2
+        compute_hosts: []
+        cpu_high_millicores: 750
+        cpu_reserve_millicores: 1000
+        memory_reserve_mib: 1639
+        max_loaded_per_process: 650
+        max_cold_in_flight: 4
+        ordinary_in_flight: 16
+        compute_in_flight: 2
+        peer_ordinary_in_flight: 16
+        peer_compute_in_flight: 4
+        peer_cooldown_ms: 15
   network_profiles:
     - id: internal
       name: 内网服务

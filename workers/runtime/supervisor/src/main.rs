@@ -1,7 +1,9 @@
 mod admission;
 mod rejection;
 mod routing;
+mod serving;
 
+use std::collections::HashSet;
 use std::env;
 use std::io;
 use std::net::{SocketAddr, TcpListener};
@@ -72,6 +74,7 @@ fn group_limits(shared: &str, ordinary: &str, compute: &str, fallback: usize) ->
 struct Endpoint {
     address: SocketAddr,
     pid: Option<u32>,
+    serving: Option<serving::ChildSockets>,
     in_flight: AtomicUsize,
     cpu: RwLock<SlotCpu>,
     ledger: Arc<LoadLedger>,
@@ -82,6 +85,7 @@ impl Endpoint {
         Self {
             address,
             pid,
+            serving: None,
             in_flight: AtomicUsize::new(0),
             cpu: RwLock::default(),
             ledger: Arc::default(),
@@ -122,6 +126,7 @@ impl Slot {
 struct Pool {
     slots: Vec<Arc<Slot>>,
     ordinary: usize,
+    serving: Option<serving::Settings>,
     in_flight_limits: [usize; 2],
     policy: Option<Arc<Policy>>,
     local: [AtomicUsize; 2],
@@ -166,7 +171,7 @@ impl Pool {
                 reasons.insert(Rejection::WorkerdNotReady);
             }
         }
-        if self.policy.is_some() {
+        if self.policy.is_some() && self.serving.is_none() {
             candidates.sort_by_key(|(_, endpoint)| !endpoint.ledger.is_warm(key));
         }
         for (slot, endpoint) in candidates {
@@ -185,7 +190,9 @@ impl Pool {
                 slot: slot.clone(),
                 load: None,
             };
-            if let Some(policy) = &self.policy {
+            if let Some(policy) = &self.policy
+                && self.serving.is_none()
+            {
                 match lease.endpoint.ledger.reserve(policy, key.clone()) {
                     Ok(permit) => lease.load = Some(permit),
                     Err(reason) => {
@@ -233,6 +240,22 @@ impl Pool {
     }
 
     fn ready(&self) -> bool {
+        if self.serving.is_some() {
+            let policy = self.policy.as_ref().expect("serving admission");
+            return !matches!(policy.check_cpu(), Err(Rejection::PodCpuUnavailable))
+                && self.slots[..self.ordinary].iter().any(|slot| {
+                    slot.endpoint
+                        .read()
+                        .unwrap()
+                        .as_ref()
+                        .is_some_and(|endpoint| {
+                            !matches!(
+                                endpoint.cpu.read().unwrap().check(policy.sample_interval),
+                                Err(Rejection::WorkerdCpuUnavailable)
+                            )
+                        })
+                });
+        }
         self.slots
             .iter()
             .all(|slot| slot.endpoint.read().unwrap().is_some())
@@ -296,12 +319,14 @@ impl Pool {
                     endpoint.in_flight.load(Ordering::Relaxed)
                 )
                 .unwrap();
-                writeln!(
-                    out,
-                    "krun_execution_slot_loaded{labels} {}",
-                    endpoint.ledger.loaded()
-                )
-                .unwrap();
+                if self.serving.is_none() {
+                    writeln!(
+                        out,
+                        "krun_execution_slot_loaded{labels} {}",
+                        endpoint.ledger.loaded()
+                    )
+                    .unwrap();
+                }
             }
             writeln!(
                 out,
@@ -363,6 +388,8 @@ impl Pool {
 enum Listener {
     Ingress,
     Execution,
+    Management,
+    Coordinator,
     Metrics,
 }
 
@@ -379,12 +406,14 @@ struct Proxy {
 enum Target {
     Local(Lease),
     Remote(RemoteLease),
+    Management,
 }
 
 struct RequestContext {
     target: Option<Target>,
     refused: bool,
     tried_remote: Option<SocketAddr>,
+    local_cold_refused: bool,
     group: Group,
     started: Instant,
 }
@@ -417,6 +446,7 @@ impl ProxyHttp for Proxy {
             target: None,
             refused: false,
             tried_remote: None,
+            local_cold_refused: false,
             group: Group::Ordinary,
             started: Instant::now(),
         }
@@ -429,12 +459,39 @@ impl ProxyHttp for Proxy {
                 if let Some(router) = &self.router {
                     router.metrics(&mut metrics);
                 }
+                if self.pool.serving.is_some() {
+                    metrics.push_str(&serving::metrics(&self.pool).await);
+                }
                 (200, metrics)
             } else {
                 (404, String::new())
             };
             respond(session, status, body, false).await?;
             return Ok(true);
+        }
+        if self.listener == Listener::Coordinator {
+            match session.req_header().uri.path() {
+                "/ack" => serving::grant_ack(session, &self.pool).await?,
+                "/cold/reserve" | "/cold/release" => {
+                    serving::cold_load(session, &self.pool).await?
+                }
+                _ => respond(session, 404, String::new(), false).await?,
+            }
+            return Ok(true);
+        }
+        if self.listener == Listener::Management {
+            match session.req_header().uri.path() {
+                "/ready" => {
+                    serving::readiness(session, &self.pool).await?;
+                    return Ok(true);
+                }
+                "/healthz" => {
+                    let status = if self.pool.ready() { 200 } else { 503 };
+                    respond(session, status, String::new(), false).await?;
+                    return Ok(true);
+                }
+                _ => {}
+            }
         }
         if let Some(path) = &self.bench_delay_file {
             let delay_ms = std::fs::read_to_string(path)
@@ -445,7 +502,9 @@ impl ProxyHttp for Proxy {
                 sleep(Duration::from_millis(delay_ms.min(5000))).await;
             }
         }
-        if session.req_header().uri.path() == "/__pool/ready" {
+        if session.req_header().uri.path() == "/__pool/ready"
+            && (self.pool.serving.is_none() || self.listener == Listener::Execution)
+        {
             let status = if self.pool.ready() { 200 } else { 503 };
             respond(session, status, String::new(), false).await?;
             return Ok(true);
@@ -500,6 +559,7 @@ impl ProxyHttp for Proxy {
                 request.insert_header(TARGET_HEADER, lease.target())?;
                 request.insert_header(HOP_HEADER, "1")?;
             }
+            Target::Management => {}
         }
         Ok(())
     }
@@ -535,9 +595,11 @@ impl ProxyHttp for Proxy {
                         lease.slot.cold.fetch_add(1, Ordering::Relaxed);
                     }
                 }
-                response.insert_header("x-experiment-workerd-slot", &lease.slot.name)?;
-                if let Some(name) = &self.bench_pod_name {
-                    response.insert_header("x-experiment-pod", name)?;
+                if self.pool.serving.is_none() {
+                    response.insert_header("x-experiment-workerd-slot", &lease.slot.name)?;
+                    if let Some(name) = &self.bench_pod_name {
+                        response.insert_header("x-experiment-pod", name)?;
+                    }
                 }
                 if self.listener == Listener::Execution && response.status.is_success() {
                     let slots = self
@@ -560,7 +622,7 @@ impl ProxyHttp for Proxy {
                     }
                 }
             }
-            None => {}
+            Some(Target::Management) | None => {}
         }
         Ok(())
     }
@@ -571,13 +633,11 @@ impl ProxyHttp for Proxy {
         response: &mut pingora_http::ResponseHeader,
         ctx: &mut Self::CTX,
     ) -> Result<()> {
-        if ctx.tried_remote.is_some()
+        if self.listener != Listener::Ingress
+            || ctx.tried_remote.is_some()
+            || ctx.local_cold_refused
             || ctx.started.elapsed() >= self.retry_budget
             || response.status.as_u16() != 503
-            || !response
-                .headers
-                .get(REJECT_HEADER)
-                .is_some_and(|value| value == "capacity")
         {
             return Ok(());
         }
@@ -592,11 +652,24 @@ impl ProxyHttp for Proxy {
         {
             return Ok(());
         }
-        let Some(Target::Remote(lease)) = ctx.target.as_ref() else {
-            return Ok(());
-        };
-        lease.rejected();
-        ctx.tried_remote = Some(lease.address());
+        match ctx.target.as_ref() {
+            Some(Target::Remote(lease))
+                if response
+                    .headers
+                    .get(REJECT_HEADER)
+                    .is_some_and(|value| value == "capacity") =>
+            {
+                lease.rejected();
+                ctx.tried_remote = Some(lease.address());
+            }
+            Some(Target::Local(_))
+                if self.pool.serving.is_some()
+                    && response.headers.contains_key(COLD_MISS_HEADER) =>
+            {
+                ctx.local_cold_refused = true;
+            }
+            _ => return Ok(()),
+        }
         ctx.target = None;
         self.pool.retried[ctx.group.index()].fetch_add(1, Ordering::Relaxed);
         let mut error = Error::explain(ErrorType::HTTPStatus(503), "confirmed execution refusal");
@@ -680,7 +753,9 @@ impl ProxyHttp for Proxy {
         if ctx.target.is_some() {
             return Error::e_explain(ErrorType::HTTPStatus(503), "upstream already attempted");
         }
-        if ctx.tried_remote.is_some() && ctx.started.elapsed() >= self.retry_budget {
+        if (ctx.tried_remote.is_some() || ctx.local_cold_refused)
+            && ctx.started.elapsed() >= self.retry_budget
+        {
             return Error::e_explain(ErrorType::HTTPStatus(503), "capacity retry budget elapsed");
         }
         let host = session
@@ -691,17 +766,30 @@ impl ProxyHttp for Proxy {
             .and_then(|value| value.split(':').next())
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let group = if matches!(host.as_str(), "cpu-a.test" | "cpu-b.test") {
+        if self.listener == Listener::Management {
+            let target = serving::management_address(&self.pool, &host).ok_or_else(|| {
+                Error::explain(ErrorType::HTTPStatus(503), "no ready management endpoint")
+            })?;
+            ctx.target = Some(Target::Management);
+            return Ok(execution_peer(target, self.pool.serving.is_some()));
+        }
+        let compute = self.pool.serving.as_ref().map_or_else(
+            || matches!(host.as_str(), "cpu-a.test" | "cpu-b.test"),
+            |settings| {
+                self.pool.slots.len() > self.pool.ordinary && settings.compute_hosts.contains(&host)
+            },
+        );
+        let group = if compute {
             Group::Compute
         } else {
             Group::Ordinary
         };
-        let path = session.req_header().uri.path();
-        let fixture_key = path.rsplit_once('/').map_or("", |(prefix, _)| prefix);
-        if self.pool.policy.is_some() && (host.len() > 255 || fixture_key.len() > 128) {
-            return Error::e_explain(ErrorType::HTTPStatus(400), "oversized fixture key");
-        }
-        let key: Arc<str> = if self.pool.policy.is_some() {
+        let key: Arc<str> = if self.pool.serving.is_none() && self.pool.policy.is_some() {
+            let path = session.req_header().uri.path();
+            let fixture_key = path.rsplit_once('/').map_or("", |(prefix, _)| prefix);
+            if host.len() > 255 || fixture_key.len() > 128 {
+                return Error::e_explain(ErrorType::HTTPStatus(400), "oversized fixture key");
+            }
             format!("{host}{fixture_key}").into()
         } else {
             host.as_str().into()
@@ -709,13 +797,19 @@ impl ProxyHttp for Proxy {
         let ingress = self.listener == Listener::Ingress;
         if ingress
             && ctx.tried_remote.is_none()
+            && !ctx.local_cold_refused
             && let Some(router) = &self.router
         {
             router.observe_request(key.clone());
         }
         let i = group.index();
         ctx.group = group;
-        let (target, address) = match self.pool.acquire(&host, &key, group) {
+        let local = if ctx.local_cold_refused {
+            Err(Rejections::default())
+        } else {
+            self.pool.acquire(&host, &key, group)
+        };
+        let (target, address) = match local {
             Ok(lease) => {
                 let address = lease.endpoint.address;
                 if ingress {
@@ -734,7 +828,7 @@ impl ProxyHttp for Proxy {
                             let address = lease.address();
                             self.pool.forwarded[i].fetch_add(1, Ordering::Relaxed);
                             ctx.target = Some(Target::Remote(lease));
-                            return Ok(execution_peer(address));
+                            return Ok(execution_peer(address, self.pool.serving.is_some()));
                         }
                         Err(remote_reasons) => reasons.extend(remote_reasons),
                     }
@@ -752,15 +846,17 @@ impl ProxyHttp for Proxy {
             }
         };
         ctx.target = Some(target);
-        Ok(execution_peer(address))
+        Ok(execution_peer(address, self.pool.serving.is_some()))
     }
 }
 
-fn execution_peer(address: SocketAddr) -> Box<HttpPeer> {
+fn execution_peer(address: SocketAddr, serving: bool) -> Box<HttpPeer> {
     let mut peer = HttpPeer::new(address, false, String::new());
     peer.options.connection_timeout = Some(Duration::from_millis(250));
-    peer.options.read_timeout = Some(Duration::from_secs(10));
-    peer.options.write_timeout = Some(Duration::from_secs(10));
+    if !serving {
+        peer.options.read_timeout = Some(Duration::from_secs(10));
+        peer.options.write_timeout = Some(Duration::from_secs(10));
+    }
     Box::new(peer)
 }
 
@@ -779,6 +875,7 @@ impl BackgroundService for Supervisor {
                 Arc::clone(slot),
                 self.workerd.clone(),
                 self.config.clone(),
+                Arc::clone(&self.pool),
                 shutdown.clone(),
             ));
         }
@@ -862,12 +959,20 @@ async fn supervise(
     slot: Arc<Slot>,
     workerd: PathBuf,
     config: PathBuf,
+    pool: Arc<Pool>,
     mut shutdown: ShutdownWatch,
 ) {
+    let serving = pool.serving.is_some();
     let mut backoff = Duration::from_millis(100);
     while !*shutdown.borrow() {
-        match spawn(&workerd, &config, &slot.name) {
-            Ok((mut child, address)) => {
+        let started_child = if serving {
+            serving::spawn(&workerd, &config, &slot.name)
+                .map(|(child, sockets)| (child, sockets.private, Some(sockets)))
+        } else {
+            spawn(&workerd, &config, &slot.name).map(|(child, address)| (child, address, None))
+        };
+        match started_child {
+            Ok((mut child, address, sockets)) => {
                 let started = Instant::now();
                 let ready = tokio::select! {
                     _ = shutdown.changed() => false,
@@ -876,8 +981,13 @@ async fn supervise(
                         false
                     }
                     ready = async {
-                        while started.elapsed() < Duration::from_secs(5) {
-                            if probe(address).await {
+                        let startup = if serving { 60 } else { 5 };
+                        while started.elapsed() < Duration::from_secs(startup) {
+                            let ready = match sockets {
+                                Some(ref sockets) => serving::probe_ready(sockets.management).await,
+                                None => probe(address).await,
+                            };
+                            if ready {
                                 return true;
                             }
                             sleep(Duration::from_millis(20)).await;
@@ -886,7 +996,9 @@ async fn supervise(
                     } => ready,
                 };
                 if ready {
-                    let endpoint = Arc::new(Endpoint::new(address, child.id()));
+                    let mut endpoint = Endpoint::new(address, child.id());
+                    endpoint.serving = sockets;
+                    let endpoint = Arc::new(endpoint);
                     *slot.endpoint.write().unwrap() = Some(Arc::clone(&endpoint));
                     eprintln!("ready {}", slot.name);
                     tokio::select! {
@@ -895,7 +1007,8 @@ async fn supervise(
                     }
                     *slot.endpoint.write().unwrap() = None;
                     if *shutdown.borrow() {
-                        let _ = timeout(Duration::from_secs(2), async {
+                        let drain = Duration::from_secs(if serving { 20 } else { 2 });
+                        let _ = timeout(drain, async {
                             while endpoint.in_flight.load(Ordering::Relaxed) > 0 {
                                 sleep(Duration::from_millis(10)).await;
                             }
@@ -907,6 +1020,9 @@ async fn supervise(
                     }
                 }
                 stop(&mut child).await;
+                if let Some(settings) = &pool.serving {
+                    settings.cold.clear(&slot.name);
+                }
             }
             Err(error) => eprintln!("start {} failed: {error}", slot.name),
         }
@@ -927,6 +1043,7 @@ fn count(name: &str, default: usize, min: usize, max: usize) -> usize {
 }
 
 fn main() {
+    let supervised = env::args_os().nth(1).is_some_and(|arg| arg == "--serving");
     let bench_upstream = env::var("POOL_BENCH_UPSTREAM").ok().map(|value| {
         let address: SocketAddr = value.parse().expect("benchmark upstream address");
         assert!(
@@ -935,7 +1052,12 @@ fn main() {
         );
         address
     });
-    let port = count("POOL_PORT", 28081, 1, 65_535);
+    let port = count(
+        "POOL_PORT",
+        if supervised { 8081 } else { 28081 },
+        1,
+        65_535,
+    );
     let ordinary = count("POOL_ORDINARY", 2, 1, 2);
     let compute = count("POOL_COMPUTE", 2, 0, 3);
     let mut slots = Vec::new();
@@ -954,7 +1076,7 @@ fn main() {
             }));
         }
     }
-    let policy = (env::var("POOL_ADMISSION").as_deref() == Ok("1")).then(|| {
+    let policy = (supervised || env::var("POOL_ADMISSION").as_deref() == Ok("1")).then(|| {
         assert!(
             bench_upstream.is_none(),
             "admission requires locally managed workerd"
@@ -964,6 +1086,22 @@ fn main() {
     let pool = Arc::new(Pool {
         slots,
         ordinary,
+        serving: supervised.then(|| serving::Settings {
+            compute_hosts: env::var("POOL_COMPUTE_HOSTS")
+                .unwrap_or_default()
+                .split(',')
+                .filter(|host| !host.is_empty())
+                .map(str::to_ascii_lowercase)
+                .collect::<HashSet<_>>(),
+            management_token: std::fs::read_to_string(
+                env::var_os("POOL_MANAGEMENT_TOKEN_FILE")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| "/secrets/KRUN_MANAGEMENT_TOKEN".into()),
+            )
+            .expect("read runtime management token"),
+            last_ack_grant: Default::default(),
+            cold: Default::default(),
+        }),
         in_flight_limits: group_limits(
             "POOL_IN_FLIGHT",
             "POOL_ORDINARY_IN_FLIGHT",
@@ -986,13 +1124,13 @@ fn main() {
             threads: count("POOL_PROXY_THREADS", 2, 1, 64),
             max_retries: if retry_budget.is_zero() { 1 } else { 2 },
             grace_period_seconds: Some(0),
-            graceful_shutdown_timeout_seconds: Some(6),
+            graceful_shutdown_timeout_seconds: Some(if supervised { 25 } else { 6 }),
             ..ServerConf::default()
         },
     );
     server.bootstrap();
     if bench_upstream.is_none() {
-        let mut args = env::args_os().skip(1);
+        let mut args = env::args_os().skip(if supervised { 2 } else { 1 });
         let workerd = PathBuf::from(args.next().expect("workerd path"))
             .canonicalize()
             .unwrap();
@@ -1009,20 +1147,44 @@ fn main() {
         ));
     }
     let bind_address = env::var("POOL_BIND_ADDRESS")
-        .unwrap_or_else(|_| "127.0.0.1".to_owned())
+        .unwrap_or_else(|_| if supervised { "0.0.0.0" } else { "127.0.0.1" }.to_owned())
         .parse()
         .expect("POOL_BIND_ADDRESS must be an IP address");
-    let execution_port = count("POOL_EXECUTION_PORT", 0, 0, 65_535);
-    let metrics_port = count("POOL_METRICS_PORT", 0, 0, 65_535);
+    let execution_port = count(
+        "POOL_EXECUTION_PORT",
+        if supervised { 8082 } else { 0 },
+        0,
+        65_535,
+    );
+    let metrics_port = count(
+        "POOL_METRICS_PORT",
+        if supervised { 8084 } else { 0 },
+        0,
+        65_535,
+    );
+    let management_port = count(
+        "POOL_MANAGEMENT_PORT",
+        if supervised { 8083 } else { 0 },
+        0,
+        65535,
+    );
     let pod_name = env::var("POOL_BENCH_POD_NAME").ok();
-    let router = if execution_port > 0 {
-        let name = pod_name
-            .clone()
-            .filter(|name| routing::valid_name(name))
-            .expect("POOL_BENCH_POD_NAME required for peer execution");
-        let address = SocketAddr::new(bind_address, execution_port as u16);
+    let router = if execution_port > 0 && (!supervised || env::var_os("POOL_PEER_DNS").is_some()) {
+        let (name, address) = if supervised {
+            let ip: std::net::IpAddr = env::var("POOL_POD_IP")
+                .expect("POOL_POD_IP required for serving discovery")
+                .parse()
+                .expect("invalid Pod IP");
+            (ip.to_string(), SocketAddr::new(ip, execution_port as u16))
+        } else {
+            let name = pod_name
+                .clone()
+                .filter(|name| routing::valid_name(name))
+                .expect("POOL_BENCH_POD_NAME required for peer execution");
+            (name, SocketAddr::new(bind_address, execution_port as u16))
+        };
         Some(Arc::new(
-            Router::from_env(name, address).expect("POOL_PEERS required for peer execution"),
+            Router::from_env(name, address).expect("peer discovery configuration required"),
         ))
     } else {
         assert!(
@@ -1056,7 +1218,24 @@ fn main() {
     };
     for (listener, port) in [
         (Listener::Ingress, port),
-        (Listener::Execution, execution_port),
+        (
+            Listener::Execution,
+            if proxy.router.is_some() {
+                execution_port
+            } else {
+                0
+            },
+        ),
+        (Listener::Management, management_port),
+        (
+            Listener::Coordinator,
+            count(
+                "POOL_COORDINATOR_PORT",
+                if supervised { 8085 } else { 0 },
+                0,
+                65535,
+            ),
+        ),
         (Listener::Metrics, metrics_port),
     ] {
         if port > 0 {
@@ -1067,7 +1246,12 @@ fn main() {
                     ..proxy.clone()
                 },
             );
-            service.add_tcp(&SocketAddr::new(bind_address, port as u16).to_string());
+            let listener_address = if listener == Listener::Coordinator {
+                "127.0.0.1".parse().unwrap()
+            } else {
+                bind_address
+            };
+            service.add_tcp(&SocketAddr::new(listener_address, port as u16).to_string());
             server.add_service(service);
         }
     }

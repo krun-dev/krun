@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/krun-dev/krun/internal/adapters/runtimebundle"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -69,6 +70,13 @@ func (o renderOptions) renderNetworkPolicies(outputDirectory string, replacement
 				})
 				needsDNS = true
 			}
+		}
+		if labels["role"] == "krun-runtime" {
+			members := []any{map[string]any{"podSelector": map[string]any{"matchLabels": map[string]string{"role": "krun-runtime", "pool": o.pool.ID}}}}
+			ports := []any{map[string]any{"protocol": "TCP", "port": runtimebundle.ExecutionPort}}
+			spec["egress"] = append(spec["egress"].([]any), map[string]any{"to": members, "ports": ports})
+			spec["ingress"] = append(spec["ingress"].([]any), map[string]any{"from": members, "ports": ports})
+			needsDNS = true
 		}
 		if needsDNS {
 			spec["egress"] = append(spec["egress"].([]any), dnsEgressRule())

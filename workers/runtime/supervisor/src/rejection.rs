@@ -39,7 +39,7 @@ impl Rejection {
         Self::NoPeers,
     ];
 
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Self::PodCpuHigh => "pod_cpu_high",
             Self::PodCpuUnavailable => "pod_cpu_unavailable",

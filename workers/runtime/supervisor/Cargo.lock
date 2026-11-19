@@ -758,6 +758,7 @@ name = "krun-execution-pool-experiment"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "httparse",
  "libc",
  "pingora-core",
  "pingora-http",

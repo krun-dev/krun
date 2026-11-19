@@ -78,6 +78,11 @@ impl Policy {
         }
     }
 
+    pub fn cold_permit(self: &Arc<Self>) -> Result<ColdPermit, Rejection> {
+        self.reserve_cold()?;
+        Ok(ColdPermit(Arc::clone(self)))
+    }
+
     fn reserve_cold(&self) -> Result<(), Rejection> {
         let sample = self.snapshot();
         let memory = sample
@@ -249,6 +254,14 @@ impl Drop for LoadPermit {
                 entries.remove(&self.key);
             }
         }
+    }
+}
+
+pub struct ColdPermit(Arc<Policy>);
+
+impl Drop for ColdPermit {
+    fn drop(&mut self) {
+        self.0.loading.fetch_sub(1, Ordering::Relaxed);
     }
 }
 

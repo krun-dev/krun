@@ -9,3 +9,8 @@
 !storage.js
 !storage/
 !storage/**
+!supervisor/
+!supervisor/Cargo.toml
+!supervisor/Cargo.lock
+!supervisor/src/
+!supervisor/src/**

@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -25,7 +25,8 @@ pub const HEADROOM_HEADER: &str = "x-krun-lab-execution-headroom";
 pub struct Router {
     pub name: String,
     pub token: String,
-    peers: Vec<Arc<Peer>>,
+    peers: RwLock<Vec<Arc<Peer>>>,
+    discovery: Option<(String, SocketAddr)>,
     limits: [usize; 2],
     cooldown: Duration,
     use_capacity: bool,
@@ -37,7 +38,7 @@ pub struct Router {
 
 #[derive(Default)]
 struct Host {
-    known: u64,
+    known: HashSet<SocketAddr>,
     requests: usize,
 }
 
@@ -57,8 +58,16 @@ struct PeerStatus {
 
 impl Router {
     pub fn from_env(name: String, own_address: SocketAddr) -> Option<Self> {
-        let peers = env::var("POOL_PEERS").ok()?;
-        let token = env::var("POOL_PEER_TOKEN").expect("POOL_PEER_TOKEN required for forwarding");
+        let discovery = env::var("POOL_PEER_DNS")
+            .ok()
+            .map(|name| (name, own_address));
+        let peers = env::var("POOL_PEERS")
+            .ok()
+            .or_else(|| discovery.as_ref().map(|_| String::new()))?;
+        let token = env::var("POOL_PEER_TOKEN").unwrap_or_else(|_| {
+            std::fs::read_to_string("/secrets/KRUN_RUNTIME_TOKEN")
+                .expect("read pool execution token")
+        });
         assert!(token.len() >= 16 && token.bytes().all(|byte| byte.is_ascii_graphic()));
         let mut configured = Vec::new();
         for entry in peers.split(',').filter(|entry| !entry.is_empty()) {
@@ -87,7 +96,8 @@ impl Router {
         Some(Self {
             name,
             token,
-            peers: configured,
+            peers: RwLock::new(configured),
+            discovery,
             limits: group_limits(
                 "POOL_PEER_IN_FLIGHT",
                 "POOL_PEER_ORDINARY_IN_FLIGHT",
@@ -119,7 +129,8 @@ impl Router {
         group: Group,
         tried: Option<SocketAddr>,
     ) -> Result<RemoteLease, Rejections> {
-        if self.peers.is_empty() {
+        let peers = self.peers.read().unwrap();
+        if peers.is_empty() {
             return Err(Rejection::NoPeers.into());
         }
         let mut reasons = Rejections::default();
@@ -128,12 +139,12 @@ impl Router {
             .lock()
             .unwrap()
             .get(&key)
-            .map_or(0, |host| host.known);
+            .map(|host| host.known.clone());
         let group = group.index();
         let limit = self.limits[group];
         let now = Instant::now();
-        let mut candidates = Vec::with_capacity(self.peers.len());
-        for (index, peer) in self.peers.iter().enumerate() {
+        let mut candidates = Vec::with_capacity(peers.len());
+        for peer in peers.iter() {
             if Some(peer.address) == tried {
                 reasons.insert(Rejection::PeerAlreadyTried);
                 continue;
@@ -157,16 +168,18 @@ impl Router {
                     slots == 0 && now.saturating_duration_since(at) <= self.hint_ttl
                 });
             let order = peer_order(
-                known & (1 << index) != 0,
+                known
+                    .as_ref()
+                    .is_some_and(|known| known.contains(&peer.address)),
                 low_headroom,
                 if self.use_capacity { pending } else { 0 },
                 peer_score(&key, &peer.name),
             );
-            candidates.push((order, index, peer));
+            candidates.push((order, peer));
         }
         // Snapshot mutable inputs once so concurrent requests cannot change sort ordering.
-        candidates.sort_unstable_by_key(|(order, _, _)| std::cmp::Reverse(*order));
-        for (_, index, peer) in candidates {
+        candidates.sort_unstable_by_key(|(order, _)| std::cmp::Reverse(*order));
+        for (_, peer) in candidates {
             if !peer.ready.load(Ordering::Relaxed) {
                 reasons.insert(Rejection::PeerNotReady);
                 continue;
@@ -186,11 +199,39 @@ impl Router {
                 router: self.clone(),
                 peer: peer.clone(),
                 key,
-                index,
                 group,
             });
         }
         Err(reasons)
+    }
+
+    async fn refresh_discovery(&self) {
+        let Some((name, own)) = &self.discovery else {
+            return;
+        };
+        let lookup = tokio::net::lookup_host((name.as_str(), own.port()));
+        let discovered: HashSet<_> =
+            match tokio::time::timeout(Duration::from_millis(500), lookup).await {
+                Ok(Ok(answers)) => answers.filter(|target| target != own).collect(),
+                _ => return,
+            };
+        let mut peers = self.peers.write().unwrap();
+        peers.retain(|peer| discovered.contains(&peer.address));
+        for address in &discovered {
+            if !peers.iter().any(|peer| &peer.address == address) {
+                peers.push(Arc::new(Peer {
+                    name: address.ip().to_string(),
+                    address: *address,
+                    ready: AtomicBool::new(false),
+                    in_flight: Default::default(),
+                    status: Mutex::default(),
+                }));
+            }
+        }
+        drop(peers);
+        for host in self.hosts.lock().unwrap().values_mut() {
+            host.known.retain(|address| discovered.contains(address));
+        }
     }
 
     pub fn metrics(&self, out: &mut String) {
@@ -246,7 +287,6 @@ pub struct RemoteLease {
     router: Arc<Router>,
     peer: Arc<Peer>,
     key: Arc<str>,
-    index: usize,
     group: usize,
 }
 
@@ -260,7 +300,9 @@ impl RemoteLease {
 
     pub fn accepted(&self) {
         if let Some(host) = self.router.hosts.lock().unwrap().get_mut(&self.key) {
-            host.known |= 1 << self.index;
+            if host.known.len() < 64 {
+                host.known.insert(self.peer.address);
+            }
         }
     }
 
@@ -286,10 +328,15 @@ pub struct PeerHealth(pub Arc<Router>);
 impl BackgroundService for PeerHealth {
     async fn start(&self, mut shutdown: ShutdownWatch) {
         let router = &self.0;
+        let mut next_discovery = Instant::now();
         while !*shutdown.borrow() {
+            if Instant::now() >= next_discovery {
+                router.refresh_discovery().await;
+                next_discovery = Instant::now() + Duration::from_secs(2);
+            }
             let mut checks = JoinSet::new();
-            for peer in &router.peers {
-                let peer = peer.clone();
+            let peers = router.peers.read().unwrap().clone();
+            for peer in peers {
                 checks.spawn(async move {
                     let ready = probe_http(
                         peer.address, b"GET /__pool/ready HTTP/1.1\r\nHost: ready.test\r\nConnection: close\r\n\r\n",
