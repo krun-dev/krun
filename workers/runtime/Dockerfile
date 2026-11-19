@@ -1,3 +1,10 @@
+FROM rust:1.95-bookworm AS supervisor
+RUN apt-get update && apt-get install -y --no-install-recommends cmake && rm -rf /var/lib/apt/lists/*
+WORKDIR /build/supervisor
+COPY supervisor/Cargo.toml supervisor/Cargo.lock ./
+COPY supervisor/src ./src
+RUN cargo build --release --locked
+
 FROM node:24-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
@@ -17,6 +24,7 @@ COPY entry.js assets.js storage.js cache.js service.js ./
 COPY storage ./storage
 ENV WORKERD_EXPERIMENTAL_CPU_METRICS=1
 ENV WORKERD_EXPERIMENTAL_MEMORY_METRICS=1
+COPY --from=supervisor /build/supervisor/target/release/krun-runtime-supervisor /usr/local/bin/krun-runtime-supervisor
 USER 1000:1000
 # Run the native binary directly so it receives container shutdown signals.
 CMD ["/app/node_modules/.bin/workerd","serve","/config/runtime.capnp","-I","/","--experimental"]

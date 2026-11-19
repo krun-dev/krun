@@ -137,6 +137,9 @@ export class Metrics extends WorkerEntrypoint {
 
     const samples = [
       ...configMetricSamples(),
+      "# HELP krun_execution_slot_loaded Number of Loader entries tracked by the serving runtime.",
+      "# TYPE krun_execution_slot_loaded gauge",
+      `krun_execution_slot_loaded ${loadedWorkers.size}`,
       "# HELP krun_worker_requests_total Completed HTTP dispatches to business Workers.",
       "# TYPE krun_worker_requests_total counter",
     ];
@@ -1235,6 +1238,19 @@ async function sendAck(env) {
   const acknowledged = view;
   const revision = acknowledged.revision;
   try {
+    if (env.POOL_SLOT && env.POOL_SLOT !== "krun-unassigned-slot") {
+      const grant = await env.POOL_COORDINATOR.fetch("http://pool-coordinator/ack", {
+        headers: {
+          authorization: `Bearer ${env.MANAGEMENT_TOKEN}`,
+          "x-krun-config-epoch": acknowledged.epoch,
+          "x-krun-config-revision": String(revision),
+        },
+        signal: AbortSignal.timeout(1000),
+      });
+      if (!grant.ok || acknowledged !== view || revision !== view.revision) {
+        return;
+      }
+    }
     await platform(env, "/ack", {
       method: "POST",
       body: JSON.stringify({
@@ -1588,6 +1604,8 @@ export class VersionAssets extends WorkerEntrypoint {
 }
 const bindingName = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const reservedBindings = new Set([
+  "POOL_COORDINATOR",
+  "POOL_SLOT",
   "PLATFORM",
   "LOADER",
   "RUNTIME_TOKEN",
@@ -1837,14 +1855,14 @@ async function retireIdleWorkers(env, ctx, startedAt) {
   }
 }
 
-function trackWorkerSource(entry, prepare) {
+function trackWorkerSource(env, ctx, entry, prepare) {
   if (!entry) {
     return prepare;
   }
   return async () => {
     const startedAt = performance.now();
     try {
-      const code = await prepare();
+      const code = await prepareWorkerSource(env, ctx, entry, prepare);
       observeDuration(bundleLoadDuration.success, (performance.now() - startedAt) / 1000);
       return code;
     } catch (error) {
@@ -1861,12 +1879,52 @@ export class VersionService extends WorkerEntrypoint {
   }
 }
 
+const coldRefusalHeader = "x-krun-lab-cold-miss";
+
+class ColdLoadCapacityError extends Error {}
+
+async function prepareWorkerSource(env, ctx, entry, prepare) {
+  if (!entry || !env.POOL_SLOT || env.POOL_SLOT === "krun-unassigned-slot") {
+    return prepare();
+  }
+  const headers = new Headers({
+    authorization: `Bearer ${env.MANAGEMENT_TOKEN}`,
+    "x-krun-workerd-slot": env.POOL_SLOT,
+    "x-krun-workerd-tracked": String(loadedWorkers.size),
+  });
+  const reservation = await env.POOL_COORDINATOR.fetch("http://pool-coordinator/cold/reserve", {
+    method: "POST",
+    headers,
+    signal: AbortSignal.timeout(1000),
+  });
+  if (!reservation.ok) {
+    entry.coldCapacityDenied = true;
+    if (servingWorkers.get(entry.version) === entry) {
+      servingWorkers.delete(entry.version);
+    }
+    loadedWorkers.delete(entry.key);
+    throw new Error("workerd cold load capacity unavailable");
+  }
+  headers.set("x-krun-cold-permit", await reservation.text());
+  try {
+    return await prepare();
+  } finally {
+    ctx.waitUntil(
+      env.POOL_COORDINATOR.fetch("http://pool-coordinator/cold/release", {
+        method: "POST",
+        headers,
+        signal: AbortSignal.timeout(1000),
+      }).catch((error) => console.warn("workerd cold load permit release failed", error.message)),
+    );
+  }
+}
+
 async function worker(env, ctx, d, { artifact, validation, entry, epoch } = {}) {
   const validating = validation !== undefined;
   return env.LOADER.get(
     // Validation and serving must have distinct keys even on the same Pod.
     entry?.key ?? workerKey(d, "validation"),
-    trackWorkerSource(entry, async () => {
+    trackWorkerSource(env, ctx, entry, async () => {
       // Authorized storage metadata and a scoped read grant are delivered once;
       // both serving and validation sign their own direct S3 download.
       const a =
@@ -2532,6 +2590,7 @@ async function serveWorkerRequest(
     const cached = await shared.cache.match(shared.key).catch(() => undefined);
     requireFreshConfig(epoch);
     if (cached) {
+      cached.headers.delete(coldRefusalHeader);
       cached.headers.set("x-krun-version", d.id);
       cached.headers.set("x-krun-pod", env.POD_UID);
       return cached;
@@ -2560,6 +2619,11 @@ async function serveWorkerRequest(
       const responseClass = `${Math.floor(response.status / 100)}xx`;
       statusClass = Object.hasOwn(requestsByStatusClass, responseClass) ? responseClass : "other";
       return response;
+    } catch (error) {
+      if (entry.coldCapacityDenied) {
+        throw new ColdLoadCapacityError("workerd cold load capacity unavailable");
+      }
+      throw error;
     } finally {
       recordRequestMetrics(d, statusClass, startedAt);
       request.signal.removeEventListener("abort", finish);
@@ -2611,6 +2675,7 @@ async function serveWorkerRequest(
     withoutSharedCache(out);
   }
 
+  out.headers.delete(coldRefusalHeader);
   if (shared && canStoreResponse(out, asset, immutable && !hit.fallback)) {
     const write = shared.cache.put(shared.key, out.clone()).catch(() => {});
     if (typeof ctx?.waitUntil === "function") {
@@ -2673,6 +2738,9 @@ export class Private extends WorkerEntrypoint {
       console.error("runtime request failed", e.message);
 
       const response = json({ error: "runtime unavailable" }, 503);
+      if (e instanceof ColdLoadCapacityError) {
+        response.headers.set(coldRefusalHeader, "1");
+      }
       return request.headers.has(versionOverrides) || request.headers.has(verifyAuthorization)
         ? withoutSharedCache(response)
         : response;
@@ -2779,7 +2847,7 @@ export class Management extends WorkerEntrypoint {
       requireFreshConfig();
       scheduleWorkerRetirement(this.env, this.ctx);
 
-      return json({
+      const response = json({
         status: "ready",
         role: "runtime",
         validation_protocol: 1,
@@ -2791,6 +2859,9 @@ export class Management extends WorkerEntrypoint {
         revision: view.revision,
         stale_ms: performance.now() - lastSync,
       });
+      response.headers.set("x-krun-config-epoch", view.epoch);
+      response.headers.set("x-krun-config-revision", String(view.revision));
+      return response;
     } catch (e) {
       const dependency = String(e.message).startsWith("platform");
       console.error("runtime management failed", e.message);

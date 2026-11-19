@@ -52,6 +52,44 @@ Version 固定代码和配置，不携带 pool；路由和内部制品访问根�
 在一个 Gateway 上伪造另一个 domain 的 Host 不会匹配路由。DNS、TLS 和部署侧代理
 必须覆盖 `*.<domain>`。细节见 [域名与路由](workers-domains.md)。
 
+## 承流与容量
+
+正式 serving Pod 使用单个 4 核、8 GiB 容器。Rust supervisor 管理两个普通 workerd 和
+两个默认常驻的计算 workerd。业务版本继续按需加载，独立 validator 直接运行 workerd。
+`workers.runtime_pools[].execution` 的参数及默认值见 [生产配置示例](../config/production.example.yaml)。
+在 `compute_hosts` 里填写完整业务域名即可分配到计算组，其余域名进入普通组。
+`compute_processes: 0` 时该池所有请求进入普通组。
+
+```mermaid
+flowchart LR
+    G["kgateway 按 :authority 一致性哈希"] --> A["首选 Pod 的 Rust"]
+    A -->|按 Host 选可用进程| W["本地 workerd"]
+    A -->|本地超水位时单跳| B["同池其他 Pod 的 Rust"]
+    B --> X["远端 workerd"]
+    W --> L["按版本访问 Loader"]
+    X --> L
+    L -->|缓存未命中| C["向所在 Pod 的 Rust 申请冷加载额度"]
+```
+
+kgateway 对每个 serving Service 应用 `BackendConfigPolicy`，使用同一域名选择入口 Pod。
+Rust 从同池 headless Service 发现候选，记录近期拒绝和剩余额度。执行端口 8082 仅向同池
+Pod 开放，需要池认证和单跳标记；收到转发的 Pod 只在本地选 workerd。入口 Pod 消失后，
+网关根据 Ready endpoints 选择新的入口。进程退出由所在 Pod 的 Rust 重启。超时后可能已
+执行的请求不重放，明确容量拒绝且没有请求体的 GET/HEAD 在短预算内最多补选一次。
+WebSocket 通过 HTTP Upgrade 建立。连接存续期间占用所选 workerd 的在途额度。
+
+每次准入使用采样中的 Pod CPU、主线程 CPU 和 workerd 在途数。单进程默认 0.75 核暂停准入，
+降到 0.525 核后恢复，Pod 预留 1 核。Loader 回调只在需要新加载时检查 Pod 内存和版本条目，
+默认预留约 20% 内存并限制四个并行冷加载。已有热 Worker、静态资源和响应缓存继续沿用
+现有逻辑。上限 650 是单进程的 Loader 跟踪条目数，配置仍需根据实际制品大小、RSS 和
+延迟调整。
+
+每个 workerd 仍使用现有 JS 入口选择版本并执行灰度、静态资源和 bindings 逻辑，各自读配置。
+Rust 依据所有子进程的配置游标放行 Pod ACK。热请求的承流选择只依赖本地状态。
+配置同步、冷路由、制品及绑定缺失时继续访问控制面或对象存储。容量指标按
+`workerd_slot` 和 `execution_group` 区分，可在 [Runtime 大盘](../deploy/observability/README.md) 查看。
+合成负载复现命令和历史基线见 [执行池压测](../tests/runtime-load/README.md)。
+
 ## 配置分发与权限
 
 每站点 dirty 队列驱动增量发布，Runtime 只跟随本池 ops，冷 host 定向读取。

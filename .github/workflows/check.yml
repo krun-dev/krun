@@ -54,13 +54,14 @@ jobs:
           test ! -e /app/node_modules/npm/node_modules/ip-address &&
           test "$(node_modules/.bin/wrangler --version | tail -n 1)" = 4.155.0'
       - run: npm ci --prefix workers/runtime && npm test --prefix workers/runtime
-      - name: Smoke-test version CPU and memory metrics in the runtime image
+      - name: Smoke-test execution pool and version CPU and memory metrics
         run: |
           docker build -t krun-worker-runtime:test workers/runtime
-          docker run --rm --mount "type=bind,src=$PWD/workers/runtime/test,dst=/app/test,readonly" \
+          docker run --rm --cpus 4 --memory 8g --read-only --tmpfs /tmp:rw,mode=1777 \
+            --mount "type=bind,src=$PWD/workers/runtime/test,dst=/app/test,readonly" \
+            -e KRUN_TEST_SUPERVISOR=/usr/local/bin/krun-runtime-supervisor \
             -e KRUN_TEST_EXPECT_CPU_METRICS=1 -e KRUN_TEST_EXPECT_MEMORY_METRICS=1 \
-            --entrypoint node krun-worker-runtime:test \
-            test/r2-workerd-smoke.mjs
+            krun-worker-runtime:test node /app/test/r2-workerd-smoke.mjs
       - run: npm ci --prefix examples/workers-fullstack && npm test --prefix examples/workers-fullstack && npm run build --prefix examples/workers-fullstack
       - run: go vet ./...
       - run: make test-go

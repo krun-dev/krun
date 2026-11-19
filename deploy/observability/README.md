@@ -131,6 +131,14 @@ kubectl --context "$CONTEXT" -n krun-observability rollout status deployment/gra
 是展示筛选条件。内置 VictoriaMetrics 数据源可查看整个采集范围，只向有权查看该范围的人
 授予 Grafana 数据源访问权限。按组织或 Worker 开放时，需为 Grafana 配置相应隔离的数据源。
 
+## 执行池容量
+
+Runtime 的 8084 端口聚合容器内 workerd。业务请求、P99、制品加载和执行水位可按
+`workerd_slot`、`execution_group` 分组，配置收敛仍按 Pod 查看。执行池大盘同时显示
+Pod CPU、内存水位、在途额度、Loader 条目、跨 Pod 分流和按原因拆分的拒绝计数。
+先用被拒请求和 P99 判断用户影响，再结合拒绝原因定位是进程 CPU、在途额度、
+同池候选还是冷加载内存达到限制。
+
 ## 安装
 
 - 本地需要 `kubectl` 和 `openssl`。终端验证还需要 `curl` 和 `jq`。

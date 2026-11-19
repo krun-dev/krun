@@ -28,6 +28,8 @@ __OBJECT_STORAGE_BINDINGS__
 __PUBLIC_EGRESS_BINDING__
           (name = "LOADER", workerLoader = (id = __LOADER_ID__)),
           (name = "PLATFORM", service = "platform"),
+          (name = "POOL_SLOT", text = "krun-unassigned-slot"),
+          (name = "POOL_COORDINATOR", service = "pool-coordinator"),
           (name = "POD_NAME", text = embed "/pod/name"),
           (name = "POD_UID", text = embed "/pod/uid"),
           (name = "RUNTIME_TOKEN", text = embed "/secrets/KRUN_RUNTIME_TOKEN"),
@@ -53,6 +55,7 @@ __STORAGE_BINDINGS__
     ),
 __OBJECT_STORAGE_SERVICES__
 __PUBLIC_EGRESS_SERVICE__
+    (name = "pool-coordinator", external = (address = "127.0.0.1:8085", http = ())),
     (name = "deny", network = (allow = []))
   ],
   sockets = [

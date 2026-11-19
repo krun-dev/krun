@@ -92,12 +92,20 @@ func TestThreeGatewaysKeepPoolsAndConsoleIsolated(t *testing.T) {
 				incoming := spec["ingress"].([]any)
 				expectedRules := 1
 				if strings.HasPrefix(name, "runtime-") {
-					expectedRules = 2
+					expectedRules = 3
 				}
 				if len(incoming) != expectedRules {
 					t.Fatalf("unexpected ingress for %s", name)
 				}
-				if expectedRules == 2 {
+				if expectedRules == 3 {
+					execution := incoming[2].(map[string]any)["from"].([]any)
+					if len(execution) != 1 {
+						t.Fatalf("unexpected execution ingress for %s", name)
+					}
+					executionLabels := execution[0].(map[string]any)["podSelector"].(map[string]any)["matchLabels"].(map[string]any)
+					if executionLabels["app"] != name {
+						t.Fatalf("execution ingress must stay in pool %s", name)
+					}
 					peers := incoming[1].(map[string]any)["from"].([]any)
 					if len(peers) != 1 {
 						t.Fatalf("pool %s permits multiple gateways", name)
