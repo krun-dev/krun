@@ -657,7 +657,7 @@ const protocol =
 const objectService =
   '(name="objects",external=(address=' + JSON.stringify(address) + "," + protocol + "))";
 const managementPort = await freePort();
-const metricsPort = supervisor ? await freePort() : null;
+const metricsPort = await freePort();
 const coordinatorPort = supervisor ? await freePort() : null;
 const staticDomains = JSON.stringify(JSON.stringify({ "static.fixture.test": "int" }));
 const objectBindings = sharedValidator
@@ -672,9 +672,7 @@ const executionBindings = supervisor
 const executionService = supervisor
   ? `(name="pool-coordinator",external=(address="127.0.0.1:${coordinatorPort}",http=())),`
   : "";
-const metricsSocket = supervisor
-  ? `,(name="metrics",address="127.0.0.1:${metricsPort}",http=(),service=(name="entry",entrypoint="Metrics"))`
-  : "";
+const metricsSocket = `,(name="metrics",address="127.0.0.1:${metricsPort}",http=(),service=(name="entry",entrypoint="Metrics"))`;
 const config = `using W=import "/workerd/workerd.capnp";
 const config :W.Config=(services=[
  (name="entry",worker=(modules=[${modules}],compatibilityDate="2026-09-28",compatibilityFlags=["experimental","enable_ctx_exports","enable_request_signal","request_signal_passthrough"],bindings=[${sources},(name="CACHE_SOURCE",text=embed ${JSON.stringify(path.join(root, "cache.js"))}),
@@ -1072,6 +1070,33 @@ try {
       ]);
       assert.equal(largeFinished, false, "cancelled download was fully drained " + output);
       objects.delete(largeKey);
+    }
+
+    if (process.env.KRUN_TEST_EXPECT_MEMORY_METRICS === "1") {
+      const samples = await (await fetch(`http://127.0.0.1:${metricsPort}/metrics`)).text();
+      const sample = Array.from(
+        samples.matchAll(
+          /^krun_worker_version_v8_memory_bytes\{organization_id="org-test",worker_id="svc-test",environment="production",version_id="version-r2"(?:,[^}]*)?\} (\d+)$/gm,
+        ),
+      ).find((match) => Number(match[1]) > 0);
+      assert.ok(Number(sample?.[1]) > 0, "expected positive V8 memory from the real Worker");
+      console.log(`Worker version V8 memory gauge: ${sample[1]} bytes`);
+    }
+
+    if (process.env.KRUN_TEST_EXPECT_CPU_METRICS === "1") {
+      let cpuSeconds = 0;
+      for (let attempt = 0; attempt < 100 && cpuSeconds <= 0; attempt++) {
+        const samples = await (await fetch(`http://127.0.0.1:${metricsPort}/metrics`)).text();
+        const sample = Array.from(
+          samples.matchAll(
+            /^krun_worker_version_cpu_seconds_total\{organization_id="org-test",worker_id="svc-test",environment="production",version_id="version-r2"(?:,[^}]*)?\} ([\d.eE+-]+)$/gm,
+          ),
+        ).find((match) => Number(match[1]) > 0);
+        cpuSeconds = sample ? Number(sample[1]) : 0;
+        if (cpuSeconds <= 0) await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+      assert.ok(cpuSeconds > 0, "expected positive per-version CPU metric from the real Worker");
+      console.log(`Worker version CPU metric: ${cpuSeconds} seconds`);
     }
 
     if (!project && !liveGrant) {

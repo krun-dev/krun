@@ -152,6 +152,30 @@ Pod CPU、内存水位、在途额度、Loader 条目、跨 Pod 分流和按原�
 - 业务指标需要同时更新 serving workerd 镜像和 runtime 配置。部署清单声明名为
   `metrics` 的 8084 端口，并允许 `krun-observability` 中的 vmagent Pod 访问该端口。
 
+Linux AMD64 上支持 CPU 计量的 workerd 会通过该接口提供
+`krun_worker_version_cpu_seconds_total`，按组织、Worker、环境和版本区分。它是进程内的
+尽力计数，重启或采集丢失会导致少记，仅供监控。CPU 时间只包括请求执行线程，不包含
+I/O 等待、启动和其他线程。要检查单个 serving Pod 的原始指标，先将 `NAMESPACE` 换成
+runtime 所在的命名空间，执行以下命令并从输出选择一个 Pod 名称：
+
+```bash
+NAMESPACE='<runtime-namespace>'
+kubectl -n "$NAMESPACE" get pods -l role=krun-runtime
+POD='<serving-pod-name>'
+kubectl -n "$NAMESPACE" port-forward "pod/$POD" 18084:8084
+```
+
+保持转发运行，在另一终端执行 `curl -fsS http://127.0.0.1:18084/metrics | grep '^krun_worker_version_cpu_seconds_total'`。
+有已完成的 Worker 调用且启用了 CPU 计量后，输出应包含带版本标签的非负计数；无输出时，
+检查是否已部署支持该功能的 workerd、启用了计量并向 Worker 发送过请求。
+
+启用内存采样的 workerd 还会导出 `krun_worker_version_v8_memory_bytes`。同一 Pod 内
+按版本汇总 Loader 中仍在缓存的具名 serving isolate，单位为字节。数值取最近一次 V8 堆
+和外部内存采样。加载失败、验证实例和已移出 Loader 的实例不会出现在该指标中。
+在 **Worker V8 memory by Pod** 面板中按环境、版本和 Pod 查看。没有数据时，先确认新版
+Linux AMD64 runtime 已开启 `WORKERD_EXPERIMENTAL_MEMORY_METRICS=1`，再向目标版本发送一个
+会进入 Worker 的请求并等待一个采集周期。容器内存工作集继续由 cAdvisor 提供。
+
 在仓库根目录执行。将 `<context>` 换成目标集群的 kubectl context。只在首次安装时创建
 Grafana 管理员 Secret。
 

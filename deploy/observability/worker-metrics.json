@@ -39,7 +39,7 @@
           "type": "prometheus",
           "uid": "victoria-metrics"
         },
-        "query": "label_values(krun_worker_version_requests_total{job=\"krun-worker-runtime\",organization_id=${organization:doublequote},worker_id=${worker:doublequote}}, environment)",
+        "query": "label_values({__name__=~\"krun_worker_version_requests_total|krun_worker_version_v8_memory_bytes\",job=\"krun-worker-runtime\",organization_id=${organization:doublequote},worker_id=${worker:doublequote}}, environment)",
         "refresh": 2,
         "multi": true,
         "includeAll": true,
@@ -57,7 +57,7 @@
           "type": "prometheus",
           "uid": "victoria-metrics"
         },
-        "query": "label_values(krun_worker_version_requests_total{job=\"krun-worker-runtime\",organization_id=${organization:doublequote},worker_id=${worker:doublequote},environment=~\"${environment:regex}\"}, version_id)",
+        "query": "label_values({__name__=~\"krun_worker_version_requests_total|krun_worker_version_v8_memory_bytes\",job=\"krun-worker-runtime\",organization_id=${organization:doublequote},worker_id=${worker:doublequote},environment=~\"${environment:regex}\"}, version_id)",
         "refresh": 2,
         "multi": true,
         "includeAll": true,
@@ -171,6 +171,68 @@
           "legendFormat": "{{environment}} / {{version_id}} · P99"
         }
       ]
+    },
+    {
+      "id": 4,
+      "title": "Worker CPU time",
+      "description": "CPU seconds per second on the Worker execution thread. Best-effort; excludes I/O waiting, startup and work on other threads.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (environment, version_id) (rate(krun_worker_version_cpu_seconds_total{job=\"krun-worker-runtime\",organization_id=${organization:doublequote},worker_id=${worker:doublequote},environment=~\"${environment:regex}\",version_id=~\"${version:regex}\"}[$__rate_interval]))",
+          "legendFormat": "{{environment}} / {{version_id}}"
+        }
+      ],
+      "interval": "30s"
+    },
+    {
+      "id": 5,
+      "title": "Worker V8 memory by Pod",
+      "description": "Last sampled V8 heap and external memory for each version on each Pod. Only named serving isolates still in the Loader cache are shown.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (environment, version_id, pod) (krun_worker_version_v8_memory_bytes{job=\"krun-worker-runtime\",organization_id=${organization:doublequote},worker_id=${worker:doublequote},environment=~\"${environment:regex}\",version_id=~\"${version:regex}\"})",
+          "legendFormat": "{{environment}} / {{version_id}} / {{pod}}"
+        }
+      ],
+      "interval": "30s"
     }
   ]
 }
