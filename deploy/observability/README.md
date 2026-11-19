@@ -139,6 +139,11 @@ Pod CPU、内存水位、在途额度、Loader 条目、跨 Pod 分流和按原�
 先用被拒请求和 P99 判断用户影响，再结合拒绝原因定位是进程 CPU、在途额度、
 同池候选还是冷加载内存达到限制。
 
+长流 Service 启用后，可用 `krun_execution_slot_stream_in_flight` 查看
+SSE 与 WebSocket 的进程占用，用 `krun_execution_stream_ingress_in_flight`
+和 `krun_execution_stream_execution_in_flight` 分别看入口和执行 Pod 的并发。
+带 `traffic_class="stream"` 的路由计数用于定位长流拒绝和分流。
+
 ## 安装
 
 - 本地需要 `kubectl` 和 `openssl`。终端验证还需要 `curl` 和 `jq`。

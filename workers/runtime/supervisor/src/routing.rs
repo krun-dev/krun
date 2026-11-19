@@ -12,7 +12,7 @@ use tokio::task::JoinSet;
 use tokio::time::{Instant, sleep};
 
 use crate::rejection::{Rejection, Rejections};
-use crate::{Group, count, group_limits, probe_http, try_reserve};
+use crate::{Group, Traffic, count, group_limits, probe_http, try_reserve};
 
 pub const TOKEN_HEADER: &str = "x-krun-lab-peer-token";
 pub const TARGET_HEADER: &str = "x-krun-lab-target";
@@ -28,6 +28,7 @@ pub struct Router {
     peers: RwLock<Vec<Arc<Peer>>>,
     discovery: Option<(String, SocketAddr)>,
     limits: [usize; 2],
+    stream_limit: usize,
     cooldown: Duration,
     use_capacity: bool,
     hint_ttl: Duration,
@@ -46,8 +47,8 @@ pub struct Peer {
     name: String,
     pub address: SocketAddr,
     ready: AtomicBool,
-    in_flight: [AtomicUsize; 2],
-    status: Mutex<[PeerStatus; 2]>,
+    in_flight: [AtomicUsize; 4],
+    status: Mutex<[PeerStatus; 4]>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -104,6 +105,7 @@ impl Router {
                 "POOL_PEER_COMPUTE_IN_FLIGHT",
                 16,
             ),
+            stream_limit: count("POOL_PEER_STREAM_LIMIT", 128, 1, 32768),
             cooldown: Duration::from_millis(count("POOL_PEER_COOLDOWN_MS", 150, 1, 60000) as u64),
             use_capacity,
             hint_ttl: Duration::from_millis(count("POOL_PEER_HINT_TTL_MS", 150, 1, 60000) as u64),
@@ -127,6 +129,7 @@ impl Router {
         self: &Arc<Self>,
         key: Arc<str>,
         group: Group,
+        traffic: Traffic,
         tried: Option<SocketAddr>,
     ) -> Result<RemoteLease, Rejections> {
         let peers = self.peers.read().unwrap();
@@ -140,8 +143,12 @@ impl Router {
             .unwrap()
             .get(&key)
             .map(|host| host.known.clone());
-        let group = group.index();
-        let limit = self.limits[group];
+        let limit = if traffic == Traffic::Stream {
+            self.stream_limit
+        } else {
+            self.limits[group.index()]
+        };
+        let group = traffic.routing_index(group);
         let now = Instant::now();
         let mut candidates = Vec::with_capacity(peers.len());
         for peer in peers.iter() {

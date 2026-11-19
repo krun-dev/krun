@@ -591,7 +591,7 @@
         {
           "refId": "A",
           "expr": "rate(krun_execution_routes_total{job=\"krun-worker-runtime\",namespace=~\"$namespace\",pod=~\"$pod\",execution_group=~\"$execution_group\"}[$__rate_interval])",
-          "legendFormat": "{{namespace}}/{{pod}} {{execution_group}} {{outcome}}"
+          "legendFormat": "{{namespace}}/{{pod}} {{execution_group}} {{traffic_class}} {{outcome}}"
         }
       ]
     },
@@ -654,7 +654,36 @@
         {
           "refId": "A",
           "expr": "rate(krun_execution_route_admission_rejections_total{job=\"krun-worker-runtime\",namespace=~\"$namespace\",pod=~\"$pod\",execution_group=~\"$execution_group\"}[$__rate_interval])",
-          "legendFormat": "{{namespace}}/{{pod}} {{execution_group}} {{listener}} {{reason}}"
+          "legendFormat": "{{namespace}}/{{pod}} {{execution_group}} {{traffic_class}} {{listener}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "title": "workerd active SSE and WebSocket streams",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 94,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "krun_execution_slot_stream_in_flight{job=\"krun-worker-runtime\",namespace=~\"$namespace\",pod=~\"$pod\",execution_group=~\"$execution_group\",workerd_slot=~\"$workerd_slot\"}",
+          "legendFormat": "{{namespace}}/{{pod}} {{execution_group}}/{{workerd_slot}}"
         }
       ]
     }

@@ -55,6 +55,86 @@ impl Group {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Traffic {
+    Short,
+    Stream,
+}
+
+impl Traffic {
+    fn index(self) -> usize {
+        self as usize
+    }
+
+    fn routing_index(self, group: Group) -> usize {
+        self.index() * 2 + group.index()
+    }
+}
+
+struct StreamPermit(Arc<AtomicUsize>);
+
+impl StreamPermit {
+    fn acquire(counter: &Arc<AtomicUsize>, limit: usize) -> Option<Self> {
+        try_reserve(counter, limit).then(|| Self(Arc::clone(counter)))
+    }
+}
+
+impl Drop for StreamPermit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+struct Streams {
+    slot_limit: usize,
+    pod_limit: usize,
+    ingress_limit: usize,
+    ingress: Arc<AtomicUsize>,
+    execution: Arc<AtomicUsize>,
+    sse_paths: HashSet<String>,
+}
+
+impl Streams {
+    fn from_env() -> Self {
+        Self {
+            slot_limit: count("POOL_STREAM_SLOT_LIMIT", 300, 1, 4096),
+            pod_limit: count("POOL_STREAM_POD_LIMIT", 600, 1, 32768),
+            ingress_limit: count("POOL_STREAM_INGRESS_LIMIT", 600, 1, 32768),
+            ingress: Arc::default(),
+            execution: Arc::default(),
+            sse_paths: env::var("POOL_SSE_PATHS")
+                .unwrap_or_default()
+                .split(',')
+                .filter(|path| !path.is_empty())
+                .map(str::to_owned)
+                .collect(),
+        }
+    }
+
+    fn matches(&self, request: &pingora_http::RequestHeader) -> bool {
+        self.sse_paths.contains(request.uri.path())
+            || request
+                .headers
+                .get("upgrade")
+                .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"websocket"))
+            || request
+                .headers
+                .get_all("accept")
+                .iter()
+                .filter_map(|v| v.to_str().ok())
+                .any(|accept| {
+                    accept.split(',').any(|range| {
+                        range
+                            .split(';')
+                            .next()
+                            .unwrap_or_default()
+                            .trim()
+                            .eq_ignore_ascii_case("text/event-stream")
+                    })
+                })
+    }
+}
+
 fn try_reserve(counter: &AtomicUsize, limit: usize) -> bool {
     counter
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
@@ -75,7 +155,7 @@ struct Endpoint {
     address: SocketAddr,
     pid: Option<u32>,
     serving: Option<serving::ChildSockets>,
-    in_flight: AtomicUsize,
+    in_flight: [AtomicUsize; 2],
     cpu: RwLock<SlotCpu>,
     ledger: Arc<LoadLedger>,
 }
@@ -86,7 +166,7 @@ impl Endpoint {
             address,
             pid,
             serving: None,
-            in_flight: AtomicUsize::new(0),
+            in_flight: Default::default(),
             cpu: RwLock::default(),
             ledger: Arc::default(),
         }
@@ -97,11 +177,13 @@ struct Lease {
     endpoint: Arc<Endpoint>,
     slot: Arc<Slot>,
     load: Option<LoadPermit>,
+    traffic: Traffic,
+    _stream: Option<StreamPermit>,
 }
 
 impl Drop for Lease {
     fn drop(&mut self) {
-        self.endpoint.in_flight.fetch_sub(1, Ordering::Relaxed);
+        self.endpoint.in_flight[self.traffic.index()].fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -128,14 +210,15 @@ struct Pool {
     ordinary: usize,
     serving: Option<serving::Settings>,
     in_flight_limits: [usize; 2],
+    streams: Option<Streams>,
     policy: Option<Arc<Policy>>,
-    local: [AtomicUsize; 2],
-    forwarded: [AtomicUsize; 2],
-    refused: [AtomicUsize; 2],
-    execution_refused: [AtomicUsize; 2],
-    ingress_rejections: [RejectionCounts; 2],
-    execution_rejections: [RejectionCounts; 2],
-    retried: [AtomicUsize; 2],
+    local: [AtomicUsize; 4],
+    forwarded: [AtomicUsize; 4],
+    refused: [AtomicUsize; 4],
+    execution_refused: [AtomicUsize; 4],
+    ingress_rejections: [RejectionCounts; 4],
+    execution_rejections: [RejectionCounts; 4],
+    retried: [AtomicUsize; 4],
 }
 
 impl Pool {
@@ -146,18 +229,35 @@ impl Pool {
         }
     }
 
+    fn slot_limit(&self, group: Group, traffic: Traffic) -> usize {
+        match traffic {
+            Traffic::Short => self.in_flight_limits[group.index()],
+            Traffic::Stream => self.streams.as_ref().expect("stream settings").slot_limit,
+        }
+    }
+
     fn acquire(
         &self,
         host: &str,
         key: &Arc<str>,
         group: Group,
+        traffic: Traffic,
     ) -> std::result::Result<Lease, Rejections> {
         if let Some(policy) = &self.policy {
             policy.check_cpu()?;
         }
+        let mut stream = if traffic == Traffic::Stream {
+            let streams = self.streams.as_ref().expect("stream settings");
+            Some(
+                StreamPermit::acquire(&streams.execution, streams.pod_limit)
+                    .ok_or(Rejection::PodStreamInFlight)?,
+            )
+        } else {
+            None
+        };
         let mut reasons = Rejections::default();
         let slots = self.group_slots(group);
-        let limit = self.in_flight_limits[slots[0].group.index()];
+        let limit = self.slot_limit(slots[0].group, traffic);
         let hash = host.bytes().fold(0x811c9dc5u32, |hash, byte| {
             (hash ^ u32::from(byte)).wrapping_mul(0x01000193)
         });
@@ -181,7 +281,7 @@ impl Pool {
                 slot.reject(reason, &mut reasons);
                 continue;
             }
-            if !try_reserve(&endpoint.in_flight, limit) {
+            if !try_reserve(&endpoint.in_flight[traffic.index()], limit) {
                 slot.reject(Rejection::WorkerdInFlight, &mut reasons);
                 continue;
             }
@@ -189,6 +289,8 @@ impl Pool {
                 endpoint,
                 slot: slot.clone(),
                 load: None,
+                traffic,
+                _stream: stream.take(),
             };
             if let Some(policy) = &self.policy
                 && self.serving.is_none()
@@ -207,7 +309,12 @@ impl Pool {
         Err(reasons)
     }
 
-    fn headroom_after_response(&self, group: Group, completed: &Arc<Endpoint>) -> usize {
+    fn headroom_after_response(
+        &self,
+        group: Group,
+        traffic: Traffic,
+        completed: &Arc<Endpoint>,
+    ) -> usize {
         if self
             .policy
             .as_ref()
@@ -216,8 +323,8 @@ impl Pool {
             return 0;
         }
         let slots = self.group_slots(group);
-        let limit = self.in_flight_limits[slots[0].group.index()];
-        slots
+        let limit = self.slot_limit(slots[0].group, traffic);
+        let headroom = slots
             .iter()
             .filter_map(|slot| slot.endpoint.read().unwrap().clone())
             .filter(|endpoint| {
@@ -231,12 +338,22 @@ impl Pool {
                 })
             })
             .map(|endpoint| {
-                let in_flight = endpoint.in_flight.load(Ordering::Relaxed);
-                let remaining =
-                    in_flight.saturating_sub(usize::from(Arc::ptr_eq(completed, &endpoint)));
+                let in_flight = endpoint.in_flight[traffic.index()].load(Ordering::Relaxed);
+                let remaining = in_flight.saturating_sub(usize::from(
+                    traffic == Traffic::Short && Arc::ptr_eq(completed, &endpoint),
+                ));
                 limit.saturating_sub(remaining)
             })
-            .sum()
+            .sum::<usize>();
+        if traffic == Traffic::Stream {
+            let streams = self.streams.as_ref().expect("stream settings");
+            return headroom.min(
+                streams
+                    .pod_limit
+                    .saturating_sub(streams.execution.load(Ordering::Relaxed)),
+            );
+        }
+        headroom
     }
 
     fn ready(&self) -> bool {
@@ -316,9 +433,23 @@ impl Pool {
                 writeln!(
                     out,
                     "krun_execution_slot_in_flight{labels} {}",
-                    endpoint.in_flight.load(Ordering::Relaxed)
+                    endpoint.in_flight[Traffic::Short.index()].load(Ordering::Relaxed)
                 )
                 .unwrap();
+                if let Some(streams) = &self.streams {
+                    writeln!(
+                        out,
+                        "krun_execution_slot_stream_in_flight{labels} {}",
+                        endpoint.in_flight[Traffic::Stream.index()].load(Ordering::Relaxed)
+                    )
+                    .unwrap();
+                    writeln!(
+                        out,
+                        "krun_execution_slot_stream_in_flight_limit{labels} {}",
+                        streams.slot_limit
+                    )
+                    .unwrap();
+                }
                 if self.serving.is_none() {
                     writeln!(
                         out,
@@ -352,8 +483,43 @@ impl Pool {
                 &labels[1..labels.len() - 1],
             );
         }
-        for group in [Group::Ordinary, Group::Compute] {
-            let i = group.index();
+        if let Some(streams) = &self.streams {
+            writeln!(
+                out,
+                "krun_execution_stream_ingress_in_flight {}",
+                streams.ingress.load(Ordering::Relaxed)
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "krun_execution_stream_execution_in_flight {}",
+                streams.execution.load(Ordering::Relaxed)
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "krun_execution_stream_ingress_in_flight_limit {}",
+                streams.ingress_limit
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "krun_execution_stream_execution_in_flight_limit {}",
+                streams.pod_limit
+            )
+            .unwrap();
+        }
+        for (traffic, group) in [Traffic::Short, Traffic::Stream]
+            .into_iter()
+            .filter(|traffic| *traffic == Traffic::Short || self.streams.is_some())
+            .flat_map(|traffic| [Group::Ordinary, Group::Compute].map(|group| (traffic, group)))
+        {
+            let i = traffic.routing_index(group);
+            let class = if traffic == Traffic::Stream {
+                ",traffic_class=\"stream\""
+            } else {
+                ""
+            };
             for (outcome, counter) in [
                 ("local", &self.local[i]),
                 ("forwarded", &self.forwarded[i]),
@@ -361,7 +527,7 @@ impl Pool {
                 ("execution_rejected", &self.execution_refused[i]),
                 ("retry", &self.retried[i]),
             ] {
-                writeln!(out, "krun_execution_routes_total{{execution_group=\"{}\",outcome=\"{outcome}\"}} {}", group.name(), counter.load(Ordering::Relaxed)).unwrap();
+                writeln!(out, "krun_execution_routes_total{{execution_group=\"{}\",outcome=\"{outcome}\"{class}}} {}", group.name(), counter.load(Ordering::Relaxed)).unwrap();
             }
             for (listener, counts) in [
                 ("ingress", &self.ingress_rejections[i]),
@@ -371,7 +537,7 @@ impl Pool {
                     &mut out,
                     "krun_execution_route_admission_rejections_total",
                     &format!(
-                        "execution_group=\"{}\",listener=\"{listener}\"",
+                        "execution_group=\"{}\",listener=\"{listener}\"{class}",
                         group.name()
                     ),
                 );
@@ -415,6 +581,8 @@ struct RequestContext {
     tried_remote: Option<SocketAddr>,
     local_cold_refused: bool,
     group: Group,
+    traffic: Traffic,
+    stream_ingress: Option<StreamPermit>,
     started: Instant,
 }
 
@@ -448,6 +616,8 @@ impl ProxyHttp for Proxy {
             tried_remote: None,
             local_cold_refused: false,
             group: Group::Ordinary,
+            traffic: Traffic::Short,
+            stream_ingress: None,
             started: Instant::now(),
         }
     }
@@ -571,6 +741,7 @@ impl ProxyHttp for Proxy {
         ctx: &mut Self::CTX,
     ) -> Result<()> {
         let headroom = response.remove_header(HEADROOM_HEADER);
+        let accepted = response.status.is_success() || response.status.as_u16() == 101;
         match ctx.target.as_ref() {
             Some(Target::Local(lease)) => {
                 response.remove_header(REJECT_HEADER);
@@ -601,17 +772,17 @@ impl ProxyHttp for Proxy {
                         response.insert_header("x-experiment-pod", name)?;
                     }
                 }
-                if self.listener == Listener::Execution && response.status.is_success() {
-                    let slots = self
-                        .pool
-                        .headroom_after_response(ctx.group, &lease.endpoint);
+                if self.listener == Listener::Execution && accepted {
+                    let slots =
+                        self.pool
+                            .headroom_after_response(ctx.group, ctx.traffic, &lease.endpoint);
                     response.insert_header(HEADROOM_HEADER, slots.to_string())?;
                 }
             }
             Some(Target::Remote(lease)) => {
                 if response.remove_header(REJECT_HEADER).is_some() {
                     lease.rejected();
-                } else if response.status.is_success() {
+                } else if accepted {
                     lease.accepted();
                     if let Some(slots) = headroom
                         .as_ref()
@@ -671,7 +842,7 @@ impl ProxyHttp for Proxy {
             _ => return Ok(()),
         }
         ctx.target = None;
-        self.pool.retried[ctx.group.index()].fetch_add(1, Ordering::Relaxed);
+        self.pool.retried[ctx.traffic.routing_index(ctx.group)].fetch_add(1, Ordering::Relaxed);
         let mut error = Error::explain(ErrorType::HTTPStatus(503), "confirmed execution refusal");
         error.set_retry(true);
         Err(error)
@@ -802,12 +973,35 @@ impl ProxyHttp for Proxy {
         {
             router.observe_request(key.clone());
         }
-        let i = group.index();
+        let streams = self
+            .pool
+            .streams
+            .as_ref()
+            .filter(|settings| settings.matches(session.req_header()));
+        let traffic = if streams.is_some() {
+            Traffic::Stream
+        } else {
+            Traffic::Short
+        };
+        let i = traffic.routing_index(group);
         ctx.group = group;
+        ctx.traffic = traffic;
+        if ingress
+            && let Some(streams) = streams
+            && ctx.stream_ingress.is_none()
+        {
+            ctx.stream_ingress = StreamPermit::acquire(&streams.ingress, streams.ingress_limit);
+            if ctx.stream_ingress.is_none() {
+                self.pool.refused[i].fetch_add(1, Ordering::Relaxed);
+                self.pool.ingress_rejections[i].record(Rejection::IngressStreamInFlight);
+                ctx.refused = true;
+                return Error::e_explain(ErrorType::HTTPStatus(503), "ingress stream limit");
+            }
+        }
         let local = if ctx.local_cold_refused {
             Err(Rejections::default())
         } else {
-            self.pool.acquire(&host, &key, group)
+            self.pool.acquire(&host, &key, group, traffic)
         };
         let (target, address) = match local {
             Ok(lease) => {
@@ -821,7 +1015,7 @@ impl ProxyHttp for Proxy {
                 if ingress {
                     let remote = self.router.as_ref().map_or_else(
                         || Err(Rejection::NoPeers.into()),
-                        |router| router.acquire(key, group, ctx.tried_remote),
+                        |router| router.acquire(key, group, traffic, ctx.tried_remote),
                     );
                     match remote {
                         Ok(lease) => {
@@ -1009,7 +1203,11 @@ async fn supervise(
                     if *shutdown.borrow() {
                         let drain = Duration::from_secs(if serving { 20 } else { 2 });
                         let _ = timeout(drain, async {
-                            while endpoint.in_flight.load(Ordering::Relaxed) > 0 {
+                            while endpoint
+                                .in_flight
+                                .iter()
+                                .any(|value| value.load(Ordering::Relaxed) > 0)
+                            {
                                 sleep(Duration::from_millis(10)).await;
                             }
                         })
@@ -1108,6 +1306,8 @@ fn main() {
             "POOL_COMPUTE_IN_FLIGHT",
             64,
         ),
+        streams: (supervised && env::var("POOL_STREAMS_ENABLED").as_deref() == Ok("1"))
+            .then(Streams::from_env),
         policy: policy.clone(),
         local: Default::default(),
         forwarded: Default::default(),

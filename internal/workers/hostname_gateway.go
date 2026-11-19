@@ -42,7 +42,7 @@ func (w *Controller) reconcileManagedHostnames(ctx context.Context, desired map[
 			}
 			name := "workers-preview-" + securetoken.Digest(item.Host)[:24]
 			desired[name] = true
-			if _, err = w.Kube.EnsureRoute(ctx, name, pool.RuntimeService, gateway, []string{"*." + item.Host}); err != nil {
+			if _, err = w.Kube.EnsureRoute(ctx, name, pool.RuntimeService, gateway, []string{"*." + item.Host}, pool); err != nil {
 				failures = append(failures, fmt.Errorf("preview hostname %s: %w", item.Host, err))
 			}
 			continue
@@ -55,7 +55,7 @@ func (w *Controller) reconcileManagedHostnames(ctx context.Context, desired map[
 		}
 		name := "workers-hostname-" + securetoken.Digest(item.Host)[:24]
 		desired[name] = true
-		if err := w.Kube.EnsureHostnameRoute(ctx, name, item.Host, item.Revision, gateway, w.gatewayHostnameRules(item)); err != nil {
+		if err := w.Kube.EnsureHostnameRoute(ctx, name, item.Host, item.Revision, gateway, w.gatewayHostnameRules(item), desired); err != nil {
 			failures = append(failures, fmt.Errorf("hostname %s: %w", item.Host, err))
 		}
 	}
@@ -83,6 +83,10 @@ func (w *Controller) gatewayHostnameRules(item domain.ManagedHostname) []kuberne
 			rule.Status = 503
 		default:
 			rule.Service, rule.Port, rule.Worker = pool.RuntimeService, 8081, route.Worker
+			if pool.Execution.Streams != nil {
+				rule.StreamService = pool.StreamService()
+				rule.SSEPaths = pool.Execution.Streams.SSEPaths
+			}
 		}
 		out = append(out, rule)
 		root = root || (route.Match == "prefix" && route.Path == "/")

@@ -5,25 +5,48 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 
 	"github.com/krun-dev/krun/internal/config"
 )
 
 type HostnameRule struct {
-	Match      string
-	Path       string
-	Service    string
-	Namespace  string
-	Port       int
-	HostHeader string
-	Status     int
-	Worker     string
+	Match         string
+	Path          string
+	Service       string
+	Namespace     string
+	Port          int
+	HostHeader    string
+	Status        int
+	Worker        string
+	StreamService string
+	SSEPaths      []string
 }
 
 const hostnameRevision = "krun.dev/hostname-revision"
 
-func (k *Client) EnsureHostnameRoute(ctx context.Context, name, host string, revision int, gateway config.WorkerGateway, rules []HostnameRule) error {
+func (k *Client) EnsureHostnameRoute(ctx context.Context, name, host string, revision int, gateway config.WorkerGateway, rules []HostnameRule, desired ...map[string]bool) error {
+	spec, streams := hostnameRouteSpecs(host, gateway, rules)
+	if err := k.ensureHostnameRouteSpec(ctx, name, revision, spec); err != nil {
+		return err
+	}
+	// Gateway API allows 16 rules in each HTTPRoute. A sibling route's more
+	// specific headers or path take precedence over a base Worker rule.
+	for start := 0; start < len(streams); start += 16 {
+		chunk := streams[start:min(start+16, len(streams))]
+		companion := name + "-streams-" + strconv.Itoa(start/16)
+		if len(desired) > 0 {
+			desired[0][companion] = true
+		}
+		if err := k.ensureHostnameRouteSpec(ctx, companion, revision, hostRouteSpec(host, gateway, chunk)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (k *Client) ensureHostnameRouteSpec(ctx context.Context, name string, revision int, spec map[string]any) error {
 	path := "/apis/gateway.networking.k8s.io/v1/namespaces/" + k.Namespace + "/httproutes"
 	var current struct {
 		Metadata struct {
@@ -33,7 +56,6 @@ func (k *Client) EnsureHostnameRoute(ctx context.Context, name, host string, rev
 		Spec map[string]any `json:"spec"`
 	}
 
-	spec := hostnameRouteSpec(host, gateway, rules)
 	// Round-trip numbers into the same representation as the API response.
 	wire, err := json.Marshal(spec)
 	if err != nil {
@@ -73,8 +95,14 @@ func (k *Client) EnsureHostnameRoute(ctx context.Context, name, host string, rev
 }
 
 func hostnameRouteSpec(host string, gateway config.WorkerGateway, rules []HostnameRule) map[string]any {
+	spec, _ := hostnameRouteSpecs(host, gateway, rules)
+	return spec
+}
+
+func hostnameRouteSpecs(host string, gateway config.WorkerGateway, rules []HostnameRule) (map[string]any, []any) {
 	entries := make([]any, 0, len(rules))
-	for _, rule := range rules {
+	var streams []any
+	for index, rule := range rules {
 		pathType := "PathPrefix"
 		if rule.Match == "exact" {
 			pathType = "Exact"
@@ -104,12 +132,28 @@ func hostnameRouteSpec(host string, gateway config.WorkerGateway, rules []Hostna
 			}
 			entry["filters"] = filters
 		}
+		if rule.StreamService != "" {
+			if rule.Match == "exact" && slices.Contains(rule.SSEPaths, rule.Path) {
+				entries = append(entries, streamRouteRule(entry, rule.StreamService, pathMatch("Exact", rule.Path), nil))
+				continue
+			}
+			streams = append(streams, streamHeaderRule(entry, rule.StreamService, pathMatch(pathType, rule.Path)))
+			for _, path := range rule.SSEPaths {
+				if winningHostnameRule(path, rules) == index {
+					streams = append(streams, streamRouteRule(entry, rule.StreamService, pathMatch("Exact", path), nil))
+				}
+			}
+		}
 		entries = append(entries, entry)
 	}
+	return hostRouteSpec(host, gateway, entries), streams
+}
+
+func hostRouteSpec(host string, gateway config.WorkerGateway, rules []any) map[string]any {
 	return map[string]any{
 		"parentRefs": []any{map[string]string{"name": gateway.Name, "namespace": gateway.Namespace, "sectionName": gateway.Section}},
 		"hostnames":  []string{host},
-		"rules":      entries,
+		"rules":      rules,
 	}
 }
 

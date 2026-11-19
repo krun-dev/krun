@@ -387,6 +387,7 @@ func (r *renderer) resources() error {
 		}
 	}
 	r.consoleRoute()
+	r.items = append(r.items, runtimebundle.StreamListenerPolicies(r.cfg.Workers, "")...)
 	r.runtimeAPIRoute()
 	r.networkPolicies()
 	return nil
