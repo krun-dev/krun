@@ -1,0 +1,798 @@
+{
+  "ordinary-watermark": {
+    "settings": {
+      "pods": 20,
+      "compute_processes": 3,
+      "ordinary_cap": 16,
+      "peer_ordinary_cap": 16,
+      "spread_entries": true,
+      "cpu_high": 750,
+      "cpu_reserve": 1000,
+      "light_rps": 400,
+      "rounds": 22000000,
+      "in_flight": 2,
+      "peer_in_flight": 4,
+      "cooldown_ms": 15,
+      "sample_ms": 150
+    },
+    "stages": [
+      {
+        "offeredRps": 20000,
+        "measuredGroup": "light",
+        "seconds": 12,
+        "light": {
+          "attempted": 240000,
+          "succeeded": 240000,
+          "failures": {},
+          "p99ms": 14.443239,
+          "cold": 90
+        },
+        "ordinaryMainThreadCpuCores": 6.328,
+        "ordinarySlotsObservedAtHighWatermark": 0
+      },
+      {
+        "offeredRps": 25000,
+        "measuredGroup": "light",
+        "seconds": 12,
+        "light": {
+          "attempted": 300000,
+          "succeeded": 300000,
+          "failures": {},
+          "p99ms": 6.934446,
+          "cold": 0
+        },
+        "ordinaryMainThreadCpuCores": 8.296,
+        "ordinarySlotsObservedAtHighWatermark": 3
+      },
+      {
+        "offeredRps": 30000,
+        "measuredGroup": "light",
+        "seconds": 12,
+        "light": {
+          "attempted": 360000,
+          "succeeded": 359828,
+          "failures": {
+            "503": 172
+          },
+          "p99ms": 10.24166,
+          "cold": 119
+        },
+        "ordinaryMainThreadCpuCores": 9.692,
+        "ordinarySlotsObservedAtHighWatermark": 16
+      },
+      {
+        "offeredRps": 35000,
+        "measuredGroup": "light",
+        "seconds": 12,
+        "light": {
+          "attempted": 420000,
+          "succeeded": 418746,
+          "failures": {
+            "503": 1254
+          },
+          "p99ms": 11.605751,
+          "cold": 87
+        },
+        "ordinaryMainThreadCpuCores": 10.79,
+        "ordinarySlotsObservedAtHighWatermark": 17
+      }
+    ]
+  },
+  "ordinary-confirm": {
+    "settings": {
+      "pods": 20,
+      "compute_processes": 3,
+      "ordinary_cap": 16,
+      "peer_ordinary_cap": 16,
+      "spread_entries": true,
+      "cpu_high": 750,
+      "cpu_reserve": 1000,
+      "light_rps": 400,
+      "rounds": 22000000,
+      "in_flight": 2,
+      "peer_in_flight": 4,
+      "cooldown_ms": 15,
+      "sample_ms": 150
+    },
+    "stages": [
+      {
+        "offeredRps": 40000,
+        "measuredGroup": "light",
+        "seconds": 30,
+        "light": {
+          "attempted": 1200000,
+          "succeeded": 1198829,
+          "failures": {
+            "503": 1171
+          },
+          "p99ms": 14.202638,
+          "cold": 204
+        },
+        "ordinaryMainThreadCpuCores": 12.166,
+        "ordinarySlotsObservedAtHighWatermark": 25
+      },
+      {
+        "offeredRps": 50000,
+        "measuredGroup": "light",
+        "seconds": 30,
+        "light": {
+          "attempted": 1500000,
+          "succeeded": 1480022,
+          "failures": {
+            "503": 19978
+          },
+          "p99ms": 16.357447,
+          "cold": 1743
+        },
+        "ordinaryMainThreadCpuCores": 15.28,
+        "ordinarySlotsObservedAtHighWatermark": 40
+      },
+      {
+        "offeredRps": 60000,
+        "measuredGroup": "light",
+        "seconds": 30,
+        "light": {
+          "attempted": 1800000,
+          "succeeded": 1796692,
+          "failures": {
+            "503": 3308
+          },
+          "p99ms": 9.69438,
+          "cold": 114
+        },
+        "ordinaryMainThreadCpuCores": 17.982,
+        "ordinarySlotsObservedAtHighWatermark": 40
+      }
+    ]
+  },
+  "ordinary-flight16-cool15": {
+    "settings": {
+      "pods": 20,
+      "compute_processes": 3,
+      "ordinary_cap": 16,
+      "peer_ordinary_cap": 16,
+      "spread_entries": true,
+      "cpu_high": 750,
+      "cpu_reserve": 1000,
+      "light_rps": 400,
+      "rounds": 22000000,
+      "in_flight": 2,
+      "peer_in_flight": 4,
+      "cooldown_ms": 15,
+      "sample_ms": 150
+    },
+    "stages": [
+      {
+        "offeredRps": 40000,
+        "measuredGroup": "light",
+        "seconds": 10,
+        "light": {
+          "attempted": 400000,
+          "succeeded": 397078,
+          "failures": {
+            "503": 2922
+          },
+          "p99ms": 22.456428,
+          "cold": 267
+        },
+        "ordinaryMainThreadCpuCores": 11.914,
+        "ordinarySlotsObservedAtHighWatermark": 11
+      },
+      {
+        "offeredRps": 60000,
+        "measuredGroup": "light",
+        "seconds": 10,
+        "light": {
+          "attempted": 600000,
+          "succeeded": 571119,
+          "failures": {
+            "503": 28881
+          },
+          "p99ms": 25.757239,
+          "cold": 1847
+        },
+        "ordinaryMainThreadCpuCores": 17.804,
+        "ordinarySlotsObservedAtHighWatermark": 40
+      },
+      {
+        "offeredRps": 80000,
+        "measuredGroup": "light",
+        "seconds": 10,
+        "light": {
+          "attempted": 800000,
+          "succeeded": 759817,
+          "failures": {
+            "503": 40183
+          },
+          "p99ms": 16.599217,
+          "cold": 360
+        },
+        "ordinaryMainThreadCpuCores": 19.661,
+        "ordinarySlotsObservedAtHighWatermark": 40
+      },
+      {
+        "offeredRps": 100000,
+        "measuredGroup": "light",
+        "seconds": 10,
+        "light": {
+          "attempted": 1000000,
+          "succeeded": 842579,
+          "failures": {
+            "503": 156591,
+            "client_queue_full": 830
+          },
+          "p99ms": 14.517848,
+          "cold": 22
+        },
+        "ordinaryMainThreadCpuCores": 20.375,
+        "ordinarySlotsObservedAtHighWatermark": 40
+      }
+    ]
+  },
+  "ordinary-flight32-cool15": {
+    "settings": {
+      "pods": 20,
+      "compute_processes": 3,
+      "ordinary_cap": 32,
+      "peer_ordinary_cap": 16,
+      "spread_entries": true,
+      "cpu_high": 750,
+      "cpu_reserve": 1000,
+      "light_rps": 400,
+      "rounds": 22000000,
+      "in_flight": 2,
+      "peer_in_flight": 4,
+      "cooldown_ms": 15,
+      "sample_ms": 150
+    },
+    "stages": [
+      {
+        "offeredRps": 40000,
+        "measuredGroup": "light",
+        "seconds": 10,
+        "light": {
+          "attempted": 400000,
+          "succeeded": 398694,
+          "failures": {
+            "503": 1306
+          },
+          "p99ms": 37.156327,
+          "cold": 162
+        },
+        "ordinaryMainThreadCpuCores": 11.733,
+        "ordinarySlotsObservedAtHighWatermark": 14
+      },
+      {
+        "offeredRps": 60000,
+        "measuredGroup": "light",
+        "seconds": 10,
+        "light": {
+          "attempted": 600000,
+          "succeeded": 578391,
+          "failures": {
+            "503": 21608,
+            "client_queue_full": 1
+          },
+          "p99ms": 35.098949,
+          "cold": 1906
+        },
+        "ordinaryMainThreadCpuCores": 17.717,
+        "ordinarySlotsObservedAtHighWatermark": 40
+      },
+      {
+        "offeredRps": 80000,
+        "measuredGroup": "light",
+        "seconds": 10,
+        "light": {
+          "attempted": 800000,
+          "succeeded": 773868,
+          "failures": {
+            "503": 25398,
+            "client_queue_full": 734
+          },
+          "p99ms": 50.762047,
+          "cold": 345
+        },
+        "ordinaryMainThreadCpuCores": 19.781,
+        "ordinarySlotsObservedAtHighWatermark": 40
+      },
+      {
+        "offeredRps": 100000,
+        "measuredGroup": "light",
+        "seconds": 10,
+        "light": {
+          "attempted": 1000000,
+          "succeeded": 900874,
+          "failures": {
+            "503": 98973,
+            "client_queue_full": 153
+          },
+          "p99ms": 24.345978,
+          "cold": 83
+        },
+        "ordinaryMainThreadCpuCores": 20.761,
+        "ordinarySlotsObservedAtHighWatermark": 40
+      }
+    ]
+  },
+  "ordinary-flight16-cool5": {
+    "settings": {
+      "pods": 20,
+      "compute_processes": 3,
+      "ordinary_cap": 16,
+      "peer_ordinary_cap": 16,
+      "spread_entries": true,
+      "cpu_high": 750,
+      "cpu_reserve": 1000,
+      "light_rps": 400,
+      "rounds": 22000000,
+      "in_flight": 2,
+      "peer_in_flight": 4,
+      "cooldown_ms": 5,
+      "sample_ms": 150
+    },
+    "stages": [
+      {
+        "offeredRps": 40000,
+        "measuredGroup": "light",
+        "seconds": 10,
+        "light": {
+          "attempted": 400000,
+          "succeeded": 398102,
+          "failures": {
+            "503": 1898
+          },
+          "p99ms": 22.540489,
+          "cold": 290
+        },
+        "ordinaryMainThreadCpuCores": 11.744,
+        "ordinarySlotsObservedAtHighWatermark": 10
+      },
+      {
+        "offeredRps": 60000,
+        "measuredGroup": "light",
+        "seconds": 10,
+        "light": {
+          "attempted": 600000,
+          "succeeded": 575280,
+          "failures": {
+            "503": 24720
+          },
+          "p99ms": 24.570163,
+          "cold": 1474
+        },
+        "ordinaryMainThreadCpuCores": 17.565,
+        "ordinarySlotsObservedAtHighWatermark": 40
+      },
+      {
+        "offeredRps": 80000,
+        "measuredGroup": "light",
+        "seconds": 10,
+        "light": {
+          "attempted": 800000,
+          "succeeded": 754834,
+          "failures": {
+            "503": 44629,
+            "client_queue_full": 537
+          },
+          "p99ms": 18.619802,
+          "cold": 697
+        },
+        "ordinaryMainThreadCpuCores": 20.163,
+        "ordinarySlotsObservedAtHighWatermark": 40
+      },
+      {
+        "offeredRps": 100000,
+        "measuredGroup": "light",
+        "seconds": 10,
+        "light": {
+          "attempted": 1000000,
+          "succeeded": 816318,
+          "failures": {
+            "503": 181445,
+            "client_queue_full": 2237
+          },
+          "p99ms": 14.086259,
+          "cold": 35
+        },
+        "ordinaryMainThreadCpuCores": 20.121,
+        "ordinarySlotsObservedAtHighWatermark": 40
+      }
+    ]
+  },
+  "ordinary-flight32-cool5": {
+    "settings": {
+      "pods": 20,
+      "compute_processes": 3,
+      "ordinary_cap": 32,
+      "peer_ordinary_cap": 16,
+      "spread_entries": true,
+      "cpu_high": 750,
+      "cpu_reserve": 1000,
+      "light_rps": 400,
+      "rounds": 22000000,
+      "in_flight": 2,
+      "peer_in_flight": 4,
+      "cooldown_ms": 5,
+      "sample_ms": 150
+    },
+    "stages": [
+      {
+        "offeredRps": 40000,
+        "measuredGroup": "light",
+        "seconds": 10,
+        "light": {
+          "attempted": 400000,
+          "succeeded": 397708,
+          "failures": {
+            "503": 2292
+          },
+          "p99ms": 35.126669,
+          "cold": 212
+        },
+        "ordinaryMainThreadCpuCores": 11.924,
+        "ordinarySlotsObservedAtHighWatermark": 15
+      },
+      {
+        "offeredRps": 60000,
+        "measuredGroup": "light",
+        "seconds": 10,
+        "light": {
+          "attempted": 600000,
+          "succeeded": 582121,
+          "failures": {
+            "503": 17879
+          },
+          "p99ms": 35.934995,
+          "cold": 1710
+        },
+        "ordinaryMainThreadCpuCores": 17.674,
+        "ordinarySlotsObservedAtHighWatermark": 40
+      },
+      {
+        "offeredRps": 80000,
+        "measuredGroup": "light",
+        "seconds": 10,
+        "light": {
+          "attempted": 800000,
+          "succeeded": 776236,
+          "failures": {
+            "503": 23764
+          },
+          "p99ms": 47.196435,
+          "cold": 495
+        },
+        "ordinaryMainThreadCpuCores": 19.917,
+        "ordinarySlotsObservedAtHighWatermark": 40
+      },
+      {
+        "offeredRps": 100000,
+        "measuredGroup": "light",
+        "seconds": 10,
+        "light": {
+          "attempted": 1000000,
+          "succeeded": 883165,
+          "failures": {
+            "503": 116342,
+            "client_missed_window": 92,
+            "client_queue_full": 401
+          },
+          "p99ms": 23.939358,
+          "cold": 79
+        },
+        "ordinaryMainThreadCpuCores": 20.312,
+        "ordinarySlotsObservedAtHighWatermark": 40
+      }
+    ]
+  },
+  "ordinary-flight32-cool15-confirm": {
+    "settings": {
+      "pods": 20,
+      "compute_processes": 3,
+      "ordinary_cap": 32,
+      "peer_ordinary_cap": 16,
+      "spread_entries": true,
+      "cpu_high": 750,
+      "cpu_reserve": 1000,
+      "light_rps": 400,
+      "rounds": 22000000,
+      "in_flight": 2,
+      "peer_in_flight": 4,
+      "cooldown_ms": 15,
+      "sample_ms": 150
+    },
+    "stages": [
+      {
+        "offeredRps": 100000,
+        "measuredGroup": "light",
+        "seconds": 30,
+        "light": {
+          "attempted": 3000000,
+          "succeeded": 2752764,
+          "failures": {
+            "503": 246423,
+            "client_queue_full": 813
+          },
+          "p99ms": 20.704175,
+          "cold": 65
+        },
+        "ordinaryMainThreadCpuCores": 21.031,
+        "ordinarySlotsObservedAtHighWatermark": 40
+      },
+      {
+        "offeredRps": 100000,
+        "measuredGroup": "light",
+        "seconds": 30,
+        "light": {
+          "attempted": 3000000,
+          "succeeded": 2722081,
+          "failures": {
+            "503": 276738,
+            "client_queue_full": 1181
+          },
+          "p99ms": 20.371406,
+          "cold": 0
+        },
+        "ordinaryMainThreadCpuCores": 21.382,
+        "ordinarySlotsObservedAtHighWatermark": 40
+      }
+    ]
+  },
+  "compute2-sweep": {
+    "settings": {
+      "pods": 20,
+      "compute_processes": 2,
+      "cpu_high": 750,
+      "cpu_reserve": 1000,
+      "light_rps": 400,
+      "rounds": 22000000,
+      "in_flight": 2,
+      "peer_in_flight": 4,
+      "cooldown_ms": 15,
+      "sample_ms": 150
+    },
+    "stages": [
+      {
+        "offeredRps": 950,
+        "measuredGroup": "compute",
+        "seconds": 10,
+        "light": {
+          "attempted": 4000,
+          "succeeded": 4000,
+          "failures": {},
+          "p99ms": 1.5348990000002232,
+          "cold": 3
+        },
+        "compute": {
+          "attempted": 9500,
+          "succeeded": 6830,
+          "failures": {
+            "503": 2670
+          },
+          "p99ms": 75.70389899999998,
+          "cold": 0
+        }
+      }
+    ]
+  },
+  "compute3-sweep": {
+    "settings": {
+      "pods": 20,
+      "compute_processes": 3,
+      "cpu_high": 750,
+      "cpu_reserve": 1000,
+      "light_rps": 400,
+      "rounds": 22000000,
+      "in_flight": 2,
+      "peer_in_flight": 4,
+      "cooldown_ms": 15,
+      "sample_ms": 150
+    },
+    "stages": [
+      {
+        "offeredRps": 950,
+        "measuredGroup": "compute",
+        "seconds": 10,
+        "light": {
+          "attempted": 4000,
+          "succeeded": 4000,
+          "failures": {},
+          "p99ms": 1.9489569999999787,
+          "cold": 5
+        },
+        "compute": {
+          "attempted": 9500,
+          "succeeded": 9398,
+          "failures": {
+            "503": 102
+          },
+          "p99ms": 79.04758500000025,
+          "cold": 1
+        }
+      }
+    ]
+  },
+  "compute3-confirm": {
+    "settings": {
+      "pods": 20,
+      "compute_processes": 3,
+      "cpu_high": 750,
+      "cpu_reserve": 1000,
+      "light_rps": 400,
+      "rounds": 22000000,
+      "in_flight": 2,
+      "peer_in_flight": 4,
+      "cooldown_ms": 15,
+      "sample_ms": 150
+    },
+    "stages": [
+      {
+        "offeredRps": 700,
+        "measuredGroup": "compute",
+        "seconds": 60,
+        "light": {
+          "attempted": 24000,
+          "succeeded": 24000,
+          "failures": {},
+          "p99ms": 1.0675190000000612,
+          "cold": 64
+        },
+        "compute": {
+          "attempted": 42000,
+          "succeeded": 42000,
+          "failures": {},
+          "p99ms": 74.68966499999806,
+          "cold": 54
+        }
+      }
+    ]
+  },
+  "mixed3-sweep": {
+    "settings": {
+      "pods": 20,
+      "compute_processes": 3,
+      "cpu_high": 750,
+      "cpu_reserve": 1000,
+      "light_rps": 2000,
+      "io_rps": 80,
+      "io_delay_ms": 100,
+      "rounds": 22000000,
+      "medium_rounds": 5000000,
+      "in_flight": 2,
+      "peer_in_flight": 4,
+      "cooldown_ms": 15,
+      "sample_ms": 150
+    },
+    "stages": [
+      {
+        "offeredRps": 200,
+        "measuredGroup": "compute",
+        "seconds": 20,
+        "light": {
+          "attempted": 40000,
+          "succeeded": 40000,
+          "failures": {},
+          "p99ms": 1.0950640000010026,
+          "cold": 5
+        },
+        "compute": {
+          "attempted": 4000,
+          "succeeded": 4000,
+          "failures": {},
+          "p99ms": 72.09285,
+          "cold": 47
+        },
+        "medium": {
+          "attempted": 16000,
+          "succeeded": 16000,
+          "failures": {},
+          "p99ms": 45.11603399999876,
+          "cold": 56
+        },
+        "io": {
+          "attempted": 1600,
+          "succeeded": 1600,
+          "failures": {},
+          "p99ms": 102.69516199999998,
+          "cold": 1
+        }
+      },
+      {
+        "offeredRps": 500,
+        "measuredGroup": "compute",
+        "seconds": 20,
+        "light": {
+          "attempted": 40000,
+          "succeeded": 40000,
+          "failures": {},
+          "p99ms": 1.4860810000009224,
+          "cold": 2
+        },
+        "compute": {
+          "attempted": 10000,
+          "succeeded": 10000,
+          "failures": {},
+          "p99ms": 73.07546000000002,
+          "cold": 41
+        },
+        "medium": {
+          "attempted": 10000,
+          "succeeded": 10000,
+          "failures": {},
+          "p99ms": 45.54547200000161,
+          "cold": 14
+        },
+        "io": {
+          "attempted": 1600,
+          "succeeded": 1600,
+          "failures": {},
+          "p99ms": 102.80312500000036,
+          "cold": 0
+        }
+      },
+      {
+        "offeredRps": 800,
+        "measuredGroup": "compute",
+        "seconds": 20,
+        "light": {
+          "attempted": 40000,
+          "succeeded": 40000,
+          "failures": {},
+          "p99ms": 1.2995730000002368,
+          "cold": 2
+        },
+        "compute": {
+          "attempted": 16000,
+          "succeeded": 15992,
+          "failures": {
+            "503": 8
+          },
+          "p99ms": 73.32313600000089,
+          "cold": 27
+        },
+        "medium": {
+          "attempted": 4000,
+          "succeeded": 4000,
+          "failures": {},
+          "p99ms": 45.40151700000206,
+          "cold": 10
+        },
+        "io": {
+          "attempted": 1600,
+          "succeeded": 1600,
+          "failures": {},
+          "p99ms": 102.98049399999945,
+          "cold": 0
+        }
+      },
+      {
+        "offeredRps": 1000,
+        "measuredGroup": "compute",
+        "seconds": 20,
+        "light": {
+          "attempted": 40000,
+          "succeeded": 40000,
+          "failures": {},
+          "p99ms": 1.3987150000011752,
+          "cold": 1
+        },
+        "compute": {
+          "attempted": 20000,
+          "succeeded": 19551,
+          "failures": {
+            "503": 449
+          },
+          "p99ms": 77.54835000000003,
+          "cold": 152
+        },
+        "io": {
+          "attempted": 1600,
+          "succeeded": 1600,
+          "failures": {},
+          "p99ms": 102.92111999999906,
+          "cold": 0
+        }
+      }
+    ]
+  }
+}
