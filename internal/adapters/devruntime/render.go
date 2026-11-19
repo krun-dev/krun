@@ -70,6 +70,9 @@ func Render(c config.Config, controlHost, outputDirectory string) error {
 	if err := writeResource(outputDirectory, "runtime-patch.json", options.runtimePodPatch()); err != nil {
 		return err
 	}
+	if err := writeResource(outputDirectory, "runtime-execution.json", options.executionResources()); err != nil {
+		return err
+	}
 	if err := options.renderNetworkPolicies(outputDirectory, replacements); err != nil {
 		return err
 	}

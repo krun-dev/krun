@@ -1,6 +1,7 @@
 package deployment
 
 import (
+	"github.com/krun-dev/krun/internal/adapters/runtimebundle"
 	"sort"
 	"strconv"
 )
@@ -265,6 +266,12 @@ func (r *renderer) runtimeDeployment(text string, validator bool) {
 		"resources":    resources("250m", "256Mi", "2", "1Gi"),
 	}
 	if !validator {
+		container["command"] = runtimebundle.ServingCommand()
+		container["readinessProbe"] = probe("/healthz", 8083)
+		container["env"] = runtimebundle.ServingEnvironment(r.pool, 1000)
+		container["resources"] = resources("4", "8Gi", "4", "8Gi")
+		volumes = append(volumes, tempVolume("tmp", "128Mi"))
+		container["volumeMounts"] = append(mounts, tempMount("tmp", "/tmp"))
 		container["ports"] = []any{map[string]any{"name": "metrics", "containerPort": 8084}}
 	}
 	r.deployment(name, role, replicas, container, volumes, map[string]string{
@@ -275,6 +282,8 @@ func (r *renderer) runtimeDeployment(text string, validator bool) {
 		r.service(name, name, 8083)
 	} else {
 		r.service(name, name, 8081, 8083)
+		r.add("v1", "Service", runtimebundle.ServingPeerName(r.pool), map[string]any{"spec": runtimebundle.ServingPeerSpec(name)})
+		r.add("gateway.kgateway.dev/v1alpha1", "BackendConfigPolicy", name, map[string]any{"spec": runtimebundle.ServingHashSpec(name)})
 	}
 }
 

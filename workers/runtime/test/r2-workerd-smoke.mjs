@@ -57,6 +57,9 @@ function tar(files) {
   return gzipSync(Buffer.concat([...chunks, Buffer.alloc(1024)]));
 }
 const sharedValidator = process.argv.includes("--shared-validator");
+const supervisor = process.env.KRUN_TEST_SUPERVISOR;
+assert.ok(!(supervisor && sharedValidator), "supervisor is only for serving runtimes");
+let servingAcknowledgements = 0;
 const sharedSource = `import {env, WorkerEntrypoint} from 'cloudflare:workers';
 if (env.FAIL) {
   throw new Error('Rejected candidate fixture');
@@ -109,6 +112,12 @@ export default class extends WorkerEntrypoint {
   async fetch(request) {
     if (atModuleScope !== this.env.BUCKET || typeof atModuleScope.resumeMultipartUpload !== 'function') {
       throw new Error('binding initialization mismatch');
+    }
+    if (new URL(request.url).pathname === '/websocket') {
+      const [client, server] = Object.values(new WebSocketPair());
+      server.accept();
+      server.addEventListener('message', ({data}) => server.send('echo:' + data));
+      return new Response(null, {status: 101, webSocket: client});
     }
     if (new URL(request.url).pathname === '/validation-storage-prime') {
       return Response.json(await this.env.BUCKET.head('validation-must-not-write'));
@@ -561,7 +570,13 @@ const platform = http.createServer((request, response) => {
         pool: "default",
         config_epoch: fixtureConfigEpoch,
         config_revision: 1,
-        routes: [{ host: "fixture.test", enabled: true, version: descriptor.id }],
+        routes: [
+          {
+            host: url.pathname.endsWith("/127.0.0.1") ? "127.0.0.1" : "fixture.test",
+            enabled: true,
+            version: descriptor.id,
+          },
+        ],
         versions: { [descriptor.id]: descriptor },
       }),
     );
@@ -575,6 +590,7 @@ const platform = http.createServer((request, response) => {
     return;
   }
   if (url.pathname.endsWith("/ack")) {
+    servingAcknowledgements++;
     response.end("{}");
     return;
   }
@@ -641,6 +657,8 @@ const protocol =
 const objectService =
   '(name="objects",external=(address=' + JSON.stringify(address) + "," + protocol + "))";
 const managementPort = await freePort();
+const metricsPort = supervisor ? await freePort() : null;
+const coordinatorPort = supervisor ? await freePort() : null;
 const staticDomains = JSON.stringify(JSON.stringify({ "static.fixture.test": "int" }));
 const objectBindings = sharedValidator
   ? '(name="VALIDATOR_ONLY",text="true")'
@@ -648,22 +666,54 @@ const objectBindings = sharedValidator
 const privateSocket = sharedValidator
   ? ""
   : `,(name="private",address="127.0.0.1:${port}",http=(),service=(name="entry",entrypoint="Private"))`;
+const executionBindings = supervisor
+  ? ',(name="POOL_SLOT",text="krun-unassigned-slot"),(name="POOL_COORDINATOR",service="pool-coordinator")'
+  : "";
+const executionService = supervisor
+  ? `(name="pool-coordinator",external=(address="127.0.0.1:${coordinatorPort}",http=())),`
+  : "";
+const metricsSocket = supervisor
+  ? `,(name="metrics",address="127.0.0.1:${metricsPort}",http=(),service=(name="entry",entrypoint="Metrics"))`
+  : "";
 const config = `using W=import "/workerd/workerd.capnp";
 const config :W.Config=(services=[
  (name="entry",worker=(modules=[${modules}],compatibilityDate="2026-09-28",compatibilityFlags=["experimental","enable_ctx_exports","enable_request_signal","request_signal_passthrough"],bindings=[${sources},(name="CACHE_SOURCE",text=embed ${JSON.stringify(path.join(root, "cache.js"))}),
  (name="LOADER",workerLoader=(id="r2-smoke")),(name="PLATFORM",service="platform"),(name="POD_UID",text="uid"),(name="POD_NAME",text="pod"),(name="RUNTIME_POOL",text="${sharedValidator ? "validation" : "default"}"),(name="RUNTIME_TOKEN",text="${sharedValidator ? "validator-only-token" : "test"}"),(name="MANAGEMENT_TOKEN",text="test-management"),
- ${objectBindings},(name="STATIC_DOMAINS",text=${staticDomains})],globalOutbound="network")),
+ ${objectBindings},(name="STATIC_DOMAINS",text=${staticDomains})${executionBindings}],globalOutbound="network")),
  (name="platform",external=(address="127.0.0.1:${platformPort}",http=())),
  ${sharedValidator ? "" : objectService + ","}
+ ${executionService}
  (name="network",network=(allow=["127.0.0.1/32"]))],
- sockets=[(name="management",address="127.0.0.1:${managementPort}",http=(),service=(name="entry",entrypoint="Management"))${privateSocket}]);`;
+ sockets=[(name="management",address="127.0.0.1:${managementPort}",http=(),service=(name="entry",entrypoint="Management"))${privateSocket}${metricsSocket}]);`;
 // Use JSON escaping for the nested text binding instead of Cap'n Proto escapes.
 const configPath = path.join(directory, "runtime.capnp");
 writeFileSync(configPath, config);
+const workerd = path.join(root, "node_modules/.bin/workerd");
+const managementTokenFile = path.join(directory, "management");
+writeFileSync(managementTokenFile, "test-management", { mode: 0o600 });
 const child = spawn(
-  path.join(root, "node_modules/.bin/workerd"),
-  ["serve", configPath, "-I", "/", "--experimental"],
-  { stdio: ["ignore", "pipe", "pipe"] },
+  supervisor || workerd,
+  supervisor
+    ? ["--serving", workerd, configPath]
+    : ["serve", configPath, "-I", "/", "--experimental"],
+  {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: supervisor
+      ? {
+          ...process.env,
+          POOL_BIND_ADDRESS: "127.0.0.1",
+          POOL_PORT: String(port),
+          POOL_MANAGEMENT_PORT: String(managementPort),
+          POOL_METRICS_PORT: String(metricsPort),
+          POOL_COORDINATOR_PORT: String(coordinatorPort),
+          POOL_MANAGEMENT_TOKEN_FILE: managementTokenFile,
+          // Keep the cache checks on one slot despite short CPU spikes on shared runners.
+          POOL_CPU_HIGH_MCPU: "5000",
+          POOL_CPU_RESERVE_MCPU: "100",
+          POOL_MEMORY_RESERVE_MIB: "64",
+        }
+      : process.env,
+  },
 );
 let output = "";
 child.stdout.on("data", (chunk) => (output += chunk));
@@ -721,17 +771,26 @@ try {
       throw new Error("workerd exited: " + output);
     }
     try {
-      const probeURL = sharedValidator
-        ? `http://127.0.0.1:${managementPort}/ready`
-        : "http://127.0.0.1:" + port + "/";
+      const probeURL =
+        sharedValidator || supervisor
+          ? `http://127.0.0.1:${managementPort}/ready`
+          : "http://127.0.0.1:" + port + "/";
       const response = await fetch(probeURL, {
         headers: { host: "unknown.test" },
       });
       await response.body?.cancel();
-      break;
+      if (!supervisor || response.ok) {
+        break;
+      }
     } catch {
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      // Allow the test listener and all execution processes to start.
     }
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  }
+  if (supervisor) {
+    const response = await fetch(`http://127.0.0.1:${managementPort}/ready`);
+    assert.equal(response.status, 200, output);
+    assert.equal((await response.json()).revision, 1);
   }
   if (sharedValidator) {
     const readyResponse = await fetch(`http://127.0.0.1:${managementPort}/ready`);
@@ -1015,15 +1074,57 @@ try {
       objects.delete(largeKey);
     }
 
+    if (!project && !liveGrant) {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/websocket`);
+      try {
+        const messages = await new Promise((resolve, reject) => {
+          const echoed = [];
+          const deadline = setTimeout(() => reject(new Error("WebSocket echo timed out")), 3000);
+          socket.addEventListener("open", () => socket.send("first"));
+          socket.addEventListener("message", ({ data }) => {
+            echoed.push(data);
+            if (echoed.length === 1) {
+              socket.send("second");
+            } else {
+              clearTimeout(deadline);
+              resolve(echoed);
+            }
+          });
+          socket.addEventListener("error", (event) => {
+            clearTimeout(deadline);
+            reject(event.error ?? new Error("WebSocket upgrade failed"));
+          });
+        });
+        assert.deepEqual(messages, ["echo:first", "echo:second"]);
+        console.log("WORKERD WEBSOCKET SMOKE PASSED");
+      } finally {
+        socket.close();
+      }
+    }
+
     console.log(
       "R2 native WorkerLoader, module env, WorkerEntrypoint env, signed fixed Host, direct streaming and credential caching passed",
     );
   }
+  if (supervisor) {
+    const metrics = await (await fetch(`http://127.0.0.1:${metricsPort}/metrics`)).text();
+    assert.equal(metrics.match(/^krun_execution_slot_ready\{[^}]+\} 1$/gm)?.length, 4, metrics);
+    assert.match(metrics, /^krun_execution_slot_cold_loads_total\{[^}]+\} [1-9]\d*$/m);
+    assert.match(
+      metrics,
+      /^krun_execution_slot_loaded\{workerd_slot="ordinary-[01]",execution_group="ordinary"\} [1-9]\d*$/m,
+    );
+    for (let i = 0; i < 60 && servingAcknowledgements === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.ok(servingAcknowledgements > 0, output);
+    console.log("SERVING SUPERVISOR SMOKE PASSED");
+  }
 } catch (error) {
-  if (project) {
+  if (project || supervisor) {
     let safe = output;
     for (const field of ["access_key_id", "secret_access_key", "session_token", "cursor_key"]) {
-      if (grant[field]) {
+      if (grant?.[field]) {
         safe = safe.replaceAll(grant[field], "[redacted]");
       }
     }

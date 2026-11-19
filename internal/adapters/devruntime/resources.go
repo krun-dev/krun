@@ -1,5 +1,7 @@
 package devruntime
 
+import "github.com/krun-dev/krun/internal/adapters/runtimebundle"
+
 func kubernetesResource(kind, name string, fields map[string]any) map[string]any {
 	resource := map[string]any{
 		"apiVersion": "v1",
@@ -105,13 +107,20 @@ func (o renderOptions) runtimePodPatch() map[string]any {
 		map[string]any{"name": "storage", "mountPath": "/storage", "readOnly": true},
 	}
 
+	mounts = append(mounts, map[string]any{"name": "supervisor-tmp", "mountPath": "/tmp"})
+	volumes = append(volumes, map[string]any{"name": "supervisor-tmp", "emptyDir": map[string]string{"sizeLimit": "128Mi"}})
 	container := map[string]any{
-		"name":         "workerd",
-		"volumeMounts": mounts,
+		"name":           "workerd",
+		"command":        runtimebundle.ServingCommand(),
+		"readinessProbe": map[string]any{"httpGet": map[string]any{"path": "/healthz", "port": 8083}},
+		"env":            runtimebundle.ServingEnvironment(o.pool, 100),
+		"resources":      map[string]any{"limits": map[string]string{"cpu": "4", "memory": "8Gi"}},
+		"volumeMounts":   mounts,
 	}
 	podSpec := map[string]any{
-		"volumes":    volumes,
-		"containers": []any{container},
+		"securityContext": map[string]any{"fsGroup": 1000},
+		"volumes":         volumes,
+		"containers":      []any{container},
 	}
 	return map[string]any{
 		"spec": map[string]any{
@@ -120,4 +129,14 @@ func (o renderOptions) runtimePodPatch() map[string]any {
 			},
 		},
 	}
+}
+
+func (o renderOptions) executionResources() map[string]any {
+	const runtimeService = "runtime-default"
+	policy := kubernetesResource("BackendConfigPolicy", runtimeService, map[string]any{"spec": runtimebundle.ServingHashSpec(runtimeService)})
+	policy["apiVersion"] = "gateway.kgateway.dev/v1alpha1"
+	return resourceList([]any{
+		kubernetesResource("Service", runtimebundle.ServingPeerName(o.pool), map[string]any{"spec": runtimebundle.ServingPeerSpec(runtimeService)}),
+		policy,
+	})
 }

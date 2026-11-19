@@ -20,6 +20,8 @@ IMAGE="${KRUN_DEV_RUNTIME_IMAGE:-krun-worker-runtime:dev}"
 
 ssh -o ConnectTimeout=8 "$REMOTE" "rm -rf /tmp/krun-runtime && mkdir -p /tmp/krun-runtime"
 runtime_files=(
+  workers/runtime/.dockerignore
+  workers/runtime/service.js
   workers/runtime/Dockerfile
   workers/runtime/entry.js
   workers/runtime/assets.js
@@ -29,7 +31,7 @@ runtime_files=(
   workers/runtime/package-lock.json
 )
 scp "${runtime_files[@]}" "$REMOTE:/tmp/krun-runtime/"
-scp -r workers/runtime/storage "$REMOTE:/tmp/krun-runtime/storage"
+scp -r workers/runtime/storage workers/runtime/supervisor "$REMOTE:/tmp/krun-runtime/"
 ssh -o ConnectTimeout=8 "$REMOTE" "set -e
   cd /tmp/krun-runtime
   docker build -t '$IMAGE' .

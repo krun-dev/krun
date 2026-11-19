@@ -90,12 +90,13 @@ type WorkersConfig struct {
 }
 
 type WorkerRuntimePool struct {
-	ID             string            `json:"id"`
-	Access         []string          `json:"access"`
-	Labels         map[string]string `json:"labels"`
-	PrivateEgress  string            `json:"private_egress"`
-	PublicEgress   string            `json:"public_egress"`
-	RuntimeService string            `json:"runtime_service"`
+	ID             string              `json:"id"`
+	Access         []string            `json:"access"`
+	Labels         map[string]string   `json:"labels"`
+	PrivateEgress  string              `json:"private_egress"`
+	PublicEgress   string              `json:"public_egress"`
+	RuntimeService string              `json:"runtime_service"`
+	Execution      WorkerExecutionPool `json:"execution"`
 	// ValidatorService selects a dedicated workerd Deployment that loads version
 	// candidates before commit when selected by ValidatorPool. It must not be
 	// the serving RuntimeService; other pools may omit it.
@@ -105,6 +106,21 @@ type WorkerRuntimePool struct {
 	ValidatorToken          string `json:"validator_token"`
 	ManagementToken         string `json:"management_token"`
 	Default                 bool   `json:"default"`
+}
+
+type WorkerExecutionPool struct {
+	ComputeProcesses     *int     `json:"compute_processes,omitempty"`
+	ComputeHosts         []string `json:"compute_hosts,omitempty"`
+	OrdinaryInFlight     int      `json:"ordinary_in_flight,omitempty"`
+	ComputeInFlight      int      `json:"compute_in_flight,omitempty"`
+	PeerOrdinaryInFlight int      `json:"peer_ordinary_in_flight,omitempty"`
+	PeerComputeInFlight  int      `json:"peer_compute_in_flight,omitempty"`
+	CPUHighMilli         int      `json:"cpu_high_millicores,omitempty"`
+	CPUReserveMilli      int      `json:"cpu_reserve_millicores,omitempty"`
+	MemoryReserveMiB     int      `json:"memory_reserve_mib,omitempty"`
+	MaxLoadedPerProcess  int      `json:"max_loaded_per_process,omitempty"`
+	MaxColdInFlight      int      `json:"max_cold_in_flight,omitempty"`
+	PeerCooldownMS       int      `json:"peer_cooldown_ms,omitempty"`
 }
 
 type WorkerNetworkRequirements struct {
