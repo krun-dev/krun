@@ -49,9 +49,6 @@ func TestPostgresMigrationHistoryAndRollback(t *testing.T) {
 	if err := applyPendingMigrations(ctx, tx, []sqlMigration{second}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE krun_meta SET value=$1 WHERE key='schema_baseline'`, migrationBaseline(second)); err != nil {
-		t.Fatal(err)
-	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +81,7 @@ func TestPostgresRegisterLegacyBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.pool.Exec(ctx, `DROP TABLE krun_schema_migrations; INSERT INTO krun_users(user_id,source,subject,name,status) VALUES('legacy','local','legacy','Legacy','active')`); err != nil {
+	if _, err := store.pool.Exec(ctx, `DROP TABLE krun_schema_migrations; INSERT INTO krun_meta(key,value) VALUES ('schema_baseline','82934894c84ba5a9ebef6ff99f2038684c8649d07d0bc79c30b27ea939d0f9a1'); INSERT INTO krun_users(user_id,source,subject,name,status) VALUES('legacy','local','legacy','Legacy','active')`); err != nil {
 		t.Fatal(err)
 	}
 	if applied, err := MigrateSchema(ctx, schema.DSN); err != nil || !applied {
@@ -96,5 +93,34 @@ func TestPostgresRegisterLegacyBaseline(t *testing.T) {
 	var count int
 	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_users WHERE user_id='legacy'`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("legacy data: %d %v", count, err)
+	}
+}
+
+func TestPostgresMigrationLedgerDoesNotRequireLegacyFingerprint(t *testing.T) {
+	ctx := context.Background()
+	schema := testpgx.NewSchema(t, "krun_migration_no_fingerprint")
+	store, err := Open(ctx, schema.DSN, RepositoryTokenKeys{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.pool.Exec(ctx, `INSERT INTO krun_meta(key,value) VALUES ('schema_baseline','obsolete') ON CONFLICT(key) DO UPDATE SET value='obsolete'`); err != nil {
+		t.Fatal(err)
+	}
+	if reopened, err := Open(ctx, schema.DSN, RepositoryTokenKeys{}); err != nil {
+		t.Fatal(err)
+	} else {
+		reopened.Close()
+	}
+	if _, err := store.pool.Exec(ctx, `DELETE FROM krun_meta WHERE key='schema_baseline'`); err != nil {
+		t.Fatal(err)
+	}
+	if applied, err := MigrateSchema(ctx, schema.DSN); err != nil || applied {
+		t.Fatalf("current ledger without fingerprint: applied=%t err=%v", applied, err)
+	}
+	if reopened, err := Open(ctx, schema.DSN, RepositoryTokenKeys{}); err != nil {
+		t.Fatal(err)
+	} else {
+		reopened.Close()
 	}
 }

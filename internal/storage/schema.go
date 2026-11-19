@@ -37,7 +37,6 @@ func initializeStoreSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	if err != nil {
 		return err
 	}
-	baseline := migrations[0].checksum
 	if exists {
 		if err := checkCurrentSchema(ctx, tx, migrations); err != nil {
 			return err
@@ -54,9 +53,6 @@ func initializeStoreSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err = tx.Exec(ctx, migrations[0].sql); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO krun_meta(key,value) VALUES('schema_baseline',$1)`, baseline); err != nil {
-		return err
-	}
 	if err = createMigrationLedger(ctx, tx); err != nil {
 		return err
 	}
@@ -65,11 +61,6 @@ func initializeStoreSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 	if err = applyPendingMigrations(ctx, tx, migrations[1:]); err != nil {
 		return err
-	}
-	if len(migrations) > 1 {
-		if _, err = tx.Exec(ctx, `UPDATE krun_meta SET value=$1 WHERE key='schema_baseline'`, migrationBaseline(migrations[len(migrations)-1])); err != nil {
-			return err
-		}
 	}
 	return tx.Commit(ctx)
 }

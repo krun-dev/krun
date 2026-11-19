@@ -104,37 +104,32 @@ func applyPendingMigrations(ctx context.Context, tx pgx.Tx, migrations []sqlMigr
 	return nil
 }
 
-// checkCurrentSchema verifies legacy fingerprints and the complete SQL history.
+// checkCurrentSchema verifies the SQL history, or the fingerprint of a legacy database.
 func checkCurrentSchema(ctx context.Context, tx pgx.Tx, migrations []sqlMigration) error {
 	var exists bool
 	if err := tx.QueryRow(ctx, `SELECT to_regclass(format('%I.krun_schema_migrations', current_schema())) IS NOT NULL`).Scan(&exists); err != nil {
 		return err
 	}
-	count := 1
-	if exists {
-		var err error
-		count, err = validateMigrationLedger(ctx, tx, migrations)
+	if !exists {
+		var baseline string
+		err := tx.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='schema_baseline'`).Scan(&baseline)
+		if errors.Is(err, pgx.ErrNoRows) || err == nil && baseline != migrations[0].checksum {
+			return errors.New("database does not match the schema baseline; run krun-server migrate for a supported upgrade")
+		}
 		if err != nil {
 			return err
 		}
+		if len(migrations) > 1 {
+			return fmt.Errorf("database has pending schema migrations; run krun-server migrate")
+		}
+		return nil
 	}
-	var baseline string
-	err := tx.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='schema_baseline'`).Scan(&baseline)
-	if errors.Is(err, pgx.ErrNoRows) || err == nil && baseline != migrationBaseline(migrations[count-1]) {
-		return errors.New("database does not match the schema baseline; run krun-server migrate for a supported upgrade")
-	}
+	count, err := validateMigrationLedger(ctx, tx, migrations)
 	if err != nil {
 		return err
 	}
 	if count != len(migrations) {
-		return errors.New("database has pending schema migrations; run krun-server migrate")
+		return fmt.Errorf("database has pending schema migrations; run krun-server migrate")
 	}
 	return nil
-}
-
-func migrationBaseline(m sqlMigration) string {
-	if m.version == 1 {
-		return m.checksum
-	}
-	return fmt.Sprintf("sql-migrations:%d:%s", m.version, m.checksum)
 }

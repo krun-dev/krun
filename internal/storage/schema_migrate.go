@@ -189,15 +189,9 @@ func MigrateSchema(ctx context.Context, dsn string) (bool, error) {
 		return false, errors.New("schema upgrade requires an existing krun database")
 	}
 
-	// The baseline row serializes explicit upgrades in this schema. An upgrade
-	// waiting here sees the preceding transaction's committed fingerprint.
-	var current string
-	err = tx.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='schema_baseline' FOR UPDATE`).Scan(&current)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, errors.New("schema upgrade requires an existing schema fingerprint")
-	}
-	if err != nil {
-		return false, fmt.Errorf("lock schema fingerprint: %w", err)
+	// Serialize maintenance within this schema before inspecting the migration ledger.
+	if _, err := tx.Exec(ctx, `LOCK TABLE krun_meta IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+		return false, fmt.Errorf("lock schema migration: %w", err)
 	}
 
 	migrations, err := sqlMigrations()
@@ -212,6 +206,14 @@ func MigrateSchema(ctx context.Context, dsn string) (bool, error) {
 	count := 0
 	if !ledger {
 		// The old chain ends at the immutable first SQL migration.
+		var current string
+		err = tx.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='schema_baseline'`).Scan(&current)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, errors.New("schema upgrade requires an existing schema fingerprint")
+		}
+		if err != nil {
+			return false, fmt.Errorf("read schema fingerprint: %w", err)
+		}
 		target := migrations[0].checksum
 		if current != target {
 			steps, err := planSchemaMigration(current, target)
@@ -240,15 +242,9 @@ func MigrateSchema(ctx context.Context, dsn string) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if current != migrationBaseline(migrations[count-1]) {
-			return false, errors.New("database migration baseline does not match recorded history")
-		}
 	}
 	if count < len(migrations) {
 		if err := applyPendingMigrations(ctx, tx, migrations[count:]); err != nil {
-			return false, err
-		}
-		if _, err := tx.Exec(ctx, `UPDATE krun_meta SET value=$1 WHERE key='schema_baseline'`, migrationBaseline(migrations[len(migrations)-1])); err != nil {
 			return false, err
 		}
 		applied = true
