@@ -155,8 +155,10 @@ func (s *WorkerObjectStore) validate() error {
 			return fmt.Errorf("static object_storage credentials do not accept STS settings")
 		}
 	case "tos_assume_role":
+		publicHost := "tos-s3-" + s.Region + ".volces.com"
+		privateHost := "tos-s3-" + s.Region + ".ivolces.com"
 		if u.Scheme != "https" || s.AddressingStyle != "virtual" ||
-			u.Host != "tos-s3-"+s.Region+".volces.com" || strings.Contains(s.Bucket, ".") {
+			(u.Host != publicHost && u.Host != privateHost) || strings.Contains(s.Bucket, ".") {
 			return fmt.Errorf("TOS object_storage requires its regional HTTPS S3 endpoint and virtual addressing")
 		}
 		if !regexp.MustCompile(`^trn:iam::[0-9]+:role/[A-Za-z0-9+=,.@_-]{1,64}$`).MatchString(creds.RoleTrn) {
