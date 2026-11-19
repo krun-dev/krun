@@ -67,6 +67,9 @@ workers:
       private_egress: direct
       public_egress: direct
       runtime_service: runtime-default
+      execution:
+        streams:
+          sse_paths: [/sse]
       validator_service: runtime-validator-default
       runtime_token: ${KRUN_RUNTIME_TOKEN}
       management_token: ${KRUN_MANAGEMENT_TOKEN}
@@ -323,7 +326,13 @@ const config :W.Config = (
 );'''
 def serving_runtime(pool, replicas, runtime_token, management_token):
  name=f'runtime-{pool}'
- peer_name='krun-execution-'+hashlib.sha256(pool.encode()).hexdigest()[:20]
+ digest=hashlib.sha256(pool.encode()).hexdigest()[:20]
+ peer_name='krun-execution-'+digest
+ stream_name='krun-stream-'+digest
+ stream_env=[
+  {'name':'POOL_STREAMS_ENABLED','value':'1'},
+  {'name':'POOL_SSE_PATHS','value':'/sse'},
+ ] if pool=='default' else []
  config_name='runtime-config' if pool == 'default' else f'{name}-config'
  items.append(resource('ConfigMap',config_name,data={'runtime.capnp':serving_config(pool)}))
  secrets=[{'key':runtime_token,'path':'KRUN_RUNTIME_TOKEN'},
@@ -347,7 +356,7 @@ def serving_runtime(pool, replicas, runtime_token, management_token):
    {'name':'POOL_PEER_COMPUTE_IN_FLIGHT','value':'4'},
    {'name':'POOL_PEER_COOLDOWN_MS','value':'15'},
    {'name':'POOL_PEER_SELECTION','value':'capacity'},
-  ],
+  ]+stream_env,
   'securityContext':secure(),
   'volumeMounts':[{'name':'tmp','mountPath':'/tmp'},
                   {'name':'config','mountPath':'/config','readOnly':True},
@@ -370,6 +379,13 @@ def serving_runtime(pool, replicas, runtime_token, management_token):
   'targetRefs':[{'group':'','kind':'Service','name':name}],
   'loadBalancer':{'healthyPanicThreshold':0,'ringHash':{'hashPolicies':[{'header':{'name':':authority'}}]}},
  }))
+
+ if stream_env:
+  service(stream_name,[8081],selector={'app':name})
+  items.append(resource('BackendConfigPolicy',stream_name,apiVersion='gateway.kgateway.dev/v1alpha1',spec={
+   'targetRefs':[{'group':'','kind':'Service','name':stream_name}],
+   'loadBalancer':{'healthyPanicThreshold':0,'leastRequest':{'choiceCount':2}},
+  }))
 
 serving_runtime('default',2,'KRUN_RUNTIME_TOKEN','KRUN_MANAGEMENT_TOKEN')
 serving_runtime('isolated',1,'KRUN_ISOLATED_RUNTIME_TOKEN','KRUN_ISOLATED_MANAGEMENT_TOKEN')
@@ -419,6 +435,13 @@ items.append({'apiVersion':'gateway.networking.k8s.io/v1','kind':'Gateway','meta
 # Public instance: a distinct proxy deployment. Isolation lives on this
 # instance boundary, so no private hostname ever exists in its route table.
 items.append({'apiVersion':'gateway.networking.k8s.io/v1','kind':'Gateway','metadata':{'name':'workers-public','namespace':'kgateway-system'},'spec':{'gatewayClassName':'kgateway','listeners':[{'name':'public','port':8080,'protocol':'HTTP','allowedRoutes':{'namespaces':{'from':'Selector','selector':{'matchLabels':{'lab':'krun-workers-mvp'}}}}}]}})
+for name in ['workers-mvp','workers-public']:
+ items.append({
+  'apiVersion':'gateway.kgateway.dev/v1alpha1','kind':'ListenerPolicy',
+  'metadata':{'name':f'{name}-stream-upgrade','namespace':'kgateway-system'},
+  'spec':{'targetRefs':[{'group':'gateway.networking.k8s.io','kind':'Gateway','name':name}],
+          'default':{'httpSettings':{'upgradeConfig':{'enabledUpgrades':['websocket']}}}},
+ })
 (out/'manifests.json').write_text(json.dumps({'apiVersion':'v1','kind':'List','items':items},indent=2))
 (out/'manifests.json').chmod(0o600)
 print('Generated isolated workers-mvp manifests; credentials retained locally')

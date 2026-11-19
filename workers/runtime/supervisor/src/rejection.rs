@@ -18,10 +18,12 @@ pub enum Rejection {
     PeerInFlight,
     PeerAlreadyTried,
     NoPeers,
+    PodStreamInFlight,
+    IngressStreamInFlight,
 }
 
 impl Rejection {
-    const ALL: [Self; 15] = [
+    const ALL: [Self; 17] = [
         Self::PodCpuHigh,
         Self::PodCpuUnavailable,
         Self::WorkerdNotReady,
@@ -37,6 +39,8 @@ impl Rejection {
         Self::PeerInFlight,
         Self::PeerAlreadyTried,
         Self::NoPeers,
+        Self::PodStreamInFlight,
+        Self::IngressStreamInFlight,
     ];
 
     pub fn name(self) -> &'static str {
@@ -56,16 +60,18 @@ impl Rejection {
             Self::PeerInFlight => "peer_in_flight",
             Self::PeerAlreadyTried => "peer_already_tried",
             Self::NoPeers => "no_peers",
+            Self::PodStreamInFlight => "pod_stream_in_flight",
+            Self::IngressStreamInFlight => "ingress_stream_in_flight",
         }
     }
 
-    fn bit(self) -> u16 {
+    fn bit(self) -> u32 {
         1 << self as usize
     }
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct Rejections(u16);
+pub struct Rejections(u32);
 
 impl Rejections {
     pub fn insert(&mut self, reason: Rejection) {

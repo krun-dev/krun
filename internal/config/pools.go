@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -149,7 +150,34 @@ func (c *WorkersConfig) ConfiguredRuntimePools() []WorkerRuntimePool {
 	return c.RuntimePools
 }
 
+func (pool WorkerRuntimePool) StreamService() string {
+	if pool.Execution.Streams == nil {
+		return ""
+	}
+	digest := sha256.Sum256([]byte(pool.ID))
+	return "krun-stream-" + hex.EncodeToString(digest[:10])
+}
+
+var streamPath = regexp.MustCompile(`^/([A-Za-z0-9_~.-]+/)*[A-Za-z0-9_~.-]+/?$`)
+
 func (e WorkerExecutionPool) validate() error {
+	if stream := e.Streams; stream != nil {
+		if stream.PerProcess < 0 || stream.PerProcess > 4096 || stream.PerExecutionPod < 0 || stream.PerExecutionPod > 32768 ||
+			stream.PerIngressPod < 0 || stream.PerIngressPod > 32768 || stream.PerPeer < 0 || stream.PerPeer > 32768 {
+			return fmt.Errorf("invalid stream quota")
+		}
+		// A wildcard HTTPRoute has 16 rules, including the header rule and short fallback.
+		if len(stream.SSEPaths) > 14 {
+			return fmt.Errorf("at most fourteen SSE paths fit in an HTTPRoute")
+		}
+		paths := map[string]bool{}
+		for _, path := range stream.SSEPaths {
+			if len(path) > 256 || !streamPath.MatchString(path) || paths[path] || strings.Contains(path+"/", "/../") || strings.Contains(path+"/", "/./") {
+				return fmt.Errorf("invalid or duplicate SSE path")
+			}
+			paths[path] = true
+		}
+	}
 	if e.ComputeProcesses != nil && (*e.ComputeProcesses < 0 || *e.ComputeProcesses > 2) {
 		return fmt.Errorf("compute_processes must be between 0 and 2")
 	}

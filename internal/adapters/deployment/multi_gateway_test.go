@@ -172,3 +172,44 @@ func TestAllGatewaysMustPassPreflight(t *testing.T) {
 		t.Fatal("ambiguous console gateway accepted")
 	}
 }
+
+func TestStreamingPoolRendersOnlyItsGatewayAndService(t *testing.T) {
+	c := multiFixture(t)
+	pool := &c.Workers.RuntimePools[0]
+	pool.Execution.Streams = &config.WorkerStreamAdmission{SSEPaths: []string{"/model/stream"}}
+	r := renderer{cfg: c, ns: c.Workers.Namespace, pool: *pool, gateway: consoleGateway(c)}
+	if err := r.resources(); err != nil {
+		t.Fatal(err)
+	}
+	var listener, service, policy int
+	for _, raw := range r.items {
+		item := raw.(map[string]any)
+		meta := item["metadata"].(map[string]any)
+		spec, _ := item["spec"].(map[string]any)
+		switch item["kind"] {
+		case "ListenerPolicy":
+			listener++
+			target := spec["targetRefs"].([]any)[0].(map[string]string)
+			if target["name"] != "krun-internal" || target["sectionName"] != "" {
+				t.Fatalf("wrong upgrade policy scope: %v", target)
+			}
+		case "Service":
+			if meta["name"] == pool.StreamService() {
+				service++
+				if spec["selector"].(map[string]string)["app"] != pool.RuntimeService {
+					t.Fatalf("stream Service must select the serving runtime: %v", spec)
+				}
+			}
+		case "BackendConfigPolicy":
+			if meta["name"] == pool.StreamService() {
+				policy++
+				if _, ok := spec["loadBalancer"].(map[string]any)["leastRequest"]; !ok {
+					t.Fatalf("stream Service needs leastRequest: %v", spec)
+				}
+			}
+		}
+	}
+	if listener != 1 || service != 1 || policy != 1 {
+		t.Fatalf("want one ListenerPolicy, stream Service and BackendConfigPolicy, got %d/%d/%d", listener, service, policy)
+	}
+}

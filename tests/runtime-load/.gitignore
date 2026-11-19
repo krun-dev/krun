@@ -3,3 +3,7 @@
 /workerd-krun.3
 /light-bench
 /workerd-linux-64.gz
+
+/streams/__pycache__/
+/supervisor
+/workerd

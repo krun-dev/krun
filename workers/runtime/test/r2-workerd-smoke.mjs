@@ -707,6 +707,10 @@ const child = spawn(
           POOL_MANAGEMENT_TOKEN_FILE: managementTokenFile,
           // Keep the cache checks on one slot despite short CPU spikes on shared runners.
           POOL_CPU_HIGH_MCPU: "5000",
+          POOL_STREAMS_ENABLED: "1",
+          POOL_STREAM_SLOT_LIMIT: "1",
+          POOL_STREAM_POD_LIMIT: "1",
+          POOL_STREAM_INGRESS_LIMIT: "1",
           POOL_CPU_RESERVE_MCPU: "100",
           POOL_MEMORY_RESERVE_MIB: "64",
         }
@@ -1121,6 +1125,17 @@ try {
           });
         });
         assert.deepEqual(messages, ["echo:first", "echo:second"]);
+        if (supervisor) {
+          const overflow = await fetch(`http://127.0.0.1:${port}/websocket`, {
+            headers: { Accept: "text/event-stream" },
+          });
+          assert.equal(overflow.status, 503);
+          await overflow.body?.cancel();
+          assert.equal((await requestWorker("/validation-state")).status, 200);
+          const stats = await (await fetch(`http://127.0.0.1:${metricsPort}/metrics`)).text();
+          assert.match(stats, /^krun_execution_stream_ingress_in_flight 1$/m);
+          assert.match(stats, /^krun_execution_stream_execution_in_flight 1$/m);
+        }
         console.log("WORKERD WEBSOCKET SMOKE PASSED");
       } finally {
         socket.close();

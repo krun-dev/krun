@@ -284,6 +284,10 @@ func (r *renderer) runtimeDeployment(text string, validator bool) {
 		r.service(name, name, 8081, 8083)
 		r.add("v1", "Service", runtimebundle.ServingPeerName(r.pool), map[string]any{"spec": runtimebundle.ServingPeerSpec(name)})
 		r.add("gateway.kgateway.dev/v1alpha1", "BackendConfigPolicy", name, map[string]any{"spec": runtimebundle.ServingHashSpec(name)})
+		if streams := r.pool.StreamService(); streams != "" {
+			r.service(streams, name, 8081)
+			r.add("gateway.kgateway.dev/v1alpha1", "BackendConfigPolicy", streams, map[string]any{"spec": runtimebundle.ServingStreamSpec(streams)})
+		}
 	}
 }
 

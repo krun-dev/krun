@@ -76,7 +76,19 @@ Rust 从同池 headless Service 发现候选，记录近期拒绝和剩余额度
 Pod 开放，需要池认证和单跳标记；收到转发的 Pod 只在本地选 workerd。入口 Pod 消失后，
 网关根据 Ready endpoints 选择新的入口。进程退出由所在 Pod 的 Rust 重启。超时后可能已
 执行的请求不重放，明确容量拒绝且没有请求体的 GET/HEAD 在短预算内最多补选一次。
-WebSocket 通过 HTTP Upgrade 建立。连接存续期间占用所选 workerd 的在途额度。
+### SSE 与 WebSocket
+
+在池的 `execution.streams` 配置启用后，WebSocket Upgrade、接受
+`text/event-stream` 的请求，以及 `sse_paths` 中的精确路径走同池的长流 Service。
+对于用普通 Accept 头的模型客户端，配置专用的 SSE 路径。
+kgateway 按活跃请求量选择长流入口，普通流量继续按域名亲和。部署清单会为关联的
+Gateway 生成 WebSocket Upgrade 策略。长流规则的
+`request` 和 `backendRequest` 超时设为 `0s`，让流的生命周期由服务和空闲超时管理。
+
+SSE 与 WebSocket 共享长流额度，短请求保有原来的独立额度。默认每 workerd
+可接 300 条流，每 Pod 分别限制 600 条承流和 600 条执行。每个入口到一个远端 Pod，也按执行组设独立的长流额度。
+Rust 在转发前为新流占用额度，结束或断开时释放。进程 CPU 与 Pod CPU 水位仍然生效。
+长流连接固定在选中的 workerd，故障后的重连走新的入口和选点。
 
 每次准入使用采样中的 Pod CPU、主线程 CPU 和 workerd 在途数。单进程默认 0.75 核暂停准入，
 降到 0.525 核后恢复，Pod 预留 1 核。Loader 回调只在需要新加载时检查 Pod 内存和版本条目，

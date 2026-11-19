@@ -78,3 +78,23 @@ done
 [Grafana 大盘](grafana.json) 可导入已采集压测 supervisor /metrics 的实例。导入时选择
 Prometheus 兼容数据源，并在采集时附加 `namespace` 与 `pod` 标签。面板可按执行组和
 workerd 槽位筛选，展示 CPU 水位、在途占比、装载和带原因的拒绝。
+
+## SSE 与 WebSocket 混压
+
+把编译后的 Linux `krun-runtime-supervisor` 和 workerd 放到本目录。
+使用包含 Node.js 24 的本地镜像，运行以下命令：
+
+```bash
+python3 streams/run.py --image node:24-bookworm-slim \
+  --supervisor target/release/krun-runtime-supervisor --workerd workerd-krun.3 \
+  --pods 20 --streams 10000 --short-rps 2000
+```
+
+发压器把同一域名的新连接均匀送到各入口，SSE 和 WebSocket 各占一半。
+SSE 每秒发送一个事件，WebSocket 每秒往返一条消息。测试期间保持短请求负载，
+摘掉第一个测试容器后继续收发并测重连。客户端输出各阶段的 P99、连接数和失败计数。
+
+20 个 4 核、8 GiB 容器的一轮复测维持了 5,000 条 SSE 和 5,000 条 WebSocket。
+短请求约 2,000 QPS，基线 P99 0.87 ms，带长流时为 4.36 ms。
+摘掉一个容器时有 500 条流断开，在发压器切换入口后约 235 ms 全部恢复。
+这项实验直打测试容器，kgateway 行为由独立集群验证。

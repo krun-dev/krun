@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -83,7 +84,7 @@ func StaleWorkerRoutes(ctx context.Context, k *Client, prefix string, desired ma
 	return out, nil
 }
 
-func (k *Client) EnsureRoute(ctx context.Context, name, runtimeService string, g appconfig.WorkerGateway, hosts []string) (bool, error) {
+func (k *Client) EnsureRoute(ctx context.Context, name, runtimeService string, g appconfig.WorkerGateway, hosts []string, pool ...appconfig.WorkerRuntimePool) (bool, error) {
 	base := "/apis/gateway.networking.k8s.io/v1/namespaces/" + k.Namespace + "/httproutes"
 	if len(hosts) == 0 {
 		// Prune: a route with no hostnames would be invalid anyway, and leaving
@@ -124,6 +125,16 @@ func (k *Client) EnsureRoute(ctx context.Context, name, runtimeService string, g
 				"backendRefs": []any{map[string]any{"name": runtimeService, "port": 8081}},
 			},
 		},
+	}
+	streaming := len(pool) > 0 && pool[0].StreamService() != ""
+	if streaming {
+		baseRule := spec["rules"].([]any)[0].(map[string]any)
+		rules := []any{streamHeaderRule(baseRule, pool[0].StreamService(), nil)}
+		for _, path := range pool[0].Execution.Streams.SSEPaths {
+			rules = append(rules, streamRouteRule(baseRule, pool[0].StreamService(), pathMatch("Exact", path), nil))
+		}
+		baseRule["matches"] = []any{map[string]any{"path": pathMatch("PathPrefix", "/")}}
+		spec["rules"] = append(rules, baseRule)
 	}
 	var current struct {
 		Metadata struct {
@@ -187,7 +198,15 @@ func (k *Client) EnsureRoute(ctx context.Context, name, runtimeService string, g
 		old.Parent[0].Namespace != gatewayNamespace || old.Parent[0].Section != section
 	backendDrift := len(old.Rules) != 1 || len(old.Rules[0].BackendRefs) != 1 || old.Rules[0].BackendRefs[0].Name != runtimeService
 	markerDrift := len(old.Rules) != 1 || len(old.Rules[0].Filters) != 1 || !slices.Contains(old.Rules[0].Filters[0].HeaderModifier.Remove, "x-krun-route")
-	if parentDrift || backendDrift || markerDrift || strings.Join(old.Hosts, "\n") != strings.Join(hosts, "\n") {
+	drift := parentDrift || backendDrift || markerDrift || strings.Join(old.Hosts, "\n") != strings.Join(hosts, "\n")
+	if streaming {
+		var actual, expected map[string]any
+		_ = json.Unmarshal(current.Spec, &actual)
+		wire, _ := json.Marshal(spec)
+		_ = json.Unmarshal(wire, &expected)
+		drift = !reflect.DeepEqual(normalizeHostnameRouteSpec(actual), normalizeHostnameRouteSpec(expected))
+	}
+	if drift {
 		return false, k.Call(ctx, "PATCH", base+"/"+name, map[string]any{"spec": spec}, nil)
 	}
 	accepted, resolved := false, false

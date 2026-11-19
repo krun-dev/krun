@@ -34,6 +34,27 @@ func ServingHashSpec(service string) map[string]any {
 	}
 }
 
+func ServingStreamSpec(service string) map[string]any {
+	return map[string]any{
+		"targetRefs":   []any{map[string]string{"group": "", "kind": "Service", "name": service}},
+		"loadBalancer": map[string]any{"healthyPanicThreshold": 0, "leastRequest": map[string]int{"choiceCount": 2}},
+	}
+}
+
+func StreamEnvironment(settings *config.WorkerStreamAdmission) []any {
+	if settings == nil {
+		return nil
+	}
+	return []any{
+		map[string]string{"name": "POOL_STREAMS_ENABLED", "value": "1"},
+		map[string]string{"name": "POOL_SSE_PATHS", "value": strings.Join(settings.SSEPaths, ",")},
+		map[string]string{"name": "POOL_STREAM_SLOT_LIMIT", "value": strconv.Itoa(defaultQuota(settings.PerProcess, 300))},
+		map[string]string{"name": "POOL_STREAM_POD_LIMIT", "value": strconv.Itoa(defaultQuota(settings.PerExecutionPod, 600))},
+		map[string]string{"name": "POOL_STREAM_INGRESS_LIMIT", "value": strconv.Itoa(defaultQuota(settings.PerIngressPod, 600))},
+		map[string]string{"name": "POOL_PEER_STREAM_LIMIT", "value": strconv.Itoa(defaultQuota(settings.PerPeer, 128))},
+	}
+}
+
 // ServingCommand uses the same bundle as direct workerd. The supervisor owns
 // the public sockets and passes per-process loopback sockets to the children.
 func ServingCommand() []string {
@@ -64,7 +85,7 @@ func ServingEnvironment(pool config.WorkerRuntimePool, cpuReserve int) []any {
 		map[string]string{"name": "POOL_PEER_SELECTION", "value": "capacity"},
 		map[string]string{"name": "POOL_RETRY_CAPACITY_MS", "value": "100"},
 	}
-	return env
+	return append(env, StreamEnvironment(settings.Streams)...)
 }
 
 func defaultQuota(configured, fallback int) int {
@@ -72,4 +93,41 @@ func defaultQuota(configured, fallback int) int {
 		return fallback
 	}
 	return configured
+}
+
+// StreamListenerPolicies attaches WebSocket upgrade support to the Gateway
+// Gateways used by streaming Workers. kgateway 2.3 applies HTTP upgrade settings
+// from Gateway-wide policies.
+func StreamListenerPolicies(workers *config.WorkersConfig, poolID string) []any {
+	policies := []any{}
+	seen := map[string]bool{}
+	for _, domain := range workers.Domains {
+		pool, err := workers.DomainRuntimePool(domain.ID)
+		if err != nil || pool.StreamService() == "" || (poolID != "" && pool.ID != poolID) {
+			continue
+		}
+		gateway, ok := workers.Gateway(domain.Gateway)
+		if !ok {
+			continue
+		}
+		digest := sha256.Sum256([]byte(gateway.Namespace + "/" + gateway.Name))
+		name := fmt.Sprintf("krun-stream-upgrade-%x", digest[:10])
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		target := map[string]string{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": gateway.Name}
+		policies = append(policies, map[string]any{
+			"apiVersion": "gateway.kgateway.dev/v1alpha1",
+			"kind":       "ListenerPolicy",
+			"metadata":   map[string]any{"name": name, "namespace": gateway.Namespace, "labels": map[string]string{"app.kubernetes.io/part-of": "krun"}},
+			"spec": map[string]any{
+				"targetRefs": []any{target},
+				"default": map[string]any{"httpSettings": map[string]any{
+					"upgradeConfig": map[string]any{"enabledUpgrades": []string{"websocket"}},
+				}},
+			},
+		})
+	}
+	return policies
 }

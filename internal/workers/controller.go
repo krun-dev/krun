@@ -298,7 +298,7 @@ func (w *Controller) ReconcileRoutes(ctx context.Context) (map[string]bool, erro
 			}
 			name := "workers-shared-" + securetoken.Digest(pool.ID + "/" + domain.ID)[:24]
 			desiredRoutes[name] = true
-			adopted, err := w.Kube.EnsureRoute(ctx, name, pool.RuntimeService, gateway, []string{"*." + domain.Domain})
+			adopted, err := w.Kube.EnsureRoute(ctx, name, pool.RuntimeService, gateway, []string{"*." + domain.Domain}, pool)
 			ready = ready && adopted && err == nil
 			if err != nil {
 				failures = append(failures, err)

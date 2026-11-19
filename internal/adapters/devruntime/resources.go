@@ -135,8 +135,17 @@ func (o renderOptions) executionResources() map[string]any {
 	const runtimeService = "runtime-default"
 	policy := kubernetesResource("BackendConfigPolicy", runtimeService, map[string]any{"spec": runtimebundle.ServingHashSpec(runtimeService)})
 	policy["apiVersion"] = "gateway.kgateway.dev/v1alpha1"
-	return resourceList([]any{
+	items := []any{
 		kubernetesResource("Service", runtimebundle.ServingPeerName(o.pool), map[string]any{"spec": runtimebundle.ServingPeerSpec(runtimeService)}),
 		policy,
-	})
+	}
+	if name := o.pool.StreamService(); name != "" {
+		policy := kubernetesResource("BackendConfigPolicy", name, map[string]any{"spec": runtimebundle.ServingStreamSpec(name)})
+		policy["apiVersion"] = "gateway.kgateway.dev/v1alpha1"
+		items = append(items, kubernetesResource("Service", name, map[string]any{"spec": map[string]any{
+			"selector": map[string]string{"app": runtimeService},
+			"ports":    []any{map[string]any{"port": 8081, "targetPort": 8081}},
+		}}), policy)
+	}
+	return resourceList(append(items, runtimebundle.StreamListenerPolicies(o.workers, o.pool.ID)...))
 }
