@@ -113,6 +113,12 @@ export default class extends WorkerEntrypoint {
     if (atModuleScope !== this.env.BUCKET || typeof atModuleScope.resumeMultipartUpload !== 'function') {
       throw new Error('binding initialization mismatch');
     }
+    if (new URL(request.url).pathname === '/websocket') {
+      const [client, server] = Object.values(new WebSocketPair());
+      server.accept();
+      server.addEventListener('message', ({data}) => server.send('echo:' + data));
+      return new Response(null, {status: 101, webSocket: client});
+    }
     if (new URL(request.url).pathname === '/validation-storage-prime') {
       return Response.json(await this.env.BUCKET.head('validation-must-not-write'));
     }
@@ -564,7 +570,13 @@ const platform = http.createServer((request, response) => {
         pool: "default",
         config_epoch: fixtureConfigEpoch,
         config_revision: 1,
-        routes: [{ host: "fixture.test", enabled: true, version: descriptor.id }],
+        routes: [
+          {
+            host: url.pathname.endsWith("/127.0.0.1") ? "127.0.0.1" : "fixture.test",
+            enabled: true,
+            version: descriptor.id,
+          },
+        ],
         versions: { [descriptor.id]: descriptor },
       }),
     );
@@ -695,6 +707,8 @@ const child = spawn(
           POOL_METRICS_PORT: String(metricsPort),
           POOL_COORDINATOR_PORT: String(coordinatorPort),
           POOL_MANAGEMENT_TOKEN_FILE: managementTokenFile,
+          // Keep the cache checks on one slot despite short CPU spikes on shared runners.
+          POOL_CPU_HIGH_MCPU: "5000",
           POOL_CPU_RESERVE_MCPU: "100",
           POOL_MEMORY_RESERVE_MIB: "64",
         }
@@ -1058,6 +1072,34 @@ try {
       ]);
       assert.equal(largeFinished, false, "cancelled download was fully drained " + output);
       objects.delete(largeKey);
+    }
+
+    if (!project && !liveGrant) {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/websocket`);
+      try {
+        const messages = await new Promise((resolve, reject) => {
+          const echoed = [];
+          const deadline = setTimeout(() => reject(new Error("WebSocket echo timed out")), 3000);
+          socket.addEventListener("open", () => socket.send("first"));
+          socket.addEventListener("message", ({ data }) => {
+            echoed.push(data);
+            if (echoed.length === 1) {
+              socket.send("second");
+            } else {
+              clearTimeout(deadline);
+              resolve(echoed);
+            }
+          });
+          socket.addEventListener("error", (event) => {
+            clearTimeout(deadline);
+            reject(event.error ?? new Error("WebSocket upgrade failed"));
+          });
+        });
+        assert.deepEqual(messages, ["echo:first", "echo:second"]);
+        console.log("WORKERD WEBSOCKET SMOKE PASSED");
+      } finally {
+        socket.close();
+      }
     }
 
     console.log(

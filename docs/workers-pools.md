@@ -76,6 +76,7 @@ Rust 从同池 headless Service 发现候选，记录近期拒绝和剩余额度
 Pod 开放，需要池认证和单跳标记；收到转发的 Pod 只在本地选 workerd。入口 Pod 消失后，
 网关根据 Ready endpoints 选择新的入口。进程退出由所在 Pod 的 Rust 重启。超时后可能已
 执行的请求不重放，明确容量拒绝且没有请求体的 GET/HEAD 在短预算内最多补选一次。
+WebSocket 通过 HTTP Upgrade 建立。连接存续期间占用所选 workerd 的在途额度。
 
 每次准入使用采样中的 Pod CPU、主线程 CPU 和 workerd 在途数。单进程默认 0.75 核暂停准入，
 降到 0.525 核后恢复，Pod 预留 1 核。Loader 回调只在需要新加载时检查 Pod 内存和版本条目，
@@ -87,6 +88,7 @@ Pod 开放，需要池认证和单跳标记；收到转发的 Pod 只在本地�
 Rust 依据所有子进程的配置游标放行 Pod ACK。热请求的承流选择只依赖本地状态。
 配置同步、冷路由、制品及绑定缺失时继续访问控制面或对象存储。容量指标按
 `workerd_slot` 和 `execution_group` 区分，可在 [Runtime 大盘](../deploy/observability/README.md) 查看。
+合成负载复现命令和历史基线见 [执行池压测](../tests/runtime-load/README.md)。
 
 ## 配置分发与权限
 

@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent
 IMAGE = os.environ.get("BENCH_IMAGE", "docker.io/library/node:22-bookworm")
 WORKERD = os.environ.get("BENCH_WORKERD", "/bench/workerd-krun.3")
 POOL_IN_FLIGHT = int(os.environ.get("BENCH_POOL_IN_FLIGHT", "64"))
-BINARY = "/bench/target/release/krun-execution-pool-experiment"
+BINARY = "/bench/target/release/krun-runtime-supervisor"
 MOUNT = ["-v", str(ROOT) + ":/bench:ro"]
 
 

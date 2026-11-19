@@ -1,5 +1,5 @@
 [package]
-name = "krun-execution-pool-experiment"
+name = "krun-runtime-supervisor"
 version = "0.1.0"
 edition = "2024"
 

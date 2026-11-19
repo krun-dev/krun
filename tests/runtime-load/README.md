@@ -1,16 +1,16 @@
-# workerd 执行池实验
+# workerd 执行池压测
 
 在同一个 4 核 8 GiB 容器里运行 Rust/Pingora 和多个常驻 workerd。Rust 分别为普通和计算请求选执行位置，优先复用热实例。本地无法接单时，入口可以单跳转发到健康的同池容器，目标只做本地准入。workerd 使用 Dynamic Worker Loader 按需装载合成业务。
 
-这是通过实验脚本运行的独立压测。实验按测试域名区分执行组。纯轻量发压在客户端固定每个域名的入口，多容器实验用同机 loopback 和独立 cgroup。
+压测使用合成业务和独立容器，按测试域名区分执行组。纯轻量发压在客户端固定每个域名的入口，多容器通过同机 loopback 通信，每个容器使用独立 cgroup。
 
 ## 复现
 
 需要 Linux AMD64、cgroup、nerdctl、Rust 及 C/C++ 构建工具、Go、Python 3 和 GitHub CLI。容器镜像默认使用 `docker.io/library/node:22-bookworm`，可用 `BENCH_IMAGE` 指定提供相同运行依赖的镜像。以下命令在仓库根目录执行。
 
 ```bash
-go build -o experiments/workerd-execution-pool/light-bench ./experiments/workerd-execution-pool/loadgen
-cd experiments/workerd-execution-pool
+go build -o tests/runtime-load/light-bench ./tests/runtime-load/loadgen
+cd tests/runtime-load
 gh release download v1.20261116.1-krun.3 --repo krun-dev/workerd --pattern workerd-linux-64.gz
 gzip -dc workerd-linux-64.gz > workerd-krun.3
 chmod +x workerd-krun.3
@@ -75,6 +75,6 @@ done
 
 复测执行前拒绝后的 GET 换点、POST 保持拒绝和禁止多跳转发可使用 `python3 run-routing.py --mode loop-check --peer-selection capacity --cooldown-ms 15 --results /tmp/krun-loop-check.json`。
 
-[Grafana 大盘](grafana.json) 可导入已采集实验 Rust /metrics 的实例。导入时选择
+[Grafana 大盘](grafana.json) 可导入已采集压测 supervisor /metrics 的实例。导入时选择
 Prometheus 兼容数据源，并在采集时附加 `namespace` 与 `pod` 标签。面板可按执行组和
 workerd 槽位筛选，展示 CPU 水位、在途占比、装载和带原因的拒绝。

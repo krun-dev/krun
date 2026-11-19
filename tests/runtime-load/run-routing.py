@@ -1,4 +1,4 @@
-"""Same-entry cross-Pod routing experiment on separate native Linux cgroups."""
+"""Same-entry cross-Pod routing benchmark on separate native Linux cgroups."""
 import argparse
 from contextlib import ExitStack
 import http.client
