@@ -211,11 +211,11 @@ FQDN 白名单。需要更严的目的域限制时，使用公司 CNI 的 FQDN �
 表示来源 fingerprint 与目标版本之间缺少已发布的升级路径，应使用支持该路径的版本或恢复匹配的备份。
 `schema upgrade requires an existing krun database` 或 `existing schema fingerprint`
 表示目标库或 schema 选择有误，先核对主配置中的数据库与 `search_path`。
-`lock timeout` 表示仍有连接持锁，确认写入已停止后重试。
+`lock timeout` 表示仍有连接持锁，确认写入已停止后重试。迁移记录不匹配时应停止部署并检查数据库和镜像版本，不要手工修改迁移记录。
 
 ### 失败回滚与备份恢复
 
-- 升级事务失败时，增量 DDL 和 fingerprint 更新一并回滚。核对源库 fingerprint 后，启动上一版
+- 升级事务失败时，增量 SQL 和迁移记录一并回滚。核对迁移历史（旧库核对 fingerprint）后，启动上一版
   完整清单验证健康和数据。连接在提交时中断的情况下，先用同一目标版本重试并确认最终状态。
 - 升级已提交而需要回退时，在保持停写的情况下把备份恢复到**新建的空数据库**。
   `krun_recovery` 是指向该空库的 PostgreSQL service 名称。用有建表权限的应用所有者

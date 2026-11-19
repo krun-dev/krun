@@ -30,9 +30,9 @@ func TestPostgresUsesSingleSchemaBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	var baseline string
-	if err := store.pool.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='schema_baseline'`).Scan(&baseline); err != nil || baseline != bytesDigest([]byte(schemaSQL)) {
-		t.Fatalf("baseline=%q err=%v", baseline, err)
+	var count int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_schema_migrations`).Scan(&count); err != nil || count < 1 {
+		t.Fatalf("migration history count=%d err=%v", count, err)
 	}
 	reopened, err := Open(ctx, schema.DSN, RepositoryTokenKeys{})
 	if err != nil {
@@ -96,8 +96,15 @@ func TestPostgresSchemaBaselineMismatchPreservesData(t *testing.T) {
 	if _, err := store.pool.Exec(ctx, `INSERT INTO krun_users(user_id,source,subject,name,status) VALUES('baseline-survivor','local','baseline-survivor','Survivor','active')`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.pool.Exec(ctx, `DROP TABLE krun_schema_migrations; INSERT INTO krun_meta(key,value) VALUES ('schema_baseline','82934894c84ba5a9ebef6ff99f2038684c8649d07d0bc79c30b27ea939d0f9a1')`); err != nil {
+		t.Fatal(err)
+	}
+	migrations, err := sqlMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
-		_, _ = store.pool.Exec(ctx, `INSERT INTO krun_meta(key,value) VALUES('schema_baseline',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, bytesDigest([]byte(schemaSQL)))
+		_, _ = store.pool.Exec(ctx, `INSERT INTO krun_meta(key,value) VALUES('schema_baseline',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, migrations[0].checksum)
 	})
 	for _, missing := range []bool{false, true} {
 		query := `UPDATE krun_meta SET value='different-baseline' WHERE key='schema_baseline'`

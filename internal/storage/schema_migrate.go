@@ -189,41 +189,70 @@ func MigrateSchema(ctx context.Context, dsn string) (bool, error) {
 		return false, errors.New("schema upgrade requires an existing krun database")
 	}
 
-	// The baseline row serializes explicit upgrades in this schema. An upgrade
-	// waiting here sees the preceding transaction's committed fingerprint.
-	var current string
-	err = tx.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='schema_baseline' FOR UPDATE`).Scan(&current)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, errors.New("schema upgrade requires an existing schema fingerprint")
-	}
-	if err != nil {
-		return false, fmt.Errorf("lock schema fingerprint: %w", err)
+	// Serialize maintenance within this schema before inspecting the migration ledger.
+	if _, err := tx.Exec(ctx, `LOCK TABLE krun_meta IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+		return false, fmt.Errorf("lock schema migration: %w", err)
 	}
 
-	target := bytesDigest([]byte(schemaSQL))
-	if current == target {
-		return false, tx.Commit(ctx)
-	}
-	steps, err := planSchemaMigration(current, target)
+	migrations, err := sqlMigrations()
 	if err != nil {
 		return false, err
 	}
-	for _, step := range steps {
-		if _, err := tx.Exec(ctx, step.sql); err != nil {
-			return false, fmt.Errorf("apply schema upgrade %s to %s: %w", step.from, step.to, err)
+	var ledger bool
+	if err := tx.QueryRow(ctx, `SELECT to_regclass(format('%I.krun_schema_migrations', $1::text)) IS NOT NULL`, schema).Scan(&ledger); err != nil {
+		return false, err
+	}
+	applied := false
+	count := 0
+	if !ledger {
+		// The old chain ends at the immutable first SQL migration.
+		var current string
+		err = tx.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='schema_baseline'`).Scan(&current)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, errors.New("schema upgrade requires an existing schema fingerprint")
+		}
+		if err != nil {
+			return false, fmt.Errorf("read schema fingerprint: %w", err)
+		}
+		target := migrations[0].checksum
+		if current != target {
+			steps, err := planSchemaMigration(current, target)
+			if err != nil {
+				return false, err
+			}
+			for _, step := range steps {
+				if _, err := tx.Exec(ctx, step.sql); err != nil {
+					return false, fmt.Errorf("apply schema upgrade %s to %s: %w", step.from, step.to, err)
+				}
+			}
+			if _, err := tx.Exec(ctx, `UPDATE krun_meta SET value=$1 WHERE key='schema_baseline'`, target); err != nil {
+				return false, fmt.Errorf("record schema fingerprint: %w", err)
+			}
+		}
+		if err := createMigrationLedger(ctx, tx); err != nil {
+			return false, err
+		}
+		if err := recordMigration(ctx, tx, migrations[0]); err != nil {
+			return false, err
+		}
+		count = 1
+		applied = true
+	} else {
+		count, err = validateMigrationLedger(ctx, tx, migrations)
+		if err != nil {
+			return false, err
 		}
 	}
-	tag, err := tx.Exec(ctx, `UPDATE krun_meta SET value=$1 WHERE key='schema_baseline' AND value=$2`, target, current)
-	if err != nil {
-		return false, fmt.Errorf("record schema fingerprint: %w", err)
-	}
-	if tag.RowsAffected() != 1 {
-		return false, errors.New("schema fingerprint did not advance")
+	if count < len(migrations) {
+		if err := applyPendingMigrations(ctx, tx, migrations[count:]); err != nil {
+			return false, err
+		}
+		applied = true
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, fmt.Errorf("commit schema upgrade: %w", err)
 	}
-	return true, nil
+	return applied, nil
 }
 
 func scopeMaintenanceSchema(ctx context.Context, tx pgx.Tx) (string, error) {

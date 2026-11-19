@@ -5,7 +5,7 @@ HTTP 与业务入口调用本包，所有层共享 `domain`。本包不依赖 HT
 | 查找内容 | 入口 |
 | --- | --- |
 | 完整表结构、索引与触发器 | `schema.sql` |
-| 初始化及 schema fingerprint | `schema.go` |
+| 初始化、迁移历史与 SQL | `schema.go`、`schema_versions.go`、`migrations/` |
 | 显式数据库升级及增量 DDL | `schema_migrate.go` |
 | 连接池、工作副本与分区提交 | `store.go` |
 | IAM 读取 / 事务编排 | `iam_read.go` / `iam.go` |

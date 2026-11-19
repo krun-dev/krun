@@ -44,4 +44,4 @@
 
 Bun 模型从 DDL 生成，ORM 和驱动只存在于存储层。业务对象不携带 ORM 标签，模型不负责自动建表或关联保存。
 
-完整数据库 DDL 保存在 `internal/storage/schema.sql`。受支持的旧库通过显式维护命令执行增量升级，启动时校验 fingerprint。前端保持静态 SPA，所有请求仍使用同源 `/api/*`。
+数据库通过有序 SQL migration 初始化及升级，`internal/storage/schema.sql` 保存当前结构快照。旧库通过显式维护命令升级，启动时校验迁移历史。前端保持静态 SPA，所有请求仍使用同源 `/api/*`。

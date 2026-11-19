@@ -92,6 +92,6 @@ token 使用 `internal/securetoken` 生成 256 bit 随机值，数据库只保�
 
 链接在 `expires_at + 7 天` 后清理，redemption 随链接一并删除；删除组织也显式删除关联行。后台每分钟运行 retention，每批最多 1000 条，同时清理孤儿 redemption。创建、撤销、成功接受的审计沿用 7 天保留，只记录邀请 ID、组织和操作者。
 
-完整建表定义与生成模型已更新。沿用 schema fingerprint，不提供自动迁移、回填或数据库重建；旧开发/测试库需要开发者明确重建专用可丢弃实例。
+数据库结构与模型随 SQL 迁移维护，已有库使用显式迁移升级。
 
 验证入口见[自动化验证](verification.md)。`make test` 包含业务/HTTP、真实 PostgreSQL 并发、事务回滚、数量限制、分页与清理测试。`bash scripts/test-object-browser.sh` 覆盖真实静态 SPA、同源 Go API、定向创建、登录回跳、明确接受、已有成员、撤销和名额竞争。
