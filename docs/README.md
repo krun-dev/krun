@@ -4,7 +4,7 @@ krun 是一个自托管应用平台，目标是提供类似 Cloudflare Workers�
 
 本目录仅记录已实现行为、运行契约与复现方式。主配置以
 [config/example.yaml](../config/example.yaml) 为准，数据库以
-[internal/storage/schema.sql](../internal/storage/schema.sql) 为唯一建表定义。
+[internal/storage/migrations/](../internal/storage/migrations/) 为数据库升级链，`schema.sql` 为最新结构快照。
 项目尚未上线；模型变化直接更新完整基线，不维护升级链或旧格式兼容。
 
 面向用户的文档使用 Starlight，源码位于 [`user-docs/src/content/docs/`](../user-docs/src/content/docs/)。
@@ -65,6 +65,6 @@ KRUN_INTERNAL_DOCS_DIR=../docs-internal npm run docs:dev
 | 自动化验证 | [验证](verification.md) |
 | 规模边界与压测复现 | [规模](performance-scaling.md) |
 
-现有库 fingerprint 与源码基线不同会拒绝启动。受支持的旧库可按
+现有库迁移历史不匹配或存在待执行迁移时会拒绝启动。受支持的旧库可按
 [数据库升级与恢复](../deploy/production/README.md#更新与恢复)在维护窗升级。仅对可丢弃的
 开发或测试库执行显式重建。

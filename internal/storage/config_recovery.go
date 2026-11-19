@@ -23,11 +23,16 @@ func RotateConfigEpoch(ctx context.Context, dsn string) (string, error) {
 	if _, err := scopeMaintenanceSchema(ctx, tx); err != nil {
 		return "", err
 	}
+	migrations, err := sqlMigrations()
+	if err != nil {
+		return "", err
+	}
+	if err := checkCurrentSchema(ctx, tx, migrations); err != nil {
+		return "", err
+	}
 	var epoch string
 	err = tx.QueryRow(ctx, `UPDATE krun_meta SET value=replace(gen_random_uuid()::text,'-','')
-		WHERE key='worker_config_epoch' AND EXISTS (
-			SELECT 1 FROM krun_meta WHERE key='schema_baseline' AND value=$1
-		) RETURNING value`, bytesDigest([]byte(schemaSQL))).Scan(&epoch)
+		WHERE key='worker_config_epoch' RETURNING value`).Scan(&epoch)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", errors.New("runtime recovery requires the current schema baseline and configuration epoch")
 	}

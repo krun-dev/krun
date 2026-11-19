@@ -225,8 +225,7 @@ issuer AK/SK 和 cursor key 不写入 runtime ConfigMap；临时凭据经已认�
 桶和绑定使用三个表：`krun_worker_buckets`、`krun_worker_environment_r2`、
 `krun_worker_version_r2`。binding 的父实体删除时在事务内清理；版本保留清理任务也同步
 清理引用。桶和对象是持久资源，没有默认 TTL。没有逐对象数据库行。
-已有数据库 fingerprint 与本版不一致时启动会拒绝；需要显式使用新建的专用开发/测试库，
-本实现不会自动重建现有数据库。
+已有数据库有待执行迁移时启动会拒绝；按存储说明显式执行迁移，本实现不会自动重建现有数据库。
 
 ```sh
 npm test --prefix workers/runtime

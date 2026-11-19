@@ -70,8 +70,7 @@ Kubernetes、S3 和 runtime HTTP 请求均在 IAM 状态事务外进行。执行
 配置行在 `krun_worker_configurations`，每个 Secret、R2 引用分别在
 `krun_worker_configuration_secrets`、`krun_worker_configuration_r2` 中持久化。创建时在有界
 事务内校验环境 revision 和引用，读取不写库。非活动配置保留 30 天，后台保护当前、已确认
-和发布中的引用，每批最多删除 1000 份。DDL 仍以 `schema.sql` 和 fingerprint 为唯一基线，
-已有开发数据库不自动迁移，需开发者显式重建专用库。
+和发布中的引用，每批最多删除 1000 份。数据库结构由 SQL 迁移维护，已有库通过显式迁移升级。
 
 ## 构建和制品
 
@@ -302,4 +301,4 @@ header 与该 pool 独立 token，不能只信任 header：
 
 CLI：`krun build logs --org ID --worker ID --build ID [--follow]`。`--follow` 遵循相同轮询 Header，直接读取对象时不转发 API Token。
 
-DDL 仅保留日志对象引用 `log_key`，无日志正文列或独立日志表，遵循基线 fingerprint 校验；已有专用开发/测试数据库需由开发者显式重建，不自动迁移或删除数据。
+DDL 仅保留日志对象引用 `log_key`，无日志正文列或独立日志表，遵循迁移历史校验；已有数据库通过显式迁移升级，不自动删除数据。

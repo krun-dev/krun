@@ -24,6 +24,7 @@ func preUploadDatabase(t *testing.T) (string, *pgxpool.Pool) {
 	t.Cleanup(store.Close)
 
 	if _, err := store.pool.Exec(ctx, `
+        DROP TABLE krun_schema_migrations;
 		DROP TABLE krun_worker_hostname_routes, krun_worker_hostnames;
 		ALTER TABLE krun_worker_versions DROP COLUMN version_url CASCADE;
 		ALTER TABLE worker_config_routes DROP CONSTRAINT worker_config_routes_pkey,
@@ -243,6 +244,7 @@ func TestPostgresSchemaUpgradePreservesManagedWorkerRoutes(t *testing.T) {
 	}
 	defer store.Close()
 	if _, err = store.pool.Exec(ctx, `
+        DROP TABLE krun_schema_migrations;
 		ALTER TABLE krun_workers DROP COLUMN workers_dev_disabled, DROP COLUMN preview_urls_disabled;
 		ALTER TABLE krun_worker_hostnames DROP COLUMN gateway_managed, DROP COLUMN domain_type;
 		ALTER TABLE krun_worker_versions DROP COLUMN version_url CASCADE;
@@ -284,6 +286,7 @@ func TestPostgresSchemaUpgradeRecordsManagedHostnameTypes(t *testing.T) {
 	}
 	defer store.Close()
 	if _, err = store.pool.Exec(ctx, `
+        DROP TABLE krun_schema_migrations;
 		ALTER TABLE krun_worker_hostnames DROP COLUMN domain_type;
 		ALTER TABLE krun_worker_hostname_routes DROP COLUMN previews_enabled;
 		ALTER TABLE krun_worker_versions DROP COLUMN version_url CASCADE;

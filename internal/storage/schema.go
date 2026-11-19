@@ -5,12 +5,11 @@ import (
 	_ "embed"
 	"errors"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// schemaSQL is the full baseline for new databases. Existing databases may
-// change baselines only through the explicit migration command.
+// schemaSQL is the current schema snapshot used to generate and verify models.
+// New databases are built from the immutable SQL migration chain.
 //
 // No foreign keys: reference integrity comes from write-path validation,
 // explicit cascade deletes in the same statement batch, and reconciliation
@@ -19,25 +18,28 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-// An existing database must match the schema fingerprint before serving.
+// Existing databases must have the complete expected migration history before serving.
 func initializeStoreSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	var exists bool
-	if err = tx.QueryRow(ctx, `SELECT to_regclass(current_schema() || '.krun_meta') IS NOT NULL`).Scan(&exists); err != nil {
+	schema, err := scopeMaintenanceSchema(ctx, tx)
+	if err != nil {
 		return err
 	}
-	baseline := bytesDigest([]byte(schemaSQL))
+	var exists bool
+	if err = tx.QueryRow(ctx, `SELECT to_regclass(format('%I.krun_meta', $1::text)) IS NOT NULL`, schema).Scan(&exists); err != nil {
+		return err
+	}
+	migrations, err := sqlMigrations()
+	if err != nil {
+		return err
+	}
+	baseline := migrations[0].checksum
 	if exists {
-		var stored string
-		err = tx.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='schema_baseline'`).Scan(&stored)
-		if errors.Is(err, pgx.ErrNoRows) || err == nil && stored != baseline {
-			return errors.New("database does not match the current schema baseline; run krun-server migrate for a supported upgrade or restore a matching database")
-		}
-		if err != nil {
+		if err := checkCurrentSchema(ctx, tx, migrations); err != nil {
 			return err
 		}
 		return tx.Commit(ctx)
@@ -49,11 +51,25 @@ func initializeStoreSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	if occupied {
 		return errors.New("application tables exist without a schema baseline; initialize an empty development/test database explicitly")
 	}
-	if _, err = tx.Exec(ctx, schemaSQL); err != nil {
+	if _, err = tx.Exec(ctx, migrations[0].sql); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO krun_meta(key,value) VALUES('schema_baseline',$1)`, baseline); err != nil {
 		return err
+	}
+	if err = createMigrationLedger(ctx, tx); err != nil {
+		return err
+	}
+	if err = recordMigration(ctx, tx, migrations[0]); err != nil {
+		return err
+	}
+	if err = applyPendingMigrations(ctx, tx, migrations[1:]); err != nil {
+		return err
+	}
+	if len(migrations) > 1 {
+		if _, err = tx.Exec(ctx, `UPDATE krun_meta SET value=$1 WHERE key='schema_baseline'`, migrationBaseline(migrations[len(migrations)-1])); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }

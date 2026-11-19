@@ -36,6 +36,8 @@ func TestORMModelsCoverTheCurrentSchema(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
+	// The migration ledger is managed by the migration runner, not Bun.
+	delete(actual, "krun_schema_migrations")
 	for _, model := range models.All() {
 		table := store.orm.Dialect().Tables().Get(reflect.TypeOf(model).Elem())
 		columns, ok := actual[table.Name]
