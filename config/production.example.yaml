@@ -136,7 +136,7 @@ workers:
       allow_private_network: true
       client_id: ${KRUN_GITLAB_CLIENT_ID:-replace-me}
       client_secret: ${KRUN_GITLAB_CLIENT_SECRET:-replace-me}
-# deployment 是同一主配置中的渲染输入；应用启动不自动 apply 任何资源。
+# deployment 记录部署信息；应用启动不自动 apply 任何资源。
 deployment:
   console_gateway: internal
   control_image: ${KRUN_CONTROL_IMAGE:-registry.example.com/krun/krun-control:replace-me}
@@ -144,8 +144,6 @@ deployment:
   dns_resolver: ${KRUN_CLUSTER_DNS:-192.0.2.53}
   control_replicas: 1
   runtime_replicas: 2
-  runtime_node_selector: {}
-  runtime_tolerations: []
   validator_replicas: 1
   runtime_class: ${KRUN_RUNTIME_CLASS:-}
   image_pull_secrets: [] # 填已在目标 namespace 创建的公司镜像拉取 Secret 名。

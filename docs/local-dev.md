@@ -266,6 +266,5 @@ API 操作的 namespace 始终使用主配置 `workers.namespace`，不使用 ku
 中的 namespace。控制面到 runtime/validator、Gateway 和对象存储的网络连通性仍需
 按 local-first 拓扑准备；kubeconfig 只负责 Kubernetes API 的连接和认证。
 
-集群内标准部署继续使用专用 ServiceAccount；部署渲染器不挂载外部 kubeconfig，也不
-把本机凭证文件打入镜像或 Secret。运行时 kubeconfig 与执行部署脚本时 kubectl 使用的
-`KUBECONFIG` 是不同入口。
+集群内部署应使用专用 ServiceAccount，避免将本机凭证文件打入镜像。运行时 kubeconfig
+与 kubectl 使用的 `KUBECONFIG` 是不同入口。

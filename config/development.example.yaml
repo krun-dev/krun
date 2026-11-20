@@ -85,7 +85,7 @@ providers:
 # 完整 workers: 配置启用 reconcile_concurrency: 8。
 # 可设置 gradual_asset_retention_seconds 覆盖旧页面资源保留窗口。
 
-# 公司集群部署的可选渲染输入仍放在同一主配置；完整内网示例见 production.example.yaml。
+# 公司集群部署的可选信息仍放在同一主配置；完整内网示例见 production.example.yaml。
 # deployment:
 #   console_gateway: internal # 多网关时必须显式选择控制台入口；三入口模板见 test.example.yaml。
 #   control_image: registry.example.com/krun/krun-control:release-tag
@@ -93,8 +93,6 @@ providers:
 #   dns_resolver: ${KRUN_CLUSTER_DNS:-192.0.2.53}
 #   control_replicas: 1
 #   runtime_replicas: 2
-#   runtime_node_selector: {}
-#   runtime_tolerations: []
 #   validator_replicas: 1
 #   runtime_class: ""
 #   image_pull_secrets: []
