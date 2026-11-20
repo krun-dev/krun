@@ -5,21 +5,33 @@ import (
 	"net"
 	"regexp"
 	"strings"
+
+	kvalidation "k8s.io/apimachinery/pkg/util/validation"
 )
 
 // DeploymentConfig is infrastructure input in the same main YAML. Rendering is
 // explicit; loading this section never contacts or changes a cluster.
 type DeploymentConfig struct {
-	ConsoleGateway    string            `json:"console_gateway,omitempty"`
-	ControlImage      string            `json:"control_image"`
-	RuntimeImage      string            `json:"runtime_image"`
-	DNSResolver       string            `json:"dns_resolver"`
-	ControlReplicas   int               `json:"control_replicas"`
-	RuntimeReplicas   int               `json:"runtime_replicas"`
-	ValidatorReplicas int               `json:"validator_replicas"`
-	RuntimeClass      string            `json:"runtime_class,omitempty"`
-	ImagePullSecrets  []string          `json:"image_pull_secrets,omitempty"`
-	Network           DeploymentNetwork `json:"network"`
+	ConsoleGateway      string                 `json:"console_gateway,omitempty"`
+	ControlImage        string                 `json:"control_image"`
+	RuntimeImage        string                 `json:"runtime_image"`
+	DNSResolver         string                 `json:"dns_resolver"`
+	ControlReplicas     int                    `json:"control_replicas"`
+	RuntimeReplicas     int                    `json:"runtime_replicas"`
+	ValidatorReplicas   int                    `json:"validator_replicas"`
+	RuntimeNodeSelector map[string]string      `json:"runtime_node_selector,omitempty"`
+	RuntimeTolerations  []DeploymentToleration `json:"runtime_tolerations,omitempty"`
+	RuntimeClass        string                 `json:"runtime_class,omitempty"`
+	ImagePullSecrets    []string               `json:"image_pull_secrets,omitempty"`
+	Network             DeploymentNetwork      `json:"network"`
+}
+
+type DeploymentToleration struct {
+	Key               string `json:"key"`
+	Operator          string `json:"operator,omitempty"`
+	Value             string `json:"value,omitempty"`
+	Effect            string `json:"effect,omitempty"`
+	TolerationSeconds *int64 `json:"tolerationSeconds,omitempty"`
 }
 
 type DeploymentNetwork struct {
@@ -67,6 +79,16 @@ func (d *DeploymentConfig) validate() error {
 	for _, value := range append(append([]string{}, d.ImagePullSecrets...), d.RuntimeClass) {
 		if value != "" && (!name.MatchString(value) || len(value) > 63) {
 			return fmt.Errorf("invalid deployment Kubernetes resource name")
+		}
+	}
+	for key, value := range d.RuntimeNodeSelector {
+		if len(kvalidation.IsQualifiedName(key)) != 0 || len(kvalidation.IsValidLabelValue(value)) != 0 {
+			return fmt.Errorf("invalid runtime node selector")
+		}
+	}
+	for _, t := range d.RuntimeTolerations {
+		if (t.Key != "" && len(kvalidation.IsQualifiedName(t.Key)) != 0) || (t.Operator != "" && t.Operator != "Equal" && t.Operator != "Exists") || (t.Key == "" && t.Operator != "Exists") || (t.Operator == "Exists" && t.Value != "") || len(kvalidation.IsValidLabelValue(t.Value)) != 0 || (t.Effect != "" && t.Effect != "NoSchedule" && t.Effect != "PreferNoSchedule" && t.Effect != "NoExecute") || (t.TolerationSeconds != nil && (t.Effect != "NoExecute" || *t.TolerationSeconds < 0)) {
+			return fmt.Errorf("invalid runtime toleration")
 		}
 	}
 	for _, rules := range [][]DeploymentEgress{
