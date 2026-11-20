@@ -21,7 +21,7 @@ func (s *Server) consoleDomainRedirect(source *url.URL) func(http.ResponseWriter
 
 	return func(w http.ResponseWriter, r *http.Request) bool {
 		authority := url.URL{Host: r.Host}
-		if !strings.EqualFold(strings.TrimSuffix(authority.Hostname(), "."), sourceHost) {
+		if !strings.EqualFold(strings.TrimSuffix(authority.Hostname(), "."), sourceHost) || keepConsoleOrigin(r.URL) {
 			return false
 		}
 
@@ -34,6 +34,22 @@ func (s *Server) consoleDomainRedirect(source *url.URL) func(http.ResponseWriter
 		http.Redirect(w, r, target+r.URL.RequestURI(), http.StatusFound)
 		return true
 	}
+}
+
+func keepConsoleOrigin(u *url.URL) bool {
+	switch {
+	case strings.HasPrefix(u.Path, "/downloads/"), u.Path == "/install.sh":
+		// The CLI and its installer require downloads from the configured origin.
+		return true
+	case strings.HasPrefix(u.Path, "/assets/"), strings.HasPrefix(u.Path, "/brand/"):
+		// The OAuth approval page loads these resources from its own origin.
+		return true
+	case u.Path == "/", u.Path == "/index.html":
+		// The CLI exchanges its code with the server that started the request.
+		query := u.Query()
+		return query.Has("oauth") || query.Has("oauth_device")
+	}
+	return false
 }
 
 func (s *Server) consoleRedirectIP(r *http.Request) net.IP {

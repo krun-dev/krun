@@ -70,7 +70,9 @@ Go 先确认直接上游可信，再从右向左解析 `X-Forwarded-For`，剥�
 这三个头，再写入由代理确认的地址。保留原始 `Host`，以便 Go 识别 `public_url` 的域名。
 
 来源命中时，原入口的控制台 GET 和 HEAD 请求返回 302，保留路径和查询参数。
-API、健康检查和 Runtime 请求继续由原入口处理。目标须是另一个已可用的控制台入口，
+API、健康检查和 Runtime 请求继续由原入口处理。CLI 安装脚本、下载文件、浏览器授权页及其
+静态资源也由原入口提供，CLI 继续使用已配置的 endpoint 完成授权、续期和升级。
+目标须是另一个已可用的控制台入口，
 使用其自身的 `public_url` 和登录回调配置。省略 `domain_redirect` 即关闭跳转。
 静态内容由 OSS/CDN 直接提供时，在静态请求到达 OSS 之前由入口网关执行跳转规则。
 
@@ -80,6 +82,9 @@ API、健康检查和 Runtime 请求继续由原入口处理。目标须是另�
 ```bash
 curl -sSI 'https://console.example.com/?page=workers'
 ```
+
+已发布 CLI 制品时，从同一网络执行 `krun upgrade --check --endpoint https://console.example.com`，
+预期正常显示已安装或已发布版本。
 
 ## 路由示例
 

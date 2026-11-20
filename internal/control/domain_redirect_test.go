@@ -15,8 +15,14 @@ func TestConsoleDomainRedirect(t *testing.T) {
 	const source = "https://console.example.com"
 	const destination = "https://console-internal.example.com"
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("console"), 0600); err != nil {
-		t.Fatal(err)
+	for _, path := range []string{"index.html", "install.sh", "downloads/manifest.json", "downloads/krun-linux-amd64", "assets/app.js", "brand/logo.png"} {
+		filename := filepath.Join(dir, path)
+		if err := os.MkdirAll(filepath.Dir(filename), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filename, []byte("console"), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	_, proxy, err := net.ParseCIDR("192.0.2.0/24")
 	if err != nil {
@@ -34,6 +40,27 @@ func TestConsoleDomainRedirect(t *testing.T) {
 		trustedProxies: []*net.IPNet{proxy},
 	}
 	s.routes()
+
+	for _, uri := range []string{
+		"/?oauth=request-id",
+		"/?oauth_device=1",
+		"/install.sh",
+		"/downloads/manifest.json",
+		"/downloads/krun-linux-amd64",
+		"/assets/app.js",
+		"/brand/logo.png",
+	} {
+		t.Run(uri, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, source+uri, nil)
+			req.RemoteAddr = "192.0.2.4:12345"
+			req.Header.Set("X-Forwarded-For", "198.51.100.10")
+			res := httptest.NewRecorder()
+			s.ServeHTTP(res, req)
+			if res.Code != http.StatusOK || res.Body.String() != "console" {
+				t.Fatalf("got status %d Location %q, want original file", res.Code, res.Header().Get("Location"))
+			}
+		})
+	}
 
 	for _, tc := range []struct {
 		name     string
