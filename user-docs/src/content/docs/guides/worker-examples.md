@@ -35,9 +35,17 @@ description: 按 Workers + R2、PostgreSQL、Hono、Astro 和静态页面选择�
 
 ## 无浏览器自动化部署（Agent / CI）
 
-控制台仓库构建需要 GitHub 授权等浏览器交互；无人值守环境改用 krun CLI 管理资源、原版 Wrangler 发布代码，全程不需要浏览器：
+先[安装 krun CLI](/docs/guides/krun-cli.html#安装)。使用已有 API Key 时，可以由 krun CLI 管理资源、原版 Wrangler 发布代码，无需浏览器。没有 Key 时，先让用户通过设备授权登录，再创建部署 Key：
 
-1. 安装 [krun CLI](/docs/guides/krun-cli.html)，用 `krun login --token-stdin`（读入 API Key）或环境变量 `KRUN_ENDPOINT` + `KRUN_TOKEN` 完成非交互登录；`krun config set org ORG_ID` 选定组织。
+```sh
+krun login --endpoint {{KRUN_ORIGIN}} --device --browser=false
+```
+
+Agent 将命令输出的一次性链接和确认码交给用户，在命令保持运行时请用户用自己的浏览器登录并批准。授权成功后执行 `krun whoami`、`krun org list`，并用 `krun config set org ORG_ID` 选择组织。链接最多 5 分钟有效；超时或进程被中断时重新运行登录命令。不要索取密码或让用户发送令牌。详细步骤见 [CLI 设备授权](/docs/guides/krun-cli.html#登录和退出)。
+
+Wrangler 需要单独的 API Key，不能使用设备授权保存的 CLI 会话。登录后按 [Wrangler 指南](/docs/guides/cloudflare-workers.html#创建可部署的-api-key)创建有部署权限的 Key，或由管理员通过安全方式提供已有 Key；不要把 Key 写入仓库或聊天记录。然后：
+
+1. 安装 [krun CLI](/docs/guides/krun-cli.html)，使用上述设备授权，或用 `krun login --token-stdin` / `KRUN_ENDPOINT` + `KRUN_TOKEN` 使用已有 API Key；`krun config set org ORG_ID` 选定组织。
 2. 每个示例先 `krun workers create --name NAME` 创建 Worker 资源。
 3. 按 [Wrangler 部署指南](/docs/guides/cloudflare-workers.html#创建可部署的-api-key) 创建策略覆盖部署动作的 API Key，配置 `CLOUDFLARE_API_BASE_URL`、`CLOUDFLARE_ACCOUNT_ID`、`CLOUDFLARE_API_TOKEN` 三个环境变量。
 4. 克隆示例仓库，进入示例目录执行 `npm ci && npx wrangler@4.155.0 deploy`。

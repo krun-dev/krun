@@ -540,7 +540,7 @@ export default function App() {
     <div className="min-h-screen lg:pl-[232px]">
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-30 w-[232px] flex-col border-r bg-card px-3 py-5 transition-transform lg:translate-x-0",
+          "fixed inset-y-0 left-0 z-30 w-[232px] flex-col overflow-y-auto overscroll-contain border-r bg-card px-3 py-5 transition-transform lg:translate-x-0",
           menu ? "flex translate-x-0 shadow-lg" : "hidden -translate-x-full lg:flex",
         )}
       >
