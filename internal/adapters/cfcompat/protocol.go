@@ -18,7 +18,7 @@ import (
 
 type cfScriptsContext struct{}
 
-var cfScriptName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+var cfScriptName = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // The adapter preserves the ordinary authentication, CSRF and request-scope
 // machinery. Only the protocol envelope and numeric errors differ.
@@ -213,7 +213,11 @@ func (s *Server) cfEnsureScript(r *http.Request, name string) (string, error) {
 		if isProblem(err, "LOCATOR_CONFLICT") {
 			// Both API surfaces race on the same unique locator. Load the
 			// winning identity and authorize publishing to it below.
+			conflict := err
 			id, err = s.Store.ResourceID(r.Context(), org, "worker", name, false)
+			if isProblem(err, "RESOURCE_NOT_FOUND") {
+				err = conflict
+			}
 		}
 	}
 	if err != nil {
@@ -232,6 +236,9 @@ func (s *Server) cfEnsureScript(r *http.Request, name string) (string, error) {
 }
 
 func (s *Server) cfCreateScriptResource(r *http.Request, c Credentials, name string) (string, error) {
+	if s.Config.Workers != nil && s.Config.Workers.WorkerNameReserved(name) {
+		return "", domain.Conflict("HOSTNAME_UNAVAILABLE", "Worker name is reserved")
+	}
 	r, err := s.ScopedRequest(r, c)
 	if err != nil {
 		return "", err

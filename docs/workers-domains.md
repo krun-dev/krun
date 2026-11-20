@@ -11,7 +11,7 @@
 | `application` | `apps.example.com` | 组织申请域名并配置路径，目标可以是同组织的 Worker 或平台登记的静态站点、HTTP 服务 |
 
 例如，`types: [worker_default, worker_custom]` 允许同一个后缀同时提供
-`w-<worker-hash>-production.workers.example.com` 和 `orders.workers.example.com`。
+`orders.workers.example.com` 和用户绑定的其他子域名。
 如果再加入 `application`，也可以在该后缀下申请应用域名，如 `shop.workers.example.com`。
 每个完整主机名只对应一种用途。
 
@@ -21,8 +21,12 @@ Profile 和运行池。
 
 ## 默认地址和共享入口
 
-Worker 的环境默认地址格式为 `w-<worker-hash>-<environment>.<domain-suffix>`。
-主机名由组织、Worker ID、环境和 Network Profile 允许的后缀共同推导。
+Worker 的生产默认地址为 `<worker-name>.<domain-suffix>`；命名 Preview 的地址为
+`<preview-name>-<worker-name>.<domain-suffix>`。Worker 名称是全局唯一的小写 DNS 标签，
+创建后不可修改；Preview 名称和 Worker 名称拼接后不能超过 63 个字符。平台在创建时
+检查生产地址、Preview、固定部署地址与托管域名的冲突。共享 Worker 默认后缀的托管域名前缀
+也在所有 Worker 默认后缀之间统一保留。名称超过 40 个字符时固定部署地址无法生成；超过 54 个
+字符时 Version URL 无法生成，因为附加前缀后会超出 DNS 标签长度限制。
 Cloudflare 兼容接口的 `workers_dev` 控制默认生产地址，`preview_urls` 控制默认后缀上的
 命名 Preview、部署固定地址和上传后的 Version URL。上传版本通过独立运行时校验后，
 Version URL 可访问该版本，生产部署保留原状。Version URL 自上传起保留 30 天。
@@ -52,7 +56,7 @@ Runtime 同时校验 Gateway 命中的规则和目标。匹配不到的请求返
 
 1. 先配置通配 DNS、TLS 和 Gateway。按 [主配置示例](../config/example.yaml) 声明后缀的
    `types`，并在 `reserved_hosts` 填入其他服务已使用的完整主机名。自定义和应用域名都只允许
-   修改前缀。`w-` 开头的前缀由平台保留。控制台、平台静态入口和后缀自身不可申请。
+   修改前缀。控制台、平台静态入口和后缀自身不可申请。
 2. 按 [主配置示例](../config/example.yaml) 填写 `workers.managed_origins`：使用 `kind: static`
    或 `kind: http`，指定 Kubernetes Service 和端口，以及可用组织和后缀。该登记的
    `host` 用于应用后缀的 Origin Rules；连接地址来自 Service。默认转发原 Host，只有登记了

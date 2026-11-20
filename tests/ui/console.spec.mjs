@@ -268,7 +268,7 @@ test("UI creates a Worker and a preview environment", async ({ page }) => {
   await page
     .getByRole("dialog")
     .getByRole("textbox", { name: "Worker 名称", exact: true })
-    .fill("UI created " + run);
+    .fill("ui-created-" + run.toLowerCase());
   await page
     .getByRole("dialog")
     .getByRole("button", { name: "创建 Worker", exact: true })

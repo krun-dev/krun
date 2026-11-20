@@ -487,14 +487,14 @@ func TestSyncEnvironmentHostsDerivesOneHostPerDomain(t *testing.T) {
 	s := &Server{Config: appconfig.Config{Workers: c}}
 	env := WorkerEnvironment{Name: "production"}
 	s.syncEnvironmentHosts(&env, "org-a", "svc-a", []string{"internal", "external"})
-	slug := appconfig.WorkerSlug("org-a", "svc-a")
-	want := []string{slug + "-production.workers.test", slug + "-production.workers-out.example.test"}
+	slug := "svc-a"
+	want := []string{slug + ".workers.test", slug + ".workers-out.example.test"}
 	sort.Strings(env.Hosts)
 	sort.Strings(want)
 	if strings.Join(env.Hosts, ",") != strings.Join(want, ",") {
 		t.Fatalf("hosts: %v", env.Hosts)
 	}
-	if env.DisplayHosts["external"] != slug+"-production.workers-out.example.test" {
+	if env.DisplayHosts["external"] != slug+".workers-out.example.test" {
 		t.Fatalf("per-domain host: %q", env.DisplayHosts["external"])
 	}
 
@@ -646,7 +646,7 @@ func TestWorkerConfigProjectionCoversEveryDomain(t *testing.T) {
 		hosts = append(hosts, route.Host)
 	}
 	sort.Strings(hosts)
-	slug := appconfig.WorkerSlug("org-a", "svc-a")
+	slug := "svc-a"
 	// Every selected domain yields one host per environment, in host order.
 	want := []string{
 		appconfig.HostFor(slug, "empty", "workers-out.example.test"),

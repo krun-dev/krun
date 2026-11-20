@@ -1,12 +1,18 @@
 package resourcename
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/gosimple/slug"
 	"github.com/krun-dev/krun/internal/domain"
 	"golang.org/x/text/unicode/norm"
 )
+
+var workerName = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// WorkerValid requires a single lowercase DNS label.
+func WorkerValid(name string) bool { return workerName.MatchString(name) }
 
 const (
 	OrganizationMax = 32

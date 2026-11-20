@@ -20,7 +20,7 @@ func seedPerformanceSites(t *testing.T, s *Store, n int) {
 		`INSERT INTO krun_organizations(org_id,name) VALUES('tenant','Tenant'),('other','Other')`,
 		`INSERT INTO krun_members(org_id,user_id) VALUES('tenant','actor')`,
 		`INSERT INTO krun_assignments(assignment_id,subject_kind,subject_id,role,scope_kind,scope_id) VALUES('grant','user','actor','org_admin','organization','tenant')`,
-		`INSERT INTO krun_resources(resource_id,kind,org_id,name) SELECT 'site-'||repeat('0',greatest(0,6-length(i::text)))||i::text,'worker',CASE WHEN i%2=0 THEN 'tenant' ELSE 'other' END,'Site '||i FROM generate_series(1,$1::int)i`,
+		`INSERT INTO krun_resources(resource_id,kind,org_id,name,locator) SELECT 'site-'||repeat('0',greatest(0,6-length(i::text)))||i::text,'worker',CASE WHEN i%2=0 THEN 'tenant' ELSE 'other' END,'Site '||i,'site-'||repeat('0',greatest(0,6-length(i::text)))||i::text FROM generate_series(1,$1::int)i`,
 		`INSERT INTO krun_workers(worker_id,org_id,network_profile) SELECT resource_id,org_id,'default' FROM krun_resources`,
 		`INSERT INTO krun_worker_placements(worker_id,pool_id,org_id,network_profile,role,state,revision,created_at,updated_at) SELECT resource_id,'default',org_id,'default','primary','active',1,now(),now() FROM krun_resources`,
 		`INSERT INTO krun_worker_environments(worker_id,env_name,enabled,config_revision,variables) SELECT resource_id,'production',true,1,'{}'::jsonb FROM krun_resources`,

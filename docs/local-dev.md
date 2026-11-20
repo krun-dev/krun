@@ -173,13 +173,13 @@ validator 或 Gateway rollout 会让本地 38084/38080/38081 的 port-forward �
 Worker 的外网访问：
 
 ```text
-https://w-<hash>-<env>.<external-domain>/
+https://<worker-name>.<external-domain>/
 ```
 
 内网入口：
 
 ```text
-https://w-<hash>-<env>.<internal-domain>/
+https://<worker-name>.<internal-domain>/
 ```
 
 nginx 保留完整 Host，分别转发到域名绑定的 Gateway。

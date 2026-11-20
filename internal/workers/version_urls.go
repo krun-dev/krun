@@ -26,7 +26,7 @@ func VersionURLSuffixes(config *appconfig.WorkersConfig, worker domain.Worker) [
 	var suffixes []string
 	for _, pattern := range WorkerHostPatterns(worker, config) {
 		slug, suffix, _ := strings.Cut(pattern, "\x00")
-		if len(slug)+len(suffix)+10 <= 253 {
+		if len(slug)+9 <= 63 && len(slug)+len(suffix)+10 <= 253 {
 			suffixes = append(suffixes, "-"+slug+"."+suffix)
 		}
 	}

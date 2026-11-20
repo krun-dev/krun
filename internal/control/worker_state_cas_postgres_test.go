@@ -237,6 +237,9 @@ func TestPostgresEnvironmentRemovalSupersedesCommittedDeployment(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			store := postgresTestStore(t)
 			ctx := t.Context()
+			if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_resources(resource_id,kind,org_id,name,locator) VALUES('svc-preview','worker','org-preview','svc-preview','svc-preview')`); err != nil {
+				t.Fatal(err)
+			}
 			op := WorkerOperation{ID: "op-preview", Worker: "svc-preview", Organization: "org-preview",
 				Environment: "preview", Version: "rel-preview", State: "committed", Kind: "publish",
 				DeploymentRevision: 1, EdgeRevision: 5, Created: now()}

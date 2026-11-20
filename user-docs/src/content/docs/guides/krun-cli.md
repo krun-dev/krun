@@ -170,17 +170,20 @@ krun workers list --org ORGANIZATION_ID
 
 将 `ORGANIZATION_ID` 替换为 `krun org list` 输出中的组织短名或 ID。创建组织可用 `krun org create --name NAME --short-name platform` 指定短名。使用 `krun workers get --id platform/workers/image-resize` 可以按完整路径读取 Worker。
 
+在控制台进入 **Workers → 创建 Worker**，填写名称 ① 并创建。名称全局唯一，使用小写字母、数字和连字符，首尾为字母或数字，最多 63 个字符；创建后不可改名。生产默认域名使用该名称。
+
+[![① 填写 Worker 名称](/docs/screenshots/workers/create-name.png)](/docs/screenshots/workers/create-name.png)
+
 Worker 使用 `workers` 命令管理，`WORKER_ID` 来自创建或列表输出中的 `id`：
 
 ```sh
 krun workers create --org ORGANIZATION_ID --name NAME
 krun workers get --org ORGANIZATION_ID --id WORKER_ID
-krun workers update --org ORGANIZATION_ID --id WORKER_ID --name NAME --revision 1
 krun workers delete --org ORGANIZATION_ID --id WORKER_ID
 krun build logs --org ORGANIZATION_ID --worker WORKER_ID --build BUILD_ID --follow
 ```
 
-更新时使用当前资源的 `revision`。授权给指定 Worker 时使用 `--scope-kind worker --scope-id WORKER_ID`；API Key 的资源类型为 `worker`，动作包括 `worker.read`、`worker.publish` 和 `worker.version.read`。构建与日志分别使用 `build.start`、`log.read`，资源类型同样为 `worker`。Worker 的审计动作使用同一套名称。
+Worker 名称用于默认域名，创建后不能修改；名称需全局唯一，使用小写字母、数字和连字符。授权给指定 Worker 时使用 `--scope-kind worker --scope-id WORKER_ID`；API Key 的资源类型为 `worker`，动作包括 `worker.read`、`worker.publish` 和 `worker.version.read`。构建与日志分别使用 `build.start`、`log.read`，资源类型同样为 `worker`。Worker 的审计动作使用同一套名称。
 
 查看审计记录：
 

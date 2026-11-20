@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	workerartifact "github.com/krun-dev/krun/internal/artifact"
-	securetoken "github.com/krun-dev/krun/internal/securetoken"
 )
 
 // selectPoolForWorker uses rendezvous hashing so adding or removing a pool
@@ -215,14 +214,6 @@ func (c *WorkersConfig) DefaultDomains() []string {
 	return out
 }
 
-// workerSlug is the immutable, non-enumerable service label. It is always
-// "w-" plus 16 hex characters, so a host can be split into slug and
-// environment without ambiguity: the first '-' after position 18 starts the
-// environment name.
-func WorkerSlug(organization, service string) string {
-	return "w-" + securetoken.Digest(organization + "/" + service)[:16]
-}
-
 // hostFor derives the route host for one environment under one domain suffix.
 // Every domain of an environment shares the same label, so a service keeps one
 // identity; only the DNS suffix differs, and the suffix decides which Gateway
@@ -231,7 +222,14 @@ func HostFor(slug, env, suffix string) string {
 	if slug == "" || env == "" || suffix == "" {
 		return ""
 	}
-	return slug + "-" + env + "." + suffix
+	label := slug
+	if env != WorkerBaseline {
+		label = env + "-" + slug
+	}
+	if len(label) > 63 || len(label)+1+len(suffix) > 253 {
+		return ""
+	}
+	return label + "." + suffix
 }
 
 // gatewayBase returns the address console invoke uses for a Gateway instance.
@@ -251,10 +249,12 @@ func (g WorkerGateway) InClusterAddress() string {
 // short-lived preview environments identified by a slug.
 const WorkerBaseline = "production"
 
+var workerPreviewLabel = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+
 func WorkerEnvValid(v string) bool { return v == WorkerBaseline || WorkerPreviewValid(v) }
 
 func WorkerPreviewValid(v string) bool {
-	return v != WorkerBaseline && Slug.MatchString(v)
+	return v != WorkerBaseline && v != "global" && v != "development" && workerPreviewLabel.MatchString(v)
 }
 
 func WorkerTerminal(v string) bool {
@@ -287,16 +287,27 @@ func WorkerVariablesValid(vars map[string]any) bool {
 	return size <= 16<<10
 }
 
-var versionURLLabel = regexp.MustCompile(`^[a-f0-9]{8}-w-[a-f0-9]{16}$`)
-
 func (c *WorkersConfig) ManagedHostReserved(host string) bool {
 	label, _, _ := strings.Cut(host, ".")
-	if strings.HasPrefix(label, "xn--") || strings.HasPrefix(label, "w-") || versionURLLabel.MatchString(label) {
+	if strings.HasPrefix(label, "xn--") {
 		return true
 	}
 	for _, suffix := range c.Domains {
 		if host == suffix.Domain || host == suffix.StaticDomain ||
 			slices.Contains(suffix.ReservedHosts, host) {
+			return true
+		}
+	}
+	return false
+}
+
+// WorkerNameReserved prevents default hosts from shadowing platform-owned hosts.
+func (c *WorkersConfig) WorkerNameReserved(name string) bool {
+	if c == nil {
+		return false
+	}
+	for _, suffix := range c.Domains {
+		if suffix.Allows(WorkerDomainDefault) && c.ManagedHostReserved(name+"."+suffix.Domain) {
 			return true
 		}
 	}

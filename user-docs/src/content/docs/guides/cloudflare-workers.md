@@ -85,7 +85,7 @@ export default {
 }
 ```
 
-`name` 是组织内的 Worker 名称；首次发布会在 krun 中创建对应的 Worker。后续使用相同名称发布会更新该 Worker。
+`name` 是全局唯一的 Worker 名称，使用小写字母、数字和连字符，并作为默认域名的前缀；首次发布会在 krun 中创建对应的 Worker。名称创建后不能修改，后续使用相同名称发布会更新该 Worker。
 
 ## 3. 构建并发布
 

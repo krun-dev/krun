@@ -67,6 +67,7 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 			continue
 		}
 		ws = config.NormalizeWorkerNetwork(ws)
+		ws.AddressName = resource.Locator
 		placement, placed := placements[id]
 		if !placed || placement.NetworkProfile != ws.NetworkProfile || !config.PoolAllowedForProfile(ws.NetworkProfile, placement.Pool) {
 			continue
@@ -180,6 +181,9 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 		if !ok {
 			continue
 		}
+		if locator := st.Resources[deployment.Worker].Locator; locator != "" {
+			worker.AddressName = locator
+		}
 		env, ok := worker.Environments[deployment.Environment]
 		if !ok {
 			continue
@@ -210,6 +214,9 @@ func EdgeConfigFromState(st *domain.State, config *appconfig.WorkersConfig) doma
 		worker, ok := st.Workers.Workers[version.Worker]
 		if !ok || version.Organization != worker.Organization || !worker.Environments[version.Environment].Enabled {
 			continue
+		}
+		if locator := st.Resources[version.Worker].Locator; locator != "" {
+			worker.AddressName = locator
 		}
 		target, active := managedTargets[worker.Worker]
 		if !active {
@@ -259,7 +266,7 @@ func WorkerHostPatterns(ws domain.Worker, config *appconfig.WorkersConfig) []str
 	for _, id := range selection {
 		selected[id] = true
 	}
-	slug := appconfig.WorkerSlug(ws.Organization, ws.Worker)
+	slug := ws.AddressName
 	out := []string{}
 	for _, d := range config.Domains {
 		if d.Allows(appconfig.WorkerDomainDefault) && selected[d.ID] {

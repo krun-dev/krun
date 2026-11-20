@@ -361,7 +361,7 @@ func (s *Service) NewManagedHostname(org, suffixID, prefix string, kind appconfi
 	if s.Config.Workers.ManagedHostReserved(host) || (console != nil && strings.EqualFold(host, console.Hostname())) {
 		return domain.ManagedHostname{}, domain.Conflict("HOSTNAME_UNAVAILABLE", "Hostname is unavailable")
 	}
-	return domain.ManagedHostname{Host: host, Organization: org, SuffixID: suffix.ID, Type: string(kind)}, nil
+	return domain.ManagedHostname{Host: host, Organization: org, SuffixID: suffix.ID, Type: string(kind), SharesWorkerDomain: suffix.Allows(appconfig.WorkerDomainDefault)}, nil
 }
 
 func (s *Service) ValidateManagedHostnameRoutes(ctx context.Context, st *domain.State, p authorization.Principal, org, suffixID string, in, previous []domain.ManagedHostnameRoute) ([]domain.ManagedHostnameRoute, error) {

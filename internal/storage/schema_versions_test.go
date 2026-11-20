@@ -29,12 +29,12 @@ func TestPostgresMigrationHistoryAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second := sqlMigration{2, "0002_test.sql", `CREATE TABLE migration_test (value text); INSERT INTO migration_test VALUES ('preserved')`, "test-checksum"}
+	second := sqlMigration{3, "0003_test.sql", `CREATE TABLE migration_test (value text); INSERT INTO migration_test VALUES ('preserved')`, "test-checksum"}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = applyPendingMigrations(ctx, tx, []sqlMigration{second, {version: 3, name: "0003_bad.sql", sql: `INVALID SQL`, checksum: "bad"}}); err == nil {
+	if err = applyPendingMigrations(ctx, tx, []sqlMigration{second, {version: 4, name: "0004_bad.sql", sql: `INVALID SQL`, checksum: "bad"}}); err == nil {
 		t.Fatal("invalid SQL succeeded")
 	}
 	_ = tx.Rollback(ctx)
@@ -60,7 +60,7 @@ func TestPostgresMigrationHistoryAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count, err := validateMigrationLedger(ctx, tx, append(migrations, second)); err != nil || count != 2 {
+	if count, err := validateMigrationLedger(ctx, tx, append(migrations, second)); err != nil || count != len(migrations)+1 {
 		t.Fatalf("valid history: count=%d err=%v", count, err)
 	}
 	if err := checkCurrentSchema(ctx, tx, append(migrations, second)); err != nil {
@@ -81,7 +81,7 @@ func TestPostgresRegisterLegacyBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.pool.Exec(ctx, `DROP TABLE krun_schema_migrations; INSERT INTO krun_meta(key,value) VALUES ('schema_baseline','82934894c84ba5a9ebef6ff99f2038684c8649d07d0bc79c30b27ea939d0f9a1'); INSERT INTO krun_users(user_id,source,subject,name,status) VALUES('legacy','local','legacy','Legacy','active')`); err != nil {
+	if _, err := store.pool.Exec(ctx, `DROP TABLE krun_schema_migrations; DROP TABLE krun_worker_address_claims; INSERT INTO krun_meta(key,value) VALUES ('schema_baseline','82934894c84ba5a9ebef6ff99f2038684c8649d07d0bc79c30b27ea939d0f9a1'); INSERT INTO krun_users(user_id,source,subject,name,status) VALUES('legacy','local','legacy','Legacy','active')`); err != nil {
 		t.Fatal(err)
 	}
 	if applied, err := MigrateSchema(ctx, schema.DSN); err != nil || !applied {

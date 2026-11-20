@@ -357,6 +357,7 @@
   "Version": "Version",
   "平台控制台": "Platform console",
   "Worker 名称": "Worker name",
+  "名称用于默认域名，创建后不可修改；使用小写字母、数字和连字符。": "The name is used in the default hostname and cannot be changed. Use lowercase letters, numbers, and hyphens.",
   "网络环境": "Network environment",
   "Worker 已创建。": "Worker created.",
   "Worker 已创建，网络配置尚未确认。": "Worker created. Its network configuration has not been confirmed.",

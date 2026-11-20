@@ -109,6 +109,7 @@ type WorkerEnvironment struct {
 }
 
 type Worker struct {
+	AddressName         string                  `json:"address_name,omitempty"`
 	WorkersDevDisabled  bool                    `json:"-"`
 	PreviewURLsDisabled bool                    `json:"-"`
 	PreviewBase         *WorkerEnvironment      `json:"previews_base,omitempty"`

@@ -29,6 +29,12 @@ func (s Service) Resources(st *domain.State, p authorization.Principal, t author
 }
 
 func (s Service) CreateResource(st *domain.State, t authorization.Target, kind string, in ResourceCreateInput) (domain.Resource, error) {
+	if kind == "worker" {
+		if !resourcename.WorkerValid(in.Name) || (in.Locator != "" && in.Locator != in.Name) {
+			return domain.Resource{}, domain.Invalid("LOCATOR_INVALID", "Worker name must be a lowercase DNS label and match its locator")
+		}
+		return s.createResource(st, t, kind, in.Name, in.Name)
+	}
 	locator, err := resourcename.Make(firstName(in.Locator, in.Name), 1, resourcename.ResourceMax)
 	if err != nil {
 		return domain.Resource{}, err
@@ -37,6 +43,9 @@ func (s Service) CreateResource(st *domain.State, t authorization.Target, kind s
 }
 
 func (s Service) CreateWorkerScript(st *domain.State, t authorization.Target, name string) (domain.Resource, error) {
+	if !resourcename.WorkerValid(name) {
+		return domain.Resource{}, domain.Invalid("LOCATOR_INVALID", "Worker name must be a lowercase DNS label")
+	}
 	// Native routes accept internal IDs as well. Keep that namespace
 	// disjoint from user-supplied script names.
 	if strings.HasPrefix(name, "worker_") && len(name) == len("worker_")+16 {
@@ -84,6 +93,9 @@ func (s Service) UpdateResource(st *domain.State, t authorization.Target, in Rev
 	}
 	if !nameValid(in.Name) {
 		return domain.Resource{}, domain.Invalid("INVALID_REQUEST", "Name required")
+	}
+	if res.Kind == "worker" && in.Name != res.Name {
+		return domain.Resource{}, domain.Invalid("WORKER_NAME_IMMUTABLE", "Worker name cannot be changed")
 	}
 	res.Name = in.Name
 	res.Revision++

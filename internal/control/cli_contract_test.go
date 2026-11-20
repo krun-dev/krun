@@ -249,7 +249,7 @@ func TestCLIWorkerPermissionsAndAuditContract(t *testing.T) {
 		return output
 	}
 
-	created := mustRun("krun_cli_admin", "workers", "create", "--org", "org-a", "--name", "CLI Worker")
+	created := mustRun("krun_cli_admin", "workers", "create", "--org", "org-a", "--name", "cli-worker")
 	var worker Resource
 	if err := json.Unmarshal([]byte(created), &worker); err != nil || worker.Kind != "worker" || !strings.HasPrefix(worker.ID, "worker-") {
 		t.Fatalf("incorrect Worker identity: %s (%v)", created, err)
@@ -259,8 +259,11 @@ func TestCLIWorkerPermissionsAndAuditContract(t *testing.T) {
 		t.Fatal("created Worker missing from CLI list", listed)
 	}
 	mustRun("krun_cli_admin", "roles", "grant", "--org", "org-a", "--subject", "viewer", "--role", "member", "--scope-kind", "worker", "--scope-id", worker.ID)
-	mustRun("krun_cli_viewer", "workers", "update", "--org", "org-a", "--id", worker.ID, "--name", "Updated Worker", "--revision", "1")
-	if _, err := run("krun_cli_viewer", "workers", "update", "--org", "org-b", "--id", "svc-b", "--name", "Forbidden", "--revision", "1"); err == nil {
+	mustRun("krun_cli_viewer", "workers", "get", "--org", "org-a", "--id", worker.ID)
+	if response := request(s, http.MethodPatch, "/api/v1/orgs/org-a/workers/"+worker.ID, "krun_cli_admin", `{"name":"cli-worker","expected_revision":1}`); response.Code != 200 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	if _, err := run("krun_cli_viewer", "workers", "get", "--org", "org-b", "--id", "svc-b"); err == nil {
 		t.Fatal("Worker grant escaped its organization and resource scope")
 	}
 
@@ -281,8 +284,8 @@ func TestCLIWorkerPermissionsAndAuditContract(t *testing.T) {
 		t.Fatal("missing Worker API Key", keyOutput, err)
 	}
 	mustRun(key.Token, "workers", "get", "--org", "org-a", "--id", worker.ID)
-	if _, err := run(key.Token, "workers", "update", "--org", "org-a", "--id", worker.ID, "--name", "Forbidden", "--revision", "2"); err == nil {
-		t.Fatal("read-only Worker policy permitted a write")
+	if response := request(s, http.MethodPatch, "/api/v1/orgs/org-a/workers/"+worker.ID, key.Token, `{"name":"cli-worker","expected_revision":2}`); response.Code != http.StatusForbidden {
+		t.Fatal("read-only Worker policy permitted a write", response.Code)
 	}
 
 	for _, path := range []string{"/api/v1/orgs/org-a/services", "/api/v1/orgs/org-a/services/" + worker.ID} {

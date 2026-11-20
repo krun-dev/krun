@@ -44,8 +44,8 @@ func TestManagedSuffixLoadsThroughMainConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	shared := cfg.Workers.Domains[0]
-	if !shared.Allows(WorkerDomainDefault) || !shared.Allows(WorkerDomainCustom) || !cfg.Workers.ManagedHostReserved("w-reserved."+shared.Domain) {
-		t.Fatal("shared suffix is missing either use or the generated prefix reservation")
+	if !shared.Allows(WorkerDomainDefault) || !shared.Allows(WorkerDomainCustom) {
+		t.Fatal("shared suffix is missing a use")
 	}
 	if !cfg.Workers.Domains[1].Allows(WorkerDomainCustom) || !cfg.Workers.Domains[2].Allows(WorkerDomainApplication) || !cfg.Workers.ManagedHostReserved("reserved.apps.example.com") {
 		t.Fatal("managed suffix or reserved hostname was not applied")

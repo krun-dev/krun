@@ -23,7 +23,6 @@ import {
 } from "lucide-react";
 import { api, APIError, type List, type Resource } from "@/lib/api";
 import { errorMessage, t } from "@/lib/i18n";
-import { useSuggestedShortName } from "@/lib/suggested-short-name";
 import {
   pending,
   shortID,
@@ -112,7 +111,6 @@ export function WorkersPage({
   } | null>(null);
   const createRequest = useRef<AbortController | null>(null);
   const [name, setName] = useState("");
-  const locator = useSuggestedShortName(name, 63);
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
   const collection = useCollectionPage<WorkerSummary>(base + "/workers", !worker, revision);
@@ -207,7 +205,6 @@ export function WorkersPage({
   function resetCreatedWorker() {
     setCreatedWorker(null);
     setName("");
-    locator.reset();
     setRevision((value) => value + 1);
   }
 
@@ -233,7 +230,7 @@ export function WorkersPage({
         const resource = await api<Resource>(
           base + "/workers",
           "POST",
-          { name, locator: locator.value },
+          { name },
           controller.signal,
         );
         if (controller.signal.aborted) {
@@ -501,24 +498,16 @@ export function WorkersPage({
               void createWorker();
             }}
           >
-            <Field label={t("Worker 名称")}>
+            <Field
+              label={t("Worker 名称")}
+              hint={t("名称用于默认域名，创建后不可修改；使用小写字母、数字和连字符。")}
+            >
               <Input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 required
-                maxLength={128}
-                disabled={busy || !!createdWorker}
-              />
-            </Field>
-            <Field
-              label={t("Worker 定位符（可选）")}
-              hint={t("根据 Worker 名称自动填写，可修改，最多 63 个字符。可用于 Wrangler 部署。")}
-            >
-              <Input
-                value={locator.value}
-                onChange={(e) => locator.edit(e.target.value)}
-                placeholder="image-resize"
                 maxLength={63}
+                pattern="[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?"
                 disabled={busy || !!createdWorker}
               />
             </Field>

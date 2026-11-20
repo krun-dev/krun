@@ -257,6 +257,9 @@ func TestPostgresWorkerDomainsCASIsExclusive(t *testing.T) {
 func TestPostgresWorkerPreviewSetCASPreventsConcurrentLimitOverflow(t *testing.T) {
 	store := postgresTestStore(t)
 	ctx := context.Background()
+	if _, err := postgresTestPool(store).Exec(ctx, `INSERT INTO krun_resources(resource_id,kind,org_id,name,locator) VALUES('svc-preview-cas','worker','org-1','svc-preview-cas','svc-preview-cas')`); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Update(ctx, PartitionWorkers, func(st *State) error {
 		st.Workers.Workers["svc-preview-cas"] = Worker{
 			Worker: "svc-preview-cas", Organization: "org-1", Domains: []string{"internal"},

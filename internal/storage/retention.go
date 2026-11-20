@@ -18,6 +18,10 @@ func (s *Store) RetainExpired(ctx context.Context) error {
 	}
 
 	at := now()
+	if _, err := s.pool.Exec(ctx, `DELETE FROM krun_worker_address_claims WHERE label IN
+		(SELECT label FROM krun_worker_address_claims WHERE expires_at<=now() ORDER BY expires_at LIMIT 1000)`); err != nil {
+		return err
+	}
 	// Idle timeout and absolute expiry match the checks in authenticate.
 	sessionCutoff := at.Add(-30 * time.Minute)
 	if _, err := s.pool.Exec(ctx, `DELETE FROM krun_worker_deployments WHERE deployment_id IN(SELECT d.deployment_id FROM krun_worker_deployments d WHERE d.expires_at<=now() OR NOT EXISTS(SELECT 1 FROM krun_worker_environments e WHERE e.worker_id=d.worker_id AND e.env_name=d.env_name) ORDER BY d.expires_at LIMIT 1000)`); err != nil {
