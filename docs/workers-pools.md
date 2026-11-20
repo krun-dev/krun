@@ -17,8 +17,8 @@
   不额外创建 validator；候选使用独立 WorkerLoader 实例和 Cache API 命名空间，禁用
   对象存储签名和传输。候选与业务共享进程 CPU、内存，失败或资源耗尽仍可能影响业务。
 - `validator_pool: <pool-id>`：所有业务 pool 共用所选池的独立 validator。所选池必须
-  配置 `validator_service`，且与 serving Service 不同；渲染器只为该池创建独立 validator
-  Deployment、管理 Service、配置及 NetworkPolicy，不接受 Gateway 入站。
+  配置 `validator_service`，且与 serving Service 不同；部署方需要为该池维护独立 validator
+  Deployment、管理 Service、配置及 NetworkPolicy，且不能允许 Gateway 入站。
 
 控制面使用目标池的 management token，并仅发送本次候选的不可变描述符、短时制品 URL
 及绑定的 Secret 值。不会把业务池 runtime token 交给共享 validator；内部数据接口的
@@ -26,8 +26,7 @@ placement 权限保持不变。校验后再次检查 Ready EndpointSlice 成员�
 无可用成员时等待，不跨模式回退。
 
 升级期间暂停发布，先升级 runtime 镜像，再升级控制面后恢复发布。控制面通过 `/ready` 的 `validation_protocol: 1`、
-role、pool 和 Pod UID 确认能力，旧镜像不会执行候选。已有独立 validator 不会被渲染器
-自动删除，切换模式并确认发布成功后，由运维显式清理未再使用的资源。
+role、pool 和 Pod UID 确认能力，旧镜像不会执行候选。已有独立 validator 不会被控制面自动删除，切换模式并确认发布成功后，由运维显式清理未再使用的资源。
 
 校验检查制品、模块初始化及 `KrunValidation`，不遍历业务 `fetch()` 分支，也不执行真实
 对象存储读写。通过校验不代表目标业务 pool 的网络、存储权限、配置分发或资源容量已通过
@@ -138,11 +137,9 @@ PostgreSQL 托管接入的池级出网限制见 [Workers 出网](workers-egress.
 origin 调用 `/api/internal/workers/*`。该设置会接收 pool 认证 token，不向组织/Worker
 用户开放，也不进入业务 binding。只接受无凭据、路径、query、fragment 的 HTTPS origin。
 
-workerd 验证服务器证书与 SNI，并发送配置域名的 Host。生产渲染器在控制台选中的
-Gateway 上生成 `krun-runtime-api` HTTPRoute，只转发 Runtime API 前缀到内部 Service；
-同时允许该 Gateway 访问内部端口，并允许 runtime/validator 访问 Gateway 的 HTTPS
-端口。DNS、证书、TLS 终止与必要的边缘网络出口由部署方配置。若使用其他前置代理，
-须保留 `Authorization`、`X-Runtime-Pool` 及请求路径；未知凭据继续返回 403。
+workerd 验证服务器证书与 SNI，并发送配置域名的 Host。部署方负责配置 Runtime API
+路由及所需的网络访问，并提供 DNS、证书和 TLS 终止。前置代理须保留 `Authorization`、
+`X-Runtime-Pool` 及请求路径；未知凭据继续返回 403。
 
-地址修改后重新渲染并部署，ConfigMap hash 变化会滚动更新 workerd；不需要重新构建
-Worker 制品。该配置不修改对象存储地址或控制面调用 runtime 管理端口的 Pod 选址。
+地址修改后需更新 Runtime 配置并重启对应工作负载；不需要重新构建 Worker 制品。该配置
+不修改对象存储地址或控制面调用 runtime 管理端口的 Pod 选址。
