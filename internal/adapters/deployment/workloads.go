@@ -91,14 +91,6 @@ func (r *renderer) deployment(name, role string, count int, container map[string
 			},
 		},
 	}
-	if role == "krun-runtime" {
-		if len(r.cfg.Deployment.RuntimeNodeSelector) > 0 {
-			pod["nodeSelector"] = r.cfg.Deployment.RuntimeNodeSelector
-		}
-		if len(r.cfg.Deployment.RuntimeTolerations) > 0 {
-			pod["tolerations"] = r.cfg.Deployment.RuntimeTolerations
-		}
-	}
 	if token {
 		pod["serviceAccountName"] = "krun-control"
 	}

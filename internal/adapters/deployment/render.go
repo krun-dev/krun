@@ -19,7 +19,6 @@ import (
 
 	"github.com/krun-dev/krun/internal/adapters/runtimebundle"
 	"github.com/krun-dev/krun/internal/config"
-	"sigs.k8s.io/yaml"
 )
 
 type renderer struct {
@@ -28,59 +27,6 @@ type renderer struct {
 	pool    config.WorkerRuntimePool
 	gateway config.WorkerGateway
 	items   []any
-}
-
-// RenderRuntimeDeployments renders serving Deployments for an externally hosted control plane.
-// The referenced ConfigMaps, Secrets and Services must be managed separately.
-func RenderRuntimeDeployments(c config.Config, directory string) error {
-	if err := c.Validate(); err != nil {
-		return err
-	}
-	if c.Deployment == nil || c.Workers == nil || len(c.Workers.RuntimePools) == 0 {
-		return errors.New("runtime rendering requires deployment and runtime pools")
-	}
-	if directory == "" {
-		return errors.New("output directory is required")
-	}
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		return err
-	}
-	if err := os.Chmod(directory, 0700); err != nil {
-		return err
-	}
-	r := renderer{cfg: c, ns: c.Workers.Namespace}
-	networks := runtimeNetworks(c.Deployment.Network.Runtime)
-	controlAddress := net.JoinHostPort("krun-control-internal."+r.ns+".svc", port(c.InternalListen))
-	for _, pool := range c.Workers.RuntimePools {
-		r.pool = pool
-		text, err := runtimebundle.Render(c.Workers, pool, controlAddress, networks, false)
-		if err != nil {
-			return err
-		}
-		r.runtimeDeployment(text, false)
-	}
-	var output bytes.Buffer
-	for _, item := range r.items {
-		value := item.(map[string]any)
-		if value["kind"] != "Deployment" {
-			continue
-		}
-		raw, err := json.Marshal(value)
-		if err != nil {
-			return err
-		}
-		document, err := yaml.JSONToYAML(raw)
-		if err != nil {
-			return err
-		}
-		output.WriteString("---\n")
-		output.Write(document)
-	}
-	path := filepath.Join(directory, "runtime-deployments.yaml")
-	if err := os.WriteFile(path, output.Bytes(), 0600); err != nil {
-		return err
-	}
-	return os.Chmod(path, 0600)
 }
 
 func Render(c config.Config, directory string) error {
