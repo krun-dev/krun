@@ -10,13 +10,17 @@ type WorkersConfig struct {
 	DatabaseOriginCAFile string `json:"database_origin_ca_file,omitempty"`
 	// RuntimeAPIURL overrides the cluster Service used by workerd to call the
 	// authenticated Runtime API. Only deployment operators may configure it.
-	RuntimeAPIURL        string                     `json:"runtime_api_url,omitempty"`
-	ObjectStorage        *WorkerObjectStorageConfig `json:"object_storage,omitempty"`
-	ReconcileConcurrency int                        `json:"reconcile_concurrency"`
-	RepositoryProviders  []WorkerRepositoryProvider `json:"repository_providers"`
-	Namespace            string                     `json:"namespace"`
-	BuilderImage         string                     `json:"builder_image"`
-	BuilderPullPolicy    string                     `json:"builder_pull_policy"`
+	RuntimeAPIURL         string                     `json:"runtime_api_url,omitempty"`
+	ObjectStorage         *WorkerObjectStorageConfig `json:"object_storage,omitempty"`
+	ReconcileConcurrency  int                        `json:"reconcile_concurrency"`
+	RepositoryProviders   []WorkerRepositoryProvider `json:"repository_providers"`
+	Namespace             string                     `json:"namespace"`
+	BuilderImage          string                     `json:"builder_image"`
+	BuilderPullPolicy     string                     `json:"builder_pull_policy"`
+	BuilderBuildResources BuilderResources           `json:"builder_build_resources,omitempty"`
+	BuilderPackResources  BuilderResources           `json:"builder_pack_resources,omitempty"`
+	BuilderNodeSelector   map[string]string          `json:"builder_node_selector,omitempty"`
+	BuilderTolerations    []BuilderToleration        `json:"builder_tolerations,omitempty"`
 	// BuilderRuntimeClass selects an optional Kubernetes RuntimeClass for
 	// untrusted project builds (for example gVisor or Kata Containers).
 	BuilderRuntimeClass string `json:"builder_runtime_class"`

@@ -167,6 +167,16 @@ workers:
   # 生产多租户建议配置 gVisor/Kata 等 RuntimeClass；留空使用集群默认运行时。
   builder_runtime_class: ""
   builder_timeout_seconds: 600
+  # 构建容器资源；缺省字段沿用下列默认值。直接上传构建使用 build 配置。
+  builder_build_resources:
+    requests: {cpu: "100m", memory: "256Mi", ephemeral-storage: "512Mi"}
+    limits: {cpu: "2", memory: "2Gi", ephemeral-storage: "3Gi"}
+  # 仓库构建在 build 完成后运行 pack。
+  builder_pack_resources:
+    requests: {cpu: "50m", memory: "128Mi", ephemeral-storage: "64Mi"}
+    limits: {cpu: "1", memory: "512Mi", ephemeral-storage: "512Mi"}
+  builder_node_selector: {}
+  builder_tolerations: []
   # 所有包管理器只允许从这个无凭据的 HTTPS registry / 代理安装依赖。
   npm_registry: https://registry.npmjs.org/
   # 网关实例清单。路由按域名所属的 gateway 分组下发：一个实例的路由表里只会有

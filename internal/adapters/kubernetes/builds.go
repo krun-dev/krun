@@ -136,8 +136,8 @@ func (k *Client) EnsureBuildJob(ctx context.Context, b domain.WorkerBuild, priva
 			{"name": "KRUN_BUILD_TIMEOUT_MS", "value": commandTimeout},
 		},
 		"resources": map[string]any{
-			"requests": map[string]string{"cpu": "100m", "memory": "256Mi", "ephemeral-storage": WorkerBuilderEphemeralRequest},
-			"limits":   map[string]string{"cpu": "2", "memory": "2Gi", "ephemeral-storage": WorkerBuilderEphemeralLimit},
+			"requests": k.builderBuildResources.WithDefaults(appconfig.DefaultBuilderBuildResources()).Requests.Map(),
+			"limits":   k.builderBuildResources.WithDefaults(appconfig.DefaultBuilderBuildResources()).Limits.Map(),
 		},
 		"securityContext": securityContext(),
 		"volumeMounts": []any{
@@ -153,8 +153,8 @@ func (k *Client) EnsureBuildJob(ctx context.Context, b domain.WorkerBuild, priva
 		"command":         command,
 		"env":             []map[string]string{{"name": "KRUN_BUILD_PHASE", "value": "pack"}},
 		"resources": map[string]any{
-			"requests": map[string]string{"cpu": "50m", "memory": "128Mi", "ephemeral-storage": "64Mi"},
-			"limits":   map[string]string{"cpu": "1", "memory": "512Mi", "ephemeral-storage": "512Mi"},
+			"requests": k.builderPackResources.WithDefaults(appconfig.DefaultBuilderPackResources()).Requests.Map(),
+			"limits":   k.builderPackResources.WithDefaults(appconfig.DefaultBuilderPackResources()).Limits.Map(),
 		},
 		"securityContext": securityContext(),
 		"volumeMounts": []any{
@@ -201,6 +201,12 @@ func (k *Client) EnsureBuildJob(ctx context.Context, b domain.WorkerBuild, priva
 			map[string]any{"name": "work", "emptyDir": map[string]any{"sizeLimit": WorkerBuilderWorkSize}},
 			map[string]any{"name": "build-tmp", "emptyDir": map[string]any{"sizeLimit": WorkerBuilderTmpSize}},
 		}
+	}
+	if len(k.builderNodeSelector) > 0 {
+		spec["nodeSelector"] = k.builderNodeSelector
+	}
+	if len(k.builderTolerations) > 0 {
+		spec["tolerations"] = k.builderTolerations
 	}
 	if k.runtimeClass != "" {
 		spec["runtimeClassName"] = k.runtimeClass

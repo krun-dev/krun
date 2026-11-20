@@ -46,12 +46,16 @@ func newKubeconfigClient(config *appconfig.WorkersConfig) (*Client, error) {
 		return nil, fmt.Errorf("initialize Workers kubeconfig transport: %w", err)
 	}
 	return &Client{
-		Base:           strings.TrimSuffix(settings.Host, "/"),
-		TokenFile:      settings.BearerTokenFile,
-		Client:         client,
-		Namespace:      config.Namespace,
-		NpmRegistry:    config.NPMRegistry,
-		runtimeClass:   config.BuilderRuntimeClass,
-		timeoutSeconds: config.BuilderTimeoutSeconds,
+		Base:                  strings.TrimSuffix(settings.Host, "/"),
+		TokenFile:             settings.BearerTokenFile,
+		Client:                client,
+		Namespace:             config.Namespace,
+		NpmRegistry:           config.NPMRegistry,
+		runtimeClass:          config.BuilderRuntimeClass,
+		timeoutSeconds:        config.BuilderTimeoutSeconds,
+		builderBuildResources: config.BuilderBuildResources,
+		builderPackResources:  config.BuilderPackResources,
+		builderNodeSelector:   config.BuilderNodeSelector,
+		builderTolerations:    config.BuilderTolerations,
 	}, nil
 }

@@ -28,6 +28,16 @@ workers:
   builder_pull_policy: IfNotPresent
   builder_runtime_class: ${KRUN_BUILDER_RUNTIME_CLASS:-}
   builder_timeout_seconds: 600
+  # 构建容器资源；缺省字段沿用下列默认值。直接上传构建使用 build 配置。
+  builder_build_resources:
+    requests: {cpu: "100m", memory: "256Mi", ephemeral-storage: "512Mi"}
+    limits: {cpu: "2", memory: "2Gi", ephemeral-storage: "3Gi"}
+  # 仓库构建在 build 完成后运行 pack。
+  builder_pack_resources:
+    requests: {cpu: "50m", memory: "128Mi", ephemeral-storage: "64Mi"}
+    limits: {cpu: "1", memory: "512Mi", ephemeral-storage: "512Mi"}
+  builder_node_selector: {}
+  builder_tolerations: []
   clone_directory: /workdir
   reconcile_concurrency: 8
   npm_registry: ${KRUN_NPM_REGISTRY:-https://npm.example.com/}
