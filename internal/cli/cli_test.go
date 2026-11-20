@@ -10,9 +10,44 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/krun-dev/krun/internal/configfile"
 )
+
+func TestDeviceLoginReportsWaitingForApproval(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/auth/oauth/device/auth" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"device_code":               "private-device-code",
+			"user_code":                 "TEST-CODE",
+			"verification_uri_complete": server.URL + "/?oauth=TEST-CODE",
+			"expires_in":                300,
+			"interval":                  3,
+		})
+	}))
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	client := Client{Profile: Profile{Endpoint: server.URL}, Out: &out, Err: &errOut}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := client.deviceLogin(ctx, false, "krun:control offline_access"); err == nil {
+		t.Fatal("expected cancelled login")
+	}
+	message := errOut.String()
+	for _, expected := range []string{server.URL, "TEST-CODE", "Waiting for browser approval", "5m0s", "keep this command running"} {
+		if !strings.Contains(message, expected) {
+			t.Errorf("missing %q in %q", expected, message)
+		}
+	}
+	if strings.Contains(message, "private-device-code") {
+		t.Fatal("device credential exposed")
+	}
+}
 
 func TestBuildLogs(t *testing.T) {
 	var server *httptest.Server

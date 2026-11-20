@@ -233,13 +233,13 @@ func (c *Client) deviceLogin(ctx context.Context, browser bool, scope string) er
 	if err != nil || target.Scheme != base.Scheme || target.Host != base.Host {
 		return errors.New("invalid verification URL")
 	}
-	fmt.Fprintf(c.Err, "Open %s\nConfirm code: %s\n", device.URL, device.UserCode)
-	if browser {
-		openLoginBrowser(device.URL)
-	}
 	expires := time.Duration(device.Expires) * time.Second
 	if expires <= 0 || expires > 5*time.Minute {
 		expires = 5 * time.Minute
+	}
+	fmt.Fprintf(c.Err, "Open %s\nConfirm code: %s\nWaiting for browser approval (expires in %s); keep this command running.\n", device.URL, device.UserCode, expires)
+	if browser {
+		openLoginBrowser(device.URL)
 	}
 	timeout, cancel := context.WithTimeout(ctx, expires)
 	defer cancel()

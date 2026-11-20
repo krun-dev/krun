@@ -104,11 +104,13 @@ krun logout
 
 登录时在浏览器中完成授权；CLI 会保存登录信息并自动刷新授权。退出会撤销当前授权。
 
-远程终端可以使用设备授权，按终端提示在浏览器完成登录：
+远程终端或编码 Agent 没有浏览器时，可以使用设备授权：
 
 ```sh
 krun login --endpoint {{KRUN_ORIGIN}} --device --browser=false
 ```
+
+命令会输出一次性授权链接和确认码，并保持运行等待授权。Agent 应将链接和确认码交给用户，用户在自己的浏览器打开链接、登录并核对确认码后批准；不要结束等待中的命令。授权成功后运行 `krun whoami` 验证，再运行 `krun org list` 和 `krun config set org ORG_ID` 选择组织。链接有效期最多 5 分钟，过期或命令被中断后重新运行登录命令，使用新链接。授权链接只交给发起操作的用户；不要索取用户的密码或让用户发送令牌。
 
 CLI 接受 HTTPS 控制台地址，本地开发允许 loopback HTTP。登录多个账号时，可用 `--profile NAME` 分开保存。
 
@@ -116,7 +118,7 @@ CLI 接受 HTTPS 控制台地址，本地开发允许 loopback HTTP。登录多�
 
 ### 自动化与非交互登录
 
-无人值守环境（CI、编码 Agent）不需要浏览器，两种方式任选：
+已有 API Key 的无人值守环境（CI、编码 Agent）不需要浏览器，两种方式任选。没有 Key 时可按上面的设备授权流程让用户批准；设备授权得到的 CLI 会话不能直接作为 Wrangler 的 API Key。
 
 ```sh
 # 方式一：环境变量注入已有 API Key
