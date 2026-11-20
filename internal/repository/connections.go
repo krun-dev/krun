@@ -20,7 +20,7 @@ func AuditEntry(p authorization.Principal, requestID, action, provider, organiza
 func (s *Service) RecordAudit(ctx context.Context, pending domain.WorkerRepositoryConnectState, requestID, action string, allowed bool) {
 	_ = s.Store.AppendAudits(ctx, []domain.Audit{AuditEntry(authorization.Principal{User: domain.User{ID: pending.User}, Kind: "session"}, requestID, action, pending.Provider, pending.Organization, allowed)})
 }
-func (s *Service) StartConnection(ctx context.Context, st *domain.State, p authorization.Principal, organization, providerID, browser, requestID, origin string) (string, error) {
+func (s *Service) StartConnection(ctx context.Context, st *domain.State, p authorization.Principal, organization, providerID, browser, requestID string) (string, error) {
 	provider, err := s.RepositoryProvider(providerID, organization)
 	if err != nil {
 		return "", err
@@ -28,9 +28,6 @@ func (s *Service) StartConnection(ctx context.Context, st *domain.State, p autho
 	conf := (&repooauth.Client{Config: s.Config}).RepositoryOAuthConfig(provider)
 	if conf == nil {
 		return "", domain.Conflict("WORKER_REPOSITORY_OAUTH_DISABLED", "This provider is not configured for user connections")
-	}
-	if origin != "" {
-		conf.RedirectURL = origin + "/api/v1/workers/repository/" + provider.ID + "/callback"
 	}
 	state := securetoken.Random()
 	pending := domain.WorkerRepositoryConnectState{User: p.User.ID, Provider: provider.ID, Organization: organization, Browser: browser, Expires: time.Now().UTC().Add(10 * time.Minute)}
@@ -73,7 +70,7 @@ func (s *Service) IssueBrowserLaunch(ctx context.Context, st *domain.State, p au
 	return ticket, s.saveConnectState(ctx, st, p, browserLaunchKey(ticket), pending, requestID)
 }
 
-func (s *Service) OpenBrowserLaunch(ctx context.Context, p authorization.Principal, organization, provider, ticket, browser, requestID, origin string) (string, error) {
+func (s *Service) OpenBrowserLaunch(ctx context.Context, p authorization.Principal, organization, provider, ticket, browser, requestID string) (string, error) {
 	if ticket == "" || len(ticket) > 128 {
 		return "", domain.ForbiddenCode("WORKER_REPOSITORY_STATE_INVALID", "Connect request expired; try again")
 	}
@@ -88,7 +85,7 @@ func (s *Service) OpenBrowserLaunch(ctx context.Context, p authorization.Princip
 		if !ok {
 			return domain.ForbiddenCode("WORKER_REPOSITORY_STATE_INVALID", "Connect request expired or belongs to a different krun account")
 		}
-		redirect, err = s.StartConnection(ctx, st, p, organization, provider, browser, requestID, origin)
+		redirect, err = s.StartConnection(ctx, st, p, organization, provider, browser, requestID)
 		return err
 	}
 	err := open(&domain.State{})
@@ -96,8 +93,8 @@ func (s *Service) OpenBrowserLaunch(ctx context.Context, p authorization.Princip
 }
 
 type ConnectInput struct {
-	State, Code, Provider, Browser, User, RequestID, Origin string
-	Denied                                                  bool
+	State, Code, Provider, Browser, User, RequestID string
+	Denied                                          bool
 }
 type ConnectResult struct{ Provider, Organization string }
 
@@ -131,7 +128,7 @@ func (s *Service) CompleteConnection(ctx context.Context, in ConnectInput) (Conn
 		return failed(domain.Conflict("WORKER_REPOSITORY_OAUTH_DISABLED", "This provider is not configured for user connections"))
 	}
 	// The exchange happens before the bounded metadata write, never in a database transaction.
-	token, err := (&repooauth.Client{Config: s.Config}).Exchange(ctx, provider, in.Code, in.Origin)
+	token, err := (&repooauth.Client{Config: s.Config}).Exchange(ctx, provider, in.Code)
 	if err != nil {
 		if repooauth.IsUnavailable(err) {
 			return failed(domain.Unavailable("WORKER_REPOSITORY_OAUTH_UNAVAILABLE", "Repository authorization is unavailable"))

@@ -70,11 +70,7 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		s.oauthError(w, r, err)
 		return
 	}
-	origin := s.requestOrigin(r)
-	if origin == "" {
-		origin = s.Config.PublicURL
-	}
-	http.Redirect(w, r, origin+"/?oauth="+url.QueryEscape(id), http.StatusSeeOther)
+	http.Redirect(w, r, s.Config.PublicURL+"/?oauth="+url.QueryEscape(id), http.StatusSeeOther)
 }
 func (s *Server) oauthDeviceStart(w http.ResponseWriter, r *http.Request) {
 	if err := s.checkRateLimit(r); err != nil {
@@ -91,11 +87,7 @@ func (s *Server) oauthDeviceStart(w http.ResponseWriter, r *http.Request) {
 		s.oauthError(w, r, err)
 		return
 	}
-	origin := s.requestOrigin(r)
-	if origin == "" {
-		origin = s.Config.PublicURL
-	}
-	s.json(w, 200, map[string]any{"device_code": id, "user_code": a.UserCode, "verification_uri": origin + "/?oauth_device=1", "verification_uri_complete": origin + "/?oauth=" + url.QueryEscape(a.UserCode), "expires_in": 300, "interval": 3})
+	s.json(w, 200, map[string]any{"device_code": id, "user_code": a.UserCode, "verification_uri": s.Config.PublicURL + "/?oauth_device=1", "verification_uri_complete": s.Config.PublicURL + "/?oauth=" + url.QueryEscape(a.UserCode), "expires_in": 300, "interval": 3})
 }
 func (s *Server) oauthRequest(w http.ResponseWriter, r *http.Request) {
 	if err := s.checkRateLimit(r); err != nil {

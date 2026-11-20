@@ -29,7 +29,7 @@ func (s *Server) workerRepositoryConnect(st *State, p Principal, r *http.Request
 		return nil, 0, err
 	}
 	redirect, err := s.repositoryApplication().StartConnection(
-		r.Context(), st, p, target.ID, r.PathValue("provider"), digest(browser), r.Header.Get("X-Krun-Request-ID"), s.requestOrigin(r),
+		r.Context(), st, p, target.ID, r.PathValue("provider"), digest(browser), r.Header.Get("X-Krun-Request-ID"),
 	)
 	if err != nil {
 		return nil, 0, err
@@ -113,7 +113,7 @@ func (s *Server) workerRepositoryBrowserOpen(st *State, p Principal, r *http.Req
 	return deferredResponse{run: func(ctx context.Context) (any, int, error) {
 		redirect, err := s.repositoryApplication().OpenBrowserLaunch(
 			ctx, p, target.ID, r.PathValue("provider"), r.URL.Query().Get("ticket"),
-			digest(browser), r.Header.Get("X-Krun-Request-ID"), s.requestOrigin(r),
+			digest(browser), r.Header.Get("X-Krun-Request-ID"),
 		)
 		return repositoryBrowserRedirect{url: redirect, browserToken: browser}, 200, err
 	}}, 200, nil
@@ -158,7 +158,6 @@ func (s *Server) workerRepositoryCallback(w http.ResponseWriter, r *http.Request
 		Browser:   digest(browser),
 		User:      principal.User.ID,
 		RequestID: r.Header.Get("X-Krun-Request-ID"),
-		Origin:    s.requestOrigin(r),
 		Denied:    providerDenied,
 	})
 	if err != nil {

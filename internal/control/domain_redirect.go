@@ -5,26 +5,40 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	identityprovider "github.com/krun-dev/krun/internal/adapters/identity"
 )
 
-func (s *Server) requestOrigin(r *http.Request) string {
-	for _, origin := range []string{s.Config.PublicURL, s.redirectOrigin()} {
-		if origin == "" {
-			continue
-		}
-		u, err := url.Parse(origin)
-		if err == nil && strings.EqualFold(u.Host, r.Host) {
-			return strings.TrimSuffix(origin, "/")
-		}
+// initRedirectServer builds a second HTTP handler with the target origin while
+// sharing the existing store, controllers and clients. OAuth configuration and
+// routing are immutable after initialization.
+func (s *Server) initRedirectServer() {
+	if s.Config.DomainRedirect == nil {
+		return
 	}
-	return s.Config.PublicURL
+	alternate := *s
+	alternate.Config = s.Config
+	alternate.Config.PublicURL = strings.TrimSuffix(s.Config.DomainRedirect.TargetURL, "/")
+	alternate.Config.DomainRedirect = nil
+	alternate.redirectServer = nil
+	alternate.providers = make(map[string]*identityprovider.Provider, len(s.providers))
+	for id, current := range s.providers {
+		provider := *current
+		if current.Oauth != nil {
+			oauth := *current.Oauth
+			oauth.RedirectURL = alternate.Config.PublicURL + "/api/auth/" + id + "/callback"
+			provider.Oauth = &oauth
+		}
+		alternate.providers[id] = &provider
+	}
+	alternate.initCloudflare()
+	alternate.routes()
+	s.redirectServer = &alternate
 }
 
-func (s *Server) redirectOrigin() string {
-	if s.Config.DomainRedirect == nil {
-		return ""
-	}
-	return strings.TrimSuffix(s.Config.DomainRedirect.TargetURL, "/")
+func sameOriginHost(host, origin string) bool {
+	u, err := url.Parse(origin)
+	return err == nil && strings.EqualFold(host, u.Host)
 }
 
 func (s *Server) consoleDomainRedirect(source *url.URL) func(http.ResponseWriter, *http.Request) bool {

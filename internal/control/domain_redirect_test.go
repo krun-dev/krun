@@ -22,6 +22,14 @@ func TestDomainRedirectAuthenticationOrigins(t *testing.T) {
 		Config: appconfig.ProviderConfig{ID: "company"},
 		Oauth:  &oauth2.Config{RedirectURL: "https://public.example.com/api/auth/company/callback"},
 	}
+	s.providers = map[string]*identityprovider.Provider{"company": p}
+	s.initRedirectServer()
+	if got := s.redirectServer.repositoryApplication().Config.PublicURL; got != "https://internal.example.com" {
+		t.Fatalf("repository OAuth origin = %q", got)
+	}
+	if s.redirectServer.Store != s.Store || s.redirectServer.workers != s.workers {
+		t.Fatal("alternate origin must share the existing store and controller")
+	}
 	for _, tc := range []struct {
 		host, origin, wantCallback string
 		valid                      bool
@@ -35,11 +43,28 @@ func TestDomainRedirectAuthenticationOrigins(t *testing.T) {
 		r := httptest.NewRequest(http.MethodPost, "https://"+tc.host+"/api/auth/csrf", nil)
 		r.Header.Set("Origin", tc.origin)
 		r.Header.Set("X-CSRF-Token", "expected")
-		if got := s.validCSRF(r, "expected"); got != tc.valid {
+		selected := s
+		if sameOriginHost(r.Host, s.redirectServer.Config.PublicURL) {
+			selected = s.redirectServer
+		}
+		if got := selected.validCSRF(r, "expected"); got != tc.valid {
 			t.Fatalf("host %s origin %s: validCSRF = %v", tc.host, tc.origin, got)
 		}
-		if got := s.identityProviderForRequest(p, r).Oauth.RedirectURL; got != tc.wantCallback {
+		if got := selected.providers["company"].Oauth.RedirectURL; got != tc.wantCallback {
 			t.Fatalf("host %s: callback = %q", tc.host, got)
+		}
+	}
+	s.mux = http.NewServeMux()
+	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(s.Config.PublicURL)) })
+	s.redirectServer.mux = http.NewServeMux()
+	s.redirectServer.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(s.redirectServer.Config.PublicURL))
+	})
+	for _, origin := range []string{"https://public.example.com", "https://internal.example.com"} {
+		response := httptest.NewRecorder()
+		s.ServeHTTP(response, httptest.NewRequest(http.MethodGet, origin+"/", nil))
+		if response.Body.String() != origin {
+			t.Fatalf("request to %s was served with origin %s", origin, response.Body.String())
 		}
 	}
 	if p.Oauth.RedirectURL != "https://public.example.com/api/auth/company/callback" {
