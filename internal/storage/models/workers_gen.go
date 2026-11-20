@@ -392,3 +392,14 @@ type VersionR2 struct {
 	Name          string `bun:"name,pk"`
 	BucketID      string `bun:"bucket_id"`
 }
+
+type Cleanup struct {
+	bun.BaseModel `bun:"table:krun_worker_cleanup,alias:krun_worker_cleanup"`
+	WorkerID      string     `bun:"worker_id,pk"`
+	OrgID         string     `bun:"org_id"`
+	CreatedAt     time.Time  `bun:"created_at"`
+	NextAttemptAt time.Time  `bun:"next_attempt_at"`
+	CompletedAt   *time.Time `bun:"completed_at"`
+	Attempts      int        `bun:"attempts"`
+	LastError     string     `bun:"last_error"`
+}

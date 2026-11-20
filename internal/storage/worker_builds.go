@@ -19,7 +19,7 @@ var ErrBuildClaimLost = errors.New("build claim is no longer owned")
 func (s *Store) ClaimBuild(ctx context.Context, id, replica string) (bool, error) {
 	tag, err := s.pool.Exec(ctx, `UPDATE krun_worker_builds
 		SET state='building', claimed_by=$2, claimed_at=now(), started_at=COALESCE(started_at,now())
-		WHERE build_id=$1 AND (
+		WHERE build_id=$1 AND NOT EXISTS (SELECT 1 FROM krun_worker_cleanup c WHERE c.worker_id=krun_worker_builds.worker_id) AND (
 			state='queued'
 			OR (state IN ('fetching','building') AND (
 				claimed_by=$2 OR claimed_at IS NULL OR claimed_at < now() - $3::interval
@@ -33,7 +33,7 @@ func (s *Store) ClaimBuild(ctx context.Context, id, replica string) (bool, error
 
 func (s *Store) RenewBuildClaim(ctx context.Context, id, replica string) (bool, error) {
 	tag, err := s.pool.Exec(ctx, `UPDATE krun_worker_builds SET claimed_at=now()
-		WHERE build_id=$1 AND claimed_by=$2 AND state IN ('fetching','building')`, id, replica)
+		WHERE build_id=$1 AND claimed_by=$2 AND state IN ('fetching','building') AND NOT EXISTS (SELECT 1 FROM krun_worker_cleanup c WHERE c.worker_id=krun_worker_builds.worker_id)`, id, replica)
 	if err != nil {
 		return false, err
 	}

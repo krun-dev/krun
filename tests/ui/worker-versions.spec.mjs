@@ -759,3 +759,63 @@ test("deploys a saved version at a fractional canary percentage", async ({ page 
     ],
   });
 });
+
+test("delete Worker requires its ID and handles rejection and success", async ({ page }) => {
+  const { errors } = await fixture(page);
+  let requests = 0;
+  await page.route("**" + workerBase, async (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    requests++;
+    if (requests === 1) {
+      return route.fulfill({ status: 403, json: { error: { code: "FORBIDDEN", message: "No permission" } } });
+    }
+    return route.fulfill({ status: 204 });
+  });
+  await page.goto(origin + location);
+  const button = page.getByRole("button", { name: "删除 Worker", exact: true });
+  await expect(button).toBeVisible();
+  if (process.env.KRUN_DELETE_SCREENSHOTS) {
+    await button.evaluate((element) => {
+      element.style.outline = "4px solid #dc2626";
+      element.insertAdjacentHTML("beforebegin", '<span style="color:#fff;background:#dc2626;padding:4px 8px;border-radius:50%;font-weight:bold">①</span>');
+    });
+    await page.screenshot({ path: "user-docs/public/docs/screenshots/worker-delete/01-entry.png" });
+  }
+  await button.click();
+  const dialog = page.getByRole("dialog", { name: "删除 Worker" });
+  if (process.env.KRUN_DELETE_SCREENSHOTS) {
+    await dialog.locator("input").evaluate((element) => {
+      element.style.outline = "3px solid #dc2626";
+      element.insertAdjacentHTML("beforebegin", '<span style="color:#fff;background:#dc2626;padding:4px 8px;border-radius:50%;font-weight:bold;width:fit-content">②</span>');
+    });
+    await page.screenshot({ path: "user-docs/public/docs/screenshots/worker-delete/02-confirm.png" });
+  }
+  const confirm = dialog.getByRole("button", { name: "确认删除" });
+  await expect(confirm).toBeDisabled();
+  await dialog.locator("input").fill("wrong");
+  await expect(confirm).toBeDisabled();
+  await dialog.locator("input").fill("worker-versions");
+  await confirm.click();
+  await expect(dialog.getByRole("alert")).toBeVisible();
+  await confirm.click();
+  await expect(dialog).toBeHidden();
+  await expect(page).toHaveURL(/page=workers/);
+  expect(requests).toBe(2);
+  expect(errors).toEqual([]);
+});
+
+test("delete confirmation remains usable in a short dark mobile viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 480 });
+  await fixture(page);
+  await page.addInitScript(() => localStorage.setItem("krun.theme", "dark"));
+  await page.goto(origin + location);
+  await page.getByRole("button", { name: "删除 Worker", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "删除 Worker" });
+  await expect(dialog).toBeVisible();
+  await dialog.locator("input").fill("worker-versions");
+  await expect(dialog.getByRole("button", { name: "确认删除" })).toBeEnabled();
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  const box = await dialog.boundingBox();
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.y + box.height).toBeLessThanOrEqual(480);
+});

@@ -78,6 +78,16 @@ func (s *Store) RetainExpired(ctx context.Context) error {
 			return err
 		}
 	}
+	// Re-enqueue scopes when their cleanup records expire so retained legacy
+	// build metadata is removed without keeping a hot scope for 31 days.
+	if _, err := s.pool.Exec(ctx, `WITH expired AS (
+        DELETE FROM krun_worker_cleanup WHERE worker_id IN (
+            SELECT worker_id FROM krun_worker_cleanup WHERE completed_at < now() - interval '31 days' LIMIT 1000
+        ) AND completed_at < now() - interval '31 days' RETURNING worker_id
+    ) INSERT INTO worker_retention_scopes(worker_id) SELECT worker_id FROM expired
+      ON CONFLICT(worker_id) DO UPDATE SET generation=nextval('worker_dirty_seq')`); err != nil {
+		return err
+	}
 	if err := s.retainWorkerScopes(ctx); err != nil {
 		return err
 	}

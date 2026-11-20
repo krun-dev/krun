@@ -304,3 +304,10 @@ header 与该 pool 独立 token，不能只信任 header：
 CLI：`krun build logs --org ID --worker ID --build ID [--follow]`。`--follow` 遵循相同轮询 Header，直接读取对象时不转发 API Token。
 
 DDL 仅保留日志对象引用 `log_key`，无日志正文列或独立日志表，遵循迁移历史校验；已有数据库通过显式迁移升级，不自动删除数据。
+
+
+## Worker 删除和构建资源清理
+
+删除 Worker 在资源目录事务内登记 `krun_worker_cleanup`，接口返回不等待 Kubernetes。新的构建 Job、Pod 和输入 Secret 带 `app=krun-builder`、`krun.dev/organization-id` 与 `krun.dev/worker-id` 标签。后台等待 90 秒供旧构建租约失效，再按组织和 Worker 身份扫描这三类资源；删除请求带 Kubernetes UID 前置条件，已消失的资源可重复处理。清理失败记录错误并在后续周期重试，首次确认清理完成后保留记录 31 天，期间每小时复查，防止迟到的创建留下资源。复查期内保留旧构建记录，用于定位升级前未标标签的 Job 和输入 Secret；已丢失构建记录且未打标签的历史孤儿无法自动归属。存量控制面须完成升级后再依靠此清理逻辑，旧版本不会给新资源打归属标签。
+
+控制面在 Workers namespace 需要 Job 的 `get/list/delete`、Pod 的 `list/delete` 和 Secret 的 `get/list/delete` 权限，其他构建功能还需要 `create/patch`。`krun_worker_cleanup` 的 `attempts`、`next_attempt_at`、`last_error` 和 `completed_at` 可用于排查。共享运行池、Service 与 HTTPRoute 不按 Worker 标签删除；域名路由由既有协调器处理。

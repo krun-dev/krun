@@ -24,6 +24,15 @@ type WorkerJob struct {
 	} `json:"status"`
 }
 
+// BuildResourceLabels identify resources owned exclusively by one Worker.
+func BuildResourceLabels(b domain.WorkerBuild) map[string]string {
+	return map[string]string{
+		"app":                      "krun-builder",
+		"krun.dev/organization-id": b.Organization,
+		"krun.dev/worker-id":       b.Worker,
+	}
+}
+
 func (k *Client) EnsureBuildJob(ctx context.Context, b domain.WorkerBuild, private domain.WorkerBuildPrivate, sourceURL, uploadURL, image, pullPolicy string) error {
 	buildMode := "direct"
 	configPath := private.ConfigPath
@@ -88,7 +97,7 @@ func (k *Client) EnsureBuildJob(ctx context.Context, b domain.WorkerBuild, priva
 		"metadata": map[string]any{
 			"name":      b.Job,
 			"namespace": k.Namespace,
-			"labels":    map[string]string{"app": "krun-builder"},
+			"labels":    BuildResourceLabels(b),
 		},
 		"type":       "Opaque",
 		"stringData": secretData,
@@ -211,7 +220,7 @@ func (k *Client) EnsureBuildJob(ctx context.Context, b domain.WorkerBuild, priva
 	if k.runtimeClass != "" {
 		spec["runtimeClassName"] = k.runtimeClass
 	}
-	value := map[string]any{"apiVersion": "batch/v1", "kind": "Job", "metadata": map[string]any{"name": b.Job, "namespace": k.Namespace, "labels": map[string]string{"app": "krun-builder"}}, "spec": map[string]any{"backoffLimit": 0, "activeDeadlineSeconds": timeout, "ttlSecondsAfterFinished": 1800, "template": map[string]any{"metadata": map[string]any{"labels": map[string]string{"app": "krun-builder"}}, "spec": spec}}}
+	value := map[string]any{"apiVersion": "batch/v1", "kind": "Job", "metadata": map[string]any{"name": b.Job, "namespace": k.Namespace, "labels": BuildResourceLabels(b)}, "spec": map[string]any{"backoffLimit": 0, "activeDeadlineSeconds": timeout, "ttlSecondsAfterFinished": 1800, "template": map[string]any{"metadata": map[string]any{"labels": BuildResourceLabels(b)}, "spec": spec}}}
 	e = k.Call(ctx, "POST", k.Jobs(), value, &job)
 	if KubeConflict(e) {
 		if e = k.Call(ctx, "GET", k.Jobs()+"/"+b.Job, nil, &job); e != nil {

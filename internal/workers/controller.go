@@ -119,6 +119,11 @@ func (w *Controller) Run(ctx context.Context) {
 					fmt.Println("workers cleanup:", err)
 				}
 				cancel()
+				cleanupCycle, cleanupCancel := context.WithTimeout(ctx, 8*time.Second)
+				if err := w.CollectDeletedWorkerResources(cleanupCycle); err != nil && ctx.Err() == nil {
+					fmt.Println("workers resource cleanup:", err)
+				}
+				cleanupCancel()
 			}
 		}
 	}()
