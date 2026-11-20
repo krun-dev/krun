@@ -71,6 +71,9 @@ func writeResources(ctx context.Context, tx ormTransaction, before, after map[st
 		}
 		row := models.Resource{ResourceID: id}
 		if previous.Kind == "worker" {
+			if _, err := tx.Exec(ctx, `INSERT INTO krun_worker_cleanup(worker_id,org_id) VALUES($1,$2) ON CONFLICT(worker_id) DO NOTHING`, id, previous.Organization); err != nil {
+				return err
+			}
 			if err := releaseWorkerAddress(ctx, tx, "worker", id); err != nil {
 				return err
 			}

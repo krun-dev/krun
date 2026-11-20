@@ -1066,5 +1066,9 @@
   "HTTP 服务": "HTTP service",
   "申请平台子域名，为每个域名配置 HTTP 路由。": "Claim platform subdomains and configure their HTTP routes.",
   "精确路径优先，其次匹配最长的路径段前缀。": "Exact paths win, followed by the longest path segment prefix.",
-  "申请后可在域名详情配置路由。": "Configure routes after claiming the domain."
+  "申请后可在域名详情配置路由。": "Configure routes after claiming the domain.",
+  "删除 Worker": "Delete Worker",
+  "Worker 已删除。": "Worker deleted.",
+  "输入 Worker ID 以确认删除：": "Enter the Worker ID to confirm deletion:",
+  "删除后环境和路由将停止服务，其他 Worker 对它的调用可能失败。关联数据和构建资源会异步清理；共享资源和绑定的对象存储数据保留。此操作不可撤销。": "Deleting stops the environments and routes, and calls from other Workers may fail. Associated data and build resources are cleaned up asynchronously; shared resources and data in bound object storage are retained. This cannot be undone."
 }

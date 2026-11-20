@@ -96,7 +96,7 @@ func TestPostgresSchemaBaselineMismatchPreservesData(t *testing.T) {
 	if _, err := store.pool.Exec(ctx, `INSERT INTO krun_users(user_id,source,subject,name,status) VALUES('baseline-survivor','local','baseline-survivor','Survivor','active')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.pool.Exec(ctx, `DROP TABLE krun_schema_migrations; DROP TABLE krun_worker_address_claims; INSERT INTO krun_meta(key,value) VALUES ('schema_baseline','82934894c84ba5a9ebef6ff99f2038684c8649d07d0bc79c30b27ea939d0f9a1')`); err != nil {
+	if _, err := store.pool.Exec(ctx, `DROP TABLE krun_schema_migrations; DROP TABLE krun_worker_address_claims; DROP TABLE krun_worker_cleanup; INSERT INTO krun_meta(key,value) VALUES ('schema_baseline','82934894c84ba5a9ebef6ff99f2038684c8649d07d0bc79c30b27ea939d0f9a1')`); err != nil {
 		t.Fatal(err)
 	}
 	migrations, err := sqlMigrations()

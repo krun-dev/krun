@@ -355,6 +355,7 @@ export function WorkersPage({
             networkProfiles={networkProfiles}
             domainCatalogHref={domainCatalogHref}
             notify={notify}
+            onDeleted={() => openWorker("")}
           />
         </>
       ) : collection.loading || workers === null ? (
@@ -586,6 +587,7 @@ function WorkerDetail({
   networkProfiles,
   domainCatalogHref,
   notify,
+  onDeleted,
 }: {
   base: string;
   organizationBase: string;
@@ -593,7 +595,12 @@ function WorkerDetail({
   networkProfiles: WorkerNetworkProfile[];
   domainCatalogHref: string;
   notify: (s: string) => void;
+  onDeleted: () => void;
 }) {
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [deleteError, setDeleteError] = useState("");
+  const [deleting, setDeleting] = useState(false);
   const [revision, setRevision] = useState(0);
   const [binding, setBinding] = useState<RepositoryBinding | null>(null);
   const [routing, setRouting] = useState<WorkerRouting | null>(null);
@@ -705,6 +712,20 @@ function WorkerDetail({
   const deploymentPending = (name?: string) =>
     operations.some((o) => o.environment === name && pending(o.state));
   const active = deploymentPending(env?.name);
+  async function deleteWorker() {
+    if (deleting || deleteConfirmation !== worker.id) return;
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      await api(organizationBase + "/workers/" + encodeURIComponent(worker.id), "DELETE");
+      notify(t("Worker 已删除。"));
+      onDeleted();
+    } catch (e) {
+      setDeleteError(errorMessage(e));
+    } finally {
+      setDeleting(false);
+    }
+  }
   async function createPreview() {
     setBusy(true);
     try {
@@ -800,6 +821,74 @@ function WorkerDetail({
     );
   return (
     <div className="grid min-w-0 gap-6">
+      <Dialog
+        open={deleteOpen}
+        onOpenChange={(open) => {
+          if (!deleting) {
+            setDeleteOpen(open);
+            if (!open) {
+              setDeleteConfirmation("");
+              setDeleteError("");
+            }
+          }
+        }}
+      >
+        <DialogContent
+          className="max-h-[calc(100dvh-2rem)] overflow-y-auto"
+          showCloseButton={!deleting}
+        >
+          <DialogHeader>
+            <DialogTitle>{t("删除 Worker")}</DialogTitle>
+            <DialogDescription>
+              {t(
+                "删除后环境和路由将停止服务，其他 Worker 对它的调用可能失败。关联数据和构建资源会异步清理；共享资源和绑定的对象存储数据保留。此操作不可撤销。",
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <label
+            htmlFor="delete-worker-confirmation"
+            className="text-sm font-medium"
+          >
+            {t("输入 Worker ID 以确认删除：")}
+          </label>
+          <code className="break-all text-sm">{worker.id}</code>
+          <Input
+            id="delete-worker-confirmation"
+            value={deleteConfirmation}
+            onChange={(event) => setDeleteConfirmation(event.target.value)}
+            autoComplete="off"
+            disabled={deleting}
+          />
+          {deleteError ? (
+            <p
+              role="alert"
+              className="text-sm text-destructive"
+            >
+              {deleteError}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              variant="outline"
+              disabled={deleting}
+              onClick={() => {
+                setDeleteOpen(false);
+                setDeleteConfirmation("");
+                setDeleteError("");
+              }}
+            >
+              {t("取消")}
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleting || deleteConfirmation !== worker.id}
+              onClick={() => void deleteWorker()}
+            >
+              {deleting ? t("删除中…") : t("确认删除")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2">
@@ -817,6 +906,12 @@ function WorkerDetail({
           </p>
         </div>
         <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setDeleteOpen(true)}
+          >
+            {t("删除 Worker")}
+          </Button>
           <Button
             variant="outline"
             size="icon"

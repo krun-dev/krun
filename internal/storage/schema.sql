@@ -862,3 +862,13 @@ CREATE TABLE IF NOT EXISTS krun_worker_version_r2 (
 CREATE INDEX IF NOT EXISTS krun_worker_version_r2_bucket ON krun_worker_version_r2(bucket_id);
 
 CREATE OR REPLACE TRIGGER retained_assets_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_retained_assets FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
+CREATE TABLE IF NOT EXISTS krun_worker_cleanup (
+ worker_id text PRIMARY KEY,
+ org_id text NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ next_attempt_at timestamptz NOT NULL DEFAULT now() + interval '90 seconds',
+ completed_at timestamptz,
+ attempts integer NOT NULL DEFAULT 0,
+ last_error text NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS krun_worker_cleanup_pending ON krun_worker_cleanup(next_attempt_at);

@@ -637,6 +637,12 @@ func TestPostgresRetentionReconcilesDeletedWorker(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.UpdateWorkerCleanup(ctx, "orphan-service", true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := postgresTestPool(store).Exec(ctx, `UPDATE krun_worker_cleanup SET completed_at=now()-interval '32 days' WHERE worker_id='orphan-service'`); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.RetainExpired(ctx); err != nil {
 		t.Fatal(err)
 	}

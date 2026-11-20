@@ -62,3 +62,22 @@ Secret 引用一起保存；保存不会改变当前运行。
 
 「环境管理 → 创建预览环境 → 新建预览默认配置」只决定之后新建 Preview 的初始值，已有环境各自独立。
 这些控制台操作保持 Cloudflare Version、Deployment 和 Previews Base API 兼容。
+
+
+## 删除 Worker
+
+删除需要 `worker.delete` 权限。删除后环境和路由停止服务，其他 Worker 的服务绑定可能调用失败；资源清理由后台异步执行；应用域名上指向已删除 Worker 的路径保留并返回 410。已绑定的对象存储数据和其他共享资源保留。此操作不可撤销。路由传播需要时间，已有请求可能继续执行。
+
+在控制台进入 **Workers → 目标 Worker**，点击 **删除 Worker** ①。弹窗显示该 Worker 的 ID，在输入框 ② 输入完整 ID，再点击 **确认删除**。删除失败时弹窗会显示原因，可检查权限后重试。
+
+[![① Worker 详情中的删除入口](/docs/screenshots/worker-delete/01-entry.png)](/docs/screenshots/worker-delete/01-entry.png)
+
+[![② 输入 Worker ID 确认删除](/docs/screenshots/worker-delete/02-confirm.png)](/docs/screenshots/worker-delete/02-confirm.png)
+
+也可以使用 krun CLI。先登录并选择组织，或在命令中指定组织；将 `ORG_ID`、`WORKER_ID` 替换为实际 ID（可通过 `krun org list` 和 `krun workers list --org ORG_ID` 查询）：
+
+```sh
+krun workers delete --org ORG_ID --id WORKER_ID
+```
+
+CLI 命令直接执行删除，不会要求输入二次确认。删除后运行 `krun workers get --org ORG_ID --id WORKER_ID`，预期资源不存在。后台异步清理该 Worker 的构建 Job、Pod 和输入 Secret；共享的运行池、Service 和 HTTPRoute 不随单个 Worker 删除。

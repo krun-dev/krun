@@ -34,7 +34,9 @@ flowchart LR
 ## 基础设施契约
 
 1. 使用专用 namespace；部署方管理该 namespace 的 default ServiceAccount，给 builder
-   配置镜像拉取 Secret，并设置默认不挂载 API Token。不能复用有其他业务的 namespace。
+   配置镜像拉取 Secret，并设置默认不挂载 API Token。不能复用有其他业务的 namespace。控制面 ServiceAccount 需要在 Workers namespace 对
+   Job 有 `get/list/create/patch/delete` 权限，对 Secret 有 `get/list/create/patch/delete`
+   权限，对 Pod 有 `get/list/delete` 权限；后台按标签清理已删除 Worker 的构建资源。
 2. Gateway 位于独立 namespace，使用 HTTP listener，默认端口 8080，hostname 留空。
    `allowedRoutes` 允许 `app.kubernetes.io/part-of: krun` 的 namespace，且 Gateway 必须
    `Programmed=True`。公司 HTTPS 入口保留完整 Host，转发到 Gateway Service。
