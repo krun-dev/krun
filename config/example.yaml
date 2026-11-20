@@ -23,6 +23,10 @@ db: ${KRUN_DATABASE_URL}
 static_dir: ""
 # 仅列出实际 CDN / 反向代理的源网段。未受信任来源的 X-Forwarded-For 会被忽略。
 trusted_proxy_cidrs: []
+# 可选。Go 直接提供控制台时设置 static_dir，并在 trusted_proxy_cidrs 中列出可信网关。
+# domain_redirect:
+#   ips: [198.51.100.10, 198.51.100.11]
+#   target_url: https://console-internal.example.com
 
 # 所有字符串可直接填写，或使用 ${NAME} / ${NAME:-默认值}；$$ 表示字面美元符号。
 # db 示例：postgres://krun:密码@127.0.0.1:25432/krun_dev?sslmode=disable

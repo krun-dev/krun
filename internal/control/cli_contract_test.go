@@ -4,16 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	kruncli "github.com/krun-dev/krun/internal/cli"
+	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/configfile"
 )
 
@@ -28,6 +31,63 @@ func (w loginURLWriter) Write(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
+func newCLIContractRedirectServer(t *testing.T, s *Server, staticDir string) *httptest.Server {
+	t.Helper()
+	_, proxy, err := net.ParseCIDR("127.0.0.0/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Set("X-Forwarded-For", "198.51.100.10")
+		s.ServeHTTP(w, r)
+	}))
+	s.Config.PublicURL = "http://" + httpServer.Listener.Addr().String()
+	s.Config.StaticDir = staticDir
+	s.Config.DomainRedirect = &appconfig.DomainRedirect{
+		IPs:       []string{"198.51.100.10"},
+		TargetURL: "https://console-internal.example.com",
+	}
+	s.trustedProxies = []*net.IPNet{proxy}
+	s.routes()
+	httpServer.Start()
+	t.Cleanup(httpServer.Close)
+	return httpServer
+}
+
+func TestCLIUpgradeCheckWithConsoleDomainRedirect(t *testing.T) {
+	staticDir := t.TempDir()
+	downloads := filepath.Join(staticDir, "downloads")
+	if err := os.Mkdir(downloads, 0700); err != nil {
+		t.Fatal(err)
+	}
+	name := "krun-" + runtime.GOOS + "-" + runtime.GOARCH
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	const version = "2026.11.1"
+	manifest, err := json.Marshal(map[string]any{
+		"version": version,
+		"files":   map[string]string{name: strings.Repeat("0", 64)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(downloads, "manifest.json"), manifest, 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := newCLIContractRedirectServer(t, &Server{}, staticDir)
+	profilePath := filepath.Join(t.TempDir(), "profile.yaml")
+	args := []string{"upgrade", "--check", "--endpoint", server.URL, "--profile", profilePath}
+	var out bytes.Buffer
+	if err := kruncli.Run(context.Background(), args, strings.NewReader(""), &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), version) {
+		t.Fatalf("published version missing from %q", out.String())
+	}
+}
+
 func TestCLIControlOAuthLoginRefreshAndLogoutContract(t *testing.T) {
 	for _, device := range []bool{false, true} {
 		name := "PKCE"
@@ -37,9 +97,11 @@ func TestCLIControlOAuthLoginRefreshAndLogoutContract(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s, store := testServer(t)
 			oauthBrowser(t, s, store)
-			httpServer := httptest.NewServer(s)
-			defer httpServer.Close()
-			s.Config.PublicURL = httpServer.URL
+			staticDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(staticDir, "index.html"), []byte("console"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			httpServer := newCLIContractRedirectServer(t, s, staticDir)
 			target := make(chan string, 1)
 			var out bytes.Buffer
 			profilePath := filepath.Join(t.TempDir(), "profile.yaml")
@@ -59,21 +121,29 @@ func TestCLIControlOAuthLoginRefreshAndLogoutContract(t *testing.T) {
 			case <-time.After(3 * time.Second):
 				t.Fatal("login did not print its browser URL")
 			}
-			id := ""
 			client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-			if device {
-				u, _ := url.Parse(login)
-				id = u.Query().Get("oauth")
-			} else {
+			approvalURL := login
+			if !device {
 				r, err := client.Get(login)
 				if err != nil {
 					t.Fatal(err)
 				}
 				r.Body.Close()
-				u, _ := url.Parse(r.Header.Get("Location"))
-				id = u.Query().Get("oauth")
+				approvalURL = r.Header.Get("Location")
 			}
-			approved := oauthApproval(s, id, true)
+			page, err := client.Get(approvalURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			page.Body.Close()
+			if page.StatusCode != http.StatusOK {
+				t.Fatalf("approval page returned HTTP %d Location %q", page.StatusCode, page.Header.Get("Location"))
+			}
+			approval, err := url.Parse(approvalURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			approved := oauthApproval(s, approval.Query().Get("oauth"), true)
 			if approved.Code != 200 {
 				t.Fatalf("approval %d %s", approved.Code, approved.Body.String())
 			}

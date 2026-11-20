@@ -217,9 +217,13 @@ func (s *Server) routes() {
 	}
 	fs := http.FileServer(http.Dir(staticRoot))
 	publicOrigin, _ := url.Parse(s.Config.PublicURL)
+	redirect := s.consoleDomainRedirect(publicOrigin)
 	m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" && r.Method != "HEAD" {
 			s.writeError(w, r, notFound())
+			return
+		}
+		if redirect != nil && redirect(w, r) {
 			return
 		}
 		if s.Config.Development && r.Host != publicOrigin.Host {
@@ -559,34 +563,43 @@ func (s *Server) trustedProxy(ip net.IP) bool {
 	return false
 }
 
-// clientIP walks a trusted X-Forwarded-For chain from the nearest hop toward
-// the browser. A malformed chain is ignored in full; accepting only its useful
-// prefix would let an attacker influence the result.
-func (s *Server) clientIP(r *http.Request) string {
+func requestPeerHost(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		host = r.RemoteAddr
+		return r.RemoteAddr
 	}
-	peer := net.ParseIP(host)
-	if peer == nil || !s.trustedProxy(peer) {
-		return host
+	return host
+}
+
+func (s *Server) clientIP(r *http.Request) string {
+	host := requestPeerHost(r)
+	if s.trustedProxy(net.ParseIP(host)) {
+		if ip := s.forwardedClientIP(r.Header.Values("X-Forwarded-For")); ip != nil {
+			return ip.String()
+		}
 	}
-	raw := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
+	return host
+}
+
+// forwardedClientIP walks a trusted forwarding chain from the nearest hop
+// toward the browser. A malformed chain is ignored in full.
+func (s *Server) forwardedClientIP(values []string) net.IP {
+	raw := strings.Join(values, ",")
 	parts := strings.Split(raw, ",")
 	chain := make([]net.IP, 0, len(parts))
 	for _, part := range parts {
 		ip := net.ParseIP(strings.TrimSpace(part))
 		if ip == nil {
-			return host
+			return nil
 		}
 		chain = append(chain, ip)
 	}
 	for i := len(chain) - 1; i >= 0; i-- {
 		if !s.trustedProxy(chain[i]) || i == 0 {
-			return chain[i].String()
+			return chain[i]
 		}
 	}
-	return host
+	return nil
 }
 
 // cleanup is gone from the request path: expired sessions, browsers and login

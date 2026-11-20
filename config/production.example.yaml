@@ -13,6 +13,10 @@ organization_self_service: true
 db: ${KRUN_DATABASE_URL:-postgres://krun:replace-me@postgres.example.com:5432/krun}
 trusted_proxy_cidrs:
   - ${KRUN_GATEWAY_POD_CIDR:-192.0.2.0/24}
+# 可选，仅适用于由 Go 的 static_dir 提供控制台的部署。
+# domain_redirect:
+#   ips: [198.51.100.10, 198.51.100.11]
+#   target_url: https://console-internal.example.com
 providers:
   - id: company
     source_id: company-oidc-main
