@@ -121,6 +121,31 @@ async function fixture(page, options = {}) {
   return { state, requests };
 }
 
+for (const width of [1440, 390]) {
+  test(`sidebar remains usable on a short ${width}px viewport`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 500 });
+    await fixture(page, { actions: { "org-a": admin }, hyperdriveConfigured: true });
+    await page.goto(origin + "/?workspace=org-a");
+    if (width < 1024) {
+      await page.getByRole("button", { name: "打开导航" }).click();
+    }
+
+    const sidebar = page.locator("aside");
+    await expect(sidebar.getByRole("button", { name: "概览" })).toBeVisible();
+    const dimensions = await sidebar.evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+    }));
+    expect(dimensions.scrollHeight).toBeGreaterThan(dimensions.clientHeight);
+
+    const docs = sidebar.getByRole("link", { name: "使用文档" });
+    await docs.scrollIntoViewIfNeeded();
+    await expect(docs).toBeInViewport();
+    await sidebar.getByRole("button", { name: "Git 仓库授权" }).click();
+    await expect(page.getByRole("heading", { name: "Git 仓库授权" })).toBeVisible();
+  });
+}
+
 test("new users see onboarding and organization creation without management menus", async ({
   page,
 }) => {
