@@ -33,7 +33,7 @@ workers:
 共享路由下，业务 host 格式为：
 
 ```text
-w-<worker-hash>-<environment>.<domain-suffix>
+<worker-name>.<domain-suffix>
 ```
 
 每个 domain 只需一条 `*.<domain-suffix>` 路由，且必须经 Profile 唯一选中一个池。

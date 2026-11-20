@@ -194,7 +194,7 @@ test("organization short names follow the name until manually edited", async ({ 
   await expect(dialog).toBeHidden();
 });
 
-test("Worker creation sends the suggested locator shown in the form", async ({ page }) => {
+test("Worker creation sends its DNS-compatible name", async ({ page }) => {
   await fixture(page, { actions: { "org-a": admin } });
   await page.addInitScript(() => localStorage.setItem("krun.theme", "dark"));
   await page.route("**/api/v1/orgs/org-a/workers/network-profiles", (route) =>
@@ -209,17 +209,21 @@ test("Worker creation sends the suggested locator shown in the form", async ({ p
   await page.getByRole("button", { name: "创建 Worker", exact: true }).click();
   await expect(page.locator("html")).toHaveClass(/dark/);
   const dialog = page.getByRole("dialog");
-  await dialog.getByRole("textbox", { name: "Worker 名称", exact: true }).fill("Image_Resize 2");
-  await expect(dialog.getByRole("textbox", { name: /Worker 定位符/ })).toHaveValue(
-    "image-resize-2",
-  );
+  await dialog.getByRole("textbox", { name: /Worker 名称/ }).fill("image-resize-2");
+  if (process.env.KRUN_WORKER_SCREENSHOT) {
+    await dialog.getByRole("textbox", { name: /Worker 名称/ }).evaluate((input) => {
+      input.style.outline = "3px solid #e44040";
+      input.parentElement.style.position = "relative";
+      input.insertAdjacentHTML("afterend", '<span style="position:absolute;right:8px;top:8px;background:#e44040;color:white;border-radius:50%;width:24px;height:24px;text-align:center;line-height:24px;font-weight:bold">1</span>');
+    });
+    await dialog.screenshot({ path: process.env.KRUN_WORKER_SCREENSHOT });
+  }
   const request = page.waitForRequest(
     (req) => req.method() === "POST" && req.url().endsWith("/api/v1/orgs/org-a/workers"),
   );
   await dialog.getByRole("button", { name: "创建 Worker", exact: true }).click();
   expect((await request).postDataJSON()).toEqual({
-    name: "Image_Resize 2",
-    locator: "image-resize-2",
+    name: "image-resize-2",
   });
   await expect(dialog).toBeHidden();
 });
@@ -232,7 +236,7 @@ for (const lostResponse of [false, true]) {
     if (lostResponse) {
       await page.addInitScript(() => localStorage.setItem("krun.theme", "dark"));
     }
-    const worker = { id: "worker-new", locator: "image-resize", name: "Image Resize" };
+    const worker = { id: "worker-new", locator: "image-resize", name: "image-resize" };
     const profile = { id: "office", name: "Office" };
     let creates = 0;
     const updates = [];
@@ -272,7 +276,7 @@ for (const lostResponse of [false, true]) {
     await page.goto(origin + "/?page=workers&workspace=org-a");
     await page.getByRole("button", { name: "创建 Worker", exact: true }).click();
     const dialog = page.getByRole("dialog");
-    const name = dialog.getByRole("textbox", { name: "Worker 名称", exact: true });
+    const name = dialog.getByRole("textbox", { name: /Worker 名称/ });
     await name.fill(worker.name);
     await dialog.getByRole("button", { name: "Office", exact: true }).click();
     await dialog.getByRole("button", { name: "创建 Worker", exact: true }).click();
@@ -652,7 +656,7 @@ test("focus revalidation preserves unsaved forms when permissions are unchanged"
   await fixture(page, { actions: { "org-a": admin } });
   await page.goto(origin + "/?page=workers&workspace=org-a");
   await page.getByRole("button", { name: "创建 Worker", exact: true }).click();
-  const input = page.getByRole("dialog").getByRole("textbox", { name: "Worker 名称", exact: true });
+  const input = page.getByRole("dialog").getByRole("textbox", { name: /Worker 名称/ });
   await input.fill("unsaved-worker");
   const refreshed = page.waitForResponse((response) => response.url().endsWith("/permissions"));
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));

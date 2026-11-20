@@ -320,6 +320,22 @@ func (s *Store) CommitVersionURL(ctx context.Context, claim OperationClaim) (boo
 	if err != nil {
 		return false, err
 	}
+	var locator string
+	if err = tx.QueryRow(ctx, `SELECT locator FROM krun_resources WHERE resource_id=$1 AND kind='worker'`, worker).Scan(&locator); err != nil {
+		return false, err
+	}
+	if len(version) < 8 || len(locator)+9 > 63 {
+		_ = tx.Rollback(ctx)
+		return false, s.FailClaimedOperation(ctx, claim, "Version URL cannot fit in a DNS label")
+	}
+	label := version[:8] + "-" + locator
+	if err = claimWorkerAddress(ctx, tx, label, "version", version); err != nil {
+		_ = tx.Rollback(ctx)
+		return false, s.FailClaimedOperation(ctx, claim, "Version URL conflicts with another address; upload again")
+	}
+	if _, err = tx.Exec(ctx, `UPDATE krun_worker_address_claims SET expires_at=(SELECT created_at + interval '30 days' FROM krun_worker_versions WHERE version_id=$2) WHERE label=$1 AND owner_kind='version' AND owner_id=$2`, label, version); err != nil {
+		return false, err
+	}
 	tag, err := tx.Exec(ctx, `UPDATE krun_worker_versions v SET version_url=true
 		WHERE version_id=$1 AND worker_id=$2 AND org_id=$3 AND env_name=$4
 		  AND EXISTS (SELECT 1 FROM krun_worker_environments e WHERE e.worker_id=$2 AND e.env_name=$4 AND e.enabled)`, version, worker, organization, environment)

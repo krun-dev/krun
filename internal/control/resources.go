@@ -3,6 +3,7 @@ package control
 import (
 	"net/http"
 
+	"github.com/krun-dev/krun/internal/domain"
 	"github.com/krun-dev/krun/internal/iam"
 )
 
@@ -61,6 +62,9 @@ func (s *Server) resourceCreate(st *State, p Principal, r *http.Request) (any, i
 	var in iam.ResourceCreateInput
 	if e = body(r, &in); e != nil {
 		return nil, 0, e
+	}
+	if kind == "worker" && s.Config.Workers != nil && s.Config.Workers.WorkerNameReserved(in.Name) {
+		return nil, 0, domain.Conflict("HOSTNAME_UNAVAILABLE", "Worker name is reserved")
 	}
 	out, err := s.iam().CreateResource(st, t, kind, in)
 	return presentResource(st, out), 201, err

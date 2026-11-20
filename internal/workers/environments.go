@@ -60,6 +60,14 @@ func (s *Service) WorkerEnvironmentCreate(ctx context.Context, st *domain.State,
 		return nil, Read, e
 	}
 	ws := s.Worker(st, t)
+	if s.Config.Workers.WorkerNameReserved(in.Name + "-" + ws.AddressName) {
+		return nil, Read, domain.Conflict("HOSTNAME_UNAVAILABLE", "Preview address is reserved")
+	}
+	for _, pattern := range WorkerHostPatterns(ws, s.Config.Workers) {
+		if EnvHostName(pattern, in.Name) == "" {
+			return nil, Read, domain.Invalid("ENVIRONMENT_INVALID", "Preview name and Worker name must fit in one DNS label")
+		}
+	}
 	if _, exists := ws.Environments[in.Name]; exists {
 		return nil, Read, domain.Conflict("ENVIRONMENT_EXISTS", "Preview environment already exists")
 	}

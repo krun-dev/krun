@@ -53,6 +53,11 @@ func writeResources(ctx context.Context, tx ormTransaction, before, after map[st
 			CreatedAt:  resource.Created,
 		}
 		if !existed {
+			if resource.Kind == "worker" && resource.Locator != "" {
+				if err := claimWorkerAddress(ctx, tx, resource.Locator, "worker", resource.ID); err != nil {
+					return err
+				}
+			}
 			if err := insertLocator(ctx, "Resource locator already exists", tx.orm.NewInsert().Model(&row).Column("resource_id", "kind", "org_id", "locator", "name", "revision", "created_at").On("CONFLICT DO NOTHING").Returning("NULL")); err != nil {
 				return err
 			}
@@ -65,6 +70,15 @@ func writeResources(ctx context.Context, tx ormTransaction, before, after map[st
 			continue
 		}
 		row := models.Resource{ResourceID: id}
+		if previous.Kind == "worker" {
+			if err := releaseWorkerAddress(ctx, tx, "worker", id); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE krun_worker_address_claims SET expires_at=now()+interval '31 days'
+				WHERE owner_kind='preview' AND split_part(owner_id,'/',1)=$1 AND expires_at IS NULL`, id); err != nil {
+				return err
+			}
+		}
 		if err := ormCAS(ctx, "Resource changed", tx.orm.NewDelete().Model(&row).WherePK().Where("revision = ?", previous.Revision)); err != nil {
 			return err
 		}

@@ -37,6 +37,7 @@ func (s *Service) Worker(st *domain.State, t authorization.Target) domain.Worker
 		ws = domain.Worker{Worker: t.ID, Organization: t.Organization, Domains: []string{}, Environments: map[string]domain.WorkerEnvironment{}}
 	}
 	ws.Organization = t.Organization
+	ws.AddressName = st.Resources[t.ID].Locator
 	ws = s.NormalizeWorker(ws)
 	st.Workers.Workers[t.ID] = ws
 	s.EnsureWorkerPlacement(st, ws)
@@ -86,6 +87,7 @@ func (s *Service) WorkerView(st *domain.State, t authorization.Target) domain.Wo
 		ws = domain.Worker{Worker: t.ID, Organization: t.Organization, Domains: []string{}, Environments: map[string]domain.WorkerEnvironment{}}
 	}
 	ws.Organization = t.Organization
+	ws.AddressName = st.Resources[t.ID].Locator
 	ws.Domains = append([]string(nil), ws.Domains...)
 	environments := make(map[string]domain.WorkerEnvironment, len(ws.Environments))
 	for name, env := range ws.Environments {
@@ -327,7 +329,7 @@ func (s *Service) SyncEnvironmentHosts(env *domain.WorkerEnvironment, organizati
 		return
 	}
 	c := s.Config.Workers
-	slug := appconfig.WorkerSlug(organization, worker)
+	slug := worker
 	selected := map[string]bool{}
 	for _, id := range workerDomains {
 		selected[id] = true
@@ -357,7 +359,7 @@ func (s *Service) syncWorkerEnvironmentHosts(env *domain.WorkerEnvironment, work
 		env.DisplayHosts = map[string]string{}
 		return
 	}
-	s.SyncEnvironmentHosts(env, worker.Organization, worker.Worker, worker.Domains)
+	s.SyncEnvironmentHosts(env, worker.Organization, worker.AddressName, worker.Domains)
 }
 
 // syncWorkerHosts applies the worker's domain selection to every environment

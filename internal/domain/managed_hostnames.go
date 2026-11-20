@@ -6,14 +6,15 @@ type ManagedHostnameOption struct {
 }
 
 type ManagedHostname struct {
-	Type           string                 `json:"type"`
-	Host           string                 `json:"host"`
-	Organization   string                 `json:"-"`
-	SuffixID       string                 `json:"suffix_id"`
-	Revision       int                    `json:"revision"`
-	GatewayManaged bool                   `json:"-"`
-	Retired        bool                   `json:"-"`
-	Routes         []ManagedHostnameRoute `json:"routes"`
+	Type               string                 `json:"type"`
+	Host               string                 `json:"host"`
+	Organization       string                 `json:"-"`
+	SuffixID           string                 `json:"suffix_id"`
+	Revision           int                    `json:"revision"`
+	GatewayManaged     bool                   `json:"-"`
+	SharesWorkerDomain bool                   `json:"-"`
+	Retired            bool                   `json:"-"`
+	Routes             []ManagedHostnameRoute `json:"routes"`
 }
 
 type ManagedHostnameRoute struct {

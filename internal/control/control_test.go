@@ -28,8 +28,8 @@ func fixture() (*State, User, User) {
 	st.Members[memberKey("org-a", viewer.ID)] = Member{Organization: "org-a", User: viewer.ID}
 	st.Assignments["admin"] = Assignment{ID: "admin", SubjectKind: "user", SubjectID: admin.ID, Role: "system_admin", ScopeKind: "system", ScopeID: "system"}
 	st.Assignments["viewer"] = Assignment{ID: "viewer", SubjectKind: "user", SubjectID: viewer.ID, Role: "viewer", ScopeKind: "organization", ScopeID: "org-a"}
-	st.Resources["svc-a"] = Resource{ID: "svc-a", Kind: "worker", Organization: "org-a", Name: "A", Revision: 1}
-	st.Resources["svc-b"] = Resource{ID: "svc-b", Kind: "worker", Organization: "org-b", Name: "B", Revision: 1}
+	st.Resources["svc-a"] = Resource{ID: "svc-a", Kind: "worker", Organization: "org-a", Locator: "svc-a", Name: "A", Revision: 1}
+	st.Resources["svc-b"] = Resource{ID: "svc-b", Kind: "worker", Organization: "org-b", Locator: "svc-b", Name: "B", Revision: 1}
 	return st, admin, viewer
 }
 

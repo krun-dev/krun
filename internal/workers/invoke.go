@@ -16,7 +16,7 @@ func (s *Service) ResolveInvocation(ctx context.Context, st *domain.State, princ
 	if err != nil {
 		return "", "", err
 	}
-	worker := st.Workers.Workers[target.ID]
+	worker := s.WorkerView(st, target)
 	current := worker.Environments[env]
 	if env == appconfig.WorkerBaseline && worker.WorkersDevDisabled {
 		return "", "", domain.Conflict("WORKER_NOT_PUBLISHED", "The default production URL is disabled")
@@ -41,7 +41,7 @@ func (s *Service) ResolveInvocation(ctx context.Context, st *domain.State, princ
 	// Invoke through the first selected domain of the worker. The domain's
 	// Gateway decides which instance to address. Hosts are derived, not
 	// stored, so they come from the catalog and the worker selection.
-	slug := appconfig.WorkerSlug(worker.Organization, worker.Worker)
+	slug := worker.AddressName
 	for _, id := range s.SyncWorkerDomains(worker) {
 		d, ok := s.Config.Workers.Domain(id)
 		if !ok {

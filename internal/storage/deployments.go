@@ -6,6 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/krun-dev/krun/internal/domain"
+	"github.com/krun-dev/krun/internal/securetoken"
 )
 
 // Deployment intent is immutable. The executor alone sets committed_at after
@@ -17,6 +18,19 @@ func writeDeployments(ctx context.Context, tx pgx.Tx, before, after *domain.Work
 				return errors.New("deployment intent is immutable")
 			}
 			continue
+		}
+		var locator string
+		if err := tx.QueryRow(ctx, `SELECT locator FROM krun_resources WHERE resource_id=$1 AND kind='worker'`, d.Worker).Scan(&locator); err != nil {
+			return err
+		}
+		label := "d-" + securetoken.Digest(id)[:20] + "-" + locator
+		if len(label) <= 63 {
+			if err := claimWorkerAddress(ctx, tx, label, "deployment", id); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE krun_worker_address_claims SET expires_at=$2 WHERE label=$1 AND owner_kind='deployment' AND owner_id=$3`, label, d.Expires, id); err != nil {
+				return err
+			}
 		}
 		tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_deployments(deployment_id,org_id,worker_id,env_name,version_id,operation_id,created_at,expires_at,candidate_version_id,candidate_weight,message)
    SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11 WHERE EXISTS(SELECT 1 FROM krun_worker_versions WHERE version_id=$5 AND org_id=$2 AND worker_id=$3 AND env_name=$4)

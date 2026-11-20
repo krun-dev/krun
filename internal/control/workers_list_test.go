@@ -66,15 +66,14 @@ func TestWorkerSearchPaginationAndCreationTime(t *testing.T) {
 		t.Fatal(response.Code, response.Body.String())
 	}
 
-	response = request(s, "POST", "/api/v1/orgs/org-a/workers", "krun_cli_admin", `{"name":"Fresh Worker"}`)
+	response = request(s, "POST", "/api/v1/orgs/org-a/workers", "krun_cli_admin", `{"name":"fresh-worker"}`)
 	var resource Resource
 	if err := json.Unmarshal(response.Body.Bytes(), &resource); err != nil || response.Code != 201 || resource.Created.IsZero() {
 		t.Fatalf("creation time missing: %d %s", response.Code, response.Body.String())
 	}
-	response = request(s, "PATCH", "/api/v1/orgs/org-a/workers/"+resource.ID, "krun_cli_admin", `{"name":"Renamed Worker","expected_revision":1}`)
-	var renamed Resource
-	if err := json.Unmarshal(response.Body.Bytes(), &renamed); err != nil || response.Code != 200 || !renamed.Created.Equal(resource.Created) {
-		t.Fatalf("creation time changed on rename: %d %s", response.Code, response.Body.String())
+	response = request(s, "PATCH", "/api/v1/orgs/org-a/workers/"+resource.ID, "krun_cli_admin", `{"name":"renamed-worker","expected_revision":1}`)
+	if response.Code != 422 {
+		t.Fatalf("Worker rename accepted: %d %s", response.Code, response.Body.String())
 	}
 	// The CF projection includes native Workers and has its own paging contract.
 	response = request(s, "GET", cfPrefix+"/accounts/org-a/workers/scripts?q=missing&limit=1", "krun_cli_admin", "")

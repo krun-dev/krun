@@ -5,11 +5,12 @@ description: 在 Worker 上绑定整域，或通过应用域名把路径分给�
 
 平台可以为同一个后缀开通多种用途，并负责通配 DNS 和 TLS。申请时可选择已开放的后缀并填写一层前缀。
 例如，Worker 的默认地址和 `orders.workers.example.com` 可以共用 `workers.example.com`。
-每个完整主机名只对应一种用途，`w-` 开头的前缀由平台保留。
+每个完整主机名只对应一种用途，不能与其他 Worker 的生产或预览地址冲突。共享 Worker 默认后缀的托管域名前缀在所有 Worker 默认后缀之间统一保留。
+Worker 名称超过 40 个字符时无法生成固定部署地址，超过 54 个字符时无法生成 Version URL；Preview 名称与 Worker 名称拼接后最多 63 个字符。
 
 | 后缀类型 | 示例 | 在哪里配置 |
 | --- | --- | --- |
-| `worker_default` | `w-<hash>-production.workers.example.com` | Worker → 路由与域名 → 默认域名后缀。平台为环境生成前缀 |
+| `worker_default` | `orders.workers.example.com` | Worker → 路由与域名 → 默认域名后缀。生产地址使用 Worker 名称，Preview 地址使用 `<preview>-<worker>` |
 | `worker_custom` | `orders.workers.example.com` | Worker → 路由与域名 → Worker 自定义域名。整域绑定当前 Worker，默认提供生产和 Preview |
 | `application` | `shop.apps.example.com` | 组织 → 网络 → 应用域名。组织配置同域的路径和目标 |
 

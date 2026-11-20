@@ -59,7 +59,7 @@ func TestCLIWorkerWorkflow(t *testing.T) {
 		return out
 	}
 	var worker Resource
-	if err := json.Unmarshal([]byte(mustRun("workers", "create", "--org", "cli-test", "--name", "CLI Pipeline", "--locator", "cli-pipeline")), &worker); err != nil || worker.ID == "" {
+	if err := json.Unmarshal([]byte(mustRun("workers", "create", "--org", "cli-test", "--name", "cli-pipeline")), &worker); err != nil || worker.ID == "" {
 		t.Fatalf("Worker identity: %+v (%v)", worker, err)
 	}
 	var readWorker Resource

@@ -11,7 +11,7 @@ import (
 )
 
 const workersHelp = `Usage: krun workers COMMAND [--org ID]
-  list, create, get, update, delete   Manage Worker resources
+  list, create, get, delete           Manage Worker resources (names are immutable)
   environments                      Manage production and preview environments
   previews-base                     Configure defaults for new previews
   configurations                    Save and deploy environment configuration snapshots
@@ -31,7 +31,7 @@ func (c *Client) workers(ctx context.Context, args []string) error {
 	}
 	action, rest := args[0], args[1:]
 	switch action {
-	case "list", "create", "get", "update", "delete":
+	case "list", "create", "get", "delete":
 		return c.workerResource(ctx, action, rest)
 	case "environments", "previews-base":
 		return c.environments(ctx, action, rest)
@@ -63,22 +63,17 @@ func (c *Client) workers(ctx context.Context, args []string) error {
 func (c *Client) workerResource(ctx context.Context, action string, args []string) error {
 	f := flags("workers "+action, c.Err)
 	org := c.orgFlag(f)
-	var id, name, locator, after, search string
-	var revision, limit int
+	var id, name, after, search string
+	var limit int
 	switch action {
 	case "list":
 		f.IntVar(&limit, "limit", 100, "Page size (1–200)")
 		f.StringVar(&after, "after", "", "Pagination token from next_after")
 		f.StringVar(&search, "search", "", "Search by Worker name or ID")
 	case "create":
-		f.StringVar(&name, "name", "", "Worker name")
-		f.StringVar(&locator, "locator", "", "Resource locator")
+		f.StringVar(&name, "name", "", "Globally unique lowercase Worker name (immutable DNS label)")
 	default:
 		f.StringVar(&id, "id", "", "Worker ID, locator or full resource path")
-		if action == "update" {
-			f.StringVar(&name, "name", "", "New Worker name")
-			f.IntVar(&revision, "revision", -1, "Expected Worker revision")
-		}
 	}
 	if err := parseFlags(f, args); err != nil {
 		return err
@@ -108,22 +103,13 @@ func (c *Client) workerResource(ctx context.Context, action string, args []strin
 		if err := requireID(name, "name"); err != nil {
 			return err
 		}
-		input := map[string]string{"name": name}
-		if locator != "" {
-			input["locator"] = locator
-		}
-		return c.call(ctx, "POST", base, input)
+		return c.call(ctx, "POST", base, map[string]string{"name": name})
 	}
 	if err := requireID(id, "id"); err != nil {
 		return err
 	}
 	path := base + "/" + url.PathEscape(id)
 	switch action {
-	case "update":
-		if name == "" || revision < 0 {
-			return errors.New("--name and a non-negative --revision are required")
-		}
-		return c.call(ctx, "PATCH", path, map[string]any{"name": name, "expected_revision": revision})
 	case "delete":
 		return c.call(ctx, "DELETE", path, nil)
 	default:

@@ -21,7 +21,7 @@ func (s *Store) loadWorkers(ctx context.Context, st *domain.State) error {
 	}
 	batch := &pgx.Batch{}
 	queueStateRead(ctx, batch, "krun_worker_buckets", `SELECT bucket_id, org_id, name, store_id, enabled, revision, created_at FROM krun_worker_buckets`)
-	queueStateRead(ctx, batch, "krun_workers", `SELECT worker_id, org_id, network_profile, repository, repository_revision, domains_revision, preview_revision, workers_dev_disabled, preview_urls_disabled FROM krun_workers`)
+	queueStateRead(ctx, batch, "krun_workers", `SELECT worker_id, org_id, network_profile, repository, repository_revision, domains_revision, preview_revision, workers_dev_disabled, preview_urls_disabled, COALESCE((SELECT r.locator FROM krun_resources r WHERE r.resource_id=krun_workers.worker_id AND r.kind='worker'), '') FROM krun_workers`)
 	queueStateRead(ctx, batch, "krun_worker_placements", `SELECT worker_id, pool_id, org_id, network_profile, role, state, revision, created_at, updated_at FROM krun_worker_placements`)
 	queueStateRead(ctx, batch, "krun_worker_domains", `SELECT worker_id, domain_id FROM krun_worker_domains ORDER BY worker_id, ordinal`)
 	queueStateRead(ctx, batch, "krun_worker_environments", `SELECT worker_id, env_name, enabled, config_revision, variables, deployment_revision, version_id, confirmed_version_id, version_metadata, assets_binding, hyperdrive_bindings, candidate_version_id, candidate_weight, service_bindings, gradual_asset_retention_seconds FROM krun_worker_environments`)
@@ -70,15 +70,15 @@ func readWorkers(results pgx.BatchResults, st *domain.State) error {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id, org, profile string
+		var id, org, profile, locator string
 		var repository []byte
 		var repositoryRevision, domainsRevision, previewRevision int
 		var workersDevDisabled, previewURLsDisabled bool
-		if err = rows.Scan(&id, &org, &profile, &repository, &repositoryRevision, &domainsRevision, &previewRevision, &workersDevDisabled, &previewURLsDisabled); err != nil {
+		if err = rows.Scan(&id, &org, &profile, &repository, &repositoryRevision, &domainsRevision, &previewRevision, &workersDevDisabled, &previewURLsDisabled, &locator); err != nil {
 			return err
 		}
 		svc := domain.Worker{
-			Worker: id, Organization: org, NetworkProfile: profile, RepositoryRevision: repositoryRevision,
+			Worker: id, Organization: org, AddressName: locator, NetworkProfile: profile, RepositoryRevision: repositoryRevision,
 			DomainsRevision: domainsRevision, PreviewRevision: previewRevision,
 			WorkersDevDisabled: workersDevDisabled, PreviewURLsDisabled: previewURLsDisabled,
 			Domains: []string{}, Environments: map[string]domain.WorkerEnvironment{},

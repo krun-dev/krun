@@ -147,7 +147,7 @@ func (s *Server) cfSubdomain(r *http.Request, worker domain.Worker, env domain.W
 	// Wrangler uses the URL when re-enabling a default address. Keep the
 	// prospective hostname in the subdomain API even while it is inactive.
 	if worker.WorkersDevDisabled {
-		s.Application(r).SyncEnvironmentHosts(&env, worker.Organization, worker.Worker, worker.Domains)
+		s.Application(r).SyncEnvironmentHosts(&env, worker.Organization, worker.AddressName, worker.Domains)
 	}
 	out := map[string]any{
 		"enabled":          !worker.WorkersDevDisabled,
@@ -363,6 +363,7 @@ func (s *Server) cfDeploymentURLs(r *http.Request, st *domain.State, d domain.Wo
 		return []string{}, nil
 	}
 	app := s.Application(r)
+	service.AddressName = st.Resources[d.Worker].Locator
 	service = app.NormalizeWorker(service)
 	hosts := workerapp.DeploymentHosts(s.Config.Workers, service, d.ID)
 	if d.Environment != appconfig.WorkerBaseline {

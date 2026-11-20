@@ -187,6 +187,15 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 				return err
 			}
 			if !ok {
+				if name != "production" && name != domain.PreviewBaseName {
+					var locator string
+					if err := tx.QueryRow(ctx, `SELECT locator FROM krun_resources WHERE resource_id=$1 AND kind='worker'`, id).Scan(&locator); err != nil {
+						return err
+					}
+					if err := claimWorkerAddress(ctx, tx, name+"-"+locator, "preview", id+"/"+name); err != nil {
+						return err
+					}
+				}
 				tag, err := tx.Exec(ctx, `INSERT INTO krun_worker_environments
 					(worker_id, env_name, enabled, config_revision, variables, deployment_revision, version_id, confirmed_version_id, version_metadata, assets_binding, hyperdrive_bindings, service_bindings, gradual_asset_retention_seconds)
 					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11::jsonb,'{}'::jsonb),COALESCE(NULLIF($12::jsonb,'null'::jsonb),'{}'::jsonb),$13) ON CONFLICT (worker_id, env_name) DO NOTHING`,
@@ -223,6 +232,9 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 		}
 		for name, oldEnv := range domain.StorageWorkerEnvironments(old) {
 			if _, ok := domain.StorageWorkerEnvironments(svc)[name]; !ok {
+				if err := releaseWorkerAddress(ctx, tx, "preview", id+"/"+name); err != nil {
+					return err
+				}
 				if _, err := tx.Exec(ctx, `DELETE FROM krun_worker_environment_secrets WHERE worker_id=$1 AND env_name=$2`, id, name); err != nil {
 					return err
 				}
@@ -248,6 +260,10 @@ func writeWorkers(ctx context.Context, tx pgx.Tx, bw, aw *domain.WorkerState) er
 	for id := range bw.Workers {
 		if _, ok := aw.Workers[id]; ok {
 			continue
+		}
+		if _, err := tx.Exec(ctx, `UPDATE krun_worker_address_claims SET expires_at=now()+interval '31 days'
+			WHERE owner_kind='preview' AND left(owner_id,length($1)+1)=$1||'/' AND expires_at IS NULL`, id); err != nil {
+			return err
 		}
 		for _, statement := range []string{
 			`DELETE FROM krun_worker_environment_secrets WHERE worker_id=$1`,

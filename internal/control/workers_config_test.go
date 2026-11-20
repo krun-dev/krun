@@ -18,6 +18,9 @@ import (
 
 func workerConfigFixture() *State {
 	st, _, _ := fixture()
+	resource := st.Resources["svc-a"]
+	resource.Locator = "svc-a"
+	st.Resources["svc-a"] = resource
 	// Hosts are derived from the domain catalog, not stored.
 	ws := Worker{Worker: "svc-a", Organization: "org-a", Domains: []string{"internal"}, Environments: map[string]WorkerEnvironment{
 		"production": {Name: "production", Enabled: true, Version: "rel-1"},
@@ -73,7 +76,7 @@ func TestWorkerConfigProjection(t *testing.T) {
 	if len(p.Routes) != 3 {
 		t.Fatalf("routes: %+v", p.Routes)
 	}
-	slug := appconfig.WorkerSlug("org-a", "svc-a")
+	slug := "svc-a"
 	wantHosts := []string{appconfig.HostFor(slug, "empty", "workers.test"), appconfig.HostFor(slug, "preview", "workers.test"), appconfig.HostFor(slug, "production", "workers.test")}
 	sort.Strings(wantHosts)
 	for i, want := range wantHosts {
@@ -108,7 +111,7 @@ func TestWorkerConfigDiffOrdering(t *testing.T) {
 	next := first
 	next.Routes = append([]workerConfigRoute(nil), first.Routes...)
 	next.Versions = map[string]WorkerVersion{"rel-1": first.Versions["rel-1"]}
-	prodHost := appconfig.HostFor(appconfig.WorkerSlug("org-a", "svc-a"), "production", "workers.test")
+	prodHost := appconfig.HostFor("svc-a", "production", "workers.test")
 	for i := range next.Routes {
 		if next.Routes[i].Host == prodHost {
 			next.Routes[i].Version = "rel-2"

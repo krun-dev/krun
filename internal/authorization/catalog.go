@@ -42,7 +42,7 @@ var previewSlug = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 var environments = []string{"global", "development", "production"}
 
 func EnvironmentValid(v string) bool {
-	return slices.Contains(environments, v) || (v != "test" && v != "staging" && previewSlug.MatchString(v))
+	return slices.Contains(environments, v) || previewSlug.MatchString(v)
 }
 
 // Catalog returns independent copies for API clients; callers cannot change the engine's registry.

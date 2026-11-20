@@ -29,7 +29,7 @@ func TestPostgresNativeAndCloudflareResourceLocators(t *testing.T) {
 	const route = "/api/v1/orgs/platform/workers"
 	start := make(chan struct{})
 	responses := make(chan int, 2)
-	for _, name := range []string{"Concurrent Worker", "CONCURRENT-WORKER"} {
+	for _, name := range []string{"concurrent-worker", "concurrent-worker"} {
 		go func() {
 			<-start
 			response := request(s, http.MethodPost, route, token, `{"name":"`+name+`"}`)
@@ -65,15 +65,15 @@ func exerciseResourceLocators(t *testing.T, s *Server) {
 	call(http.MethodPatch, base, `{"name":"改名后的团队","allowed_sources":[],"expected_revision":1}`, 200)
 
 	var worker Resource
-	raw = call(http.MethodPost, base+"/workers", `{"name":"图片处理"}`, 201)
-	if err := json.Unmarshal(raw, &worker); err != nil || worker.Locator != "tu-pian-chu-li" || worker.Name != "图片处理" || worker.ResourcePath != "platform/workers/tu-pian-chu-li" {
+	raw = call(http.MethodPost, base+"/workers", `{"name":"tu-pian-chu-li"}`, 201)
+	if err := json.Unmarshal(raw, &worker); err != nil || worker.Locator != "tu-pian-chu-li" || worker.Name != "tu-pian-chu-li" || worker.ResourcePath != "platform/workers/tu-pian-chu-li" {
 		t.Fatalf("Worker response: %s (%v)", raw, err)
 	}
 	const workerRoute = base + "/workers/tu-pian-chu-li"
-	call(http.MethodPost, base+"/workers", `{"name":"TU PIAN CHU LI"}`, 409)
+	call(http.MethodPost, base+"/workers", `{"name":"TU PIAN CHU LI"}`, 422)
 	call(http.MethodPost, base+"/models", `{"name":"图片处理"}`, 201)
-	call(http.MethodPost, "/api/v1/orgs/org-b/workers", `{"name":"图片处理"}`, 201)
-	call(http.MethodPatch, workerRoute, `{"name":"改名后的 Worker","expected_revision":1}`, 200)
+	call(http.MethodPost, "/api/v1/orgs/org-b/workers", `{"name":"tu-pian-chu-li"}`, 409)
+	call(http.MethodPatch, workerRoute, `{"name":"renamed","expected_revision":1}`, 422)
 	call(http.MethodGet, workerRoute+"/overview", "", 200)
 	call(http.MethodGet, base+"/workers?worker=tu-pian-chu-li", "", 200)
 	call(http.MethodPost, "/api/v1/authz/check", `{"action":"worker.read","resource_kind":"worker","resource_id":"platform/workers/tu-pian-chu-li"}`, 200)

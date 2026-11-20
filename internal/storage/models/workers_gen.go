@@ -8,6 +8,14 @@ import (
 	"github.com/uptrace/bun"
 )
 
+type AddressClaim struct {
+	bun.BaseModel `bun:"table:krun_worker_address_claims,alias:krun_worker_address_claims"`
+	Label         string     `bun:"label,pk"`
+	OwnerKind     string     `bun:"owner_kind"`
+	OwnerID       string     `bun:"owner_id"`
+	ExpiresAt     *time.Time `bun:"expires_at"`
+}
+
 type Worker struct {
 	bun.BaseModel       `bun:"table:krun_workers,alias:krun_workers"`
 	WorkerID            string          `bun:"worker_id,pk"`

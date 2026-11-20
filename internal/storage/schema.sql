@@ -117,6 +117,15 @@ CREATE TABLE IF NOT EXISTS krun_resources (
 
 CREATE UNIQUE INDEX IF NOT EXISTS krun_resources_locator ON krun_resources(org_id, kind, locator) WHERE locator <> '';
 
+CREATE TABLE IF NOT EXISTS krun_worker_address_claims (
+ label text PRIMARY KEY,
+ owner_kind text NOT NULL,
+ owner_id text NOT NULL,
+ expires_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS krun_worker_address_claims_owner ON krun_worker_address_claims(owner_kind, owner_id);
+CREATE INDEX IF NOT EXISTS krun_worker_address_claims_expiry ON krun_worker_address_claims(expires_at) WHERE expires_at IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS krun_resources_org_kind_cursor ON krun_resources (org_id, kind, resource_id COLLATE "C");
 
 CREATE TABLE IF NOT EXISTS krun_api_keys (

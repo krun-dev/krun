@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/krun-dev/krun/internal/domain"
@@ -145,6 +146,12 @@ func saveManagedHostnameRow(ctx context.Context, tx pgx.Tx, item domain.ManagedH
 	var err error
 
 	if revision == 0 {
+		if item.SharesWorkerDomain {
+			label, _, _ := strings.Cut(item.Host, ".")
+			if err := claimWorkerAddress(ctx, tx, label, "hostname", item.Organization+"/"+label); err != nil {
+				return item, err
+			}
+		}
 		err = tx.QueryRow(ctx, `
 			INSERT INTO krun_worker_hostnames(host,org_id,suffix_id,gateway_managed,domain_type) VALUES ($1,$2,$3,$4,$5)
 			ON CONFLICT (host) DO NOTHING RETURNING revision`, item.Host, item.Organization, item.SuffixID, item.GatewayManaged, item.Type).Scan(&item.Revision)
