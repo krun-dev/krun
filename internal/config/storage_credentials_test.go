@@ -18,6 +18,18 @@ func objectStorageExample() *WorkerObjectStorageConfig {
 	}
 }
 
+func TestTOSPrivateEndpoint(t *testing.T) {
+	c := objectStorageExample()
+	c.Stores[0].Endpoint = "https://tos-s3-cn-beijing.ivolces.com"
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	c.Stores[0].Endpoint = "https://tos-s3-cn-shanghai.ivolces.com"
+	if err := c.Validate(); err == nil {
+		t.Fatal("endpoint from another region must be rejected")
+	}
+}
+
 func TestObjectStorageValidation(t *testing.T) {
 	for _, test := range []struct {
 		name   string
