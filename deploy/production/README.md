@@ -146,20 +146,6 @@ Gateway 的 namespace、listener、HTTP 端口、namespace selector 或状态不
 会在 apply 前停止。Kubernetes API 版本为 apps/v1、policy/v1、networking.k8s.io/v1
 和 gateway.networking.k8s.io/v1。不会安装/升级公司 Gateway API 或 kgateway CRD。
 
-## 单独渲染 Runtime Deployment
-
-控制面部署在集群外时，可使用同一主配置单独生成 serving Runtime Deployment：
-
-```sh
-go run ./cmd/krun-deploy --config "$MAIN_YAML" --out "$PRIVATE_OUTPUT" --runtime-only
-```
-
-输出 `runtime-deployments.yaml`，每个 serving pool 一个 Deployment。`deployment.runtime_node_selector`
-和 `deployment.runtime_tolerations` 使用 Kubernetes 节点标签和 toleration 字段，作用于所有
-serving Runtime，不影响控制面和 validator。该文件不创建 Deployment 引用的 ConfigMap、Secret、
-Service、网络策略或 Gateway；部署前需确认这些资源和凭据已经由部署侧准备并与当前配置一致。
-配置和密钥变化会影响 Pod 的 hash，输出必须使用实际生产值生成。
-
 ## 首次初始化与验收
 
 1. 验证公司 HTTPS 入口的 `/`、`/assets/*`、`/api/healthz`；未知静态路径应为 404。
