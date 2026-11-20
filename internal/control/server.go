@@ -306,7 +306,7 @@ func (s *Server) cookie(r *http.Request, kind string) string {
 }
 
 func (s *Server) validCSRF(r *http.Request, expected string) bool {
-	if r.Header.Get("Origin") != s.Config.PublicURL {
+	if origin := s.requestOrigin(r); origin == "" || r.Header.Get("Origin") != origin {
 		return false
 	}
 	value := r.Header.Get("X-CSRF-Token")
@@ -628,7 +628,7 @@ func (s *Server) providersHandler(w http.ResponseWriter, r *http.Request) {
 // csrfHandler issues the token a browser needs before a mutating request. It
 // touches only the session or browser row involved.
 func (s *Server) csrfHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Origin") != s.Config.PublicURL {
+	if origin := s.requestOrigin(r); origin == "" || r.Header.Get("Origin") != origin {
 		s.writeError(w, r, problem(403, "CSRF_INVALID", "CSRF verification failed"))
 		return
 	}

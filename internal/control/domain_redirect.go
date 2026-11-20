@@ -7,6 +7,26 @@ import (
 	"strings"
 )
 
+func (s *Server) requestOrigin(r *http.Request) string {
+	for _, origin := range []string{s.Config.PublicURL, s.redirectOrigin()} {
+		if origin == "" {
+			continue
+		}
+		u, err := url.Parse(origin)
+		if err == nil && strings.EqualFold(u.Host, r.Host) {
+			return strings.TrimSuffix(origin, "/")
+		}
+	}
+	return s.Config.PublicURL
+}
+
+func (s *Server) redirectOrigin() string {
+	if s.Config.DomainRedirect == nil {
+		return ""
+	}
+	return strings.TrimSuffix(s.Config.DomainRedirect.TargetURL, "/")
+}
+
 func (s *Server) consoleDomainRedirect(source *url.URL) func(http.ResponseWriter, *http.Request) bool {
 	redirect := s.Config.DomainRedirect
 	if redirect == nil {

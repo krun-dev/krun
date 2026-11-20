@@ -59,7 +59,7 @@ func (s *Server) loginHandler(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	redirect := p.Begin(challenge.State, challenge.Verifier, challenge.Nonce)
+	redirect := s.identityProviderForRequest(p, r).Begin(challenge.State, challenge.Verifier, challenge.Nonce)
 	if r.Header.Get("Accept") == "application/json" {
 		s.json(w, 200, map[string]string{"redirect_url": redirect})
 		return
@@ -92,7 +92,7 @@ func (s *Server) callbackHandler(w http.ResponseWriter, r *http.Request) {
 		s.callbackError(w, r, "AUTH_UPSTREAM_DENIED")
 		return
 	}
-	identity, e := p.Complete(r.Context(), r.URL.Query().Get("code"), tx.Verifier, tx.Nonce)
+	identity, e := s.identityProviderForRequest(p, r).Complete(r.Context(), r.URL.Query().Get("code"), tx.Verifier, tx.Nonce)
 	if e != nil {
 		failure := &identityprovider.ProviderFailure{Stage: "identity", Reason: "invalid_upstream_response"}
 		var diagnostic *identityprovider.ProviderFailure
@@ -122,6 +122,18 @@ func (s *Server) callbackHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setCookie(w, "session", sessionToken, 8*3600)
 	http.Redirect(w, r, tx.ReturnTo, http.StatusSeeOther)
+}
+
+func (s *Server) identityProviderForRequest(p *identityprovider.Provider, r *http.Request) *identityprovider.Provider {
+	origin := s.requestOrigin(r)
+	if origin == "" || p.Oauth == nil {
+		return p
+	}
+	provider := *p
+	oauth := *p.Oauth
+	oauth.RedirectURL = origin + "/api/auth/" + p.Config.ID + "/callback"
+	provider.Oauth = &oauth
+	return &provider
 }
 
 // finishLogin creates or refreshes the user and issues a session. The user,

@@ -18,13 +18,17 @@ type Unavailable struct{ Cause error }
 
 func (e *Unavailable) Error() string { return "repository OAuth transport unavailable" }
 func (e *Unavailable) Unwrap() error { return e.Cause }
-func (c *Client) Exchange(ctx context.Context, provider appconfig.WorkerRepositoryProvider, code string) (Grant, error) {
+func (c *Client) Exchange(ctx context.Context, provider appconfig.WorkerRepositoryProvider, code, origin string) (Grant, error) {
 	confined, cancel, err := c.RepositoryOAuthContext(ctx, provider)
 	if err != nil {
 		return Grant{}, &Unavailable{Cause: err}
 	}
 	defer cancel()
-	token, err := c.RepositoryOAuthConfig(provider).Exchange(confined, code)
+	oauth := c.RepositoryOAuthConfig(provider)
+	if origin != "" {
+		oauth.RedirectURL = origin + "/api/v1/workers/repository/" + provider.ID + "/callback"
+	}
+	token, err := oauth.Exchange(confined, code)
 	if err != nil {
 		return Grant{}, err
 	}

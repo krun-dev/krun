@@ -8,8 +8,44 @@ import (
 	"path/filepath"
 	"testing"
 
+	identityprovider "github.com/krun-dev/krun/internal/adapters/identity"
 	appconfig "github.com/krun-dev/krun/internal/config"
+	"golang.org/x/oauth2"
 )
+
+func TestDomainRedirectAuthenticationOrigins(t *testing.T) {
+	s := &Server{Config: appconfig.Config{
+		PublicURL:      "https://public.example.com",
+		DomainRedirect: &appconfig.DomainRedirect{TargetURL: "https://internal.example.com"},
+	}}
+	p := &identityprovider.Provider{
+		Config: appconfig.ProviderConfig{ID: "company"},
+		Oauth:  &oauth2.Config{RedirectURL: "https://public.example.com/api/auth/company/callback"},
+	}
+	for _, tc := range []struct {
+		host, origin, wantCallback string
+		valid                      bool
+	}{
+		{"public.example.com", "https://public.example.com", "https://public.example.com/api/auth/company/callback", true},
+		{"internal.example.com", "https://internal.example.com", "https://internal.example.com/api/auth/company/callback", true},
+		{"internal.example.com", "https://public.example.com", "https://internal.example.com/api/auth/company/callback", false},
+		{"evil.example.com", "https://internal.example.com", "https://public.example.com/api/auth/company/callback", false},
+		{"evil.example.com", "", "https://public.example.com/api/auth/company/callback", false},
+	} {
+		r := httptest.NewRequest(http.MethodPost, "https://"+tc.host+"/api/auth/csrf", nil)
+		r.Header.Set("Origin", tc.origin)
+		r.Header.Set("X-CSRF-Token", "expected")
+		if got := s.validCSRF(r, "expected"); got != tc.valid {
+			t.Fatalf("host %s origin %s: validCSRF = %v", tc.host, tc.origin, got)
+		}
+		if got := s.identityProviderForRequest(p, r).Oauth.RedirectURL; got != tc.wantCallback {
+			t.Fatalf("host %s: callback = %q", tc.host, got)
+		}
+	}
+	if p.Oauth.RedirectURL != "https://public.example.com/api/auth/company/callback" {
+		t.Fatal("request changed the shared OAuth configuration")
+	}
+}
 
 func TestConsoleDomainRedirect(t *testing.T) {
 	const source = "https://console.example.com"
