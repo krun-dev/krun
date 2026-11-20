@@ -32,6 +32,9 @@ func (c *WorkersConfig) Validate() error {
 	if err := c.ValidateRepositoryProviders(); err != nil {
 		return err
 	}
+	if err := c.validateBuilderJob(); err != nil {
+		return err
+	}
 	if c.BuilderPullPolicy == "" {
 		c.BuilderPullPolicy = "IfNotPresent"
 	}

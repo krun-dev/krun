@@ -18,13 +18,17 @@ import (
 )
 
 type Client struct {
-	Base           string
-	TokenFile      string
-	Client         *http.Client
-	Namespace      string
-	NpmRegistry    string
-	runtimeClass   string
-	timeoutSeconds int
+	Base                  string
+	TokenFile             string
+	Client                *http.Client
+	Namespace             string
+	NpmRegistry           string
+	runtimeClass          string
+	timeoutSeconds        int
+	builderBuildResources appconfig.BuilderResources
+	builderPackResources  appconfig.BuilderResources
+	builderNodeSelector   map[string]string
+	builderTolerations    []appconfig.BuilderToleration
 }
 
 type WorkerKubeError struct {
@@ -56,12 +60,16 @@ func New(config *appconfig.WorkersConfig) (*Client, error) {
 		return nil, errors.New("empty Kubernetes bearer token")
 	}
 	return &Client{
-		Base:           config.KubernetesAPI,
-		TokenFile:      config.KubernetesTokenFile,
-		Namespace:      config.Namespace,
-		NpmRegistry:    config.NPMRegistry,
-		runtimeClass:   config.BuilderRuntimeClass,
-		timeoutSeconds: config.BuilderTimeoutSeconds,
+		Base:                  config.KubernetesAPI,
+		TokenFile:             config.KubernetesTokenFile,
+		Namespace:             config.Namespace,
+		NpmRegistry:           config.NPMRegistry,
+		runtimeClass:          config.BuilderRuntimeClass,
+		timeoutSeconds:        config.BuilderTimeoutSeconds,
+		builderBuildResources: config.BuilderBuildResources,
+		builderPackResources:  config.BuilderPackResources,
+		builderNodeSelector:   config.BuilderNodeSelector,
+		builderTolerations:    config.BuilderTolerations,
 		Client: &http.Client{
 			Timeout: 10 * time.Second,
 			Transport: &http.Transport{
