@@ -67,6 +67,7 @@ type Server struct {
 	providers          map[string]*identityprovider.Provider
 	trustedProxies     []*net.IPNet
 	sendEmail          func(context.Context, string, string, string) error
+	redirectServer     *Server
 }
 
 func NewServer(ctx context.Context, c appconfig.Config, store *Store) (*Server, error) {
@@ -114,6 +115,13 @@ func NewServer(ctx context.Context, c appconfig.Config, store *Store) (*Server, 
 			return nil, err
 		}
 	}
+	s.initCloudflare()
+	s.routes()
+	s.initRedirectServer()
+	return s, nil
+}
+
+func (s *Server) initCloudflare() {
 	s.cf = &cfcompat.Server{
 		Config:      &s.Config,
 		Store:       s.Store,
@@ -146,8 +154,6 @@ func NewServer(ctx context.Context, c appconfig.Config, store *Store) (*Server, 
 		JSON:           s.json,
 		WriteError:     s.writeError,
 	}
-	s.routes()
-	return s, nil
 }
 
 func (s *Server) routes() {
@@ -240,6 +246,10 @@ func (s *Server) routes() {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.redirectServer != nil && sameOriginHost(r.Host, s.redirectServer.Config.PublicURL) {
+		s.redirectServer.ServeHTTP(w, r)
+		return
+	}
 	w.Header().Set("Content-Language", localize.RequestLanguage(r.Header.Get("Accept-Language")))
 	w.Header().Add("Vary", "Accept-Language")
 	r.Header.Set("X-Krun-Request-ID", randomID("req"))
