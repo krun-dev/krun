@@ -27,15 +27,13 @@ flowchart LR
 - `workers/runtime/Dockerfile`、`workers/builder/Dockerfile`：固定依赖的实际运行/构建镜像。
 - `config/production.example.yaml`：完整主配置；deployment 输入也在这同一份文件。
 - `config/test.example.yaml`：内网、Office、公网三个独立网关/运行池的完整测试模板。
-- `cmd/krun-deploy`：离线渲染 Secret、ConfigMap、Deployment、Service、RBAC、NetworkPolicy、PDB、HTTPRoute。
 - `scripts/build-deployment.sh`：构建三个镜像，只有显式 `--push` 才上传。
 - `scripts/package-console.sh`：静态检查并打包完整 `dist/console/`（含用户文档和 CLI 下载），不启动 Node 服务或自动上传。
-- `scripts/deploy-production.sh`：默认只渲染；写集群必须同时传 `--context` 和 `--apply`。
-- `gateway.example.yaml`：可选的公司网关管理员参考配置，不被部署脚本自动应用。
+- `gateway.example.yaml`：可选的公司网关管理员参考配置，由部署方按需维护。
 
 ## 基础设施契约
 
-1. 使用专用 namespace；渲染器管理该 namespace 的 default ServiceAccount，给 builder
+1. 使用专用 namespace；部署方管理该 namespace 的 default ServiceAccount，给 builder
    配置镜像拉取 Secret，并设置默认不挂载 API Token。不能复用有其他业务的 namespace。
 2. Gateway 位于独立 namespace，使用 HTTP listener，默认端口 8080，hostname 留空。
    `allowedRoutes` 允许 `app.kubernetes.io/part-of: krun` 的 namespace，且 Gateway 必须
@@ -43,16 +41,15 @@ flowchart LR
    若 listener 为其他 HTTP 端口，可在主配置 `workers.gateways[].base` 指定其集群
    Service origin，例如 `http://krun-internal.kgateway-system.svc:80`，不能使用 SSH 地址。
    数据面 Service 名须与 Gateway 名一致，Pod 带
-   `gateway.networking.k8s.io/gateway-name: <Gateway 名>` 标签，生成的网络策略依此放行。
+   `gateway.networking.k8s.io/gateway-name: <Gateway 名>` 标签，网络策略需据此放行。
    selfManaged Gateway 的 Service/数据面由公司另行部署，单独创建 Gateway 对象并不会提供入口。
 3. `gateway.example.yaml` 使用 kgateway GatewayParameters 将数据面 Service 设为
    ClusterIP；TLS 和内网入口仍由公司管理。参考
    [kgateway API](https://kgateway.dev/docs/envoy/latest/reference/api/)；按公司安装版本审查 CRD。
-4. 控制台域名如 `krun.example.com`；业务域名另设 `workers.example.com`。查看渲染后的
-   summary，为 `*.workers.example.com` 和 `static.workers.example.com` 配置 DNS/TLS。
+4. 控制台域名如 `krun.example.com`；业务域名另设 `workers.example.com`。为 `*.workers.example.com` 和 `static.workers.example.com` 配置 DNS/TLS。
    Worker 地址使用 `w-<slug>-<environment>.workers.example.com`，不包含 pool hash。
    每个业务 domain 通过 Network Profile 绑定唯一 pool，扩容使用该 pool 的副本数。
-5. 渲染器只生成控制台 `/api` 到 Go 的 HTTPRoute，不创建前端代理 Deployment。公司
+5. 部署方配置控制台 `/api` 到 Go 的 HTTPRoute。公司
    CDN / 入口代理在同一个 origin 下将 `/`、`/assets/*` 回源 OSS，其他静态路径返回 404。
 6. 静态发布平台负责 OSS 的访问权限与私有回源。不要把制品桶当作控制台公开静态桶。
 7. 集群 CNI 必须执行 NetworkPolicy，控制面到 Kubernetes API、数据库、SSO/Git、STS、
@@ -63,7 +60,7 @@ flowchart LR
 
 部署工具机/CI 需要 Go 1.26、Node.js 24/npm、Python 3、Docker 和 kubectl；集群运行期
 不需要这些构建工具。首次安装者需要创建专用 namespace、在其中管理清单资源，以及
-在 Gateway namespace 创建对应的只读 Role/RoleBinding；应用本身只获得生成的有限权限。
+在 Gateway namespace 创建对应的只读 Role/RoleBinding；应用本身只获得所需的有限权限。
 
 在 CI/密钥平台维护一份主 YAML，以 `config/production.example.yaml` 为起点，填充公司
 实际变量。需要本地验证时使用唯一 `.data/dev.yaml`，不要新建第二份本地应用 YAML，
@@ -90,10 +87,8 @@ flowchart LR
 base64url 编码并去掉 `=`。密钥只在密钥平台或 gitignored 主配置中保存；不要每次
 发布重新生成 token/key，仍有保留 Version 引用的旧加密 key 不能删除。
 
-渲染器拒绝开发模式、local builder、`Never` 拉取策略、managed/匿名制品存储、SSH
-管理地址、示例凭据、全零加密 key，以及共享系统 namespace。多个 pool 会各自生成
-serving、可选共享 validator 与网络策略；多个 Gateway 时必须在 `deployment.console_gateway` 指定
-控制台使用的 Gateway ID，所有 Gateway 都要通过预检。每个业务 domain 必须经 Profile 唯一选择一个运行池。
+生产部署应使用独立 namespace、受限的 ServiceAccount 和可拉取的镜像。每个业务
+域名必须经 Network Profile 唯一选择一个运行池；部署方负责配置各池的 Runtime、网络策略和 Gateway。
 
 ## 构建与打包
 
@@ -114,37 +109,10 @@ scripts/package-console.sh .data/console-release
 `.data/` 或 `dist/` 的其他内容。源站需要支持正确的 JS/CSS MIME 类型。入口 no-store，
 带 hash 的 assets 长期缓存由 CDN / 静态源站配置落实。
 
-## 渲染、检查、部署
+## 部署
 
-`MAIN_YAML`、`PRIVATE_OUTPUT` 和 `COMPANY_CONTEXT` 都由操作者显式指定，不依赖当前
-kubectl context。输出目录在 checkout 内时必须位于 `.data/`；也可使用 checkout 外的
-私有 CI 临时目录。
-
-```sh
-scripts/deploy-production.sh --config "$MAIN_YAML" --out "$PRIVATE_OUTPUT"
-```
-
-生成：
-
-- `resources.json`：**包含实际 Secret 的私有清单**，权限 0600；不要 cat、提交、发评审
-  或放到公共构建制品。Secret 使用 data，避免 stringData 与 server-side apply 的问题。
-- `summary.json`：无凭据的资源清单、DNS 后缀和 Gateway 要求，供审查。
-- `browser-cors.json`：业务桶所需 CORS 规则参考。合并到原规则，不覆盖已有业务规则；
-  TOS 原生 API 外层使用 CORSRules，按厂商控制台/API 配置。
-
-```sh
-# server dry-run 要求目标 namespace 已存在；它不会替你创建 namespace。
-scripts/deploy-production.sh --config "$MAIN_YAML" --out "$PRIVATE_OUTPUT" \
-  --context "$COMPANY_CONTEXT" --dry-run
-
-# 明确部署；预检现有 Gateway，apply 并等待所有 Deployment rollout。
-scripts/deploy-production.sh --config "$MAIN_YAML" --out "$PRIVATE_OUTPUT" \
-  --context "$COMPANY_CONTEXT" --apply
-```
-
-Gateway 的 namespace、listener、HTTP 端口、namespace selector 或状态不匹配时，脚本
-会在 apply 前停止。Kubernetes API 版本为 apps/v1、policy/v1、networking.k8s.io/v1
-和 gateway.networking.k8s.io/v1。不会安装/升级公司 Gateway API 或 kgateway CRD。
+Kubernetes 工作负载、Secret、Service、网络策略和 Gateway 由部署方按照目标环境维护和部署。
+部署前检查资源权限、镜像、域名、证书及网络连通性。
 
 ## 首次初始化与验收
 
@@ -160,7 +128,7 @@ kubectl --context "$COMPANY_CONTEXT" -n "$NAMESPACE" exec deployment/krun-contro
 4. 绑定真实测试仓库，完成构建、validator 校验、发布、ACK、业务调用和回滚。
 5. 检查 builder Job 没有 API Token，serving 和 validator 凭据不同，管理端口/内部
    Runtime API 无公网路由。Go 只有 namespace Role，不授予 cluster-admin。
-6. 按 browser-cors.json 合并业务桶 CORS，测试浏览器真实 PUT、下载、删除和 R2 读取。
+6. 配置业务桶 CORS，测试浏览器真实 PUT、下载、删除和 R2 读取。
    CSP connect-src 由静态发布平台列入确切对象存储 origin。
 7. 在公司专用验收环境完成 UI/E2E。仓库 UI 的 console workflow 使用 kind-git fixture，
    不能直接拿公司真实仓库代替该 fixture；生产验收应按上面的实际业务步骤执行。
@@ -252,7 +220,7 @@ FQDN 白名单。需要更严的目的域限制时，使用公司 CNI 的 FQDN �
 匹配。Office 使用 private 访问类型。控制台 API 通过 `deployment.console_gateway: office`
 仅挂在 Office Gateway；业务 HTTPRoute 在控制面运行后协调产生。
 
-Gateway 的 base 是同名 Service 的预期集群地址。渲染器不会创建或修改 Gateway
+Gateway 的 base 是同名 Service 的预期集群地址。部署方负责 Gateway
 及其 Service；selfManaged Gateway 若暂未创建 Service，必须在实际验收前补齐。
 不使用 hostNetwork。仅有 Gateway `Programmed=True` 不表示外部入口已可访问。
 
@@ -261,14 +229,13 @@ Gateway 的 base 是同名 Service 的预期集群地址。渲染器不会创建
 制品和业务数据分别用其他私有前缀，不能因静态回源而公开整个共享桶。
 测试模板所有真实值用占位符；用户指定的私有 `test.yaml` 只通过 `--config` 显式加载。
 实际发布前必须验证 CNI 的 NetworkPolicy 执行能力、Gateway Service、DNS/TLS、SSO
-回调白名单、静态回源权限和镜像 tag；数据库与存储的 CIDR 快照变化时应重新生成。
+回调白名单、静态回源权限和镜像 tag；数据库与存储的 CIDR 变化时应更新网络策略。
 
 控制面运行时支持主 YAML 中的 `workers.kubernetes_kubeconfig_file` 和可选
 `workers.kubernetes_context`，用于本地/集群外控制面；配置方式见
-[本地开发](../../docs/local-dev.md#显式-kubeconfig)。本目录的标准集群内渲染器仍要求
-ServiceAccount 凭证，不读取或打包操作者的 kubeconfig。
+[本地开发](../../docs/local-dev.md#显式-kubeconfig)。集群内部署可使用受限的 ServiceAccount 凭证。
 
-候选校验默认复用业务 pool 的 Ready Pod，不额外渲染 validator。需要进程隔离时在主配置
+候选校验默认复用业务 pool 的 Ready Pod，不需要独立 validator。需要进程隔离时在主配置
 设置 `workers.validator_pool` 为已有 pool ID，所有业务 pool 共用该池的独立 validator。
 升级期间暂停发布，先升级 runtime 镜像再升级控制面后恢复发布；旧镜像不支持 `validation_protocol: 1` 时会等待。
 切换模式不自动删除旧 validator 资源；确认新模式可发布后显式清理。
