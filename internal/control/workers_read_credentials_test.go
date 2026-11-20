@@ -36,10 +36,10 @@ func TestRuntimeReadCredentialsScopeAndTransport(t *testing.T) {
 	s, store, _ := workerTestServer(t)
 	version := seedPublishedWorker(t, store)
 	c := s.Config.Workers
-	c.S3Prefix = "installation/dev"
-	c.S3RuntimeEndpoint = "https://storage.example.com"
-	c.S3Region = "us-east-1"
-	c.S3LocationID = "primary"
+	c.ArtifactStorage.Prefix = "installation/dev"
+	c.ArtifactStorage.RuntimeEndpoint = "https://storage.example.com"
+	c.ArtifactStorage.Region = "us-east-1"
+	c.ArtifactStorage.LocationID = "primary"
 	recorder := &readCredentialRecorder{}
 	s.workers = &workerapp.Controller{
 		Service: s.workerApplication(nil), Config: c, ReadCredentials: recorder,
@@ -52,8 +52,8 @@ func TestRuntimeReadCredentialsScopeAndTransport(t *testing.T) {
 	}
 	if err := store.Update(context.Background(), PartitionWorkers, func(st *State) error {
 		artifact := st.Workers.Artifacts[version.Artifact]
-		artifact.StorageLocation = c.S3LocationID
-		artifact.Bucket = c.S3Bucket
+		artifact.StorageLocation = c.ArtifactStorage.LocationID
+		artifact.Bucket = c.ArtifactStorage.Bucket
 		artifact.ObjectKey = "v1/org-a/sha256/" + artifact.ArchiveDigest + "/bundle.tar.gz"
 		st.Workers.Artifacts[artifact.ID] = artifact
 		return nil
@@ -97,7 +97,7 @@ func TestRuntimeReadCredentialsScopeAndTransport(t *testing.T) {
 			}
 			scope := recorder.scopes[len(recorder.scopes)-1]
 			if scope.Access != domain.StorageRead || scope.Organization != "org-a" ||
-				scope.Bucket != c.S3Bucket || scope.Prefix != "installation/dev/"+tc.prefix {
+				scope.Bucket != c.ArtifactStorage.Bucket || scope.Prefix != "installation/dev/"+tc.prefix {
 				t.Fatalf("incorrect read scope: %#v", scope)
 			}
 			before := len(recorder.scopes)
@@ -142,6 +142,48 @@ func TestRuntimeReadCredentialsScopeAndTransport(t *testing.T) {
 	raw, err := json.Marshal(domain.StorageReadGrant{Credentials: domain.StorageCredentials{SecretAccessKey: "session-secret"}})
 	if err != nil || string(raw) != "{}" {
 		t.Fatal("read grant leaked through default JSON serialization")
+	}
+}
+
+func TestRuntimeCheckpointCredentialsAreScopedToServingPoolAndEpoch(t *testing.T) {
+	s, store, _ := workerTestServer(t)
+	cfg := s.Config.Workers
+	cfg.ArtifactStorage.Credentials.Mode = "sts"
+	cfg.ArtifactStorage.Prefix = "private/artifacts"
+	cfg.ArtifactStorage.RuntimeEndpoint = "https://storage.example.com"
+	cfg.RuntimePools[0].ValidatorToken = "fixture-validator-token"
+	pool := cfg.RuntimePools[0]
+	recorder := &readCredentialRecorder{}
+	s.workers = &workerapp.Controller{Config: cfg, ReadCredentials: recorder}
+
+	head, err := store.ConfigPosition(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(token, poolID, epoch string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "/api/internal/workers/config/credentials?epoch="+epoch, nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("X-Runtime-Pool", poolID)
+		out := httptest.NewRecorder()
+		s.serveInternal(out, r)
+		return out
+	}
+	if got := request(pool.ValidatorToken, pool.ID, head.Epoch); got.Code != http.StatusForbidden {
+		t.Fatalf("validator grant status = %d", got.Code)
+	}
+	if got := request(pool.RuntimeToken, "other-pool", head.Epoch); got.Code != http.StatusForbidden {
+		t.Fatalf("cross-pool grant status = %d", got.Code)
+	}
+	if got := request(pool.RuntimeToken, pool.ID, "stale"); got.Code != http.StatusConflict {
+		t.Fatalf("stale epoch grant status = %d", got.Code)
+	}
+	if got := request(pool.RuntimeToken, pool.ID, head.Epoch); got.Code != http.StatusOK ||
+		got.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected serving grant response: %d", got.Code)
+	}
+	expected := "private/artifacts/" + workerapp.WorkerPoolConfigPrefix(pool.ID, head.Epoch)
+	if len(recorder.scopes) != 1 || recorder.scopes[0].Access != domain.StorageRead || recorder.scopes[0].Prefix != expected {
+		t.Fatalf("incorrect checkpoint scopes: %v", recorder.scopes)
 	}
 }
 

@@ -19,7 +19,7 @@ func (w *Controller) PutBytes(ctx context.Context, key string, data []byte, opts
 	if w.PutObject == nil {
 		return errors.New("object storage unavailable")
 	}
-	_, e := w.PutObject(ctx, w.Config.S3Bucket, key, bytes.NewReader(data), int64(len(data)), opts)
+	_, e := w.PutObject(ctx, w.Config.ArtifactStorage.Bucket, key, bytes.NewReader(data), int64(len(data)), opts)
 	return e
 }
 
@@ -28,17 +28,17 @@ var NewWorkerS3Endpoint = objectstore.NewWorkerS3Endpoint
 var NewWorkerS3 = objectstore.NewWorkerS3
 
 func (w *Controller) EnsureBucket(ctx context.Context) error {
-	if w.Config.S3BucketMode == "external" {
+	if w.Config.ArtifactStorage.BucketMode == "external" {
 		return nil
 	}
-	ok, e := w.S3.BucketExists(ctx, w.Config.S3Bucket)
+	ok, e := w.S3.BucketExists(ctx, w.Config.ArtifactStorage.Bucket)
 	if e != nil {
 		return e
 	}
 	if !ok {
-		e = w.S3.MakeBucket(ctx, w.Config.S3Bucket, objectstore.MakeBucketOptions{Region: w.Config.S3Region})
+		e = w.S3.MakeBucket(ctx, w.Config.ArtifactStorage.Bucket, objectstore.MakeBucketOptions{Region: w.Config.ArtifactStorage.Region})
 		if e != nil {
-			ok, check := w.S3.BucketExists(ctx, w.Config.S3Bucket)
+			ok, check := w.S3.BucketExists(ctx, w.Config.ArtifactStorage.Bucket)
 			if check == nil && ok {
 				return w.EnsureAssetPolicy(ctx)
 			}
@@ -53,10 +53,10 @@ func (w *Controller) EnsureBucket(ctx context.Context) error {
 // A managed bucket is dedicated to krun. Remove any legacy anonymous policy
 // before publishing snapshots. External buckets remain under operator control.
 func (w *Controller) EnsureAssetPolicy(ctx context.Context) error {
-	if w.Config.S3BucketMode == "external" {
+	if w.Config.ArtifactStorage.BucketMode == "external" {
 		return nil
 	}
-	err := w.S3.SetBucketPolicy(ctx, w.Config.S3Bucket, "")
+	err := w.S3.SetBucketPolicy(ctx, w.Config.ArtifactStorage.Bucket, "")
 	if objectstore.ToErrorResponse(err).Code == "NoSuchBucketPolicy" {
 		return nil
 	}
@@ -64,7 +64,7 @@ func (w *Controller) EnsureAssetPolicy(ctx context.Context) error {
 }
 
 func (w *Controller) GetObject(ctx context.Context, key string) ([]byte, error) {
-	obj, e := w.S3.GetObject(ctx, w.Config.S3Bucket, key, objectstore.GetObjectOptions{})
+	obj, e := w.S3.GetObject(ctx, w.Config.ArtifactStorage.Bucket, key, objectstore.GetObjectOptions{})
 	if e != nil {
 		return nil, e
 	}
@@ -80,7 +80,7 @@ func (w *Controller) GetObject(ctx context.Context, key string) ([]byte, error) 
 }
 
 func (w *Controller) PutImmutable(ctx context.Context, key string, raw []byte) error {
-	obj, e := w.S3.StatObject(ctx, w.Config.S3Bucket, key, objectstore.StatObjectOptions{})
+	obj, e := w.S3.StatObject(ctx, w.Config.ArtifactStorage.Bucket, key, objectstore.StatObjectOptions{})
 	if e == nil {
 		if obj.Size != int64(len(raw)) {
 			return errors.New("immutable object size conflict")
@@ -116,7 +116,7 @@ func (w *Controller) BuilderS3() objectstore.Client {
 
 func (w *Controller) UploadURL(ctx context.Context, b domain.WorkerBuild) (string, error) {
 
-	u, e := w.BuilderS3().PresignedPutObject(ctx, w.Config.S3Bucket, WorkerUploadKey(b), w.BuildURLTTL())
+	u, e := w.BuilderS3().PresignedPutObject(ctx, w.Config.ArtifactStorage.Bucket, WorkerUploadKey(b), w.BuildURLTTL())
 	if e != nil {
 		return "", e
 	}

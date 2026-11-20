@@ -38,10 +38,15 @@ func catalogConfig() *appconfig.WorkersConfig {
 			ID: "default", Name: "Default", Default: true, Approval: "none", Visibility: "public",
 			Requirements: appconfig.WorkerNetworkRequirements{Ingress: []string{"public", "private"}, PrivateEgress: "direct", PublicEgress: "direct"},
 		}},
-		S3Endpoint:  "http://127.0.0.1:9000",
-		S3Bucket:    "krun-artifacts",
-		S3AccessKey: "access",
-		S3SecretKey: "secret",
+		ArtifactStorage: appconfig.WorkerArtifactStorageConfig{
+			Endpoint: "http://127.0.0.1:9000",
+			Bucket:   "krun-artifacts",
+			Credentials: appconfig.ArtifactStorageCredentials{
+				AccessKeyID:     "access",
+				SecretAccessKey: "secret",
+			},
+		},
+
 		Gateways: []appconfig.WorkerGateway{
 			{ID: "internal", Name: "workers-mvp", Namespace: "kgateway-system", Section: "private", Base: "http://127.0.0.1:38080"},
 			{ID: "external", Name: "workers-public", Namespace: "kgateway-system", Section: "public", Base: "http://127.0.0.1:38081"},
@@ -61,8 +66,8 @@ func TestCatalogValidationAndDefaults(t *testing.T) {
 	if c.Domains[0].StaticDomain != "static.workers.test" {
 		t.Fatalf("static domain default: %q", c.Domains[0].StaticDomain)
 	}
-	if c.S3BuilderEndpoint != c.S3Endpoint || c.S3RuntimeEndpoint != c.S3BuilderEndpoint {
-		t.Fatalf("storage endpoint defaults: control=%q builder=%q runtime=%q", c.S3Endpoint, c.S3BuilderEndpoint, c.S3RuntimeEndpoint)
+	if c.ArtifactStorage.BuilderEndpoint != c.ArtifactStorage.Endpoint || c.ArtifactStorage.RuntimeEndpoint != c.ArtifactStorage.BuilderEndpoint {
+		t.Fatalf("storage endpoint defaults: control=%q builder=%q runtime=%q", c.ArtifactStorage.Endpoint, c.ArtifactStorage.BuilderEndpoint, c.ArtifactStorage.RuntimeEndpoint)
 	}
 	if c.NPMRegistry != "https://registry.npmjs.org/" {
 		t.Fatalf("npm registry default: %q", c.NPMRegistry)
@@ -247,18 +252,18 @@ func TestCatalogRejectsBrokenReferences(t *testing.T) {
 
 func TestRuntimeStorageEndpointValidation(t *testing.T) {
 	c := catalogConfig()
-	c.S3BuilderEndpoint = "http://builder.storage.test:9000"
-	c.S3RuntimeEndpoint = "http://static-assets.workers-mvp.svc:9000"
+	c.ArtifactStorage.BuilderEndpoint = "http://builder.storage.test:9000"
+	c.ArtifactStorage.RuntimeEndpoint = "http://static-assets.workers-mvp.svc:9000"
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if c.S3RuntimeEndpoint != "http://static-assets.workers-mvp.svc:9000" {
-		t.Fatalf("runtime endpoint changed: %q", c.S3RuntimeEndpoint)
+	if c.ArtifactStorage.RuntimeEndpoint != "http://static-assets.workers-mvp.svc:9000" {
+		t.Fatalf("runtime endpoint changed: %q", c.ArtifactStorage.RuntimeEndpoint)
 	}
 
 	c = catalogConfig()
-	c.S3RuntimeEndpoint = "file:///tmp/storage"
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "runtime endpoint") {
+	c.ArtifactStorage.RuntimeEndpoint = "file:///tmp/storage"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "artifact_storage.runtime_endpoint") {
 		t.Fatalf("invalid runtime endpoint accepted: %v", err)
 	}
 }
@@ -915,8 +920,8 @@ func TestProcessOperationValidationMembers(t *testing.T) {
 			defer apiServer.Close()
 
 			c := testWorkersConfig()
-			c.S3Endpoint, c.S3BuilderEndpoint = s3Server.URL, s3Server.URL
-			c.S3Bucket, c.S3AccessKey, c.S3SecretKey, c.S3LocationID = "artifacts", "access", "secret", "test"
+			c.ArtifactStorage.Endpoint, c.ArtifactStorage.BuilderEndpoint = s3Server.URL, s3Server.URL
+			c.ArtifactStorage.Bucket, c.ArtifactStorage.Credentials.AccessKeyID, c.ArtifactStorage.Credentials.SecretAccessKey, c.ArtifactStorage.LocationID = "artifacts", "access", "secret", "test"
 			c.SecretsActiveKey = "v1"
 			c.SecretsKeys = map[string]string{"v1": "ERERERERERERERERERERERERERERERERERERERERERE="}
 			if strings.HasPrefix(mode, "dedicated") || mode == "no-validator" {

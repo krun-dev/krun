@@ -23,7 +23,7 @@ func (w *Controller) ReadGrant(ctx context.Context, organization, resource, pref
 		Organization:          organization,
 		BucketID:              resource,
 		StoreID:               "artifacts",
-		Bucket:                w.Config.S3Bucket,
+		Bucket:                w.Config.ArtifactStorage.Bucket,
 		Prefix:                w.Config.S3Key(prefix),
 		Access:                domain.StorageRead,
 		AuthorizationRevision: 1,
@@ -31,18 +31,18 @@ func (w *Controller) ReadGrant(ctx context.Context, organization, resource, pref
 	if err != nil {
 		return domain.StorageReadGrant{}, domain.Unavailable("STORAGE_CREDENTIALS_UNAVAILABLE", "Runtime storage credentials unavailable")
 	}
-	endpoint, err := url.Parse(w.Config.S3RuntimeEndpoint)
+	endpoint, err := url.Parse(w.Config.ArtifactStorage.RuntimeEndpoint)
 	if err != nil {
 		return domain.StorageReadGrant{}, domain.Unavailable("STORAGE_UNAVAILABLE", "Runtime storage unavailable")
 	}
 	style := "path"
-	if w.Config.S3UsesVirtualHost(*endpoint, w.Config.S3Bucket) {
+	if w.Config.S3UsesVirtualHost(*endpoint, w.Config.ArtifactStorage.Bucket) {
 		style = "virtual"
 	}
 	return domain.StorageReadGrant{
-		Endpoint:        w.Config.S3RuntimeEndpoint,
-		Region:          w.Config.S3Region,
-		Bucket:          w.Config.S3Bucket,
+		Endpoint:        w.Config.ArtifactStorage.RuntimeEndpoint,
+		Region:          w.Config.ArtifactStorage.Region,
+		Bucket:          w.Config.ArtifactStorage.Bucket,
 		Prefix:          w.Config.S3Key(prefix),
 		AddressingStyle: style,
 		LeaseUntil:      time.Now().UTC().Add(5 * time.Minute),
@@ -51,7 +51,7 @@ func (w *Controller) ReadGrant(ctx context.Context, organization, resource, pref
 }
 
 func (w *Controller) ArtifactReadGrant(ctx context.Context, artifact domain.WorkerArtifact) (domain.StorageReadGrant, error) {
-	if artifact.StorageLocation != w.Config.S3LocationID || artifact.Bucket != w.Config.S3Bucket ||
+	if artifact.StorageLocation != w.Config.ArtifactStorage.LocationID || artifact.Bucket != w.Config.ArtifactStorage.Bucket ||
 		artifact.ObjectKey != "v1/"+artifact.Organization+"/sha256/"+artifact.ArchiveDigest+"/bundle.tar.gz" {
 		return domain.StorageReadGrant{}, domain.NotFound()
 	}

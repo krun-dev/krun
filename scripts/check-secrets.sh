@@ -52,11 +52,24 @@ for config_file in .data/dev.yaml .data/test.yaml; do
   db="$(sed -n 's/^db:[[:space:]]*//p' "$config_file" | head -1 | sed 's/^"//; s/"$//')"
   password="$(printf '%s' "$db" | sed -n 's#.*://[^:]*:\([^@]*\)@.*#\1#p')"
   check_value "database password" "$password"
-  minio="$(sed -n 's/^[[:space:]]*s3_endpoint:[[:space:]]*//p' "$config_file" | head -1 | sed 's/^"//; s/"$//; s#^[a-z]*://##; s#/.*##; s#:.*##')"
-  case "$minio" in
-    ""|127.0.0.1|localhost|::1|tos-s3-*.volces.com) ;;
-    *) check_value "minio host" "$minio" ;;
-  esac
+  while IFS= read -r endpoint; do
+    case "$endpoint" in
+      ""|\${*) continue ;;
+    esac
+    host="$(printf '%s' "$endpoint" | sed 's/^"//; s/"$//; s#^[a-z]*://##; s#/.*##; s#:.*##')"
+    case "$host" in
+      ""|127.0.0.1|localhost|::1|tos-s3-*.volces.com|tos-s3-*.ivolces.com) ;;
+      *) check_value "artifact storage host" "$host" ;;
+    esac
+  done < <(awk '
+    /^  artifact_storage:/ { artifact = 1; next }
+    /^  [^ ]/ { artifact = 0 }
+    artifact && /^    (endpoint|builder_endpoint|runtime_endpoint|log_read_endpoint):/ ||
+      /^  s3_(endpoint|builder_endpoint|runtime_endpoint|log_read_endpoint):/ {
+        sub(/^[^:]*:[[:space:]]*/, "")
+        print
+      }
+  ' "$config_file")
 done
 
 for file in "${files[@]}"; do

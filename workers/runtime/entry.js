@@ -753,8 +753,53 @@ async function platform(env, path, init = {}) {
   return response.json();
 }
 
+// Refresh during normal polling so the object store can still serve a
+// checkpoint when a route lookup temporarily cannot reach the control plane.
+async function checkpointGrant(env, refreshBefore = 5000) {
+  const epoch = view.epoch;
+  const key = epoch + "\0checkpoints";
+  const cached = readGrants.get(key);
+  if (usableReadGrant(cached) && Date.parse(cached.lease_until) > Date.now() + refreshBefore) {
+    return cached;
+  }
+  const grant = await platform(env, "/config/credentials?epoch=" + encodeURIComponent(epoch), {
+    method: "POST",
+  });
+  if (view.epoch !== epoch || !usableReadGrant(grant)) {
+    throw new Error("Checkpoint read grant unavailable");
+  }
+  lruPut(readGrants, key, grant, 1024);
+  return grant;
+}
+
+async function fetchCheckpoint(env, url, timeout) {
+  if (env.CONFIG_STORAGE_STS !== "1") {
+    return fetchConfiguration(env, url, timeout);
+  }
+  const epoch = view.epoch;
+  const base = env.CONFIG_BASE + "/epochs/" + epoch + "/";
+  if (!url.startsWith(base)) {
+    throw new Error("configuration URL outside checkpoint scope");
+  }
+  const name = url.slice(base.length);
+  if (!/^shards\/[a-f0-9]{2}\/(latest\.json|[0-9]+\.json\.gz)$/.test(name)) {
+    throw new Error("invalid checkpoint object name");
+  }
+  const grant = await checkpointGrant(env);
+  if (epoch !== view.epoch) {
+    throw new Error("checkpoint epoch changed");
+  }
+  const signed = await signRequest(grant, "GET", grant.prefix + name);
+  return fetch(signed.url, {
+    method: signed.method,
+    headers: signed.headers,
+    redirect: "manual",
+    signal: AbortSignal.timeout(timeout),
+  });
+}
+
 async function requestJSON(env, url, timeout) {
-  const response = await fetchConfiguration(env, url, timeout);
+  const response = await fetchCheckpoint(env, url, timeout);
 
   if (!response.ok) {
     throw new Error("config " + response.status);
@@ -764,7 +809,7 @@ async function requestJSON(env, url, timeout) {
 }
 
 async function requestBytes(env, url, timeout) {
-  const response = await fetchConfiguration(env, url, timeout);
+  const response = await fetchCheckpoint(env, url, timeout);
 
   if (!response.ok) {
     throw new Error("config " + response.status);
@@ -1276,12 +1321,18 @@ async function sendAck(env) {
 async function follow(env) {
   let backoff = 1000;
   let lastAck = 0;
+  let lastCheckpointCheck = 0;
 
   while (true) {
     lastLoop = Date.now();
 
     try {
       await ensureBootstrap(env);
+
+      if (env.CONFIG_STORAGE_STS === "1" && Date.now() - lastCheckpointCheck > 30000) {
+        lastCheckpointCheck = Date.now();
+        await checkpointGrant(env, 60000).catch(() => {});
+      }
 
       if (Date.now() - lastAck > 5000) {
         await sendAck(env);
@@ -1612,6 +1663,7 @@ const reservedBindings = new Set([
   "RUNTIME_POOL",
   "MANAGEMENT_TOKEN",
   "CONFIG_BASE",
+  "CONFIG_STORAGE_STS",
   "POD_NAME",
   "POD_UID",
   "ASSETS_CACHE_MAX",

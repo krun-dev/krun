@@ -57,9 +57,11 @@ func TestS3ObjectAddressing(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := WorkersConfig{
-				S3Bucket:          test.bucket,
-				S3Prefix:          "dev/run",
-				S3AddressingStyle: test.style,
+				ArtifactStorage: WorkerArtifactStorageConfig{
+					Bucket:          test.bucket,
+					Prefix:          "dev/run",
+					AddressingStyle: test.style,
+				},
 			}
 			if got := cfg.S3ObjectURL(test.endpoint, "config/latest.json"); got != test.want {
 				t.Fatalf("object URL = %q, want %q", got, test.want)

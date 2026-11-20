@@ -70,7 +70,7 @@ func (w *Controller) CollectWorkerObjects(ctx context.Context) error {
 		failures = append(failures, err)
 	}
 	for _, artifact := range artifacts {
-		if artifact.StorageLocation != w.Config.S3LocationID || artifact.Bucket != w.Config.S3Bucket {
+		if artifact.StorageLocation != w.Config.ArtifactStorage.LocationID || artifact.Bucket != w.Config.ArtifactStorage.Bucket {
 			blocked, blockErr := w.Service.Store.BlockGarbageArtifact(ctx, artifact.ID, w.Replica, artifact.UseRevision)
 			if blockErr != nil {
 				failures = append(failures, blockErr)
@@ -127,7 +127,7 @@ func (w *Controller) CollectWorkerObjects(ctx context.Context) error {
 			if !claimed {
 				continue
 			}
-			if removeErr := w.S3.RemoveObject(ctx, w.Config.S3Bucket, source.Key, objectstore.RemoveObjectOptions{}); removeErr != nil {
+			if removeErr := w.S3.RemoveObject(ctx, w.Config.ArtifactStorage.Bucket, source.Key, objectstore.RemoveObjectOptions{}); removeErr != nil {
 				failures = append(failures, removeErr)
 				continue
 			}
@@ -185,13 +185,13 @@ func (w *Controller) RemoveWorkerObjects(ctx context.Context, prefix string, rem
 		w.objectGCAfter = map[string]string{}
 	}
 	count := 0
-	for object := range w.S3.ListObjects(ctx, w.Config.S3Bucket, objectstore.ListObjectsOptions{Prefix: prefix, Recursive: true, StartAfter: w.objectGCAfter[prefix], MaxKeys: 500}) {
+	for object := range w.S3.ListObjects(ctx, w.Config.ArtifactStorage.Bucket, objectstore.ListObjectsOptions{Prefix: prefix, Recursive: true, StartAfter: w.objectGCAfter[prefix], MaxKeys: 500}) {
 		if object.Err != nil {
-			return object.Err
+			return fmt.Errorf("list artifact objects under %q: %w", prefix, object.Err)
 		}
 		if remove(object.Key, object.LastModified) {
-			if err := w.S3.RemoveObject(ctx, w.Config.S3Bucket, object.Key, objectstore.RemoveObjectOptions{}); err != nil {
-				return err
+			if err := w.S3.RemoveObject(ctx, w.Config.ArtifactStorage.Bucket, object.Key, objectstore.RemoveObjectOptions{}); err != nil {
+				return fmt.Errorf("delete expired artifact object under %q: %w", prefix, err)
 			}
 		}
 		w.objectGCAfter[prefix] = object.Key

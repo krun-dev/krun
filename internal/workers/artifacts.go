@@ -55,7 +55,7 @@ func (w *Controller) FinalizeUploadedBuild(ctx context.Context, b domain.WorkerB
 		return domain.WorkerArtifact{}, errors.New("artifact build profile does not match requested compatibility")
 	}
 	digest := securetoken.Digest(b.Organization + "/" + code.ArchiveDigest)
-	a := domain.WorkerArtifact{ID: "art-" + digest, Organization: b.Organization, State: "finalized", Profile: code.Profile, StorageLocation: w.Config.S3LocationID, Bucket: w.Config.S3Bucket, ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: append([]string(nil), code.CompatibilityFlags...), Size: len(raw), ObjectKey: "v1/" + b.Organization + "/sha256/" + code.ArchiveDigest + "/bundle.tar.gz", Created: time.Now().UTC()}
+	a := domain.WorkerArtifact{ID: "art-" + digest, Organization: b.Organization, State: "finalized", Profile: code.Profile, StorageLocation: w.Config.ArtifactStorage.LocationID, Bucket: w.Config.ArtifactStorage.Bucket, ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifest, ModuleDigest: code.Digest, CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: append([]string(nil), code.CompatibilityFlags...), Size: len(raw), ObjectKey: "v1/" + b.Organization + "/sha256/" + code.ArchiveDigest + "/bundle.tar.gz", Created: time.Now().UTC()}
 	if e := w.Service.Store.ReserveBuildArtifact(ctx, b.ID, owner, &a, "art_"+digest); e != nil {
 		return a, e
 	}
@@ -76,7 +76,7 @@ func (w *Controller) FinalizeUploadedBuild(ctx context.Context, b domain.WorkerB
 // a build and validating a version candidate; runtime cold loads verify the
 // same digests locally after downloading via the presigned URL.
 func (w *Controller) ArtifactCode(ctx context.Context, a domain.WorkerArtifact) (workerartifact.WorkerCode, error) {
-	if a.StorageLocation != w.Config.S3LocationID || a.Bucket != w.Config.S3Bucket {
+	if a.StorageLocation != w.Config.ArtifactStorage.LocationID || a.Bucket != w.Config.ArtifactStorage.Bucket {
 		return workerartifact.WorkerCode{}, errors.New("artifact storage location mismatch")
 	}
 	raw, e := w.GetObject(ctx, a.ObjectKey)

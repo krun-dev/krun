@@ -679,6 +679,76 @@ await check(
     assert(!downloads.some((key) => key.startsWith("config:snapshots/")));
   },
 );
+await check("STS checkpoint fallback signs with the pool session", async () => {
+  const env = makeEnv(null, []);
+  const prefix = "objects/private/config/pools/default/epochs/" + fixtureConfigEpoch + "/";
+  env.CONFIG_BASE = "http://config.test/private/config/pools/default";
+  env.CONFIG_STORAGE_STS = "1";
+  const shard = (await digest("w-test.workers.test")).slice(0, 2);
+  const snapshot = "shards/" + shard + "/1.json.gz";
+  const latest = "shards/" + shard + "/latest.json";
+  const raw = gzipSync(
+    JSON.stringify({
+      pool: "default",
+      config_epoch: fixtureConfigEpoch,
+      config_revision: 1,
+      routes: [{ host: "w-test.workers.test", path: "/", enabled: true, version: version.id }],
+      versions: { [version.id]: version },
+    }),
+  );
+  configObjects.set(prefix.slice("objects/".length) + snapshot, raw);
+  configObjects.set(
+    prefix.slice("objects/".length) + latest,
+    JSON.stringify({
+      config_epoch: fixtureConfigEpoch,
+      config_revision: 1,
+      snapshot,
+      sha256: await digest(raw),
+    }),
+  );
+
+  const platformFetch = env.PLATFORM.fetch;
+  env.PLATFORM.fetch = async (request) => {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/config/credentials")) {
+      assert.equal(request.method, "POST");
+      assert.equal(url.searchParams.get("epoch"), fixtureConfigEpoch);
+      return Response.json({
+        ...fixtureRead("http://config.test/index.html").storage,
+        prefix,
+      });
+    }
+    if (url.pathname.includes("/config/routes/")) {
+      return new Response(null, { status: 503 });
+    }
+    return platformFetch(request);
+  };
+
+  const originalFetch = globalThis.fetch;
+  const signedReads = [];
+  globalThis.fetch = async (input) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    if (url.hostname === "config.test") {
+      assert.equal(url.searchParams.get("X-Amz-Security-Token"), "fixture-session");
+      assert.ok(url.searchParams.has("X-Amz-Signature"));
+      signedReads.push(url.pathname);
+    }
+    return originalFetch(input);
+  };
+  try {
+    const mod = await freshEntry();
+    const response = await call(new mod.Private(env, {}), "/");
+    assert.equal(response.status, 200);
+    assert.deepEqual(signedReads, [
+      "/runtime-fixture/" + prefix + latest,
+      "/runtime-fixture/" + prefix + snapshot,
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    configObjects.delete(prefix.slice("objects/".length) + latest);
+    configObjects.delete(prefix.slice("objects/".length) + snapshot);
+  }
+});
 for (const pool of [undefined, "internal-a", "office-a", "public-a"]) {
   await check(`cold bootstrap requires the control plane for ${pool || "default"}`, async () => {
     configObjects.set(

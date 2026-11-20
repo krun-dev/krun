@@ -33,7 +33,7 @@ provider 错误只保留分类和经过过滤的 request ID，不保留上游错
 
 ## 主配置
 
-使用唯一主配置的 `workers.object_storage` 段，与制品存储的 `workers.s3_*` 分开。
+使用唯一主配置的 `workers.object_storage` 段，与制品存储的 `workers.artifact_storage` 分开。
 完整可加载模板见 `config/example.yaml` 的注释段；本地 static 模板见
 `config/development.example.yaml`。真实值只放 `.data/dev.yaml` 或该文件的环境变量引用。
 
@@ -75,17 +75,14 @@ static 返回的密钥拥有原有权限，不应提供给不可信业务代码�
 
 ## 制品与静态资产的 Runtime 读取
 
-主配置 `workers.s3_runtime_credentials` 可选择同一个 `tos_assume_role` provider。
-它使用 `workers.s3_runtime_endpoint`、`s3_region`、`s3_bucket`、`s3_prefix` 和寻址设置，
-不与业务 R2 的 bucket 或读写权限混用。完整注释示例及环境变量引用见 `config/example.yaml`。
-TOS 需要区域 HTTPS S3 端点和 virtual 寻址。STS 失败不会降级到静态凭据。
-省略该段时使用 `s3_access_key` / `s3_secret_key`，供本地 MinIO 等环境使用；
-也可显式配置 `type: static`。static 不具备云端会话限权，不应当作 STS 隔离。
+主配置通过 [制品存储](object-storage.md) 的 `credentials.mode` 选择 AK/SK 或 STS。
+STS 模式下，控制面的读写、列表、删除和构建预签名 URL 使用同一个 provider，并把会话限制在
+配置的桶和前缀。预签名 URL 只用剩余有效期覆盖 URL 生命周期的会话签发。
 
-Go 在签发前校验 Runtime 身份、pool、Version 或静态域可见性；临时凭据仅允许
-`GetObject`，范围为实际 `s3_prefix` 下的一个不可变制品目录或站点资产目录。
-不授予上传、删除、列举权限。签发复用有界 Manager，缓存最多 1024 个 scope，
-并发最多 8，超时 20 秒，会话请求期限 1 小时，提前 5 分钟刷新并附加抖动。
+Go 在签发 Runtime 授权前校验 Runtime 身份、pool、Version 或静态域可见性。
+临时凭据仅允许 `GetObject`，范围为一个不可变制品目录、站点资产目录或本池当前配置代次的
+快照目录。授予快照读取前校验 serving 身份及当前配置代次。Serving 在轮询配置时更新快照授权，
+路由查询暂时失败时用未过期的授权从对象存储读快照。
 
 内部响应使用 `Cache-Control: no-store`，凭据不进入公开资源、配置快照、持久化状态或业务 env。
 可信入口使用与 R2 相同的 SigV4 实现生成 60 秒有效的读取签名，并直接访问对象存储。
@@ -95,8 +92,7 @@ Go 在签发前校验 Runtime 身份、pool、Version 或静态域可见性；�
 本地租约不能撤销已经签发的云端权限。
 
 独立 validator 只从候选验证管理请求获得对应制品的只读授权，不申请 serving 资产凭据，
-也不获得业务 R2 授权。配置快照的签名读取保持既有实现；构建上传、控制台对象下载和
-日志下载仍按各自 API 返回预签名 URL。
+也不获得业务 R2 授权。构建上传和日志下载仍按各自 API 返回预签名 URL。
 
 ## 缓存与失效
 
@@ -158,8 +154,8 @@ KRUN_TEST_POSTGRES_URL="$TEST_DATABASE_URL" \
   -args -runtime-storage-config=../../.data/dev.yaml
 ```
 
-这项测试要求主配置显式选择 `s3_runtime_credentials.type: tos_assume_role`，不会回退到
+这项测试要求主配置显式选择 `artifact_storage.credentials.mode: sts`（或旧版 Runtime STS 配置），不会回退到
 静态凭据。元数据写入专用 PostgreSQL 测试库的独立 schema。权限 handler、生产模板生成的 serving / validator、
-STS 和对象存储均使用真实实现。测试仅在 `s3_prefix/integration-tests/<随机ID>/` 下创建
+STS 和对象存储均使用真实实现。测试仅在 `artifact_storage.prefix` 下的 `integration-tests/<随机ID>/` 下创建
 配置头、制品、清单和资产，验证配置签名读取、静态响应与缓存、代码执行、凭据不进入
 业务 env，以及云端对写入、删除、列举、相邻目录读取的拒绝，结束后删除对象并确认不存在。

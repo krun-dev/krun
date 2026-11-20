@@ -187,6 +187,7 @@ func (s *Server) routes() {
 	if s.Config.Workers != nil {
 		s.internalMux.HandleFunc("POST /api/internal/workers/static-assets/{prefix}/{organization}/{worker}/{digest}/credentials", s.workerRuntimeStaticAssetCredentials)
 		s.internalMux.HandleFunc("GET /api/internal/workers/config/snapshot", s.workerRuntimeConfigSnapshot)
+		s.internalMux.HandleFunc("POST /api/internal/workers/config/credentials", s.workerRuntimeConfigCredentials)
 		s.internalMux.HandleFunc("GET /api/internal/workers/config/changes", s.workerRuntimeConfigChanges)
 		s.internalMux.HandleFunc("GET /api/internal/workers/config/routes/{host}", s.workerRuntimeConfigRoute)
 		s.internalMux.HandleFunc("GET /api/internal/workers/versions/{version}/assets", s.workerRuntimeVersionAssets)

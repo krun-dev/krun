@@ -31,7 +31,7 @@ func (w *Controller) ImportModules(ctx context.Context, ref WorkerRef, actor dom
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = w.S3.RemoveObject(cleanup, w.Config.S3Bucket, WorkerUploadKey(b), objectstore.RemoveObjectOptions{})
+		_ = w.S3.RemoveObject(cleanup, w.Config.ArtifactStorage.Bucket, WorkerUploadKey(b), objectstore.RemoveObjectOptions{})
 	}()
 	if err = w.EnsureBucket(ctx); err != nil {
 		return b, err

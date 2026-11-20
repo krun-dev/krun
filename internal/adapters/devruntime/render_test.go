@@ -19,13 +19,18 @@ func TestExternalRenderSeparatesRuntimeCredentialsAndEnablesVerifiedTLS(t *testi
 	cfg := config.Config{
 		InternalListen: "0.0.0.0:9001",
 		Workers: &config.WorkersConfig{
-			ValidatorPool:     "default",
-			S3RuntimeEndpoint: "https://storage.example.com",
-			S3BucketMode:      "external",
-			S3Region:          "cn-beijing",
-			ConfigBaseURL:     "https://bucket.storage.example.com/dev/run/config",
-			S3AccessKey:       "fixture-access",
-			S3SecretKey:       "fixture-secret",
+			ValidatorPool: "default",
+			ArtifactStorage: config.WorkerArtifactStorageConfig{
+				RuntimeEndpoint: "https://storage.example.com",
+				BucketMode:      "external",
+				Region:          "cn-beijing",
+				ConfigBaseURL:   "https://bucket.storage.example.com/dev/run/config",
+				Credentials: config.ArtifactStorageCredentials{
+					AccessKeyID:     "fixture-access",
+					SecretAccessKey: "fixture-secret",
+				},
+			},
+
 			RuntimePools: []config.WorkerRuntimePool{
 				{
 					ID:              "default",
@@ -114,11 +119,14 @@ func TestRenderStorageModes(t *testing.T) {
 			cfg := config.Config{
 				InternalListen: "0.0.0.0:9001",
 				Workers: &config.WorkersConfig{
-					ValidatorPool:     "default",
-					S3RuntimeEndpoint: test.endpoint,
-					S3BucketMode:      test.bucketMode,
-					S3Region:          "us-east-1",
-					ConfigBaseURL:     test.endpoint + "/bucket/config",
+					ValidatorPool: "default",
+					ArtifactStorage: config.WorkerArtifactStorageConfig{
+						RuntimeEndpoint: test.endpoint,
+						BucketMode:      test.bucketMode,
+						Region:          "us-east-1",
+						ConfigBaseURL:   test.endpoint + "/bucket/config",
+					},
+
 					RuntimePools: []config.WorkerRuntimePool{
 						{ID: "default", Default: true},
 					},
@@ -204,13 +212,17 @@ func TestCheckStorageUsesStandardS3BucketRequests(t *testing.T) {
 			defer server.Close()
 
 			cfg := &config.WorkersConfig{
-				S3Endpoint:        server.URL,
-				S3Bucket:          "bucket",
-				S3Region:          "us-east-1",
-				S3AddressingStyle: "path",
-				S3BucketMode:      test.bucketMode,
-				S3AccessKey:       "fixture-access",
-				S3SecretKey:       "fixture-secret",
+				ArtifactStorage: config.WorkerArtifactStorageConfig{
+					Endpoint:        server.URL,
+					Bucket:          "bucket",
+					Region:          "us-east-1",
+					AddressingStyle: "path",
+					BucketMode:      test.bucketMode,
+					Credentials: config.ArtifactStorageCredentials{
+						AccessKeyID:     "fixture-access",
+						SecretAccessKey: "fixture-secret",
+					},
+				},
 			}
 			if err := CheckStorage(cfg); (err != nil) != test.wantError {
 				t.Fatalf("storage probe error = %v, want error = %v", err, test.wantError)
@@ -230,11 +242,14 @@ func TestLocalDatabaseEgressIsOnlyGrantedToServingPods(t *testing.T) {
 			cfg := config.Config{
 				InternalListen: "0.0.0.0:9001",
 				Workers: &config.WorkersConfig{
-					ValidatorPool:     "default",
-					S3RuntimeEndpoint: "http://192.0.2.20:9000",
-					S3BucketMode:      "external",
-					S3Region:          "us-east-1",
-					ConfigBaseURL:     "http://192.0.2.20:9000/bucket/config",
+					ValidatorPool: "default",
+					ArtifactStorage: config.WorkerArtifactStorageConfig{
+						RuntimeEndpoint: "http://192.0.2.20:9000",
+						BucketMode:      "external",
+						Region:          "us-east-1",
+						ConfigBaseURL:   "http://192.0.2.20:9000/bucket/config",
+					},
+
 					LocalDatabaseEgress: []config.WorkerDatabaseEgress{
 						{CIDR: "198.51.100.0/24", Port: 5432},
 					},

@@ -132,7 +132,7 @@ var WorkerAssetBindingName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 var WorkerReservedBindings = map[string]bool{
 	"PLATFORM": true, "LOADER": true, "RUNTIME_TOKEN": true, "RUNTIME_POOL": true,
 	"POOL_COORDINATOR": true, "POOL_SLOT": true,
-	"MANAGEMENT_TOKEN": true, "CONFIG_BASE": true, "POD_NAME": true, "POD_UID": true,
+	"MANAGEMENT_TOKEN": true, "CONFIG_BASE": true, "CONFIG_STORAGE_STS": true, "POD_NAME": true, "POD_UID": true,
 	"ASSETS_CACHE_MAX":   true,
 	"STORAGE_ACCESS_KEY": true, "STORAGE_SECRET_KEY": true, "STORAGE_REGION": true,
 	"STATIC_DOMAINS": true,

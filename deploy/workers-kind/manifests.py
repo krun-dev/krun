@@ -58,7 +58,6 @@ workers:
   builder_pull_policy: Never
   builder_timeout_seconds: 600
   npm_registry: https://git-mock/npm/
-  s3_location_id: primary
   clone_directory: /workdir
   validator_pool: default
   runtime_pools:
@@ -167,11 +166,14 @@ workers:
   secrets_active_key: v1
   secrets_keys:
     v1: ${KRUN_WORKERS_SECRETS_KEY}
-  s3_endpoint: http://minio:9000
-  s3_bucket: krun-artifacts
-  config_base_url: http://minio:9000/krun-artifacts/config
-  s3_access_key: ${KRUN_S3_ACCESS}
-  s3_secret_key: ${KRUN_S3_SECRET}
+  artifact_storage:
+    endpoint: http://minio:9000
+    bucket: krun-artifacts
+    location_id: primary
+    credentials:
+      mode: ak_sk
+      access_key_id: ${KRUN_S3_ACCESS}
+      secret_access_key: ${KRUN_S3_SECRET}
   repository_providers:
     - id: kind-git
       type: gitlab

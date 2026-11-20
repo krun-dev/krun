@@ -126,7 +126,7 @@ func Render(workers *config.WorkersConfig, pool config.WorkerRuntimePool, contro
 		"__STORAGE_ALLOW__", strings.Join(allowed, ","),
 		"__POOL__", quote(pool.ID),
 		"__LOADER_ID__", quote(loader),
-		"__CONFIG_BASE__", quote(workers.ConfigBaseURL+"/pools/"+pool.ID),
+		"__CONFIG_BASE__", quote(workers.ArtifactStorage.ConfigBaseURL+"/pools/"+pool.ID),
 		"__STORAGE_BINDINGS__", storageBindings(workers, pool),
 		"__OBJECT_STORAGE_BINDINGS__", bindings,
 		"__OBJECT_STORAGE_SERVICES__", services,
@@ -204,11 +204,16 @@ func storageBindings(workers *config.WorkersConfig, pool config.WorkerRuntimePoo
 		domains[domain.StaticDomain] = prefix
 	}
 	raw, _ := json.Marshal(domains)
+	if workers.ArtifactUsesSTS() {
+		return fmt.Sprintf(`
+          (name = "CONFIG_STORAGE_STS", text = "1"),
+          (name = "STATIC_DOMAINS", text = %s),`, quote(string(raw)))
+	}
 	return fmt.Sprintf(`
           (name = "STORAGE_ACCESS_KEY", text = embed "/storage/access"),
           (name = "STORAGE_SECRET_KEY", text = embed "/storage/secret"),
           (name = "STORAGE_REGION", text = %s),
-          (name = "STATIC_DOMAINS", text = %s),`, quote(workers.S3Region), quote(string(raw)))
+          (name = "STATIC_DOMAINS", text = %s),`, quote(workers.ArtifactStorage.Region), quote(string(raw)))
 }
 
 func quote(value string) string {

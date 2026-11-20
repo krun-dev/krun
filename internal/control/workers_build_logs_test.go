@@ -41,11 +41,11 @@ func TestWorkerBuildLogDelivery(t *testing.T) {
 		_, _ = w.Write([]byte(text))
 	}))
 	defer objects.Close()
-	s.Config.Workers.S3Endpoint = objects.URL
-	s.Config.Workers.S3Bucket = "bucket"
-	s.Config.Workers.S3Region = "us-east-1"
-	s.Config.Workers.S3AccessKey = "test-access"
-	s.Config.Workers.S3SecretKey = "test-secret"
+	s.Config.Workers.ArtifactStorage.Endpoint = objects.URL
+	s.Config.Workers.ArtifactStorage.Bucket = "bucket"
+	s.Config.Workers.ArtifactStorage.Region = "us-east-1"
+	s.Config.Workers.ArtifactStorage.Credentials.AccessKeyID = "test-access"
+	s.Config.Workers.ArtifactStorage.Credentials.SecretAccessKey = "test-secret"
 	client, err := objectstore.NewWorkerS3(s.Config.Workers)
 	if err != nil {
 		t.Fatal(err)

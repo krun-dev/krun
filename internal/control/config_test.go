@@ -280,11 +280,11 @@ func TestExternalObjectStoreConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := string(raw)
-	base = strings.Replace(base, "s3_region: us-east-1", "s3_region: cn-beijing", 1)
-	base = strings.Replace(base, "s3_addressing_style: auto", "s3_addressing_style: virtual", 1)
-	base = strings.Replace(base, "s3_prefix: \"\"", "s3_prefix: dev/run", 1)
-	base = strings.Replace(base, "s3_bucket_mode: managed", "s3_bucket_mode: external", 1)
-	base = strings.Replace(base, "  config_base_url: https://s3.internal.example.com/krun-artifacts/config\n", "", 1)
+	base = strings.Replace(base, "region: us-east-1", "region: cn-beijing", 1)
+	base = strings.Replace(base, "addressing_style: auto", "addressing_style: virtual", 1)
+	base = strings.Replace(base, "prefix: \"\"", "prefix: dev/run", 1)
+	base = strings.Replace(base, "bucket_mode: managed", "bucket_mode: external", 1)
+	base = strings.Replace(base, "    # runtime_endpoint:", "    runtime_endpoint:", 1)
 	file := filepath.Join(t.TempDir(), "config.yaml")
 	if err = os.WriteFile(file, []byte(base), 0600); err != nil {
 		t.Fatal(err)
@@ -293,16 +293,16 @@ func TestExternalObjectStoreConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Workers.S3Region != "cn-beijing" || cfg.Workers.S3Prefix != "dev/run" || cfg.Workers.S3BucketMode != "external" || cfg.Workers.ConfigBaseURL != "https://krun-artifacts.s3.runtime.internal.example.com/dev/run/config" {
+	if cfg.Workers.ArtifactStorage.Region != "cn-beijing" || cfg.Workers.ArtifactStorage.Prefix != "dev/run" || cfg.Workers.ArtifactStorage.BucketMode != "external" || cfg.Workers.ArtifactStorage.ConfigBaseURL != "https://krun-artifacts.s3.runtime.internal.example.com/dev/run/config" {
 		t.Fatalf("object storage config not loaded correctly")
 	}
 	for _, test := range []struct{ from, to string }{
-		{"s3_region: cn-beijing", "s3_region: invalid/region"},
-		{"s3_addressing_style: virtual", "s3_addressing_style: invalid"},
-		{"s3_bucket_mode: external", "s3_bucket_mode: invalid"},
-		{"s3_prefix: dev/run", "s3_prefix: ../other"},
-		{"s3_prefix: dev/run", "s3_prefix: .."},
-		{"s3_prefix: dev/run", "s3_prefix: /dev/run"},
+		{"region: cn-beijing", "region: invalid/region"},
+		{"addressing_style: virtual", "addressing_style: invalid"},
+		{"bucket_mode: external", "bucket_mode: invalid"},
+		{"prefix: dev/run", "prefix: ../other"},
+		{"prefix: dev/run", "prefix: .."},
+		{"prefix: dev/run", "prefix: /dev/run"},
 	} {
 		os.WriteFile(file, []byte(strings.Replace(base, test.from, test.to, 1)), 0600)
 		if _, err = appconfig.LoadConfig(file); err == nil {

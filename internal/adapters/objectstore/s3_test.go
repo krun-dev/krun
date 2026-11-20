@@ -30,13 +30,17 @@ func TestS3PresignedURLsMatchRuntimeAddressing(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := &config.WorkersConfig{
-				S3Endpoint:        test.endpoint,
-				S3Bucket:          test.bucket,
-				S3AddressingStyle: test.style,
-				S3Region:          test.region,
-				S3Prefix:          "dev/run",
-				S3AccessKey:       "test-access",
-				S3SecretKey:       "test-secret",
+				ArtifactStorage: config.WorkerArtifactStorageConfig{
+					Endpoint:        test.endpoint,
+					Bucket:          test.bucket,
+					AddressingStyle: test.style,
+					Region:          test.region,
+					Prefix:          "dev/run",
+					Credentials: config.ArtifactStorageCredentials{
+						AccessKeyID:     "test-access",
+						SecretAccessKey: "test-secret",
+					},
+				},
 			}
 			client, err := NewWorkerS3(cfg)
 			if err != nil {

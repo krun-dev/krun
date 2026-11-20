@@ -105,7 +105,7 @@ func newRenderOptions(c config.Config, controlHost string) (renderOptions, error
 	}
 	options.controlPort = controlPort
 
-	storage, _ := url.Parse(c.Workers.S3RuntimeEndpoint)
+	storage, _ := url.Parse(c.Workers.ArtifactStorage.RuntimeEndpoint)
 	options.storageHost = storage.Hostname()
 	options.storagePort = storage.Port()
 	if options.storagePort == "" {
@@ -142,7 +142,7 @@ func (o renderOptions) templateReplacements() *strings.Replacer {
 		"__MINIO_HOST__", o.storageHost,
 		"__MINIO_PORT__", o.storagePort,
 		"__STORAGE_ALLOW__", allowedNetworks,
-		"__CONFIG_BASE__", quote(o.workers.ConfigBaseURL+"/pools/default"),
+		"__CONFIG_BASE__", quote(o.workers.ArtifactStorage.ConfigBaseURL+"/pools/default"),
 	)
 }
 
@@ -179,13 +179,20 @@ func CheckStorage(c *config.WorkersConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	if c.ArtifactUsesSTS() {
+		for object := range client.ListObjects(ctx, c.ArtifactStorage.Bucket, objectstore.ListObjectsOptions{Prefix: "config/", MaxKeys: 1}) {
+			return object.Err
+		}
+		return ctx.Err()
+	}
+
 	// BucketExists is standard S3. A missing managed bucket can be created by
 	// the controller; external buckets must already exist.
-	exists, err := client.BucketExists(ctx, c.S3Bucket)
+	exists, err := client.BucketExists(ctx, c.ArtifactStorage.Bucket)
 	if err != nil {
 		return errors.New("configured S3 storage is unavailable or credentials lack bucket access")
 	}
-	if !exists && c.S3BucketMode == "external" {
+	if !exists && c.ArtifactStorage.BucketMode == "external" {
 		return errors.New("configured external S3 bucket does not exist")
 	}
 	return nil
