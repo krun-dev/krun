@@ -19,6 +19,10 @@ organization_self_service: true
 db: postgres://krun:CHANGE_ME@127.0.0.1:25432/krun_dev?sslmode=disable
 static_dir: dist
 trusted_proxy_cidrs: []
+# 可选。通过本地反向代理测试时，将其源网段加入 trusted_proxy_cidrs。
+# domain_redirect:
+#   ips: [198.51.100.10, 198.51.100.11]
+#   target_url: http://localhost:8081
 providers:
   - id: local
     enabled: true # 改为 false 禁用本地开发登录

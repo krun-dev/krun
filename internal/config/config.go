@@ -81,6 +81,7 @@ type Config struct {
 	// allowed to supply X-Forwarded-For. The header is ignored for every other
 	// peer so clients cannot choose their own rate-limit identity.
 	TrustedProxyCIDRs []string         `json:"trusted_proxy_cidrs"`
+	DomainRedirect    *DomainRedirect  `json:"domain_redirect,omitempty"`
 	Providers         []ProviderConfig `json:"providers"`
 	// OrganizationSelfService lets any signed-in user create an organization.
 	// Off by default: organization.create remains system-admin only.
@@ -174,6 +175,9 @@ func (c *Config) Validate() error {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
 			return fmt.Errorf("invalid trusted_proxy_cidrs entry %q", cidr)
 		}
+	}
+	if err := c.validateDomainRedirect(u); err != nil {
+		return err
 	}
 	if err := storage.ValidateDSN(c.DB); err != nil {
 		return errors.New("invalid PostgreSQL db connection string")

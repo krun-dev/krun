@@ -50,6 +50,37 @@ db: ${KRUN_DATABASE_URL}
 浏览器认证依赖同源 Cookie（Secure、HttpOnly、SameSite=Lax），后端不提供 CORS。
 不要把前端改成请求另一个域名，也不要在前端注入后端地址或凭据。
 
+### 按来源 IP 跳转到内网控制台
+
+当 Go 通过 `static_dir` 直接提供控制台时，可以在同一份主 YAML 中启用域名跳转。
+以下字段合并到现有配置。将 `trusted_proxy_cidrs` 换成直接连接 Go 的可信代理网段，将
+`domain_redirect.ips` 换成请求头中实际出现的出口 IP 列表。列表支持 IPv4 和 IPv6 单地址。
+
+```yaml
+public_url: https://console.example.com
+static_dir: dist/console
+trusted_proxy_cidrs: [192.0.2.0/24]
+domain_redirect:
+  ips: [198.51.100.10, 198.51.100.11, "2001:db8::10"]
+  target_url: https://console-internal.example.com
+```
+
+Go 先确认直接上游可信，再从右向左解析 `X-Forwarded-For`，剥离可信代理地址。
+该头缺失时依次查找 `X-Forward-For` 和单值 `X-Real-IP`。最外层代理须清除客户端传入的
+这三个头，再写入由代理确认的地址。保留原始 `Host`，以便 Go 识别 `public_url` 的域名。
+
+来源命中时，原入口的控制台 GET 和 HEAD 请求返回 302，保留路径和查询参数。
+API、健康检查和 Runtime 请求继续由原入口处理。目标须是另一个已可用的控制台入口，
+使用其自身的 `public_url` 和登录回调配置。省略 `domain_redirect` 即关闭跳转。
+静态内容由 OSS/CDN 直接提供时，在静态请求到达 OSS 之前由入口网关执行跳转规则。
+
+使用更新后的 YAML 重启控制面。从已列出的出口网络运行下列命令，将示例域名替换为实际入口。
+预期返回 302，且 `Location` 为目标域名下的 `/?page=workers`。从其他网络执行时，预期返回正常控制台响应。
+
+```bash
+curl -sSI 'https://console.example.com/?page=workers'
+```
+
 ## 路由示例
 
 仓库中的 [`deploy/production/nginx.conf.example`](../deploy/production/nginx.conf.example)
