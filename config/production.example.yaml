@@ -144,6 +144,8 @@ deployment:
   dns_resolver: ${KRUN_CLUSTER_DNS:-192.0.2.53}
   control_replicas: 1
   runtime_replicas: 2
+  runtime_node_selector: {}
+  runtime_tolerations: []
   validator_replicas: 1
   runtime_class: ${KRUN_RUNTIME_CLASS:-}
   image_pull_secrets: [] # 填已在目标 namespace 创建的公司镜像拉取 Secret 名。

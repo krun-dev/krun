@@ -13,6 +13,7 @@ import (
 func main() {
 	file := flag.String("config", "", "Main application YAML (required)")
 	gateway := flag.String("check-gateway", "", "Check a complete Gateway List JSON instead of rendering")
+	runtimeOnly := flag.Bool("runtime-only", false, "Render serving Runtime Deployments as YAML")
 	out := flag.String("out", "", "Private output directory (required; contains Secrets)")
 	flag.Parse()
 	cfg, err := config.LoadConfig(*file)
@@ -23,6 +24,8 @@ func main() {
 			if err == nil {
 				err = deployment.CheckGateways(cfg, raw)
 			}
+		} else if *runtimeOnly {
+			err = deployment.RenderRuntimeDeployments(cfg, *out)
 		} else {
 			err = deployment.Render(cfg, *out)
 		}
@@ -30,6 +33,10 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+	if *runtimeOnly {
+		fmt.Println("Rendered runtime-deployments.yaml; no cluster changes made")
+		return
 	}
 	if *gateway != "" {
 		fmt.Println("Gateway listener, namespace allowance and readiness verified")

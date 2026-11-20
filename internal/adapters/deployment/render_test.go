@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/krun-dev/krun/internal/config"
+	"sigs.k8s.io/yaml"
 )
 
 func fixture(t *testing.T) config.Config {
@@ -201,6 +202,49 @@ func TestExistingGatewayPreflight(t *testing.T) {
 	} {
 		if err := CheckGateway(c, []byte(raw)); err == nil {
 			t.Fatal("incompatible Gateway accepted")
+		}
+	}
+}
+
+func TestRenderRuntimeDeploymentsWithScheduling(t *testing.T) {
+	c := multiFixture(t)
+	c.StaticDir = "/external/console"
+	c.Workers.KubernetesKubeconfigFile = "/external/kubeconfig"
+	c.Workers.KubernetesAPI = ""
+	c.Workers.KubernetesTokenFile = ""
+	c.Workers.KubernetesCAFile = ""
+	c.Deployment.RuntimeNodeSelector = map[string]string{"example.com/cluster": "pool-a"}
+	c.Deployment.RuntimeTolerations = []config.DeploymentToleration{
+		{Key: "example.com/vnode", Operator: "Exists", Effect: "NoSchedule"},
+		{Key: "example.com/gpu", Operator: "Equal", Value: "true", Effect: "NoSchedule"},
+	}
+	out := t.TempDir()
+	if err := RenderRuntimeDeployments(c, out); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(out, "runtime-deployments.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	documents := strings.Split(strings.TrimSpace(string(raw)), "---\n")
+	if documents[0] != "" || len(documents)-1 != len(c.Workers.RuntimePools) {
+		t.Fatalf("expected one YAML document per pool, got %d", len(documents)-1)
+	}
+	for _, document := range documents[1:] {
+		var item map[string]any
+		if err := yaml.Unmarshal([]byte(document), &item); err != nil {
+			t.Fatal(err)
+		}
+		if item["kind"] != "Deployment" {
+			t.Fatal("unexpected resource")
+		}
+		spec := item["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+		if spec["nodeSelector"].(map[string]any)["example.com/cluster"] != "pool-a" {
+			t.Fatal("node selector missing")
+		}
+		tolerations := spec["tolerations"].([]any)
+		if len(tolerations) != 2 || tolerations[0].(map[string]any)["operator"] != "Exists" || tolerations[1].(map[string]any)["value"] != "true" {
+			t.Fatal("tolerations missing")
 		}
 	}
 }
