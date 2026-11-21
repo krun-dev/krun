@@ -152,31 +152,26 @@ func TestArtifactRuntimeCredentialsLoadThroughMainConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var section []string
-	active := false
-	for _, line := range strings.Split(string(raw), "\n") {
-		if strings.TrimSpace(line) == "# s3_runtime_credentials:" {
-			active = true
-		}
-		if !active {
-			continue
-		}
-		if !strings.HasPrefix(line, "  # ") {
-			break
-		}
-		text := strings.TrimPrefix(line, "  # ")
-		if len(section) > 0 && !strings.HasPrefix(text, " ") {
-			break
-		}
-		section = append(section, "  "+text)
+	start := strings.Index(string(raw), "  artifact_storage:")
+	end := strings.Index(string(raw), "  # 可选业务存储凭据")
+	if start < 0 || end <= start {
+		t.Fatal("missing artifact storage example")
 	}
-	if len(section) < 6 {
-		t.Fatal("missing runtime STS example")
-	}
-	content := strings.Replace(string(raw), "  repository_providers:", strings.Join(section, "\n")+"\n  repository_providers:", 1)
-	content = strings.Replace(content, "s3_runtime_endpoint: https://s3.runtime.internal.example.com", "s3_runtime_endpoint: https://tos-s3-cn-beijing.volces.com", 1)
-	content = strings.Replace(content, "s3_region: us-east-1", "s3_region: cn-beijing", 1)
-	content = strings.Replace(content, "s3_addressing_style: auto", "s3_addressing_style: virtual", 1)
+	const legacy = `
+  s3_endpoint: https://s3.example.com
+  s3_runtime_endpoint: https://tos-s3-cn-beijing.volces.com
+  s3_region: cn-beijing
+  s3_addressing_style: virtual
+  s3_bucket: artifacts
+  s3_access_key: fixture-access
+  s3_secret_key: fixture-secret
+  s3_runtime_credentials:
+    type: tos_assume_role
+    access_key_id: fixture-issuer
+    secret_access_key: fixture-issuer-secret
+    role_trn: trn:iam::1000000000:role/fixture
+`
+	content := string(raw[:start]) + strings.TrimPrefix(legacy, "\n") + string(raw[end:])
 	file := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(file, []byte(content), 0600); err != nil {
 		t.Fatal(err)
@@ -185,7 +180,7 @@ func TestArtifactRuntimeCredentialsLoadThroughMainConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credentials := loaded.Workers.S3RuntimeCredentials
+	credentials := loaded.Workers.ArtifactStorage.LegacyRuntimeCredentials
 	if credentials == nil || credentials.Type != "tos_assume_role" || credentials.STSEndpoint != "https://sts.volcengineapi.com" {
 		t.Fatal("runtime STS settings did not load")
 	}
@@ -197,14 +192,14 @@ func TestArtifactRuntimeCredentialsLoadThroughMainConfig(t *testing.T) {
 	} {
 		copy := *loaded.Workers
 		value := *credentials
-		copy.S3RuntimeCredentials = &value
+		copy.ArtifactStorage.LegacyRuntimeCredentials = &value
 		change(&value)
 		if err := copy.Validate(); err == nil {
 			t.Fatal("invalid runtime STS settings accepted")
 		}
 	}
 	copy := *loaded.Workers
-	copy.S3RuntimeCredentials = &WorkerStorageCredentialConfig{Type: "static", AccessKeyID: "fixture-access", SecretAccessKey: "fixture-secret"}
+	copy.ArtifactStorage.LegacyRuntimeCredentials = &WorkerStorageCredentialConfig{Type: "static", AccessKeyID: "fixture-access", SecretAccessKey: "fixture-secret"}
 	if err := copy.Validate(); err != nil {
 		t.Fatal("explicit local static provider rejected", err)
 	}

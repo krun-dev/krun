@@ -463,7 +463,7 @@ func (w *Controller) WriteConfigLatest(ctx context.Context, key string, next Edg
 	// CAS so an older publisher cannot overwrite a newer revision between GET
 	// and PUT. A precondition race is retried after observing the winner.
 	for attempts := 0; attempts < 4; attempts++ {
-		stat, statErr := w.S3.StatObject(ctx, w.Config.S3Bucket, key, objectstore.StatObjectOptions{})
+		stat, statErr := w.S3.StatObject(ctx, w.Config.ArtifactStorage.Bucket, key, objectstore.StatObjectOptions{})
 		opts := objectstore.PutObjectOptions{ContentType: "application/json", CacheControl: "no-store"}
 		if statErr == nil {
 			currentRaw, readErr := w.GetObject(ctx, key)

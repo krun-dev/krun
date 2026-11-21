@@ -150,7 +150,7 @@ func (s *Service) AssetCredentials(ctx context.Context, version, poolID string) 
 		return domain.StorageReadGrant{}, err
 	}
 	pool, ok := s.Config.RuntimePool(poolID)
-	if !ok || artifact.StorageLocation != s.Config.S3LocationID || artifact.Bucket != s.Config.S3Bucket {
+	if !ok || artifact.StorageLocation != s.Config.ArtifactStorage.LocationID || artifact.Bucket != s.Config.ArtifactStorage.Bucket {
 		return domain.StorageReadGrant{}, domain.NotFound()
 	}
 	prefix := "int"

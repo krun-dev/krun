@@ -14,8 +14,10 @@ func TestExternalBucketLeavesBucketAndPolicyUntouched(t *testing.T) {
 	// bucket administration or policy requests, even on a first deployment.
 	controller := workerapp.Controller{
 		Config: &config.WorkersConfig{
-			S3BucketMode: "external",
-			S3Prefix:     "dev/run",
+			ArtifactStorage: config.WorkerArtifactStorageConfig{
+				BucketMode: "external",
+				Prefix:     "dev/run",
+			},
 		},
 	}
 	if err := controller.EnsureBucket(context.Background()); err != nil {
@@ -49,8 +51,11 @@ func TestManagedBucketRemovesLegacyAnonymousPolicy(t *testing.T) {
 	for _, existing := range []bool{false, true} {
 		client := &policyRecorder{policy: "legacy-policy", created: existing}
 		controller := workerapp.Controller{
-			S3:     client,
-			Config: &config.WorkersConfig{S3Bucket: "bucket", S3BucketMode: "managed"},
+			S3: client,
+			Config: &config.WorkersConfig{ArtifactStorage: config.WorkerArtifactStorageConfig{
+				Bucket:     "bucket",
+				BucketMode: "managed",
+			}},
 		}
 		if err := controller.EnsureBucket(t.Context()); err != nil {
 			t.Fatal(err)

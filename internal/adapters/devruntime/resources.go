@@ -35,13 +35,15 @@ func (o renderOptions) secretResources() map[string]any {
 				"KRUN_MANAGEMENT_TOKEN": o.pool.ManagementToken,
 			},
 		}),
-		kubernetesResource("Secret", "workers-storage", map[string]any{
+	}
+	if !o.workers.ArtifactUsesSTS() {
+		secrets = append(secrets, kubernetesResource("Secret", "workers-storage", map[string]any{
 			"type": "Opaque",
 			"stringData": map[string]string{
-				"access": o.workers.S3AccessKey,
-				"secret": o.workers.S3SecretKey,
+				"access": o.workers.ArtifactStorage.Credentials.AccessKeyID,
+				"secret": o.workers.ArtifactStorage.Credentials.SecretAccessKey,
 			},
-		}),
+		}))
 	}
 
 	return resourceList(secrets)
@@ -92,19 +94,23 @@ func (o renderOptions) runtimePodPatch() map[string]any {
 				},
 			},
 		},
-		map[string]any{
-			"name": "storage",
-			"secret": map[string]string{
-				"secretName": "workers-storage",
-			},
-		},
 	}
 
 	mounts := []any{
 		map[string]any{"name": "config", "mountPath": "/config", "readOnly": true},
 		map[string]any{"name": "pod", "mountPath": "/pod", "readOnly": true},
 		map[string]any{"name": "secrets", "mountPath": "/secrets", "readOnly": true},
-		map[string]any{"name": "storage", "mountPath": "/storage", "readOnly": true},
+	}
+
+	if !o.workers.ArtifactUsesSTS() {
+		volumes = append(volumes,
+			map[string]any{
+				"name": "storage",
+				"secret": map[string]string{
+					"secretName": "workers-storage",
+				},
+			})
+		mounts = append(mounts, map[string]any{"name": "storage", "mountPath": "/storage", "readOnly": true})
 	}
 
 	mounts = append(mounts, map[string]any{"name": "supervisor-tmp", "mountPath": "/tmp"})

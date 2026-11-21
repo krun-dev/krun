@@ -34,8 +34,14 @@ func TestConfiguredRuntimeReads(t *testing.T) {
 		t.Fatal("set KRUN_TEST_POSTGRES_URL to a dedicated PostgreSQL test database")
 	}
 	cfg, err := config.LoadConfig(*runtimeStorageConfig)
-	if err != nil || cfg.Workers == nil || cfg.Workers.S3RuntimeCredentials == nil || cfg.Workers.S3RuntimeCredentials.Type != "tos_assume_role" {
-		t.Fatal("main configuration must explicitly select runtime STS")
+	if err != nil || cfg.Workers == nil {
+		t.Fatal("load main Workers configuration", err)
+	}
+	if !cfg.Workers.ArtifactUsesSTS() {
+		legacy := cfg.Workers.ArtifactStorage.LegacyRuntimeCredentials
+		if legacy == nil || legacy.Type != "tos_assume_role" {
+			t.Fatal("main configuration must explicitly select runtime STS")
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -51,8 +57,8 @@ func TestConfiguredRuntimeReads(t *testing.T) {
 	w.RuntimePools[0].RuntimeToken = securetoken.Random()
 	w.RuntimePools[0].ManagementToken = securetoken.Random()
 	w.Domains[0].StaticDomain = "static.fixture.test"
-	w.S3Prefix += "/integration-tests/" + securetoken.NewID("reads")
-	w.ConfigBaseURL = w.S3ObjectURL(w.S3RuntimeEndpoint, "config")
+	w.ArtifactStorage.Prefix += "/integration-tests/" + securetoken.NewID("reads")
+	w.ArtifactStorage.ConfigBaseURL = w.S3ObjectURL(w.ArtifactStorage.RuntimeEndpoint, "config")
 	s.Config.Workers = &w
 	s.routes()
 	html := []byte("<!doctype html><title>live STS assets</title>")
@@ -82,7 +88,7 @@ func TestConfiguredRuntimeReads(t *testing.T) {
 	at := now()
 	artifact := WorkerArtifact{
 		ID: "art-live-reads", Organization: "org-a", State: "finalized", Profile: code.Profile,
-		StorageLocation: w.S3LocationID, Bucket: w.S3Bucket,
+		StorageLocation: w.ArtifactStorage.LocationID, Bucket: w.ArtifactStorage.Bucket,
 		ObjectKey:     "v1/org-a/sha256/" + code.ArchiveDigest + "/bundle.tar.gz",
 		ArchiveDigest: code.ArchiveDigest, ManifestDigest: manifestDigest, ModuleDigest: code.Digest,
 		CompatibilityDate: code.CompatibilityDate, CompatibilityFlags: code.CompatibilityFlags,
@@ -144,16 +150,16 @@ func TestConfiguredRuntimeReads(t *testing.T) {
 		cleanup, stop := context.WithTimeout(context.Background(), 45*time.Second)
 		defer stop()
 		for key := range objects {
-			if err := client.RemoveObject(cleanup, w.S3Bucket, key, objectstore.RemoveObjectOptions{}); err != nil {
+			if err := client.RemoveObject(cleanup, w.ArtifactStorage.Bucket, key, objectstore.RemoveObjectOptions{}); err != nil {
 				t.Error("fixture cleanup failed")
 			}
-			if _, err := client.StatObject(cleanup, w.S3Bucket, key, objectstore.StatObjectOptions{}); objectstore.ToErrorResponse(err).StatusCode != 404 {
+			if _, err := client.StatObject(cleanup, w.ArtifactStorage.Bucket, key, objectstore.StatObjectOptions{}); objectstore.ToErrorResponse(err).StatusCode != 404 {
 				t.Error("fixture absence could not be confirmed")
 			}
 		}
 	})
 	for key, data := range objects {
-		if _, err := client.PutObject(ctx, w.S3Bucket, key, bytes.NewReader(data), int64(len(data)), metadata[key]); err != nil {
+		if _, err := client.PutObject(ctx, w.ArtifactStorage.Bucket, key, bytes.NewReader(data), int64(len(data)), metadata[key]); err != nil {
 			t.Fatal("fixture upload failed:", objectstore.ToErrorResponse(err).Code)
 		}
 	}

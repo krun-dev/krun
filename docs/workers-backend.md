@@ -171,7 +171,7 @@ URI 路径、query、method、body 保留；网关和入口清除客户端伪造
 
 配置了资产的版本在入口 Worker 内多一层路径决策：`run_worker_first` 命中 → 业务 Worker；否则查资产表（含 `html_handling` 规范化）→ 命中直接返回（ETag/304）；未命中且是导航请求 → 按 `not_found_handling` 返回 `index.html`；其余交给业务 Worker。资产按文件从桶的 `pub/` 前缀懒加载并做进程内 LRU，归档（`v1/` 前缀）始终需要凭证。两个静态域各有一条共享 HTTPRoute，统一由可信入口 Runtime 本地签名读取。
 
-每个 Pod 只有一个 workerd 进程，可动态加载多个业务 Worker。入口通过固定 `PLATFORM` service binding 请求受限内部 API；内部制品接口校验资源权限后返回元数据及限定到不可变制品目录的只读存储授权，runtime 本地计算 S3 SigV4，直连对象存储下载并校验归档与模块 hash。静态资产同样使用目录级授权，不逐文件获取签名 URL。配置 `s3_runtime_credentials` 可复用 STS 适配器签发临时凭据；省略时使用主配置的静态 S3 凭据，供本地兼容存储使用。凭据只进入可信入口内存，候选验证通过管理请求获得制品只读授权，不允许独立 validator 调用 serving 凭据接口。配置快照仍使用既有的配置读取签名。当 Version 含 Secret 时，入口再按精确 Version ID 从内部接口取值，核对绑定摘要后仅在 Loader 创建业务 isolate 时注入内存；Secret 不进入对象存储快照、公开 Version JSON 或业务日志。平台的对象存储凭据只由可信入口持有。入口 Worker 的出网白名单使用 workerd 的 `network=(allow=[...])`，**只接受 CIDR**（`host:port` 会在启动时报 `invalid CIDR`），需覆盖对象存储 Service 的 ClusterIP 网段；Pod 级 NetworkPolicy 仍把实际目标钉在对象存储 Pod 的 :9000。Loader key 包含组织、Worker、环境、Version、runtime 版本和构建 profile，使用不可变模块及显式变量。业务 `globalOutbound` 根据 serving 池选择公网出口或关闭，候选始终关闭全局出网。
+每个 Pod 只有一个 workerd 进程，可动态加载多个业务 Worker。入口通过固定 `PLATFORM` service binding 请求受限内部 API；内部制品接口校验资源权限后返回元数据及限定到不可变制品目录的只读存储授权，runtime 本地计算 S3 SigV4，直连对象存储下载并校验归档与模块 hash。静态资产同样使用目录级授权，不逐文件获取签名 URL。通过 `artifact_storage.credentials` 集中选择 AK/SK 或 STS 模式。凭据只进入可信入口内存，候选验证通过管理请求获得制品只读授权，不允许独立 validator 调用 serving 凭据接口。STS 模式下配置快照使用限定到本池当前代次的只读授权。当 Version 含 Secret 时，入口再按精确 Version ID 从内部接口取值，核对绑定摘要后仅在 Loader 创建业务 isolate 时注入内存；Secret 不进入对象存储快照、公开 Version JSON 或业务日志。平台的对象存储凭据只由可信入口持有。入口 Worker 的出网白名单使用 workerd 的 `network=(allow=[...])`，**只接受 CIDR**（`host:port` 会在启动时报 `invalid CIDR`），需覆盖对象存储 Service 的 ClusterIP 网段；Pod 级 NetworkPolicy 仍把实际目标钉在对象存储 Pod 的 :9000。Loader key 包含组织、Worker、环境、Version、runtime 版本和构建 profile，使用不可变模块及显式变量。业务 `globalOutbound` 根据 serving 池选择公网出口或关闭，候选始终关闭全局出网。
 
 serving Pod 在本地按 Version 记录最近一次转发业务请求的时间、当前分钟调用次数和在途调用数。workerd 的本地流式 Tail 事件跟踪调用生命周期，覆盖流式响应、WebSocket、同 isolate 内的入口调用和 `waitUntil()`。管理探针异步触发回收，每轮最多检查 32 个缓存项、尝试回收 4 个。距上次转发满 1 小时且没有在途工作时，入口通过动态 Worker 的内部入口移除 Loader 缓存项，无需查询控制面。路由继续有效，下次请求到该 Pod 时按需冷加载。workerd 不为名为 `test` 的入口发送 Tail 事件，导出该名称的版本跳过平台主动回收。
 
@@ -184,7 +184,7 @@ serving Pod 在本地按 Version 记录最近一次转发业务请求的时间�
 3. **跟随**通过 `config/changes` 携带 epoch 和 revision。增量批次同时包含应用区间和读取时的 `config_head_revision`。代次变化或游标越界返回 409，Runtime 重新启动配置视图。204 心跳携带 `X-Krun-Config-Epoch`，用于确认配置仍然有效。
 4. **ACK** 每约 5 秒上报 epoch 和 revision。过期代次返回 409 `CONFIG_EPOCH_CHANGED`，Runtime 通过配置流重新同步。
 
-`config/` 前缀与 `pub/`、`int/` 一样通过签名授权读取，只能通过集群内 endpoint 访问（`config_base_url` 必须指向私有地址）；生产应使用独立桶或带 VPC 条件的桶策略。对象存储快照只含 host → version 指针和不可变 Version 描述符，不含 Build、Operation、日志或 IAM 数据。PostgreSQL 不保存每个 revision 的全量投影，只保存一份归一化当前头和最近 512 个 revision 的逐实体 ops；Pod 的 revision 落后于保留窗口，或高于当前发布 head 时，通过 409 重置为紧凑 head，再按需读取 host。客户端 revision 超前不会被当作无更新而一直返回 204。
+`config/` 前缀与 `pub/`、`int/` 一样通过签名授权读取，只能通过集群内 endpoint 访问（`artifact_storage.config_base_url` 必须指向私有地址）；生产应使用独立桶或带 VPC 条件的桶策略。对象存储快照只含 host → version 指针和不可变 Version 描述符，不含 Build、Operation、日志或 IAM 数据。PostgreSQL 不保存每个 revision 的全量投影，只保存一份归一化当前头和最近 512 个 revision 的逐实体 ops；Pod 的 revision 落后于保留窗口，或高于当前发布 head 时，通过 409 重置为紧凑 head，再按需读取 host。客户端 revision 超前不会被当作无更新而一直返回 204。
 
 对象存储的 checkpoint 放在 `config/pools/<pool>/epochs/<epoch>/` 下。后台清理保留当前代次引用的快照，其他代次及旧路径对象满 24 小时后进入清理。恢复 PostgreSQL 后，按[生产恢复步骤](../deploy/production/README.md#失败回滚与备份恢复)轮换配置代次。
 
@@ -297,7 +297,7 @@ header 与该 pool 独立 token，不能只信任 header：
 
 `GET .../builds/{id}/logs` 默认返回 `build_id`、`state`、`download_url` 和 `expired`。预签名 GET URL 有效期 5 分钟；调用方不要保存或记录 URL。尚无快照或日志已过期时 URL 为空。成功响应有 `X-Log-Poll-Interval` 时按秒继续请求，没有时读取最终对象后停止；错误响应不代表构建结束。控制面响应和对象均禁用缓存。
 
-日志对象保留 7 天，由后台对象清理器分批清理（包括失去租约后产生的孤立快照）。主 YAML 的可选 `s3_log_read_endpoint` 决定浏览器/CLI 日志预签名 URL 的访问地址，不填时沿用 `s3_endpoint`。控制面上传及清理始终使用 `s3_endpoint`；两者可以分别配置为内网和公网 endpoint，但必须指向同一桶及对象前缀。选择地址由部署配置决定，不按访问者网络自动探测。浏览器选择默认直读模式时，HTTPS 页面需使用 HTTPS 读取地址，且 TOS bucket 的 CORS 需允许对应 origin 的 GET；请求不携带控制面 Cookie。控制台的 inline 模式通过 `s3_endpoint` 读取对象，不需要 bucket CORS 或浏览器可访问的读取地址。构建和 runtime 的内部 endpoint 不用于浏览器日志 URL。
+日志对象保留 7 天，由后台对象清理器分批清理（包括失去租约后产生的孤立快照）。主 YAML 的可选 `artifact_storage.log_read_endpoint` 决定浏览器/CLI 日志预签名 URL 的访问地址，不填时沿用 `artifact_storage.endpoint`。控制面上传及清理始终使用 `artifact_storage.endpoint`；两者可以分别配置为内网和公网 endpoint，但必须指向同一桶及对象前缀。选择地址由部署配置决定，不按访问者网络自动探测。浏览器选择默认直读模式时，HTTPS 页面需使用 HTTPS 读取地址，且 TOS bucket 的 CORS 需允许对应 origin 的 GET；请求不携带控制面 Cookie。控制台的 inline 模式通过 `artifact_storage.endpoint` 读取对象，不需要 bucket CORS 或浏览器可访问的读取地址。构建和 runtime 的内部 endpoint 不用于浏览器日志 URL。
 
 `GET .../builds/{id}/logs?inline=true` 使用相同的 `log.read` 鉴权，由 Go 在释放状态读取后获取对象，返回相同元数据及 `log` 正文，`download_url` 为空。尚无快照或日志已过期时 `log` 为空字符串。对象读取限时 20 秒、最多 32 KiB，读取失败返回 `503 LOG_UNAVAILABLE`；轮询和禁用缓存的规则不变。控制台使用此同源模式，不依赖 bucket CORS。
 

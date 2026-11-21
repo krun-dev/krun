@@ -139,7 +139,7 @@ func (w *Controller) ProcessBuild(ctx context.Context, b domain.WorkerBuild, pri
 	}
 	e = w.FinishBuildArtifact(ctx, b, w.Replica, artifact, log)
 	if e == nil {
-		_ = w.S3.RemoveObject(ctx, w.Config.S3Bucket, WorkerUploadKey(b), objectstore.RemoveObjectOptions{})
+		_ = w.S3.RemoveObject(ctx, w.Config.ArtifactStorage.Bucket, WorkerUploadKey(b), objectstore.RemoveObjectOptions{})
 	}
 	return e
 }
@@ -216,7 +216,7 @@ func (w *Controller) RunLocalBuild(b domain.WorkerBuild, private domain.WorkerBu
 	}
 	e = w.FinishBuildArtifact(finishCtx, b, w.Replica, artifact, log)
 	if e == nil {
-		_ = w.S3.RemoveObject(finishCtx, w.Config.S3Bucket, WorkerUploadKey(b), objectstore.RemoveObjectOptions{})
+		_ = w.S3.RemoveObject(finishCtx, w.Config.ArtifactStorage.Bucket, WorkerUploadKey(b), objectstore.RemoveObjectOptions{})
 	}
 }
 

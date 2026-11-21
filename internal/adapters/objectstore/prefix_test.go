@@ -121,12 +121,16 @@ func TestPrefixClientAllOperations(t *testing.T) {
 }
 func TestVirtualHostPresigningAndRegion(t *testing.T) {
 	cfg := &config.WorkersConfig{
-		S3Endpoint:        "https://storage.example.com",
-		S3AddressingStyle: "virtual",
-		S3Prefix:          "dev/run",
-		S3Region:          "cn-beijing",
-		S3AccessKey:       "test-access",
-		S3SecretKey:       "test-secret",
+		ArtifactStorage: config.WorkerArtifactStorageConfig{
+			Endpoint:        "https://storage.example.com",
+			AddressingStyle: "virtual",
+			Prefix:          "dev/run",
+			Region:          "cn-beijing",
+			Credentials: config.ArtifactStorageCredentials{
+				AccessKeyID:     "test-access",
+				SecretAccessKey: "test-secret",
+			},
+		},
 	}
 	client, err := NewWorkerS3(cfg)
 	if err != nil {

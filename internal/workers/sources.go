@@ -32,7 +32,7 @@ func (w *Controller) SourceUploadURL(ctx context.Context, organization string) (
 	if e := w.Service.Store.IssueWorkerSourceUpload(ctx, key, organization); e != nil {
 		return "", "", e
 	}
-	u, e := w.S3.PresignedPutObject(ctx, w.Config.S3Bucket, key, 15*time.Minute)
+	u, e := w.S3.PresignedPutObject(ctx, w.Config.ArtifactStorage.Bucket, key, 15*time.Minute)
 	if e != nil {
 		return "", "", e
 	}
@@ -42,14 +42,14 @@ func (w *Controller) SourceUploadURL(ctx context.Context, organization string) (
 // Builder and runtime live inside the cluster, so read URLs are signed against
 // the in-cluster endpoint. Signing is offline.
 func (w *Controller) SourceBundleURL(ctx context.Context, key string) (string, error) {
-	info, e := w.S3.StatObject(ctx, w.Config.S3Bucket, key, objectstore.StatObjectOptions{})
+	info, e := w.S3.StatObject(ctx, w.Config.ArtifactStorage.Bucket, key, objectstore.StatObjectOptions{})
 	if e != nil {
 		return "", e
 	}
 	if info.Size <= 0 || info.Size > workerartifact.WorkerSourceMax {
 		return "", errors.New("source bundle exceeds size limit")
 	}
-	u, e := w.BuilderS3().PresignedGetObject(ctx, w.Config.S3Bucket, key, w.BuildURLTTL(), nil)
+	u, e := w.BuilderS3().PresignedGetObject(ctx, w.Config.ArtifactStorage.Bucket, key, w.BuildURLTTL(), nil)
 	if e != nil {
 		return "", e
 	}

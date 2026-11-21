@@ -51,7 +51,7 @@ manifest 使用 single-flight 和有界 LRU，路径索引只构建一次；资�
 | `pub/<org>/<worker>/<digest>/` | 公网静态资产副本 | 通过绑定的公网静态域访问 |
 | `int/<org>/<worker>/<digest>/` | 内网静态资产副本 | 通过绑定的内网静态域访问 |
 
-以上均为逻辑 key；配置 `s3_prefix` 后，实际对象在该前缀下隔离。外部私有桶不修改
+以上均为逻辑 key；配置 `artifact_storage.prefix` 后，实际对象在该前缀下隔离。外部私有桶不修改
 桶策略。Runtime 按组织、Worker 和 digest 获取目录级只读授权，
 签名读取静态对象，并从 S3 对象元数据校验 SHA-256。公网静态域仅为同一 Runtime pool
 中已经发布到公网路由的版本发放新读取授权。

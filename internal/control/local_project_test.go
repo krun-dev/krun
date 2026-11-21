@@ -75,7 +75,10 @@ func TestLocalUploadMultipartSelectsOnlyArchive(t *testing.T) {
 func TestPostgresLocalUploadQueuesStaticAndWorkerProjects(t *testing.T) {
 	s, store := testServer(t)
 	ctx := context.Background()
-	s.Config.Workers = &appconfig.WorkersConfig{S3Bucket: "test", S3BucketMode: "external"}
+	s.Config.Workers = &appconfig.WorkersConfig{ArtifactStorage: appconfig.WorkerArtifactStorageConfig{
+		Bucket:     "test",
+		BucketMode: "external",
+	}}
 	staged := map[string][]byte{}
 	s.workers = &workerapp.Controller{
 		Config: s.Config.Workers, Service: &workerapp.Service{Store: store},

@@ -8,6 +8,7 @@ import (
 
 	"github.com/krun-dev/krun/internal/adapters/runtimeclient"
 	appconfig "github.com/krun-dev/krun/internal/config"
+	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
 func (s *Server) workerRuntimePool(r *http.Request) (appconfig.WorkerRuntimePool, bool) {
@@ -40,6 +41,35 @@ func (s *Server) workerRuntimeConfigSnapshot(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	s.json(w, 200, map[string]any{"pool": pool.ID, "config_epoch": head.Epoch, "config_revision": head.Revision, "lazy_routes": true, "routes": []workerConfigRoute{}, "versions": map[string]WorkerVersion{}})
+}
+
+// A serving pool can read only its own checkpoint directory for the current epoch.
+func (s *Server) workerRuntimeConfigCredentials(w http.ResponseWriter, r *http.Request) {
+	pool, allowed := s.workerRuntimeServingPool(r)
+	if !allowed {
+		s.writeError(w, r, forbidden())
+		return
+	}
+	if s.workers == nil || !s.Config.Workers.ArtifactUsesSTS() {
+		s.writeError(w, r, notFound())
+		return
+	}
+	head, err := s.Store.ConfigPosition(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if head.Epoch == "" || head.Epoch != r.URL.Query().Get("epoch") {
+		s.workerConfigResync(w, r)
+		return
+	}
+	grant, err := s.workers.ReadGrant(r.Context(), "control-plane", "config:"+pool.ID, workerapp.WorkerPoolConfigPrefix(pool.ID, head.Epoch))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	s.json(w, 200, runtimeclient.ReadGrantPayload(grant))
 }
 
 // workerRuntimeConfigChanges is the incremental feed. since=0 means bootstrap

@@ -63,7 +63,7 @@ func (w *Controller) BuildLogURL(ctx context.Context, key string) (string, error
 	if client == nil {
 		client = w.S3
 	}
-	u, err := client.PresignedGetObject(ctx, w.Config.S3Bucket, key, 5*time.Minute, nil)
+	u, err := client.PresignedGetObject(ctx, w.Config.ArtifactStorage.Bucket, key, 5*time.Minute, nil)
 	if err != nil {
 		return "", err
 	}
@@ -77,7 +77,7 @@ func (w *Controller) ReadBuildLog(ctx context.Context, key string) (string, erro
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
-	obj, err := w.S3.GetObject(ctx, w.Config.S3Bucket, key, objectstore.GetObjectOptions{})
+	obj, err := w.S3.GetObject(ctx, w.Config.ArtifactStorage.Bucket, key, objectstore.GetObjectOptions{})
 	if err != nil {
 		return "", err
 	}

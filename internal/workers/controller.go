@@ -75,14 +75,14 @@ func NewController(s *Service) (*Controller, error) {
 		return nil, e
 	}
 	s3Builder := s3
-	if s.Config.Workers.S3BuilderEndpoint != s.Config.Workers.S3Endpoint {
-		s3Builder, e = NewWorkerS3Endpoint(s.Config.Workers, s.Config.Workers.S3BuilderEndpoint)
+	if s.Config.Workers.ArtifactStorage.BuilderEndpoint != s.Config.Workers.ArtifactStorage.Endpoint {
+		s3Builder, e = NewWorkerS3Endpoint(s.Config.Workers, s.Config.Workers.ArtifactStorage.BuilderEndpoint)
 		if e != nil {
 			return nil, e
 		}
 	}
 	s3LogRead := s3
-	if endpoint := s.Config.Workers.S3LogReadEndpoint; endpoint != "" && endpoint != s.Config.Workers.S3Endpoint {
+	if endpoint := s.Config.Workers.ArtifactStorage.LogReadEndpoint; endpoint != "" && endpoint != s.Config.Workers.ArtifactStorage.Endpoint {
 		s3LogRead, e = NewWorkerS3Endpoint(s.Config.Workers, endpoint)
 		if e != nil {
 			return nil, e

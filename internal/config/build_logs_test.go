@@ -16,8 +16,8 @@ func TestLogReadEndpointLoadsThroughMainConfig(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			upload := c.Workers.S3Endpoint
-			c.Workers.S3LogReadEndpoint = endpoint
+			upload := c.Workers.ArtifactStorage.Endpoint
+			c.Workers.ArtifactStorage.LogReadEndpoint = endpoint
 			raw, _ := json.Marshal(c)
 			file := filepath.Join(t.TempDir(), "main.yaml")
 			if err := os.WriteFile(file, raw, 0600); err != nil {
@@ -31,7 +31,7 @@ func TestLogReadEndpointLoadsThroughMainConfig(t *testing.T) {
 			if expected == "" {
 				expected = upload
 			}
-			if loaded.Workers.S3Endpoint != upload || loaded.Workers.S3LogReadEndpoint != expected {
+			if loaded.Workers.ArtifactStorage.Endpoint != upload || loaded.Workers.ArtifactStorage.LogReadEndpoint != expected {
 				t.Fatal("log endpoint changed upload address or did not load")
 			}
 		})
@@ -47,7 +47,7 @@ func TestLogReadEndpointRejectsInvalidOrigins(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			c.Workers.S3LogReadEndpoint = endpoint
+			c.Workers.ArtifactStorage.LogReadEndpoint = endpoint
 			raw, _ := json.Marshal(c)
 			file := filepath.Join(t.TempDir(), "main.yaml")
 			if err := os.WriteFile(file, raw, 0600); err != nil {

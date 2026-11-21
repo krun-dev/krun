@@ -35,12 +35,16 @@ func startLiveReadRuntime(t *testing.T, ctx context.Context, c *config.WorkersCo
 		t.Fatal(err)
 	}
 	directory := t.TempDir()
-	for name, value := range map[string]string{
+	bindings := map[string]string{
 		"pod/name": "live-test", "pod/uid": "live-test",
 		"secrets/KRUN_RUNTIME_TOKEN":    pool.RuntimeToken,
 		"secrets/KRUN_MANAGEMENT_TOKEN": pool.ManagementToken,
-		"storage/access":                c.S3AccessKey, "storage/secret": c.S3SecretKey,
-	} {
+	}
+	if !c.ArtifactUsesSTS() && !validator {
+		bindings["storage/access"] = c.ArtifactStorage.Credentials.AccessKeyID
+		bindings["storage/secret"] = c.ArtifactStorage.Credentials.SecretAccessKey
+	}
+	for name, value := range bindings {
 		filename := filepath.Join(directory, name)
 		if err := os.MkdirAll(filepath.Dir(filename), 0700); err != nil {
 			t.Fatal("runtime private directory failed")
@@ -163,11 +167,11 @@ func verifyLiveReadRestrictions(t *testing.T, ctx context.Context, c *config.Wor
 	t.Cleanup(func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 20*time.Second)
 		defer stop()
-		relative := strings.TrimPrefix(blockedKey, c.S3Prefix+"/")
-		if err := writer.RemoveObject(cleanup, c.S3Bucket, relative, objectstore.RemoveObjectOptions{}); err != nil {
+		relative := strings.TrimPrefix(blockedKey, c.ArtifactStorage.Prefix+"/")
+		if err := writer.RemoveObject(cleanup, c.ArtifactStorage.Bucket, relative, objectstore.RemoveObjectOptions{}); err != nil {
 			t.Error("blocked-write fixture cleanup failed")
 		}
-		if _, err := writer.StatObject(cleanup, c.S3Bucket, relative, objectstore.StatObjectOptions{}); objectstore.ToErrorResponse(err).StatusCode != 404 {
+		if _, err := writer.StatObject(cleanup, c.ArtifactStorage.Bucket, relative, objectstore.StatObjectOptions{}); objectstore.ToErrorResponse(err).StatusCode != 404 {
 			t.Error("blocked-write fixture absence unconfirmed")
 		}
 	})

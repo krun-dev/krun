@@ -62,7 +62,12 @@ func TestSystemConfigAuthorizationAndRedaction(t *testing.T) {
 	}
 	s.Config.Workers = &appconfig.WorkersConfig{
 		RuntimeAPIURL: private, BuilderMode: "kubernetes", PreviewLimit: 32, ValidatorPool: "private-b",
-		KubernetesAPI: private, KubernetesTokenFile: private, S3AccessKey: private, S3SecretKey: private,
+		KubernetesAPI: private, KubernetesTokenFile: private, ArtifactStorage: appconfig.WorkerArtifactStorageConfig{
+			Credentials: appconfig.ArtifactStorageCredentials{
+				AccessKeyID:     private,
+				SecretAccessKey: private,
+			},
+		},
 		SecretsKeys: map[string]string{"active": private},
 		RuntimePools: []appconfig.WorkerRuntimePool{
 			{
