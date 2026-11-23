@@ -42,7 +42,7 @@ IAM 与 Workers 是两套独立分区，**不共享事务**：
 
 构建日志正文仅存于对象存储；`krun_worker_build_private` 只保留 `log_key` 引用，不含日志正文列。
 
-`internal/storage/schema.sql` 是当前结构快照和模型生成输入。新库按 `internal/storage/migrations/` 的顺序执行 SQL；已有库校验迁移记录，升级通过显式命令执行。
+`internal/storage/schema.sql` 是当前结构快照和模型生成输入。新库按 `internal/storage/migrations/` 的顺序执行 SQL；已有库校验迁移记录，升级通过人工执行增量 SQL。
 
 ## 读路径
 
@@ -115,26 +115,40 @@ CF 资产临时对象在写入前登记 `krun_worker_source_uploads`，由现有
 ## Schema 基线
 
 `OpenStore` 在空 schema 按顺序执行全部 SQL migration，并记录版本、文件名和 SHA-256。
-已有库启动时校验完整历史，拒绝缺失、未知或被修改的迁移，也拒绝有待执行迁移的库。
-维护窗内停止控制面和写入后，执行 `krun-server migrate --config /config/control.yaml`；
-命令锁定元数据表并在事务中执行所有待执行 SQL、记录历史，失败时全部回滚。重复执行是幂等的。
-该命令要求已有 krun 数据库；空库由服务首次启动初始化。迁移 SQL 必须支持事务，不支持
-`CREATE INDEX CONCURRENTLY` 等不能在事务中执行的语句。
+已有库启动时校验全部已知迁移及其校验和，并要求该版本所需的迁移已经执行；启动不会升级已有库。
+新版迁移可声明兼容的最低 schema 版本，例如 `0002_online_from_0001_add_example.sql` 表示
+从基线 0001 开始的控制面可与此迁移后的库并行运行。支持此协议的旧版本启动时会校验自己的完整
+历史，以及后续迁移的连续版本、名称和校验和格式；未标记或最低兼容版本过高时拒绝启动。未知迁移
+内容无法由旧二进制校验：名称是一项必须经过审查和并发测试的兼容性承诺，不是 SQL 安全证明。
 
-旧库没有迁移记录时，命令先沿原指纹升级链到固定的 `0001_initial.sql`，再登记初始版本。
-识别依据是旧库保存的指纹，**不会检测手工修改造成的结构漂移**；应先备份并验证数据库。
-旧库已处于初始基线时可以启动，执行一次 migrate 后会登记历史。登记后仅校验迁移记录，不再校验或更新旧 fingerprint。数据库管理员应保护迁移记录，
-不要手动修改指纹或迁移表。
-指纹 `8f802b41ccf74f398f6c4c8ede9c480ad29b7e29ae95d7febda6046baa3842ef`
-对应提交 `96b6dd4` 所用的 schema，先为已有构建补充 `config_path`，旧行取空字符串默认值。
-指纹 `791bb9ebf10e4652f69918635175574492833a5b55b53db9806f0a604b333a30`
-已包含该列，从此步继续为发布 Operation 增加 `claim_generation` 和 `edge_pool`。已有 `validating` 行在下一次认领时采用新租约。
-仍指向当前部署的 `committed` 行重新确认边缘 revision，失去部署目标的行标记为 `superseded`。
-指纹 `f5ddb02a599235f4f87c218e94dcac41afa1212d8f8634f025254e9ab3f80877`
-从发布认领基线继续升级，为配置流初始化代次。旧 ACK 被清除，仍在收敛的部署和 checkpoint 重新发布。
-指纹 `5ec33847b55dc6a84dd405672d22b70ff4c90f5ebd6597ea709cc57e9b13900e`
-是灰度发布前的基线。升级后，已有环境和发布仍以原版本接收 100% 流量，控制面重新生成运行时路由配置。
-新增迁移时，追加连续编号的 `0002_description.sql` 等文件，保持已发布文件不变；同步更新 `schema.sql`、生成模型和数据库测试，确保新库和升级库结构一致。SQL 全部在同一事务中执行；数据量大的回填应另行设计维护方案。维护窗、备份与恢复步骤见[生产部署](../deploy/production/README.md#更新与恢复)。
+### 手动执行在线迁移
+
+适用于已经完成上述兼容协议过渡、且迁移经过在线兼容验证的已有数据库。需要 Python 3、`psql`，
+PostgreSQL service 文件中配置目标库、凭据和应用 schema 的 `search_path`。以下以未来迁移为例，
+将 `MIGRATION` 替换为目标版本实际包含的文件名；按版本顺序逐个运行：
+
+```sh
+MIGRATION=0002_online_from_0001_add_example.sql
+python3 scripts/render-online-migration.py "$MIGRATION" > /tmp/krun-online-migration.sql
+# 审核生成的 SQL、目标数据库和 schema 后执行：
+psql 'service=krun_production' -v ON_ERROR_STOP=1 -f /tmp/krun-online-migration.sql
+```
+
+生成脚本在事务内核验此前每条迁移的版本、文件名和 SHA-256，执行 SQL 并登记本次迁移；
+任何一步失败都回滚，记录已存在或历史不符时拒绝执行。核对 PostgreSQL service 的库和 schema
+与应用配置相同。迁移成功后滚动部署新版本，确认旧、新 Pod 同时健康及读写正常，再完成发布。
+如执行结果因连接中断不明，先核对迁移记录与数据库状态，不要直接重复或手工修改记录。
+
+文件名的 `online_from_NNNN` 标记必须对应已发布的最低兼容 schema。迁移仅做兼容性扩展；
+删除、重命名、收紧约束或更改读写语义需要先发布兼容双读写版本并完成回填，确认所有旧版本
+退出及回滚窗口关闭后才能清理。大表回填须分批、可恢复且能处理并发写入；建索引等可能长时间
+锁表的操作需单独设计，例如在事务外预先创建并验证并发索引。SQL 不得自行提交事务；不支持
+事务内的 `CREATE INDEX CONCURRENTLY`。每次迁移须验证旧、新版本并发读写、重启、超时、失败及恢复。
+
+当前以 `0001_initial.sql` 为初始基线。此前的数据库历史不属于这条迁移链；需要新的空库
+初始化，服务不会自动清除已有数据。
+
+新增迁移时，追加连续编号的在线兼容文件，保持已发布文件不变；同步更新 `schema.sql`、生成模型和数据库测试，确保新库和升级库结构一致。备份、历史版本升级与恢复步骤见[生产部署](../deploy/production/README.md#更新与恢复)。
 
 ## 已知限制
 

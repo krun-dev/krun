@@ -150,68 +150,12 @@ FQDN 白名单。需要更严的目的域限制时，使用公司 CNI 的 FQDN �
 
 ## 更新与恢复
 
-### 停写升级
+### 手动在线升级
 
-在对正式数据库执行下列步骤前，先用备份和对象存储副本完成一次隔离的升级及恢复演练。
-
-1. 进入维护窗，关闭业务入口和写流量，停止所有控制面副本、serving、validator 和后台写入。首次升级到
-   配置代次协议时，旧 serving 不兼容新的配置流。记录上一版镜像 digest、私有配置清单、
-   Worker 加密 key ring 版本、PostgreSQL 备份恢复点和对应的对象存储备份。保留历史版本
-   引用的制品、静态资产和对应时点的 Runtime 配置对象。
-2. 用目标版本的二进制和主配置执行升级。以下命令需要 PostgreSQL 客户端工具（版本至少与服务器
-   主版本一致）和目标版本的 `krun-server`。`krun_source` 是源库的 PostgreSQL service
-   名称，凭据由 service 配置及凭据文件提供。执行前核对 service 和
-   `/config/control.yaml` 中的 `db` 指向同一个 PostgreSQL 实例和数据库，并确认应用使用的 schema。
-
-   ```sh
-   umask 077
-   KRUN_BACKUP_DIR="$(mktemp -d ./krun-db-backup.XXXXXX)" &&
-     KRUN_BACKUP_FILE="$KRUN_BACKUP_DIR/krun-before-upgrade.dump" &&
-     pg_dump --dbname='service=krun_source' --format=custom --file="$KRUN_BACKUP_FILE" &&
-     pg_restore --list "$KRUN_BACKUP_FILE" >/dev/null &&
-     krun-server migrate --config /config/control.yaml --lang en
-   ```
-
-3. 命令成功后部署目标版本的完整清单。重复执行应返回 `Database schema is already current`。
-   控制面启动即恢复协调和后台清理。核对 `/api/healthz` 和 serving 管理端 `/ready` 均返回 200，
-   `/ready` 含有 `config_epoch`，历史版本可查询。开放验证流量，通过真实入口调用指定版本，
-   检查制品、静态资产和需要历史 Secret 的业务行为。通过后恢复业务流量。
-
-已支持的来源见[存储说明](../../docs/storage.md#schema-基线)。`no supported schema upgrade`
-表示来源 fingerprint 与目标版本之间缺少已发布的升级路径，应使用支持该路径的版本或恢复匹配的备份。
-`schema upgrade requires an existing krun database` 或 `existing schema fingerprint`
-表示目标库或 schema 选择有误，先核对主配置中的数据库与 `search_path`。
-`lock timeout` 表示仍有连接持锁，确认写入已停止后重试。迁移记录不匹配时应停止部署并检查数据库和镜像版本，不要手工修改迁移记录。
-
-### 失败回滚与备份恢复
-
-- 升级事务失败时，增量 SQL 和迁移记录一并回滚。核对迁移历史（旧库核对 fingerprint）后，启动上一版
-  完整清单验证健康和数据。连接在提交时中断的情况下，先用同一目标版本重试并确认最终状态。
-- 升级已提交而需要回退时，在保持停写的情况下把备份恢复到**新建的空数据库**。
-  `krun_recovery` 是指向该空库的 PostgreSQL service 名称。用有建表权限的应用所有者
-  角色恢复，让它拥有新对象。若服务使用不同的运行角色，启动前按部署配置重新授予权限。
-  将 `KRUN_BACKUP_FILE` 设为步骤 2 生成的备份文件路径。
-
-  ```sh
-  pg_restore --dbname='service=krun_recovery' --no-owner --no-acl --exit-on-error \
-    --single-transaction "$KRUN_BACKUP_FILE"
-  ```
-
-- 用与备份兼容的镜像、私有配置和 key ring 指向恢复库。隔离验收时使用对象存储副本，
-  保留备份时的 `storage_location_id` 和不可变制品对象键。保持业务入口关闭，停止所有旧控制面、
-  serving 和 validator。升级到支持配置代次的版本时，先执行 `migrate`，再用目标版本轮换恢复库的代次。
-  对支持配置代次的数据库，每次恢复都执行轮换。
-
-  ```sh
-  krun-server rotate-runtime-config-epoch --config /config/control.yaml
-  ```
-
-  命令输出新的配置代次，并清除恢复库中的 Runtime ACK 和旧 checkpoint 发布进度。
-  `runtime recovery requires the current schema baseline and configuration epoch` 表示恢复库
-  与所用二进制不匹配，先核对主配置指向的库和 schema，再执行受支持的显式升级。
-  部署相匹配的控制面和 Runtime 镜像，验证 `/api/healthz` 返回 200，serving 管理端的
-  `/ready` 返回 200 且 `config_epoch` 等于命令输出。通过真实入口检查历史版本和资产后再切流，
-  并记录恢复耗时和恢复点。
+按[手动执行在线迁移](../../docs/storage.md#手动执行在线迁移)审核并执行增量 SQL，再滚动发布。
+执行前验证迁移兼容所有仍可能运行或重启的版本，并检查并发回填和锁等待。数据库当前基线为
+`0001_initial.sql`，新库由控制面初始化；旧测试数据不属于此迁移链，使用新的空库初始化。
+迁移失败时检查 SQL 与迁移记录，完成修复后再发布。
 
 ## 三入口集群测试配置
 
