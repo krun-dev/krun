@@ -10,7 +10,6 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { gzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
-import { resourceStreamFixture } from "./resource-stream-fixture.mjs";
 import { runProject } from "./r2-project-scenarios.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -619,9 +618,11 @@ const platform = http.createServer((request, response) => {
   response.writeHead(404);
   response.end("{}");
 });
-const resourceStream = resourceAgent
-  ? resourceStreamFixture(platform, descriptor, () => servingAcknowledgements++)
-  : null;
+let resourceStream = null;
+if (resourceAgent) {
+  const { resourceStreamFixture } = await import("./resource-stream-fixture.mjs");
+  resourceStream = resourceStreamFixture(platform, descriptor, () => servingAcknowledgements++);
+}
 const platformPort = await listen(platform);
 const port = await freePort();
 const moduleNames = [

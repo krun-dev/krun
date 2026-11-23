@@ -30,16 +30,18 @@ npx playwright test tests/ui/navigation.spec.mjs
 
 真实 supervisor + 多 workerd + 资源 WebSocket 的集成测试需要 Linux cgroup。
 下面容器测试使用独立端口和临时目录，不访问业务数据库或对象存储；依赖先运行
-`npm ci --prefix workers/runtime` 安装测试用 WebSocket fixture。
+`npm ci --prefix workers/runtime` 安装测试用 WebSocket fixture。生产镜像不包含 `ws` 测试依赖，运行 v2 用例时单独只读挂载；
+旧协议 smoke 不加载该 fixture，可直接在生产镜像中运行。
 
 ```sh
 docker build -t krun-runtime-resources:test workers/runtime
 docker run --rm --cpus=4 --memory=2g \
-  --mount "type=bind,source=$PWD,target=/workspace,readonly" --workdir /workspace \
+  --read-only --tmpfs /tmp:rw,mode=1777 \
+  --mount "type=bind,source=$PWD/workers/runtime/test,target=/app/test,readonly" \
+  --mount "type=bind,source=$PWD/workers/runtime/node_modules/ws,target=/app/node_modules/ws,readonly" \
   --env KRUN_TEST_SUPERVISOR=/usr/local/bin/krun-runtime-supervisor \
-  --env KRUN_TEST_WORKERD=/app/node_modules/.bin/workerd \
   --env KRUN_TEST_RESOURCE_AGENT=1 krun-runtime-resources:test \
-  node workers/runtime/test/r2-workerd-smoke.mjs
+  node /app/test/r2-workerd-smoke.mjs
 ```
 
 该用例验证 R2、流式响应、实际 serving 准备探测以及配置连接中断后的热请求。
