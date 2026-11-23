@@ -41,8 +41,7 @@ func (d *DeploymentConfig) validate() error {
 		return nil
 	}
 	for _, image := range []string{d.ControlImage, d.RuntimeImage} {
-		last := image[strings.LastIndex(image, "/")+1:]
-		if image == "" || strings.ContainsAny(image, " \t\r\n$") || strings.HasSuffix(image, ":latest") || !strings.Contains(last, ":") {
+		if !pinnedDeploymentImage(image) {
 			return fmt.Errorf("deployment images require explicit tags or digests")
 		}
 	}
@@ -105,4 +104,10 @@ func (d *DeploymentConfig) validate() error {
 		}
 	}
 	return nil
+}
+
+func pinnedDeploymentImage(image string) bool {
+	last := image[strings.LastIndex(image, "/")+1:]
+	name, tag, found := strings.Cut(last, ":")
+	return found && name != "" && tag != "" && !strings.ContainsAny(image, " \t\r\n$") && !strings.HasSuffix(image, ":latest")
 }

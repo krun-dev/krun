@@ -119,3 +119,41 @@ func TestThreeGatewayExampleLoadsThroughMainConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestPoolDeploymentValidation(t *testing.T) {
+	setExampleCredentials(t)
+	cfg, err := LoadConfig(filepath.Join("..", "..", "config", "production.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := cfg.Workers.RuntimePools[0]
+	if d := pool.Deployment; d == nil || d.Image != cfg.Deployment.RuntimeImage ||
+		d.Replicas != cfg.Deployment.RuntimeReplicas || d.SecretName != pool.RuntimeService ||
+		d.PeerService != pool.DefaultPeerService() {
+		t.Fatalf("pool did not inherit its deployment defaults: %+v", d)
+	}
+	for _, test := range []struct {
+		field  string
+		change func(*RuntimePoolDeployment)
+	}{
+		{"pod_labels", func(d *RuntimePoolDeployment) { d.PodLabels = map[string]string{"app": "conflict"} }},
+		{"node_selector", func(d *RuntimePoolDeployment) { d.NodeSelector = map[string]string{"invalid key": "node"} }},
+		{"tolerations", func(d *RuntimePoolDeployment) { d.Tolerations = []BuilderToleration{{Operator: "Equal"}} }},
+		{"dns_policy", func(d *RuntimePoolDeployment) { d.DNSPolicy = "Invalid" }},
+		{"dns_config.nameservers", func(d *RuntimePoolDeployment) { d.DNSPolicy = "None" }},
+		{"dns_config.nameservers", func(d *RuntimePoolDeployment) {
+			d.DNSConfig = &RuntimePodDNSConfig{Nameservers: []string{"resolver.example.com"}}
+		}},
+		{"dns_config.searches", func(d *RuntimePoolDeployment) { d.DNSConfig = &RuntimePodDNSConfig{Searches: []string{"-invalid"}} }},
+		{"peer_service", func(d *RuntimePoolDeployment) { d.PeerService = pool.ValidatorService }},
+	} {
+		t.Run(test.field, func(t *testing.T) {
+			d := *pool.Deployment
+			test.change(&d)
+			cfg.Workers.RuntimePools[0].Deployment = &d
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), test.field) {
+				t.Fatalf("want error for %s, got %v", test.field, err)
+			}
+		})
+	}
+}

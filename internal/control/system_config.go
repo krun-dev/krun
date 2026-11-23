@@ -1,8 +1,11 @@
 package control
 
 import (
+	"errors"
 	"net/http"
 	"slices"
+
+	"github.com/krun-dev/krun/internal/adapters/runtimebundle"
 )
 
 type systemConfigView struct {
@@ -26,6 +29,7 @@ type runtimePoolConfigView struct {
 	PublicEgress        string   `json:"public_egress"`
 	ValidatorConfigured bool     `json:"validator_configured"`
 	NetworkProfiles     []string `json:"network_profiles"`
+	ManifestsConfigured bool     `json:"manifests_configured,omitempty"`
 }
 
 type deploymentConfigView struct {
@@ -38,6 +42,24 @@ func (s *Server) systemConfig(st *State, p Principal, r *http.Request) (any, int
 		return nil, 0, err
 	}
 	return describeSystemConfig(s.Config), http.StatusOK, nil
+}
+
+func (s *Server) systemRuntimePoolManifests(st *State, p Principal, r *http.Request) (any, int, error) {
+	if err := s.require(st, p, r, "system.config.read", systemTarget()); err != nil {
+		return nil, 0, err
+	}
+
+	manifests, err := runtimebundle.RenderPoolManifests(s.Config, r.PathValue("pool"))
+	switch {
+	case errors.Is(err, runtimebundle.ErrPoolNotFound):
+		return nil, 0, problem(404, "RESOURCE_NOT_FOUND", err.Error())
+	case errors.Is(err, runtimebundle.ErrPoolDeploymentNotConfigured):
+		return nil, 0, problem(409, "RUNTIME_POOL_DEPLOYMENT_NOT_CONFIGURED", err.Error())
+	case err != nil:
+		return nil, 0, err
+	default:
+		return manifests, http.StatusOK, nil
+	}
 }
 
 // Project approved fields from the effective configuration. Do not serialize
@@ -74,6 +96,7 @@ func describeSystemConfig(c Config) systemConfigView {
 			PublicEgress:        pool.PublicEgress,
 			ValidatorConfigured: pool.ValidatorService != "",
 			NetworkProfiles:     append([]string{}, profiles...),
+			ManifestsConfigured: pool.Deployment != nil,
 		})
 	}
 	view.Workers = workers

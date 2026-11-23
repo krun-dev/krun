@@ -114,6 +114,7 @@ scripts/package-console.sh .data/console-release
 ## 部署
 
 Kubernetes 工作负载、Secret、Service、网络策略和 Gateway 由部署方按照目标环境维护和部署。
+serving Runtime 可从主配置中的 pool [生成并预览清单](../../docs/workers-pools.md#生成-serving-清单)。
 部署前检查资源权限、镜像、域名、证书及网络连通性。
 
 ## 首次初始化与验收

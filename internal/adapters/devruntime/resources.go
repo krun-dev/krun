@@ -119,7 +119,7 @@ func (o renderOptions) runtimePodPatch() map[string]any {
 		"name":           "workerd",
 		"command":        runtimebundle.ServingCommand(),
 		"readinessProbe": map[string]any{"httpGet": map[string]any{"path": "/healthz", "port": 8083}},
-		"env":            runtimebundle.ServingEnvironment(o.pool, 100),
+		"env":            runtimebundle.ServingEnvironment(o.pool, o.pool.DefaultPeerService(), 100),
 		"resources":      map[string]any{"limits": map[string]string{"cpu": "4", "memory": "8Gi"}},
 		"volumeMounts":   mounts,
 	}
@@ -142,7 +142,7 @@ func (o renderOptions) executionResources() map[string]any {
 	policy := kubernetesResource("BackendConfigPolicy", runtimeService, map[string]any{"spec": runtimebundle.ServingHashSpec(runtimeService)})
 	policy["apiVersion"] = "gateway.kgateway.dev/v1alpha1"
 	items := []any{
-		kubernetesResource("Service", runtimebundle.ServingPeerName(o.pool), map[string]any{"spec": runtimebundle.ServingPeerSpec(runtimeService)}),
+		kubernetesResource("Service", o.pool.DefaultPeerService(), map[string]any{"spec": runtimebundle.ServingPeerSpec(runtimeService)}),
 		policy,
 	}
 	if name := o.pool.StreamService(); name != "" {

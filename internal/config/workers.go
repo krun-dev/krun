@@ -78,13 +78,14 @@ type WorkersConfig struct {
 }
 
 type WorkerRuntimePool struct {
-	ID             string              `json:"id"`
-	Access         []string            `json:"access"`
-	Labels         map[string]string   `json:"labels"`
-	PrivateEgress  string              `json:"private_egress"`
-	PublicEgress   string              `json:"public_egress"`
-	RuntimeService string              `json:"runtime_service"`
-	Execution      WorkerExecutionPool `json:"execution"`
+	ID             string                 `json:"id"`
+	Access         []string               `json:"access"`
+	Labels         map[string]string      `json:"labels"`
+	PrivateEgress  string                 `json:"private_egress"`
+	PublicEgress   string                 `json:"public_egress"`
+	RuntimeService string                 `json:"runtime_service"`
+	Execution      WorkerExecutionPool    `json:"execution"`
+	Deployment     *RuntimePoolDeployment `json:"deployment,omitempty"`
 	// ValidatorService selects a dedicated workerd Deployment that loads version
 	// candidates before commit when selected by ValidatorPool. It must not be
 	// the serving RuntimeService; other pools may omit it.

@@ -152,5 +152,5 @@ Authorization、X-Runtime-Pool、方法、请求体和查询参数保持原样�
 pool 凭据；匿名请求仍返回 403。内部监听不可用时返回 503，两个监听器仍都必须启动。
 
 `workers.runtime_api_url` 控制 workerd 回调地址；`merged_deployment` 控制主入口是否接收
-该回调。开启后，部署生成器将域名的 Runtime API 路由指向主 Service，已有平台可统一
+该回调。开启后，部署方可将域名的 Runtime API 路由指向主 Service，统一
 转发整个域名到主端口。此模式不拆分进程或改变后台任务认领机制。
