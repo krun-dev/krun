@@ -112,6 +112,11 @@ Secret 与资产读取继续校验该池有效 placement。Version Secret 接口
 serving runtime token。候选验证通过 management token 认证，所需的 Secret 随验证请求传递。
 业务 Worker 无平台 token、对象存储密钥或控制面 binding。
 
+各池使用独立的 Runtime 凭据、配置流和路由范围；某池明确的配置认证拒绝不会清空其他池的视图。
+独立 serving Deployment、Service、Gateway 和存储权限可以限定资源或入口故障的范围。
+共享控制面、PostgreSQL 或对象存储仍是共同依赖，分池本身不消除这些故障；断连时依靠各池最后确认的本地状态继续承流。
+需要不同故障范围的业务应使用独立池及部署资源，控制面断连策略见[边缘配置分发](workers-backend.md#边缘配置分发)。
+
 ## 公网出网
 
 池显式配置 `public_egress: direct` 后，serving workerd 给业务 Worker 提供独立公网出口。

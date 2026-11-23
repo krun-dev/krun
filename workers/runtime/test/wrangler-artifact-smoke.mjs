@@ -235,6 +235,8 @@ let artifact = null;
 let version = null;
 let descriptor = null;
 let artifactDownloads = 0;
+let controlAvailable = true;
+let failedControlPolls = 0;
 const configRevision = 1;
 let activeVersion;
 let untracedVersion;
@@ -261,10 +263,26 @@ async function eventually(check, message) {
   }
   assert.fail(message());
 }
+
+function rejectControlDuringOutage(request, response) {
+  if (controlAvailable || !request.url.startsWith("/api/internal/workers/")) {
+    return false;
+  }
+  if (request.url.startsWith("/api/internal/workers/config/changes")) {
+    failedControlPolls++;
+  }
+  response.writeHead(503);
+  response.end("control unavailable");
+  return true;
+}
+
 const server = createServer((request, response) => {
   const chunks = [];
   request.on("data", (chunk) => chunks.push(chunk));
   request.on("end", () => {
+    if (rejectControlDuringOutage(request, response)) {
+      return;
+    }
     if (request.url === "/source") {
       response.writeHead(200, { "content-type": "application/gzip" });
       response.end(project);
@@ -347,6 +365,9 @@ const server = createServer((request, response) => {
     }
     if (request.url.startsWith("/api/internal/workers/config/changes")) {
       setTimeout(() => {
+        if (rejectControlDuringOutage(request, response)) {
+          return;
+        }
         response.writeHead(204, { "x-krun-config-epoch": fixtureConfigEpoch });
         response.end();
       }, 50);
@@ -512,6 +533,8 @@ export { default, KrunValidation, Named as test } from ${modulePath};
     entryPath,
     `
 let testNow;
+let syncClockAdvance = 0;
+const performance = { now: () => globalThis.performance.now() + syncClockAdvance };
 const Date = class extends globalThis.Date {
   static now() {
     return testNow ?? globalThis.Date.now();
@@ -520,10 +543,14 @@ const Date = class extends globalThis.Date {
 ${entrySource}
 export class SmokeManagement extends Management {
   fetch(request) {
+    if (new URL(request.url).pathname === "/test-config-sync") {
+      return Response.json({ healthy: configSyncHealthy });
+    }
     const now = request.headers.get("x-test-now");
     if (now !== null) {
       testNow = Number(now);
     }
+    syncClockAdvance = Number(request.headers.get("x-test-sync-clock-advance") || 0);
     return super.fetch(request);
   }
 }
@@ -605,9 +632,12 @@ const config :W.Config = (
   const idleMs = 60 * 60 * 1000;
   // Keep the simulated clock within the validity of the fixture's storage grants.
   const startedAt = Date.now() - 3 * idleMs - 120_000;
-  const ready = (now) =>
+  const ready = (now, syncClockAdvance = 0) =>
     fetch(`http://127.0.0.1:${managementPort}/ready`, {
-      headers: { "x-test-now": String(now) },
+      headers: {
+        "x-test-now": String(now),
+        "x-test-sync-clock-advance": String(syncClockAdvance),
+      },
     }).then((r) => r.json());
   await ready(startedAt);
   const response = await requestWorker("/run");
@@ -708,6 +738,34 @@ const config :W.Config = (
     "streaming activity tracking must not grant experimental flags to user Workers",
   );
   assert.match(output, /compatibility flag experimental is experimental/);
+
+  controlAvailable = false;
+  await eventually(
+    async () => {
+      const sync = await fetch(`http://127.0.0.1:${managementPort}/test-config-sync`).then((r) =>
+        r.json(),
+      );
+      return failedControlPolls > 0 && sync.healthy === false;
+    },
+    () => "workerd did not observe the control-plane outage",
+  );
+  const downloadsBeforeOutage = artifactDownloads;
+  const afterIdleDeadline = Date.now() + 2 * idleMs;
+  const disconnected = await ready(afterIdleDeadline);
+  assert.equal(disconnected.config_fresh, true);
+  await delay(100);
+  const warmDuringOutage = await requestWorker("/run", { host: activeHost });
+  assert.equal(warmDuringOutage.status, 200, warmDuringOutage.body + "\n" + output);
+
+  const degraded = await ready(afterIdleDeadline + 2 * idleMs, idleMs);
+  assert.equal(degraded.status, "ready");
+  assert.equal(degraded.config_fresh, false);
+  await delay(100);
+  const stillServing = await requestWorker("/run", { host: activeHost });
+  assert.equal(stillServing.status, 200, stillServing.body + "\n" + output);
+  assert.equal(stillServing.headers["x-krun-version"], activeVersion.id);
+  assert.equal(artifactDownloads, downloadsBeforeOutage);
+  assert.equal((await requestWorker("/run", { host: "cold.wrangler.test" })).status, 503);
   console.log("REAL WRANGLER ARTIFACT TO WORKERD SMOKE PASSED");
 } finally {
   if (child && !exited) {
