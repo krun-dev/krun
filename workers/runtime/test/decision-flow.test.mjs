@@ -834,16 +834,29 @@ await check("configuration metrics distinguish applied revision from accepted AC
   assert.match(awaitingACK, /^krun_runtime_config_ack_current 0$/m);
   assert.match(awaitingACK, /^krun_runtime_config_converged 0$/m);
 });
-await check("cached traffic fails closed 60 seconds after control-plane loss", async () => {
+await check("warm traffic survives a prolonged outage while config metrics go stale", async () => {
   const env = makeEnv(null, []);
   const original = env.PLATFORM.fetch;
   let connected = true;
-  env.PLATFORM.fetch = async (request) =>
-    connected ? original(request) : new Response("unavailable", { status: 503 });
+  const binding = { version_id: version.id, binding: "BUCKET", bucket_id: "bucket-test" };
+  const grant = { ...fixtureRead("http://assets.test/index.html").storage, ...binding };
+  env.PLATFORM.fetch = async (request) => {
+    if (!connected) {
+      return new Response("unavailable", { status: 503 });
+    }
+    if (new URL(request.url).pathname.endsWith("/bindings/BUCKET/credentials")) {
+      return Response.json(grant);
+    }
+    return original(request);
+  };
 
   const mod = await freshEntry();
   const handler = new mod.Private(env, {});
   assert.equal((await call(handler, "/")).status, 200);
+  const signer = new mod.VersionStorage(env, {
+    props: { ...binding, config_epoch: fixtureConfigEpoch },
+  });
+  assert.equal((await signer.sign("head", "fixture.txt")).method, "HEAD");
   connected = false;
   await new Promise((resolve) => setTimeout(resolve, 5));
   const originalNow = performance.now;
@@ -851,14 +864,150 @@ await check("cached traffic fails closed 60 seconds after control-plane loss", a
   try {
     performance.now = () => disconnectedAt + 59000;
     assert.equal((await call(handler, "/")).status, 200);
-    performance.now = () => disconnectedAt + 61000;
-    assert.equal((await call(handler, "/")).status, 503);
-    assert.equal((await call(new mod.Management(env, {}), "/ready")).status, 503);
+    performance.now = () => disconnectedAt + 3_600_000;
+    assert.equal((await call(handler, "/")).status, 200);
+    const ready = await call(new mod.Management(env, {}), "/ready");
+    assert.equal(ready.status, 200);
+    assert.equal((await ready.json()).config_fresh, false);
+    assert.equal((await signer.sign("head", "fixture.txt")).method, "HEAD");
+    const previousEpochSigner = new mod.VersionStorage(env, {
+      props: { ...binding, config_epoch: "c".repeat(32) },
+    });
+    await assert.rejects(
+      previousEpochSigner.sign("head", "fixture.txt"),
+      /configuration epoch changed/,
+    );
+    const wallClock = Date.now;
+    try {
+      Date.now = () => Date.parse(grant.lease_until) + 1000;
+      await assert.rejects(signer.sign("head", "fixture.txt"), /platform 503/);
+    } finally {
+      Date.now = wallClock;
+    }
     const metrics = await (await call(new mod.Metrics(env, {}), "/metrics")).text();
     assert.match(metrics, /^krun_runtime_config_fresh 0$/m);
     assert.match(metrics, /^krun_runtime_config_converged 0$/m);
   } finally {
     performance.now = originalNow;
+  }
+});
+await check("a definitive control-plane denial fences warm routes", async () => {
+  const env = makeEnv(null, []);
+  const mod = await freshEntry();
+  const handler = new mod.Private(env, {});
+  assert.equal((await call(handler, "/")).status, 200);
+  env.PLATFORM.fetch = async () => new Response("forbidden", { status: 403 });
+  assert.equal((await handler.fetch(new Request("http://uncached.workers.test/"))).status, 503);
+  assert.equal((await call(handler, "/")).status, 503);
+  assert.equal((await call(new mod.Management(env, {}), "/ready")).status, 503);
+});
+for (const endpoint of ["/config/changes", "/ack"]) {
+  for (const status of [401, 403]) {
+    await check(`${endpoint} ${status} fences cached traffic without a cold lookup`, async () => {
+      const env = makeEnv(null, []);
+      const platform = env.PLATFORM.fetch;
+      let release;
+      let entered;
+      let denied = false;
+      const pending = new Promise((resolve) => (entered = resolve));
+      env.PLATFORM.fetch = async (request) => {
+        if (denied) {
+          return new Response(null, { status });
+        }
+        if (new URL(request.url).pathname.endsWith(endpoint)) {
+          entered();
+          return new Promise((resolve) => (release = resolve));
+        }
+        return platform(request);
+      };
+      const mod = await freshEntry();
+      const handler = new mod.Private(env, {});
+      assert.equal((await call(handler, "/")).status, 200);
+      await pending;
+      denied = true;
+      release(new Response(null, { status }));
+      let response;
+      for (let i = 0; i < 50; i++) {
+        response = await call(handler, "/");
+        if (response.status === 503) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      assert.equal(response.status, 503);
+      assert.equal((await call(new mod.Management(env, {}), "/ready")).status, 503);
+    });
+  }
+}
+await check("recovery applies a disable and the restriction survives another outage", async () => {
+  const env = makeEnv(null, []);
+  const platform = env.PLATFORM.fetch;
+  let release;
+  let entered;
+  let applied;
+  let polls = 0;
+  const pending = new Promise((resolve) => (entered = resolve));
+  const recovered = new Promise((resolve) => (applied = resolve));
+  env.PLATFORM.fetch = async (request) => {
+    if (new URL(request.url).pathname.endsWith("/config/changes")) {
+      polls++;
+      if (polls === 1) {
+        entered();
+        return new Promise((resolve) => (release = resolve));
+      }
+      applied();
+      return new Promise(() => {});
+    }
+    return platform(request);
+  };
+  const mod = await freshEntry();
+  const handler = new mod.Private(env, {});
+  assert.equal((await call(handler, "/")).status, 200);
+  await pending;
+  const originalNow = performance.now;
+  let now = performance.now() + 3_600_000;
+  try {
+    performance.now = () => now;
+    assert.equal((await call(handler, "/")).status, 200);
+    release(
+      Response.json({
+        config_epoch: fixtureConfigEpoch,
+        config_head_revision: 2,
+        from: 1,
+        to: 2,
+        ops: [
+          {
+            type: "route_upsert",
+            host: "w-test.workers.test",
+            route: { host: "w-test.workers.test", version: version.id, enabled: false },
+          },
+        ],
+      }),
+    );
+    await recovered;
+    assert.equal((await call(handler, "/")).status, 410);
+    now += 3_600_000;
+    assert.equal((await call(handler, "/")).status, 410);
+    const ready = await call(new mod.Management(env, {}), "/ready");
+    assert.equal(ready.status, 200);
+    assert.equal((await ready.json()).config_fresh, false);
+  } finally {
+    performance.now = originalNow;
+  }
+});
+await check("a cached deployment still expires during a control-plane outage", async () => {
+  const expires = new Date(Date.now() + 60_000).toISOString();
+  const env = makeEnv(null, [], version.id, { expires });
+  const mod = await freshEntry();
+  const handler = new mod.Private(env, {});
+  assert.equal((await call(handler, "/")).status, 200);
+  env.PLATFORM.fetch = async () => new Response(null, { status: 503 });
+  const originalNow = Date.now;
+  try {
+    Date.now = () => Date.parse(expires) + 1;
+    assert.equal((await call(handler, "/")).status, 410);
+  } finally {
+    Date.now = originalNow;
   }
 });
 await check("a route miss in a new epoch fences pending traffic and static grants", async () => {

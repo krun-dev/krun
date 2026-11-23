@@ -186,11 +186,35 @@ serving Pod 在本地按 Version 记录最近一次转发业务请求的时间�
 
 `config/` 前缀与 `pub/`、`int/` 一样通过签名授权读取，只能通过集群内 endpoint 访问（`artifact_storage.config_base_url` 必须指向私有地址）；生产应使用独立桶或带 VPC 条件的桶策略。对象存储快照只含 host → version 指针和不可变 Version 描述符，不含 Build、Operation、日志或 IAM 数据。PostgreSQL 不保存每个 revision 的全量投影，只保存一份归一化当前头和最近 512 个 revision 的逐实体 ops；Pod 的 revision 落后于保留窗口，或高于当前发布 head 时，通过 409 重置为紧凑 head，再按需读取 host。客户端 revision 超前不会被当作无更新而一直返回 204。
 
-对象存储的 checkpoint 放在 `config/pools/<pool>/epochs/<epoch>/` 下。后台清理保留当前代次引用的快照，其他代次及旧路径对象满 24 小时后进入清理。恢复 PostgreSQL 后，按[生产恢复步骤](../deploy/production/README.md#失败回滚与备份恢复)轮换配置代次。
+对象存储的 checkpoint 放在 `config/pools/<pool>/epochs/<epoch>/` 下。后台清理保留当前代次引用的快照，其他代次及旧路径对象满 24 小时后进入清理。恢复 PostgreSQL 后，按[备份恢复后的配置代次](../deploy/production/README.md#备份恢复后的配置代次)轮换配置代次。
 
-短暂断连时，热路由可在最后一次控制面确认后的 60 秒内继续服务。尚未缓存的代码、资产或 Secret 仍需各自的读取授权。超过 60 秒后，新请求和 serving readiness 返回 503。新 Pod 在控制面确认代次后开始服务。
+已确认代次的 serving Pod 在控制面断连时继续使用最后已加载的配置和版本。60 秒是配置新鲜度的观测阈值，
+超过后 `/ready` 仍可返回 200，且报告 `config_fresh: false`。断连时暂停主动回收已加载的 Worker。
+尚未缓存的代码、资产清单或 Secret 仍需控制面，存储操作仍受凭据租约和过期时间限制。
+新 Pod 在控制面确认代次后开始服务。配置流报告需要重新同步、代次不匹配或控制面明确拒绝认证时，
+Runtime 使旧视图失效并等待重新启动配置。
 
-controller 默认对业务 pool 的 Ready serving Pod 调用 `/validate`，配置 `validator_pool` 后改用独立 validator。该接口总是在校验专用的 WorkerLoader 实例中加载并运行 `KrunValidation`；commit 后由配置流传播，controller 通过 `worker_runtime_acks` 观察收敛，`available` 表示当前 serving 成员都已上报该 revision。Serving readiness 要求配置视图已加载且处于有效期，Version 在首次请求时懒加载。Validator readiness 不启动配置跟随或 ACK，也没有业务 socket。业务域名的实际可达性由独立 HTTPS 探测记录，见[运行指标](../deploy/observability/README.md#配置收敛与业务入口)。
+| 断连时的请求 | 行为 |
+| --- | --- |
+| 本地已有路由、所选版本及所需依赖 | 使用最后确认的配置继续服务；灰度权重保持最后确认值 |
+| 已缓存的资产或响应 | 按本地路由和原缓存规则服务；不会延长响应缓存 TTL |
+| 读取未缓存的资产或使用 R2 binding | 仅在原有目录授权或 binding 凭据租约内读取；到期后必须向控制面续签 |
+| 冷路由 | 尝试控制面和同代次、revision 足够新的 shard；这不能补齐缺失的代码、manifest、Secret 或其他绑定 |
+| 新 Pod、未加载的版本或缺失的绑定 | 仍需原有控制面授权和依赖；失败仅影响相关请求 |
+| 已知的环境停用、路由删除和部署过期 | 继续执行本地已应用的限制；过期时间到达后即使断连也停止服务 |
+
+停用、删除和 Secret 更新通过配置流传播，完全断连的 Pod 无法收到新撤销，不能保证立即生效。
+收到的配置认证拒绝会使整个本地视图失效；业务凭据仍受原授权租约约束，不因断连延长。
+已经发出的存储签名、在途请求和已经注入 isolate 的 Secret 不具备即时撤销保证。
+必须立即阻断的事件需要通过独立可操作的 Gateway、网络或底层存储权限执行，不能仅等待配置流。
+
+路由和资产缓存仍有容量上限，进程退出、重启或缓存淘汰后可能需要重新加载依赖。
+断连期间应保留已就绪的 serving 副本；readiness 200 仅表示本地配置可承流，不表示控制面已恢复或所有站点均可冷启动。
+缺少可用依赖或配置视图失效的业务请求返回 HTTP 503、`{"error":"runtime unavailable"}`；
+恢复控制面连接及相应依赖后重试。已停用环境和过期部署分别返回 HTTP 410、
+`{"error":"environment disabled"}` 和 `{"error":"deployment expired"}`，需要恢复环境或重新发布。
+
+controller 默认对业务 pool 的 Ready serving Pod 调用 `/validate`，配置 `validator_pool` 后改用独立 validator。该接口总是在校验专用的 WorkerLoader 实例中加载并运行 `KrunValidation`；commit 后由配置流传播，controller 通过 `worker_runtime_acks` 观察收敛，`available` 表示当前 serving 成员都已上报该 revision。Serving readiness 要求已加载可用的配置视图，Version 在首次请求时懒加载。Validator readiness 不启动配置跟随或 ACK，也没有业务 socket。业务域名的实际可达性由独立 HTTPS 探测记录，见[运行指标](../deploy/observability/README.md#配置收敛与业务入口)。
 
 资源池和 Network Profile 来自主 YAML，使用有效 placement 限定路由和内部数据访问；
 当前模型见 [资源池配置](workers-pools.md)。Secret binding 已支持，Service/DB binding 不在当前范围。

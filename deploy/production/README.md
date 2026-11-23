@@ -150,6 +150,35 @@ FQDN 白名单。需要更严的目的域限制时，使用公司 CNI 的 FQDN �
 
 ## 更新与恢复
 
+### 控制面断连
+
+Serving Pod 保留最后已确认的路由和已加载的 Worker。控制面或控制面 PostgreSQL 断连时，
+已加载且依赖可用的版本继续处理请求。`/ready` 可返回 200，最后一次有效配置同步满 60 秒后
+`config_fresh` 为 `false`。发布、配置变更、冷加载和存储凭据续签仍依赖控制面。
+生产可在主配置设置 `deployment.control_replicas` 和 `deployment.runtime_replicas` 至少为 2，
+并为 PostgreSQL 使用可故障切换的连接入口。断连期间保留已就绪的 serving 副本。
+需要在控制面不可用时紧急停止流量，可在 Gateway 关闭对应业务入口。数据库备份恢复前隔离旧 serving 流量，轮换配置代次并验证新 serving 后再切流。
+
+断连演练使用隔离环境：先通过真实业务入口预热，再中断 Runtime 到控制面的连接，等待超过 60 秒。
+预期热版本和其已缓存资产继续返回原状态，管理端 `/ready` 返回 200 且 `config_fresh: false`，
+`krun_runtime_config_fresh` 为 0；未缓存依赖无法加载的业务请求返回 503 `runtime unavailable`。
+恢复连接后，检查配置新鲜度恢复，并验证一次停用变更使对应业务请求返回 410 `environment disabled`。
+
+### 备份恢复后的配置代次
+
+前置条件：已隔离业务入口并停止所有连接该数据库的控制面和 serving 实例，PostgreSQL 已恢复，
+主配置指向恢复后的数据库且 schema 校验通过。在仓库根目录使用 Go 1.26 执行；
+将 `KRUN_CONFIG` 替换为密钥平台挂载的唯一主配置路径：
+
+```bash
+KRUN_CONFIG=/path/to/main.yaml
+go run ./cmd/krun-server rotate-runtime-config-epoch --config "$KRUN_CONFIG"
+```
+
+命令输出新的 32 位十六进制代次。启动控制面和新 serving 后，确认其管理端 `/ready` 返回 200，
+`config_epoch` 与输出相同；通过真实业务入口验证版本、资产和绑定，再恢复业务入口。
+未轮换代次或仍能承流的旧 serving 可能继续使用备份恢复前的配置。
+
 ### 手动在线升级
 
 按[手动执行在线迁移](../../docs/storage.md#手动执行在线迁移)审核并执行增量 SQL，再滚动发布。
