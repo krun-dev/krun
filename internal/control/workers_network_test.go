@@ -892,6 +892,16 @@ func TestProcessOperationValidationMembers(t *testing.T) {
 						t.Error("validation used the wrong pool credential")
 					}
 					var payload struct {
+						Artifact struct {
+							Storage struct {
+								Endpoint        string `json:"endpoint"`
+								Region          string `json:"region"`
+								Bucket          string `json:"bucket"`
+								Prefix          string `json:"prefix"`
+								AccessKeyID     string `json:"access_key_id"`
+								SecretAccessKey string `json:"secret_access_key"`
+							} `json:"storage"`
+						} `json:"artifact"`
 						Secrets struct {
 							Version string            `json:"version_id"`
 							Digest  string            `json:"secret_digest"`
@@ -900,6 +910,11 @@ func TestProcessOperationValidationMembers(t *testing.T) {
 					}
 					if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 						t.Error(err)
+					}
+					grant := payload.Artifact.Storage
+					if grant.Endpoint != s3Server.URL || grant.Region != "us-east-1" || grant.Bucket != "artifacts" ||
+						grant.Prefix != "v1/org-a/sha256/"+code.ArchiveDigest+"/" || grant.AccessKeyID != "access" || grant.SecretAccessKey != "secret" {
+						t.Error("candidate artifact read grant is incomplete or outside the artifact scope")
 					}
 					if payload.Secrets.Version != "rel-cas" || payload.Secrets.Values["API_SECRET"] != "candidate-only" || payload.Secrets.Digest == "" {
 						t.Error("immutable candidate secrets were not supplied")
@@ -921,8 +936,19 @@ func TestProcessOperationValidationMembers(t *testing.T) {
 			defer apiServer.Close()
 
 			c := testWorkersConfig()
-			c.ArtifactStorage.Endpoint, c.ArtifactStorage.BuilderEndpoint = s3Server.URL, s3Server.URL
-			c.ArtifactStorage.Bucket, c.ArtifactStorage.Credentials.AccessKeyID, c.ArtifactStorage.Credentials.SecretAccessKey, c.ArtifactStorage.LocationID = "artifacts", "access", "secret", "test"
+			c.ArtifactStorage = appconfig.WorkerArtifactStorageConfig{
+				Endpoint:        s3Server.URL,
+				BuilderEndpoint: s3Server.URL,
+				RuntimeEndpoint: s3Server.URL,
+				Region:          "us-east-1",
+				Bucket:          "artifacts",
+				LocationID:      "test",
+				Credentials: appconfig.ArtifactStorageCredentials{
+					Mode:            "ak_sk",
+					AccessKeyID:     "access",
+					SecretAccessKey: "secret",
+				},
+			}
 			c.SecretsActiveKey = "v1"
 			c.SecretsKeys = map[string]string{"v1": "ERERERERERERERERERERERERERERERERERERERERERE="}
 			if strings.HasPrefix(mode, "dedicated") || mode == "no-validator" {
