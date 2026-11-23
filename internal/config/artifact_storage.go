@@ -1,33 +1,29 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
 	"path"
 	"regexp"
 	"strings"
-
-	"github.com/krun-dev/krun/internal/configfile"
 )
 
 // WorkerArtifactStorageConfig defines one physical store. Endpoint overrides
 // point to the same bucket, from networks with different DNS or routing.
 type WorkerArtifactStorageConfig struct {
-	Endpoint                 string                         `json:"endpoint"`
-	BuilderEndpoint          string                         `json:"builder_endpoint,omitempty"`
-	RuntimeEndpoint          string                         `json:"runtime_endpoint,omitempty"`
-	LogReadEndpoint          string                         `json:"log_read_endpoint,omitempty"`
-	Region                   string                         `json:"region"`
-	Bucket                   string                         `json:"bucket"`
-	Prefix                   string                         `json:"prefix,omitempty"`
-	LocationID               string                         `json:"location_id"`
-	AddressingStyle          string                         `json:"addressing_style,omitempty"`
-	BucketMode               string                         `json:"bucket_mode,omitempty"`
-	ConfigBaseURL            string                         `json:"config_base_url,omitempty"`
-	Credentials              ArtifactStorageCredentials     `json:"credentials"`
-	LegacyRuntimeCredentials *WorkerStorageCredentialConfig `json:"-"`
+	Endpoint        string                     `json:"endpoint"`
+	BuilderEndpoint string                     `json:"builder_endpoint,omitempty"`
+	RuntimeEndpoint string                     `json:"runtime_endpoint,omitempty"`
+	LogReadEndpoint string                     `json:"log_read_endpoint,omitempty"`
+	Region          string                     `json:"region"`
+	Bucket          string                     `json:"bucket"`
+	Prefix          string                     `json:"prefix,omitempty"`
+	LocationID      string                     `json:"location_id"`
+	AddressingStyle string                     `json:"addressing_style,omitempty"`
+	BucketMode      string                     `json:"bucket_mode,omitempty"`
+	ConfigBaseURL   string                     `json:"config_base_url,omitempty"`
+	Credentials     ArtifactStorageCredentials `json:"credentials"`
 }
 
 type ArtifactStorageCredentials struct {
@@ -37,62 +33,6 @@ type ArtifactStorageCredentials struct {
 	SecretAccessKey string `json:"secret_access_key"`
 	RoleTRN         string `json:"role_trn,omitempty"`
 	STSEndpoint     string `json:"sts_endpoint,omitempty"`
-}
-
-// UnmarshalJSON accepts the old flat layout on upgrade and immediately converts
-// it to the same representation used by the nested configuration.
-func (c *WorkersConfig) UnmarshalJSON(raw []byte) error {
-	var fields map[string]json.RawMessage
-	if err := configfile.DecodeJSON(raw, &fields); err != nil {
-		return err
-	}
-	oldKeys := map[string]string{
-		"s3_endpoint": "endpoint", "s3_builder_endpoint": "builder_endpoint",
-		"s3_runtime_endpoint": "runtime_endpoint", "s3_log_read_endpoint": "log_read_endpoint",
-		"s3_region": "region", "s3_bucket": "bucket", "s3_prefix": "prefix",
-		"s3_location_id": "location_id", "s3_addressing_style": "addressing_style",
-		"s3_bucket_mode": "bucket_mode", "config_base_url": "config_base_url",
-	}
-	legacy := map[string]json.RawMessage{}
-	credentials := map[string]json.RawMessage{}
-	move := func(from, to string, into map[string]json.RawMessage) {
-		if value, exists := fields[from]; exists {
-			into[to] = value
-			delete(fields, from)
-		}
-	}
-	for from, to := range oldKeys {
-		move(from, to, legacy)
-	}
-	move("s3_access_key", "access_key_id", credentials)
-	move("s3_secret_key", "secret_access_key", credentials)
-	legacyRuntime, hasLegacyRuntime := fields["s3_runtime_credentials"]
-	delete(fields, "s3_runtime_credentials")
-	_, nested := fields["artifact_storage"]
-	if len(legacy) != 0 || len(credentials) != 0 || hasLegacyRuntime {
-		if nested {
-			return fmt.Errorf("workers.artifact_storage cannot be combined with legacy s3_* or config_base_url settings")
-		}
-		credentials["mode"] = json.RawMessage(`"ak_sk"`)
-		legacy["credentials"], _ = json.Marshal(credentials)
-		fields["artifact_storage"], _ = json.Marshal(legacy)
-	}
-
-	type workerConfig WorkersConfig
-	normalized, err := json.Marshal(fields)
-	if err != nil {
-		return err
-	}
-	if err := configfile.DecodeJSON(normalized, (*workerConfig)(c)); err != nil {
-		return err
-	}
-	if nested && c.ArtifactStorage.Credentials.Mode == "" {
-		return fmt.Errorf("workers.artifact_storage.credentials.mode is required")
-	}
-	if hasLegacyRuntime {
-		return configfile.DecodeJSON(legacyRuntime, &c.ArtifactStorage.LegacyRuntimeCredentials)
-	}
-	return nil
 }
 
 func (c *WorkersConfig) ArtifactUsesSTS() bool {
@@ -109,7 +49,7 @@ func (c *WorkersConfig) ArtifactCredentials() WorkerStorageCredentialConfig {
 				RoleTrn: auth.RoleTRN, STSEndpoint: auth.STSEndpoint,
 			}
 		}
-	case "", "ak_sk":
+	case "ak_sk":
 		return WorkerStorageCredentialConfig{Type: "static", AccessKeyID: auth.AccessKeyID, SecretAccessKey: auth.SecretAccessKey}
 	}
 	return WorkerStorageCredentialConfig{}
@@ -121,7 +61,7 @@ func (s *WorkerArtifactStorageConfig) validateCredentials() error {
 		return fmt.Errorf("workers.artifact_storage.credentials requires access_key_id and secret_access_key")
 	}
 	switch auth.Mode {
-	case "", "ak_sk":
+	case "ak_sk":
 		if auth.Provider != "" || auth.RoleTRN != "" || auth.STSEndpoint != "" {
 			return fmt.Errorf("workers.artifact_storage.credentials mode ak_sk does not accept STS settings")
 		}
@@ -208,14 +148,6 @@ func (c *WorkersConfig) validateArtifactStorage() error {
 		}
 	}
 
-	if s.LegacyRuntimeCredentials != nil {
-		store := c.artifactCredentialStore(s.RuntimeEndpoint, *s.LegacyRuntimeCredentials)
-		store.RootPrefix = "runtime"
-		if err := store.validate(); err != nil {
-			return fmt.Errorf("invalid Workers s3_runtime_credentials: %w", err)
-		}
-		s.LegacyRuntimeCredentials = &store.Credentials
-	}
 	if s.ConfigBaseURL == "" {
 		s.ConfigBaseURL = c.S3ObjectURL(s.RuntimeEndpoint, "config")
 	}

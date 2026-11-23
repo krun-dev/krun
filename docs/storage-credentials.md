@@ -154,7 +154,7 @@ KRUN_TEST_POSTGRES_URL="$TEST_DATABASE_URL" \
   -args -runtime-storage-config=../../.data/dev.yaml
 ```
 
-这项测试要求主配置显式选择 `artifact_storage.credentials.mode: sts`（或旧版 Runtime STS 配置），不会回退到
+这项测试要求主配置显式选择 `artifact_storage.credentials.mode: sts`，不会回退到
 静态凭据。元数据写入专用 PostgreSQL 测试库的独立 schema。权限 handler、生产模板生成的 serving / validator、
 STS 和对象存储均使用真实实现。测试仅在 `artifact_storage.prefix` 下的 `integration-tests/<随机ID>/` 下创建
 配置头、制品、清单和资产，验证配置签名读取、静态响应与缓存、代码执行、凭据不进入

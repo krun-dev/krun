@@ -38,10 +38,7 @@ func TestConfiguredRuntimeReads(t *testing.T) {
 		t.Fatal("load main Workers configuration", err)
 	}
 	if !cfg.Workers.ArtifactUsesSTS() {
-		legacy := cfg.Workers.ArtifactStorage.LegacyRuntimeCredentials
-		if legacy == nil || legacy.Type != "tos_assume_role" {
-			t.Fatal("main configuration must explicitly select runtime STS")
-		}
+		t.Fatal("main configuration must explicitly select runtime STS")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()

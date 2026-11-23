@@ -94,10 +94,10 @@ workers:
 
 ## 从旧配置升级
 
-旧版扁平 `workers.s3_*` 继续可读。切换到新块时，地址、桶、前缀、区域、寻址和位置 ID
+旧版扁平 `workers.s3_*` 不再被接受。切换到新块时，地址、桶、前缀、区域、寻址和位置 ID
 从旧字段原样迁移，例如 `s3_endpoint` 到 `artifact_storage.endpoint`。
 可选的 `config_base_url` 也移入新块。删掉旧字段后再添加新块，两种布局不能混用。
-旧版单独使用 `s3_runtime_credentials` 的部署可保留旧布局，直到制品存储准备好统一使用 STS。
+旧版单独使用 `s3_runtime_credentials` 的部署需改用统一的 `artifact_storage.credentials`。
 
 切换 STS 时一起升级控制面和 serving Runtime。使用新版渲染器生成的 serving 配置会自动
 启用 `CONFIG_STORAGE_STS`。如果维护手写的 workerd 配置，为可信入口添加文本绑定

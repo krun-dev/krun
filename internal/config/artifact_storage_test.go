@@ -42,6 +42,8 @@ artifact_storage:
 	}
 	for _, test := range []struct{ name, input string }{
 		{"mixed layout", input + "s3_endpoint: https://s3.example.com\n"},
+		{"legacy flat layout", "s3_endpoint: https://s3.example.com\n"},
+		{"legacy runtime credentials", input + "s3_runtime_credentials:\n  type: static\n"},
 		{"unknown field", input + "  unexpected: true\n"},
 		{"missing mode", strings.Replace(input, "    mode: sts\n", "", 1)},
 		{"unknown provider", strings.Replace(input, "provider: volcengine", "provider: other", 1)},

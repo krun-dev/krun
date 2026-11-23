@@ -67,14 +67,6 @@ func (r *Registry) Credentials(ctx context.Context, scope domain.StorageCredenti
 // NewArtifactManager reuses the STS provider and cache implementation while
 // keeping artifact read scopes separate from business storage.
 func NewArtifactManager(c *config.WorkersConfig) (*Manager, error) {
-	credentials := c.ArtifactCredentials()
-	if c.ArtifactStorage.LegacyRuntimeCredentials != nil {
-		credentials = *c.ArtifactStorage.LegacyRuntimeCredentials
-	}
-	return newArtifactManager(credentials, c.ArtifactStorage.Region)
-}
-
-func NewArtifactClientManager(c *config.WorkersConfig) (*Manager, error) {
 	return newArtifactManager(c.ArtifactCredentials(), c.ArtifactStorage.Region)
 }
 

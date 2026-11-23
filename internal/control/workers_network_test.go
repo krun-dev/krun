@@ -42,6 +42,7 @@ func catalogConfig() *appconfig.WorkersConfig {
 			Endpoint: "http://127.0.0.1:9000",
 			Bucket:   "krun-artifacts",
 			Credentials: appconfig.ArtifactStorageCredentials{
+				Mode:            "ak_sk",
 				AccessKeyID:     "access",
 				SecretAccessKey: "secret",
 			},
