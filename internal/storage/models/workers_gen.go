@@ -299,6 +299,9 @@ type Operation struct {
 	ExpectedRevision   int             `bun:"expected_revision"`
 	ConfigRevision     int             `bun:"config_revision"`
 	EdgeRevision       int64           `bun:"edge_revision"`
+	ResourceGeneration int64           `bun:"resource_generation"`
+	ResourceEpoch      string          `bun:"resource_epoch"`
+	ResourcePool       string          `bun:"resource_pool"`
 	EdgePool           string          `bun:"edge_pool"`
 	DeploymentRevision int             `bun:"deployment_revision"`
 	Error              string          `bun:"error"`

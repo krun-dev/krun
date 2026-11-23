@@ -18,6 +18,8 @@ krun is pre-launch. It currently supports running and managing Workers, object s
 - Bind logical buckets backed by S3-compatible storage to Workers and manage objects in the console.
 - Manage access through organizations, members, roles, and API keys, and manage identities and organizations from the CLI.
 
+- Run multiple control-plane replicas with bounded local caches and on-demand Runtime resource subscriptions. Deployment availability and propagation are tracked separately; loaded configurations continue serving during control-plane outages. [Configuration distribution](docs/workers-backend.md#边缘配置分发)
+
 ## Workers binding compatibility
 
 krun runs module-format JavaScript and TypeScript Workers on workerd. The table lists the supported Cloudflare Workers bindings and their main limits.

@@ -1,4 +1,5 @@
 mod admission;
+mod config_agent;
 mod rejection;
 mod routing;
 mod serving;
@@ -567,6 +568,7 @@ struct Proxy {
     bench_pod_name: Option<String>,
     bench_delay_file: Option<PathBuf>,
     retry_budget: Duration,
+    config_agent: Option<Arc<config_agent::Agent>>,
 }
 
 enum Target {
@@ -584,6 +586,7 @@ struct RequestContext {
     traffic: Traffic,
     stream_ingress: Option<StreamPermit>,
     started: Instant,
+    config_bundle: Option<Arc<config_agent::Bundle>>,
 }
 
 async fn respond(session: &mut Session, status: u16, body: String, rejected: bool) -> Result<()> {
@@ -619,6 +622,7 @@ impl ProxyHttp for Proxy {
             traffic: Traffic::Short,
             stream_ingress: None,
             started: Instant::now(),
+            config_bundle: None,
         }
     }
 
@@ -626,6 +630,9 @@ impl ProxyHttp for Proxy {
         if self.listener == Listener::Metrics {
             let (status, body) = if session.req_header().uri.path() == "/metrics" {
                 let mut metrics = self.pool.metrics();
+                if let Some(agent) = &self.config_agent {
+                    metrics.push_str(&agent.metrics());
+                }
                 if let Some(router) = &self.router {
                     router.metrics(&mut metrics);
                 }
@@ -640,6 +647,14 @@ impl ProxyHttp for Proxy {
             return Ok(true);
         }
         if self.listener == Listener::Coordinator {
+            if session.req_header().uri.path().starts_with("/config/") {
+                if let (Some(agent), Some(settings)) = (&self.config_agent, &self.pool.serving) {
+                    return config_agent::coordinator(session, agent, &settings.management_token)
+                        .await;
+                }
+                respond(session, 503, String::new(), false).await?;
+                return Ok(true);
+            }
             match session.req_header().uri.path() {
                 "/ack" => serving::grant_ack(session, &self.pool).await?,
                 "/cold/reserve" | "/cold/release" => {
@@ -715,11 +730,44 @@ impl ProxyHttp for Proxy {
             REJECT_HEADER,
             COLD_MISS_HEADER,
             HEADROOM_HEADER,
+            config_agent::CONFIG_HEADER,
         ] {
             request.remove_header(field);
         }
         match ctx.target.as_ref().expect("upstream selected") {
             Target::Local(lease) => {
+                if let Some(agent) = &self.config_agent {
+                    let host = request
+                        .headers
+                        .get("host")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or_default()
+                        .split(':')
+                        .next()
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
+                    if agent.is_static_host(&host) {
+                        agent.head().map_err(|status| {
+                            Error::explain(
+                                ErrorType::HTTPStatus(status),
+                                "configuration unavailable",
+                            )
+                        })?;
+                    } else {
+                        let bundle =
+                            agent
+                                .resolve(&host, request.uri.path())
+                                .await
+                                .map_err(|status| {
+                                    Error::explain(
+                                        ErrorType::HTTPStatus(status),
+                                        "configuration unavailable",
+                                    )
+                                })?;
+                        request.insert_header(config_agent::CONFIG_HEADER, &bundle.handle)?;
+                        ctx.config_bundle = Some(bundle);
+                    }
+                }
                 if let Some(permit) = &lease.load {
                     request.insert_header(LOAD_HEADER, if permit.may_load { "1" } else { "0" })?;
                 }
@@ -1415,7 +1463,19 @@ fn main() {
         bench_pod_name: pod_name,
         bench_delay_file: env::var_os("POOL_BENCH_DELAY_FILE").map(PathBuf::from),
         retry_budget,
+        config_agent: if supervised {
+            let path = PathBuf::from(env::args_os().nth(3).expect("workerd config"));
+            config_agent::Agent::from_config(&path).expect("configuration agent settings")
+        } else {
+            None
+        },
     };
+    if let Some(agent) = &proxy.config_agent {
+        server.add_service(background_service(
+            "runtime configuration agent",
+            config_agent::AgentService(agent.clone()),
+        ));
+    }
     for (listener, port) in [
         (Listener::Ingress, port),
         (

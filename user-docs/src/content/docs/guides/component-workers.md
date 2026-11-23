@@ -50,6 +50,33 @@ export default {
 
 发布后可以从 Worker 详情的「指标」页查看请求数、HTTP 5xx 比例和响应延迟，并比较不同环境及版本。操作步骤见 [Workers 观测](/docs/guides/workers-observability.html)。
 
+## 查看配置传播
+
+发布进度显示“部署已可用”后，展开同一发布操作下的“配置传播状态”。可用表示至少一个 Ready serving Pod
+已经确认目标配置并在实际 serving Loader 中准备版本；它与所有成员的同步进度分别显示。
+
+- **已应用**：已确认当前目标代次；**尚未缓存**：成员清单已确认，但该 Pod 尚未使用此目标，首次访问时冷读取。
+- **待同步**：已缓存的配置较旧；**未知成员**：连接或新鲜证明缺失；**拒绝应用**：当前会话拒绝配置。
+- 目标配置代次用于与服务端观测对照。只在成员清单已确认且无待同步、未知或拒绝成员时显示“当前成员已确认”。
+
+![发布可用与传播状态分别显示，未知成员仍计入总数](/images/workers-propagation-light.png)
+
+深色与手机界面使用相同字段：
+
+![深色主题中的配置传播状态](/images/workers-propagation-dark.png)
+
+![手机界面中的配置传播状态](/images/workers-propagation-mobile.png)
+
+控制面断连时，已加载路由、版本及依赖可继续服务，配置新鲜度会变为否。
+新站点、缺失依赖与到期凭据的续签仍可能失败；进程重启不保证离线恢复。
+固定版本地址不跟随默认发布，但仍受环境启停、placement 和地址有效期约束。
+指定版本不存在或无权限时不会回退到默认版本。
+
+```bash
+krun deployments propagation --org TEAM --worker WORKER --env production
+krun deployments propagation --org TEAM --worker WORKER --env production --wait --timeout 2m
+```
+
 ## 命名配置版本
 
 在 Worker 中选择环境并进入「配置版本」，可以从环境草稿或当前生效配置保存一份带名称、

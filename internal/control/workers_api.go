@@ -113,6 +113,7 @@ func (s *Server) workersRoutes(m *recordingMux) {
 	m.HandleFunc("POST "+base+"/environments/{environment}/deployments", protect(false, s.workerPublish))
 	m.HandleFunc("POST "+base+"/environments/{environment}/rollbacks", protect(false, s.workerRollback))
 	m.HandleFunc("GET "+base+"/environments/{environment}/history", protect(false, s.workerVersionHistory))
+	m.HandleFunc("GET "+base+"/environments/{environment}/propagation", protect(false, s.workerPropagation))
 	m.HandleFunc("GET "+base+"/operations", protect(false, s.workerOperationList))
 	m.HandleFunc("GET "+base+"/previews-base", protect(false, s.workerPreviewBase))
 	m.HandleFunc("PATCH "+base+"/previews-base", protect(false, s.workerPreviewBase))
@@ -311,6 +312,11 @@ func (s *Server) workerDeploymentCreate(st *State, p Principal, r *http.Request,
 
 func (s *Server) workerOperationGet(st *State, p Principal, r *http.Request) (any, int, error) {
 	out, outcome, err := s.workerApplication(r).WorkerOperationGet(r.Context(), st, p, workerRef(r))
+	return out, workerHTTPStatus(outcome), err
+}
+
+func (s *Server) workerPropagation(st *State, p Principal, r *http.Request) (any, int, error) {
+	out, outcome, err := s.workerApplication(r).WorkerPropagation(r.Context(), st, p, workerRef(r), r.PathValue("environment"))
 	return out, workerHTTPStatus(outcome), err
 }
 

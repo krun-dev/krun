@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { SelectField } from "@/components/common";
 import { cn } from "@/lib/utils";
 import { operationLabel, Status, stepNames, stepStates, states } from "./shared";
+import { PropagationStatus } from "./propagation";
 
 export function VersionSummary({
   build,
@@ -59,10 +60,12 @@ export function VersionSummary({
 }
 
 export function OperationPanel({
+  base,
   operation: op,
   operations,
   select,
 }: {
+  base?: string;
   operation: Operation;
   operations: Operation[];
   select: (id: string) => void;
@@ -86,13 +89,13 @@ export function OperationPanel({
         >
           <p className={cn(op.state === "failed" && "text-destructive")}>
             {op.state === "available"
-              ? t("部署已生效。")
+              ? t("部署已可用，配置传播进度单独确认。")
               : op.state === "failed"
                 ? t("部署失败，请查看下方错误详情。")
                 : op.state === "superseded"
                   ? t("此部署已被后续部署替换。")
                   : op.state === "committed"
-                    ? t("部署已提交，正在等待生效。")
+                    ? t("部署已提交，正在等待运行侧准备探测。")
                     : t("部署请求已受理，正在排队或验证，请等待生效。")}
           </p>
           {op.version_id && (
@@ -162,6 +165,14 @@ export function OperationPanel({
           </SelectField>
         </div>
       </CardContent>
+      {base ? (
+        <div className="px-5 pb-5">
+          <PropagationStatus
+            base={base}
+            environment={op.environment}
+          />
+        </div>
+      ) : null}
     </Card>
   );
 }

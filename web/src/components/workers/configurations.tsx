@@ -330,6 +330,7 @@ export function ConfigurationsPanel({
       )}
       {operation ? (
         <OperationPanel
+          base={base}
           operation={operation}
           operations={operations.filter((item) => item.environment === env.name)}
           select={selectOperation}

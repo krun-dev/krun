@@ -9,8 +9,8 @@
 | --- | --- | --- |
 | 控制面读取 | 站点 API 按组织/资源过滤 SQL；列表用资源 ID 游标；Runtime 按 Version/Artifact 主键查询；登录只读当前 identity，启动只注册来源；导航只加载当前用户的授权上下文 | 管理员的批量 IAM 管理操作仍保留独立的管理查询语义；没有给它们伪造授权缓存 |
 | 网关协调 | 共享路由按 pool × domain 建通配 HTTPRoute；不加载全站点拓扑；命名空间清单一次分页读取并复用；已就绪路由每 30 秒修复，未就绪时每秒重试 | 共享路由是唯一入口模型 |
-| 发布 | 数据库触发器将变更合并成一条 Worker dirty 行；每批最多 256 站点；仅对变化路由/Version 写增量；有界批次在 CAS 事务内按顺序写入，无网络调用；操作优先发布自己的站点 | catalogue 变化会一次性入队重建，按有界批次推进；revision 仍是全局单调游标 |
-| Runtime 配置 | 紧凑 head 启动；冷 host 定向查询；仅缓存最多 4096 条 route 和其 Version；增量原地同步提交、按引用计数回收，不遍历全表；对象存储有 256 个 host hash shard | 每个 shard 的大小随所属站点数增长；百万条路由均匀分布时约 3906 条/shard；不要求每 Pod 下载全池 |
+| 发布 | 稳定 host/path 绑定与 deployment/Version 分离；逐资源代次；归一化合并通知；每轮最多处理 128 个待重建 Worker | 普通切版本不重写绑定；域名/路径目录变化仍需有界重建；没有全局 head 提交 |
+| Runtime 配置 | Pod 级 Rust agent、一条 Protobuf WebSocket、按需资源图、当前状态恢复、主库代次复核、受保护的有界缓存 | 每个副本都要为其订阅工作集复核版本；不同 Pod 的活跃集合可能重叠；冷加载和依赖授权仍有成本 |
 | 资产 | finalize 独立保存有 digest 的 manifest；控制面用 single-flight + LRU；Runtime manifest 使用 LRU、合并并发回源、预建路径索引，已加载的 Worker 在其生命周期内保留该 manifest；资产字节缓存维持有界 LRU | 冷请求仍会依赖控制面授权与对象存储；同一资产目录在授权租约内由 workerd 本地签名，无逐文件控制面调用；独立静态域可直达对象存储/CDN |
 | 队列 | 可认领状态/租约筛选，`reconcile_after` 轮转；有界并行协调；`started_at` 区分执行时间与排队时间；认领后才做候选归档 I/O | 不引入额外消息队列；操作行仍是持久化工作队列 |
 | 清理 | dirty Worker retention scope；历史排名仅针对发生变化的站点；过期删除每批最多 1000 行；孤儿 input 有持久游标；资产对象归属索引 + S3 multi-delete；对象扫描有游标和批量上限；GC 独立于发布循环 | 对象 GC 每 10 秒最多执行 8 秒，数据库 retention 每分钟最多执行 20 秒；积压跨批次推进 |
@@ -20,11 +20,16 @@
 
 ## 配置与域名
 
-主 `WorkersConfig` 的协调并发配置：
+主 `WorkersConfig` 的协调并发与资源分发配置（完整上限见 `config/example.yaml`）：
 
 ```yaml
 workers:
   reconcile_concurrency: 8
+  runtime_config:
+    protocol: 2
+    verify_millis: 5000
+    read_concurrency: 32
+    pod_cold_concurrency: 4
 ```
 
 业务入口统一使用共享路由。`reconcile_concurrency` 默认 8，允许 1–64。
@@ -43,23 +48,32 @@ Profile、domain 选择、placement 和 Runtime pool 认证仍共同约束可访
 部署侧为每个 `*.<domain-suffix>` 配置 DNS 和 TLS，即可覆盖单层业务主机名。
 
 控制台是 `/` 静态 SPA，全部控制面接口仍在 `/api/*`；冷路由接口位于内部 listener 的
-`/api/internal/workers/config/routes/{host}`。生产 OSS + 同域 `/api/*` 分发契约不变。
+`/api/internal/workers/config/v2/watch`（WebSocket）。生产 OSS + 同域 `/api/*` 分发契约不变。
 
 ## 持久化与恢复
 
-- `worker_config_dirty`：一站点一行，generation CAS 防止旧 publisher 吞掉新变更；处理后删除。
-- `worker_config_checkpoints`：一 pool/shard 一行，覆盖写 revision/published revision。
-- `worker_asset_objects`：一对象一行，artifact 索引直接定位其文件；对象删除成功后再删行。
-- `worker_retention_scopes`：一变更站点一行，裁剪/孤儿清理完成后按 generation 条件删除。
-- `worker_config_ops` 和 revision 继续保留 512 个 revision；旧不可变 shard 对象按 floor 清理，保留仍被当前 shard pointer 引用的对象。
+v2 使用 `worker_runtime_bindings` 保存一条路径规则一行，`worker_runtime_generations` 保存逐资源代次，
+`worker_runtime_notifications` 合并未发通知，`worker_runtime_route_dirty` 合并绑定重建。
+`worker_runtime_sessions` 和 `worker_runtime_resource_acks` 保存带 session 的有限观测状态。
+通知通过主库 LISTEN/NOTIFY 传播，丢失后通过主库版本复核修复，不把通知作为持久事件日志。
+删除代次保留 24 小时，过期 session/ACK 有界清理；源实体缺失始终返回删除状态。
 
-没有外键、全局选主或数据库内网络调用。IAM 与 Workers 的实体变更保持分开。
-触发器只产生一个站点 ID 的协调意图，不在 IAM 事务中修改 Workers 实体。
+v1 的 `worker_config_*` 与 `worker_runtime_acks` 只在过渡模式中使用，原保留窗口和 checkpoint 清理仍适用。
+制品和资产仍存对象存储；v2 配置不写 S3 checkpoint，不依赖恢复全池路由快照。
+断连保留已加载资源并暂停主动回收，原授权租约不延长，冷加载和离线重启不保证成功。
+详见[边缘配置分发](workers-backend.md#边缘配置分发)。
 
-Shard 在 repeatable-read 视图中读取，并用该视图的真实 head 命名；因此并发发布者不会
-给同一个不可变对象键写入不同内容。Pointer 使用 ETag CAS，旧 revision 不能覆盖新 revision。
-控制面断连时，已确认代次的 Runtime 可从同代次且 revision 足够新的 shard 恢复冷路由，
-已加载版本继续处理请求。未缓存的代码、资产和 Secret 仍需各自的读取授权。60 秒未同步时配置新鲜度指标转为 0。
+## 真实活跃版本负载
+
+`TestPostgresRuntimeResourcesTenThousandActive` 在隔离 PostgreSQL schema 中创建 100,000 个站点、
+10,000 个真实 Version、环境与路由绑定，以四个并行读取者加载活跃资源图，再检查 10,000 次热读取不回源。
+fixture 导入后执行 ANALYZE，测量元数据批量读取，不包含代码下载、Secret、资产或业务执行。
+批量大小、耗时和缓存占用由测试日志记录；这些数据不是生产 QPS/SLO 承诺。
+
+```bash
+KRUN_RESOURCE_SCALE=1 KRUN_TEST_POSTGRES_URL="$TEST_DATABASE_URL" \
+  go test ./internal/control -run '^TestPostgresRuntimeResourcesTenThousandActive$' -count=1 -v -timeout 15m
+```
 
 ## 复现与测量范围
 
@@ -102,5 +116,5 @@ UI 覆盖登录/语言/退出、106 站点跨页、页外深链接、仓库绑�
 指定已编译的路径。默认 `HEAD` 使用仓库实际默认分支，并有真实 Git 仓库回归。
 
 生产容量还需按活跃比例、站点资产大小、总 QPS、发布突发和可用性目标压测 Gateway、
-控制面、PostgreSQL、对象存储/CDN 及 runtime 工作集。保留全局 revision CAS 是当前明确的边界；
-若发布吞吐达到这个小事务的上限，再按独立 pool/shard 拆分 head。
+控制面、PostgreSQL、对象存储/CDN 及 Runtime 工作集。v2 已移除全局 revision 提交与 checkpoint 重写，
+后续扩展依据资源复核、冷加载预算及主库查询的实际瓶颈决定。

@@ -23,8 +23,10 @@ type Store struct {
 	orm                 *bun.DB
 	repositoryTokenKeys RepositoryTokenKeys
 
-	configMu sync.Mutex
-	configCh chan struct{}
+	configMu     sync.Mutex
+	configCh     chan struct{}
+	runtimeDone  chan struct{}
+	runtimeClose sync.Once
 }
 
 // StatePartition selects which tables Update loads and persists. Keeping the
@@ -51,7 +53,7 @@ func Open(ctx context.Context, dsn string, keys RepositoryTokenKeys) (*Store, er
 		pool.Close()
 		return nil, err
 	}
-	return &Store{pool: pool, orm: newORM(pool), repositoryTokenKeys: keys}, nil
+	return &Store{pool: pool, orm: newORM(pool), repositoryTokenKeys: keys, runtimeDone: make(chan struct{})}, nil
 }
 
 func openPostgresPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
@@ -69,11 +71,18 @@ func openPostgresPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 }
 
 func (s *Store) Close() {
+	s.runtimeClose.Do(func() {
+		if s.runtimeDone != nil {
+			close(s.runtimeDone)
+		}
+	})
 	if s.orm != nil {
 		_ = s.orm.Close()
 	}
 	s.pool.Close()
 }
+
+func (s *Store) RuntimeDone() <-chan struct{} { return s.runtimeDone }
 
 // Ping verifies that the store can serve a query without loading any control
 // plane tables.

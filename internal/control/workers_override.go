@@ -17,6 +17,7 @@ func (s *Server) workerRuntimeAuthorizeOverride(w http.ResponseWriter, r *http.R
 	var in struct {
 		Host       string `json:"host"`
 		Credential string `json:"credential"`
+		Version    string `json:"version"`
 	}
 	if err := bodyWithLimit(r, &in, 4096); err != nil {
 		s.writeError(w, r, err)
@@ -44,6 +45,10 @@ func (s *Server) workerRuntimeAuthorizeOverride(w http.ResponseWriter, r *http.R
 		return
 	}
 	target := route.Routes[0]
+	if in.Version != "" && in.Version != target.Version && in.Version != target.Candidate {
+		s.writeError(w, r, forbidden())
+		return
+	}
 	if !target.Enabled || target.Expires != nil || target.Environment == "" {
 		s.writeError(w, r, forbidden())
 		return
@@ -87,5 +92,5 @@ func (s *Server) workerRuntimeAuthorizeOverride(w http.ResponseWriter, r *http.R
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	s.json(w, 200, map[string]bool{"allowed": true})
+	s.json(w, 200, map[string]any{"allowed": true, "config_epoch": route.Epoch, "route": target, "versions": route.Versions})
 }

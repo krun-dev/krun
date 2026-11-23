@@ -30,6 +30,7 @@ __PUBLIC_EGRESS_BINDING__
           (name = "PLATFORM", service = "platform"),
           (name = "POOL_SLOT", text = "krun-unassigned-slot"),
           (name = "POOL_COORDINATOR", service = "pool-coordinator"),
+          (name = "CONFIG_PROTOCOL", text = __CONFIG_PROTOCOL__),
           (name = "POD_NAME", text = embed "/pod/name"),
           (name = "POD_UID", text = embed "/pod/uid"),
           (name = "RUNTIME_TOKEN", text = embed "/secrets/KRUN_RUNTIME_TOKEN"),

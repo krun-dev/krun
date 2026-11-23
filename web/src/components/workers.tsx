@@ -1226,6 +1226,7 @@ function WorkerDetail({
                 </Card>
                 {operation ? (
                   <OperationPanel
+                    base={base}
                     operation={operation}
                     operations={operations.filter((o) => o.environment === env.name)}
                     select={setSelectedOperation}

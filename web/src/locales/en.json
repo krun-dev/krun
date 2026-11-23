@@ -1079,5 +1079,21 @@
   "删除 Worker": "Delete Worker",
   "Worker 已删除。": "Worker deleted.",
   "输入 Worker ID 以确认删除：": "Enter the Worker ID to confirm deletion:",
-  "删除后环境和路由将停止服务，其他 Worker 对它的调用可能失败。关联数据和构建资源会异步清理；共享资源和绑定的对象存储数据保留。此操作不可撤销。": "Deleting stops the environments and routes, and calls from other Workers may fail. Associated data and build resources are cleaned up asynchronously; shared resources and data in bound object storage are retained. This cannot be undone."
+  "删除后环境和路由将停止服务，其他 Worker 对它的调用可能失败。关联数据和构建资源会异步清理；共享资源和绑定的对象存储数据保留。此操作不可撤销。": "Deleting stops the environments and routes, and calls from other Workers may fail. Associated data and build resources are cleaned up asynchronously; shared resources and data in bound object storage are retained. This cannot be undone.",
+  "配置传播状态": "Configuration propagation",
+  "当前成员已确认": "Current members confirmed",
+  "配置传播中": "Configuration propagating",
+  "传播状态未知": "Propagation unknown",
+  "正在查询": "Checking",
+  "目标配置代次": "Target generation",
+  "已应用": "Applied",
+  "尚未缓存": "Not cached",
+  "待同步": "Pending",
+  "未知成员": "Unknown members",
+  "拒绝应用": "Rejected",
+  "观测成员": "Observed members",
+  "发布可用与配置传播分别确认；断连成员保留已知配置，状态显示为未知。": "Availability and propagation are confirmed separately. Disconnected members retain their known configuration and appear as unknown.",
+  "成员清单尚未确认，不能据此判定全池收敛。": "Membership is not confirmed; pool-wide convergence cannot be inferred.",
+  "部署已可用，配置传播进度单独确认。": "Deployment is available. Configuration propagation is tracked separately.",
+  "部署已提交，正在等待运行侧准备探测。": "Deployment committed; waiting for the serving preparation probe."
 }

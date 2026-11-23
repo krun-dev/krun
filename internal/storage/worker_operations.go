@@ -129,12 +129,12 @@ func (s *Store) CommitOperation(ctx context.Context, claim OperationClaim, reten
 	// the environment CAS. A stale operation must not cancel live convergence.
 	if _, err = tx.Exec(ctx, `UPDATE krun_worker_operations
 		SET state='superseded', error='Replaced by '||$3, finished_at=now()
-		WHERE worker_id=$1 AND env_name=$2 AND operation_id<>$3 AND state='committed'`,
+		WHERE worker_id=$1 AND env_name=$2 AND operation_id<>$3 AND state='committed' AND kind<>'version-url'`,
 		worker, environment, claim.id); err != nil {
 		return false, err
 	}
 	// Steps 0-2 (artifact, candidate, commit) are finished by the time the
-	// version is durable; step 3 stays running until acks converge.
+	// version is durable; step 3 waits for the serving confirmation policy.
 	_, err = tx.Exec(ctx, `UPDATE krun_worker_operations
 		SET state='committed', error='', deployment_revision=$2, edge_revision=0, edge_pool='', finished_at=NULL,
 		    reconcile_after=now()+interval '2 seconds',
@@ -155,7 +155,7 @@ func (s *Store) CommitOperation(ctx context.Context, claim OperationClaim, reten
 
 // confirmOperation records convergence once every serving Pod has acked the
 // edge revision. It also appends the version history entry.
-func (s *Store) ConfirmOperation(ctx context.Context, id, pool string, target domain.EdgeConfigCursor) error {
+func (s *Store) ConfirmOperation(ctx context.Context, id, pool string, target domain.EdgeConfigCursor, resourceProtocol ...bool) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -169,16 +169,24 @@ func (s *Store) ConfirmOperation(ctx context.Context, id, pool string, target do
 		return nil
 	}
 	edgeRevision := target.Revision
+	targetCondition := "edge_pool=$2 AND edge_revision=$3 AND edge_revision>0"
+	targetArgs := []any{id, pool, edgeRevision}
+	environmentCondition := "o.edge_pool=$2 AND o.edge_revision=$3 AND o.edge_revision>0"
+	if len(resourceProtocol) > 0 && resourceProtocol[0] {
+		targetCondition = "resource_pool=$2 AND resource_generation=$3 AND resource_generation>0 AND resource_epoch=$4"
+		environmentCondition = "o.resource_pool=$2 AND o.resource_generation=$3 AND o.resource_generation>0 AND o.resource_epoch=$4"
+		targetArgs = append(targetArgs, target.Epoch)
+	}
 	// Acquire the environment row before the committed operation row, matching
 	// the order in which a replacement commit locks these two rows.
 	tag, err := tx.Exec(ctx, `UPDATE krun_worker_environments e
 		SET confirmed_version_id=o.version_id, updated_at=now()
 		FROM krun_worker_operations o
-		WHERE o.operation_id=$1 AND o.state='committed' AND o.edge_pool=$2 AND o.edge_revision=$3 AND o.edge_revision>0
+		WHERE o.operation_id=$1 AND o.state='committed' AND `+environmentCondition+`
 			AND e.worker_id=o.worker_id AND e.env_name=o.env_name AND e.enabled
 			AND e.deployment_revision=o.deployment_revision AND e.version_id=o.version_id
 			AND e.candidate_version_id=o.candidate_version_id AND e.candidate_weight=o.candidate_weight
-			AND `+activeOperationPool, id, pool, edgeRevision)
+			AND `+activeOperationPool, targetArgs...)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
@@ -194,7 +202,7 @@ func (s *Store) ConfirmOperation(ctx context.Context, id, pool string, target do
 	tag, err = tx.Exec(ctx, `UPDATE krun_worker_operations
 		SET state='available', error='', finished_at=now(),
 		    steps = jsonb_set(steps, '{3,state}', '"done"')
-		WHERE operation_id=$1 AND state='committed' AND edge_pool=$2 AND edge_revision=$3`, id, pool, edgeRevision)
+		WHERE operation_id=$1 AND state='committed' AND `+targetCondition, targetArgs...)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
@@ -303,7 +311,7 @@ func (s *Store) FailClaimedOperation(ctx context.Context, claim OperationClaim, 
 
 // CommitVersionURL publishes only the validated immutable upload. It doesn't
 // update the deployment revision, traffic weights, or environment bindings.
-func (s *Store) CommitVersionURL(ctx context.Context, claim OperationClaim) (bool, error) {
+func (s *Store) CommitVersionURL(ctx context.Context, claim OperationClaim, prepareServing ...bool) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -351,9 +359,11 @@ func (s *Store) CommitVersionURL(ctx context.Context, claim OperationClaim) (boo
 		_ = tx.Rollback(ctx)
 		return false, s.FailClaimedOperation(ctx, claim, "Version or environment unavailable")
 	}
-	if _, err = tx.Exec(ctx, `UPDATE krun_worker_operations SET state='available', finished_at=now(), error='',
-		steps=(SELECT jsonb_agg(jsonb_set(step, '{state}', '"done"')) FROM jsonb_array_elements(steps) AS step)
-		WHERE operation_id=$1`, claim.id); err != nil {
+	preparing := len(prepareServing) > 0 && prepareServing[0]
+	if _, err = tx.Exec(ctx, `UPDATE krun_worker_operations SET state=CASE WHEN $2 THEN 'committed' ELSE 'available' END,
+        finished_at=CASE WHEN $2 THEN NULL ELSE now() END,error='',
+		steps=(SELECT jsonb_agg(jsonb_set(step, '{state}',CASE WHEN $2 AND step->>'name'='synchronize' THEN '"running"'::jsonb ELSE '"done"'::jsonb END)) FROM jsonb_array_elements(steps) AS step)
+		WHERE operation_id=$1`, claim.id, preparing); err != nil {
 		return false, err
 	}
 	if err = tx.Commit(ctx); err != nil {

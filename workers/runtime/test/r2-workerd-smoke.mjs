@@ -58,6 +58,8 @@ function tar(files) {
 }
 const sharedValidator = process.argv.includes("--shared-validator");
 const supervisor = process.env.KRUN_TEST_SUPERVISOR;
+const resourceAgent = process.env.KRUN_TEST_RESOURCE_AGENT === "1";
+assert.ok(!resourceAgent || supervisor, "resource agent smoke requires KRUN_TEST_SUPERVISOR");
 assert.ok(!(supervisor && sharedValidator), "supervisor is only for serving runtimes");
 let servingAcknowledgements = 0;
 const sharedSource = `import {env, WorkerEntrypoint} from 'cloudflare:workers';
@@ -616,6 +618,11 @@ const platform = http.createServer((request, response) => {
   response.writeHead(404);
   response.end("{}");
 });
+let resourceStream = null;
+if (resourceAgent) {
+  const { resourceStreamFixture } = await import("./resource-stream-fixture.mjs");
+  resourceStream = resourceStreamFixture(platform, descriptor, () => servingAcknowledgements++);
+}
 const platformPort = await listen(platform);
 const port = await freePort();
 const moduleNames = [
@@ -669,6 +676,7 @@ const privateSocket = sharedValidator
 const executionBindings = supervisor
   ? ',(name="POOL_SLOT",text="krun-unassigned-slot"),(name="POOL_COORDINATOR",service="pool-coordinator")'
   : "";
+const resourceBindings = resourceAgent ? ', (name="CONFIG_PROTOCOL",text="2")' : "";
 const executionService = supervisor
   ? `(name="pool-coordinator",external=(address="127.0.0.1:${coordinatorPort}",http=())),`
   : "";
@@ -677,7 +685,7 @@ const config = `using W=import "/workerd/workerd.capnp";
 const config :W.Config=(services=[
  (name="entry",worker=(modules=[${modules}],compatibilityDate="2026-09-28",compatibilityFlags=["experimental","enable_ctx_exports","enable_request_signal","request_signal_passthrough"],bindings=[${sources},(name="CACHE_SOURCE",text=embed ${JSON.stringify(path.join(root, "cache.js"))}),
  (name="LOADER",workerLoader=(id="r2-smoke")),(name="PLATFORM",service="platform"),(name="POD_UID",text="uid"),(name="POD_NAME",text="pod"),(name="RUNTIME_POOL",text="${sharedValidator ? "validation" : "default"}"),(name="RUNTIME_TOKEN",text="${sharedValidator ? "validator-only-token" : "test"}"),(name="MANAGEMENT_TOKEN",text="test-management"),
- ${objectBindings},(name="STATIC_DOMAINS",text=${staticDomains})${executionBindings}],globalOutbound="network")),
+ ${objectBindings},(name="STATIC_DOMAINS",text=${staticDomains})${executionBindings}${resourceBindings}],globalOutbound="network")),
  (name="platform",external=(address="127.0.0.1:${platformPort}",http=())),
  ${sharedValidator ? "" : objectService + ","}
  ${executionService}
@@ -685,8 +693,33 @@ const config :W.Config=(services=[
  sockets=[(name="management",address="127.0.0.1:${managementPort}",http=(),service=(name="entry",entrypoint="Management"))${privateSocket}${metricsSocket}]);`;
 // Use JSON escaping for the nested text binding instead of Cap'n Proto escapes.
 const configPath = path.join(directory, "runtime.capnp");
-writeFileSync(configPath, config);
-const workerd = path.join(root, "node_modules/.bin/workerd");
+let renderedConfig = config;
+if (resourceAgent) {
+  const tokenFile = path.join(directory, "runtime-token");
+  const podFile = path.join(directory, "pod-uid");
+  writeFileSync(tokenFile, "test", { mode: 0o600 });
+  writeFileSync(podFile, "uid", { mode: 0o600 });
+  renderedConfig =
+    "# krun-config-agent " +
+    JSON.stringify({
+      control_url: `http://127.0.0.1:${platformPort}/api/internal/workers/config/v2/watch`,
+      pool: "default",
+      token_file: tokenFile,
+      pod_file: podFile,
+      static_hosts: ["static.fixture.test"],
+      limits: {
+        frame_bytes: 262144,
+        resource_bytes: 4194304,
+        pod_cache_bytes: 67108864,
+        pod_cache_entries: 65536,
+        pod_cold_concurrency: 4,
+      },
+    }) +
+    "\n" +
+    config;
+}
+writeFileSync(configPath, renderedConfig);
+const workerd = process.env.KRUN_TEST_WORKERD || path.join(root, "node_modules/.bin/workerd");
 const managementTokenFile = path.join(directory, "management");
 writeFileSync(managementTokenFile, "test-management", { mode: 0o600 });
 const child = spawn(
@@ -792,7 +825,7 @@ try {
   if (supervisor) {
     const response = await fetch(`http://127.0.0.1:${managementPort}/ready`);
     assert.equal(response.status, 200, output);
-    assert.equal((await response.json()).revision, 1);
+    assert.equal((await response.json()).revision, resourceAgent ? 0 : 1);
   }
   if (sharedValidator) {
     const readyResponse = await fetch(`http://127.0.0.1:${managementPort}/ready`);
@@ -1158,6 +1191,26 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     assert.ok(servingAcknowledgements > 0, output);
+    if (resourceAgent) {
+      const probe = await fetch(`http://127.0.0.1:${managementPort}/config-probe`, {
+        method: "POST",
+        headers: { authorization: "Bearer test-management", "content-type": "application/json" },
+        body: JSON.stringify({
+          host: "fixture.test",
+          path: "/",
+          worker_id: descriptor.worker_id,
+          environment: descriptor.environment,
+          version_id: descriptor.id,
+          generation: 1,
+        }),
+      });
+      assert.equal(probe.status, 200, await probe.clone().text());
+      assert.equal((await probe.json()).version_id, descriptor.id);
+      resourceStream.disconnect();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      assert.equal((await requestWorker("/validation-state")).status, 200);
+      console.log("RESOURCE AGENT SERVING PROBE AND OFFLINE HOT SERVICE PASSED");
+    }
     console.log("SERVING SUPERVISOR SMOKE PASSED");
   }
 } catch (error) {
@@ -1183,6 +1236,7 @@ try {
       }, 2000),
     ),
   ]);
+  resourceStream?.close();
   platform.closeAllConnections();
   storage.closeAllConnections();
   platform.close();

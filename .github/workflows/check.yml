@@ -62,6 +62,15 @@ jobs:
             -e KRUN_TEST_SUPERVISOR=/usr/local/bin/krun-runtime-supervisor \
             -e KRUN_TEST_EXPECT_CPU_METRICS=1 -e KRUN_TEST_EXPECT_MEMORY_METRICS=1 \
             krun-worker-runtime:test node /app/test/r2-workerd-smoke.mjs
+      - name: Smoke-test resource configuration agent
+        run: |
+          docker run --rm --cpus 4 --memory 8g --read-only --tmpfs /tmp:rw,mode=1777 \
+            --mount "type=bind,src=$PWD/workers/runtime/test,dst=/app/test,readonly" \
+            --mount "type=bind,src=$PWD/workers/runtime/node_modules/ws,dst=/app/node_modules/ws,readonly" \
+            -e KRUN_TEST_SUPERVISOR=/usr/local/bin/krun-runtime-supervisor \
+            -e KRUN_TEST_RESOURCE_AGENT=1 \
+            -e KRUN_TEST_EXPECT_CPU_METRICS=1 -e KRUN_TEST_EXPECT_MEMORY_METRICS=1 \
+            krun-worker-runtime:test node /app/test/r2-workerd-smoke.mjs
       - run: npm ci --prefix examples/workers-fullstack && npm test --prefix examples/workers-fullstack && npm run build --prefix examples/workers-fullstack
       - run: go vet ./...
       - run: make test-go
