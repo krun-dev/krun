@@ -14,6 +14,7 @@ const deploymentHelp = `Usage: krun deployments COMMAND [--org ID] --worker ID
   status  Show the environment's traffic percentages and confirmed version
   view    Inspect a deployment by deployment ID
   wait    Wait for a deployment by operation ID
+  propagation  Inspect configuration propagation; --wait waits for current membership
 `
 
 const versionHelp = `Usage: krun versions COMMAND [--org ID] --worker ID
@@ -179,14 +180,27 @@ func (c *Client) deployments(ctx context.Context, args []string) error {
 	f := flags("deployments "+action, c.Err)
 	target := c.workerFlags(f)
 	switch action {
-	case "status":
+	case "status", "propagation":
 		env := environmentFlag(f)
+		var wait bool
+		var waitTimeout time.Duration
+		if action == "propagation" {
+			f.BoolVar(&wait, "wait", false, "Wait until all observed Ready members are current")
+			f.DurationVar(&waitTimeout, "timeout", 10*time.Minute, "Maximum propagation wait time")
+		}
 		base, err := target.path(f, args)
 		if err != nil {
 			return err
 		}
 		if err := requireID(*env, "env"); err != nil {
 			return err
+		}
+		if action == "propagation" {
+			path := base + "/environments/" + url.PathEscape(*env) + "/propagation"
+			if wait {
+				return c.waitFor(ctx, path, *env, waitTimeout, func(state string) (bool, bool) { return state == "current", state == "current" })
+			}
+			return c.call(ctx, "GET", path, nil)
 		}
 		current, err := c.environment(ctx, base, *env)
 		if err != nil {

@@ -34,7 +34,8 @@ IAM 与 Workers 是两套独立分区，**不共享事务**：
 | Workers | `krun_workers`、`krun_worker_domains`、`krun_worker_environments`、`krun_worker_secret_versions`、`krun_worker_environment_secrets`、`krun_worker_builds`、`krun_worker_build_private`、`krun_worker_artifacts`、`krun_worker_versions`、`krun_worker_deployments`、`krun_worker_version_secrets`、`krun_worker_operations`、`krun_worker_history`、`krun_worker_idempotency`、`krun_repository_connections`、`krun_repository_connect_states` |
 | 会话（不属于任何分区） | `krun_sessions`、`krun_browsers`、`krun_login_states`、`krun_email_logins`、`krun_oauth_authorizations`、`krun_oauth_grants`、`krun_oauth_refresh_tokens` |
 | 组织邀请（类型化方法，不进入 State） | `krun_org_invitation_links`、`krun_org_invitation_redemptions`；邀请、名额、成员和直接角色在有界 IAM 事务内提交 |
-| 旁路 | `krun_audits`、`worker_config_revisions`、`worker_config_routes`、`worker_config_versions`、`worker_config_ops`、`worker_config_dirty`、`worker_config_checkpoints`、`worker_asset_objects`、`worker_retention_scopes`、`worker_runtime_acks` |
+| 资源分发 v2 | `worker_runtime_bindings`、`worker_runtime_generations`、`worker_runtime_notifications`、`worker_runtime_route_dirty`、`worker_runtime_sessions`、`worker_runtime_resource_acks` |
+| 旁路 / v1 兼容 | `krun_audits`、`worker_config_revisions`、`worker_config_routes`、`worker_config_versions`、`worker_config_ops`、`worker_config_dirty`、`worker_config_checkpoints`、`worker_asset_objects`、`worker_retention_scopes`、`worker_runtime_acks` |
 
 仓库 OAuth 的访问令牌与刷新令牌使用 `workers.secrets_keys` 中的版本化密钥做 AES-256-GCM
 加密。加密验证绑定用户、仓库提供商与字段。轮换时保留旧密钥版本，已有连接仍可读取，新连接
@@ -81,9 +82,9 @@ UPDATE krun_worker_environments SET version_id=$4, deployment_revision=deploymen
 
 ## 边缘收敛
 
-站点变更进入有界 dirty 队列，发布者只读取变更站点并写入 normalized delta；对象存储保存 compact head 与 host-hash shard checkpoint。Runtime 通过增量 feed 收敛，冷 host 按需读取，ACK 仍用于观察收敛。细节及保留/清理机制见 [规模边界与验证](performance-scaling.md)。
+v2 将稳定 host/path 绑定单独归一化，发布目标直接读取环境源行，Version 保持不可变。逐资源代次与合并通知在同一源事务提交；副本通知使用 PostgreSQL LISTEN/NOTIFY，主库版本复核修复漏通知。session 与资源 ACK 只记录传播观测。v1 的全局 head/ops/checkpoint 表仅用于兼容。见 [规模边界与验证](performance-scaling.md)。
 
-**Hosts 不再持久化。** 环境的主机名由域名目录 + 服务的域名选择现算，`workers.Service.NormalizeWorker`、`reconcile` 的 HTTPRoute 生成、边缘增量投影共用同一套推导，因此三者不会漂移。
+**Hosts 从域名目录推导，v2 的稳定绑定是可重建的读取投影。** 环境的主机名由域名目录 + 服务的域名选择现算，`workers.Service.NormalizeWorker`、`reconcile` 的 HTTPRoute 生成、边缘增量投影共用同一套推导，因此三者不会漂移。
 
 ## 认证数据
 
@@ -179,3 +180,6 @@ Secret 引用与 R2 引用分别按绑定名称保存在 `krun_worker_configurat
 配置绑定及配置行；删除 Worker 的后台清理也覆盖这三张表。非活动配置 30 天过期，当前、
 已确认和进行中的部署引用受保护；`RetainExpired` 每批清理最多 1000 份。Secret 版本清理
 同时检查配置引用，防止尚存配置丢失 Secret。配置接口见 [Workers 后端](workers-backend.md)。
+
+资源协议表由 `0002_online_from_0001_runtime_resources.sql` 增量迁移引入，不改写既有 migration。
+已有库先按本页流程审核并执行增量 SQL，再部署新控制面和 Runtime；启动不会自动升级既有库。

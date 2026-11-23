@@ -116,3 +116,18 @@ providers:
 #       - public_https: true
 #     builder:
 #       - public_https: true
+
+# 启用完整 workers: 段后，可在同一段中配置 runtime_config:：
+#   runtime_config:
+#     protocol: 2
+#     verify_millis: 5000
+#     cache_entries: 65536
+#     cache_bytes: 134217728
+#     read_concurrency: 32
+#     max_subscriptions: 65536
+#     max_connections: 1024
+#     frame_bytes: 262144
+#     resource_bytes: 4194304
+#     pod_cache_bytes: 67108864
+#     pod_cache_entries: 65536
+#     pod_cold_concurrency: 4

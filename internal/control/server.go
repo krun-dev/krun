@@ -29,6 +29,7 @@ import (
 	appconfig "github.com/krun-dev/krun/internal/config"
 	"github.com/krun-dev/krun/internal/configfile"
 	"github.com/krun-dev/krun/internal/localize"
+	"github.com/krun-dev/krun/internal/runtimeconfig"
 	"github.com/krun-dev/krun/internal/securetoken"
 	workerapp "github.com/krun-dev/krun/internal/workers"
 )
@@ -68,6 +69,8 @@ type Server struct {
 	trustedProxies     []*net.IPNet
 	sendEmail          func(context.Context, string, string, string) error
 	redirectServer     *Server
+	runtimeHubOnce     sync.Once
+	runtimeHub         *runtimeconfig.ResourceHub
 }
 
 func NewServer(ctx context.Context, c appconfig.Config, store *Store) (*Server, error) {
@@ -185,6 +188,7 @@ func (s *Server) routes() {
 	s.routeScopes = m.scopes
 	s.internalMux = http.NewServeMux()
 	if s.Config.Workers != nil {
+		s.internalMux.HandleFunc("GET /api/internal/workers/config/v2/watch", s.workerRuntimeResourceWatch)
 		s.internalMux.HandleFunc("POST /api/internal/workers/static-assets/{prefix}/{organization}/{worker}/{digest}/credentials", s.workerRuntimeStaticAssetCredentials)
 		s.internalMux.HandleFunc("GET /api/internal/workers/config/snapshot", s.workerRuntimeConfigSnapshot)
 		s.internalMux.HandleFunc("POST /api/internal/workers/config/credentials", s.workerRuntimeConfigCredentials)
@@ -667,7 +671,7 @@ func Serve(ctx context.Context, c appconfig.Config) error {
 		return e
 	}
 	defer store.Close()
-	handler, e := NewServer(ctx, c, store)
+	handler, e := NewServer(runCtx, c, store)
 	if e != nil {
 		return e
 	}

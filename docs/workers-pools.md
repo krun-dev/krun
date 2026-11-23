@@ -173,17 +173,17 @@ Rust 在转发前为新流占用额度，结束或断开时释放。进程 CPU �
 现有逻辑。上限 650 是单进程的 Loader 跟踪条目数，配置仍需根据实际制品大小、RSS 和
 延迟调整。
 
-每个 workerd 仍使用现有 JS 入口选择版本并执行灰度、静态资源和 bindings 逻辑，各自读配置。
-Rust 依据所有子进程的配置游标放行 Pod ACK。热请求的承流选择只依赖本地状态。
+每个 workerd 的 JS 入口执行版本、灰度、静态资源和 bindings 逻辑。默认 v2 由 Rust agent 共享配置连接与资源图，
+热请求携带本地配置 handle，各 workerd 只缓存使用到的不可变描述符；v1 兼容模式保留子进程游标和 Pod ACK。
 配置同步、冷路由、制品及绑定缺失时继续访问控制面或对象存储。容量指标按
 `workerd_slot` 和 `execution_group` 区分，可在 [Runtime 大盘](../deploy/observability/README.md) 查看。
 合成负载复现命令和历史基线见 [执行池压测](../tests/runtime-load/README.md)。
 
 ## 配置分发与权限
 
-每站点 dirty 队列驱动增量发布，Runtime 只跟随本池 ops，冷 host 定向读取。
-对象存储为每个池保存紧凑 head 和 256 个 host-hash shard checkpoint。Runtime 内存
-缓存有界，不在启动时加载全池站点。详见 [规模与验证](performance-scaling.md)。
+默认 v2 按 host/path 绑定、发布目标与不可变 Version 分资源订阅。每个 Pod 一条 Protobuf WebSocket，
+控制面副本使用本地有界缓存、合并通知和主库版本复核。更新与恢复只处理使用中的资源，不加载全池或回放 op。
+冷加载有并发和字节预算，断连保留热状态。详见 [规模与验证](performance-scaling.md)。
 
 内部 listener 要求 `X-Runtime-Pool` 和对应 Runtime token；路由、Version、Artifact、
 Secret 与资产读取继续校验该池有效 placement。Version Secret 接口仅接受对应池的

@@ -446,6 +446,9 @@ type EdgeConfigLatest struct {
 // publishConfig serializes local publication; PostgreSQL coordinates replicas
 // through the per-worker dirty queue and revision CAS.
 func (w *Controller) PublishConfig(ctx context.Context) (int64, error) {
+	if w.Config.RuntimeConfig.Protocol == 2 {
+		return w.PublishRuntimeResources(ctx)
+	}
 	w.configMu.Lock()
 	defer w.configMu.Unlock()
 	return w.PublishConfigDelta(ctx)

@@ -131,7 +131,7 @@ var WorkerAssetBindingName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 // Keep in sync with reservedBindings and magicBindings in workers/runtime/entry.js.
 var WorkerReservedBindings = map[string]bool{
 	"PLATFORM": true, "LOADER": true, "RUNTIME_TOKEN": true, "RUNTIME_POOL": true,
-	"POOL_COORDINATOR": true, "POOL_SLOT": true,
+	"CONFIG_PROTOCOL": true, "POOL_COORDINATOR": true, "POOL_SLOT": true,
 	"MANAGEMENT_TOKEN": true, "CONFIG_BASE": true, "CONFIG_STORAGE_STS": true, "POD_NAME": true, "POD_UID": true,
 	"ASSETS_CACHE_MAX":   true,
 	"STORAGE_ACCESS_KEY": true, "STORAGE_SECRET_KEY": true, "STORAGE_REGION": true,

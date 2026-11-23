@@ -111,6 +111,7 @@ await check('kind keeps console login off the Runtime API Service', async () => 
   'curl', '-sS', '--max-time', '5', '-o', '/dev/null', '-w', '%{http_code}', 'http://127.0.0.1:9001' + route);
  assert.equal(runtimeStatus('/api/auth/providers'), '404');
  assert.equal(runtimeStatus('/api/internal/workers/config/snapshot'), '403');
+ assert.equal(runtimeStatus('/api/internal/workers/config/v2/watch'), '403');
  return {servicePorts: ports};
 });
 const auth=await api('/api/auth/csrf','POST',undefined,200,{session:true});csrf=auth.csrf_token;
@@ -469,14 +470,24 @@ await check('site pagination is complete and shared Gateway routes stay bounded'
  assert.deepEqual([...seen].sort(),[...expected].sort());assert.equal(routeCount(),before);
  return {sites:seen.size,pages,gateway_routes:before};
 });
-await check('runtime checkpoints use a compact head and immutable host shards scoped to the epoch',async()=>{
+await check('resource configuration separates deployment targets and reports current Ready membership',async()=>{
  const epoch=sql("SELECT value FROM krun_meta WHERE key='worker_config_epoch'");assert.match(epoch,/^[0-9a-f]{32}$/);
- const configRoot=storage+'/config/pools/default/epochs/'+epoch+'/';
- const latest=controlStorageGet(configRoot+'latest.json');assert.equal(latest.status,200);assert.equal(latest.body.lazy_routes,true);assert.equal(latest.body.config_epoch,epoch);assert.equal(latest.body.snapshot,'');
- const {createHash}=await import('node:crypto');const shard=createHash('sha256').update(hostProd).digest('hex').slice(0,2);
- const pointer=controlStorageGet(configRoot+'shards/'+shard+'/latest.json');assert.equal(pointer.status,200);assert.equal(pointer.body.config_epoch,epoch);assert(pointer.body.snapshot.endsWith('.json.gz'));assert(pointer.body.sha256);
- const snapshot=controlStorageGet(configRoot+pointer.body.snapshot);assert.equal(snapshot.status,200);
- return {lazy_routes:true,shard,checkpoint_revision:pointer.body.config_revision};
+ let propagation;
+ for(let attempt=0;attempt<40;attempt++){
+  propagation=await api(base+'/environments/production/propagation');
+  if(propagation.state==='current')break;
+  await sleep(500);
+ }
+ assert.equal(propagation.config_epoch,epoch);
+ assert.equal(propagation.membership_confirmed,true);
+ assert.equal(propagation.state,'current');
+ assert(propagation.total>0);assert(propagation.applied>0);
+ assert.equal(propagation.applied+propagation.unsubscribed,propagation.total);
+ assert(propagation.target_generation>0);
+ assert(Number(sql(`SELECT count(*) FROM worker_runtime_bindings WHERE host='${hostProd}' AND fixed_version_id=''`))>0);
+ const stored=Number(sql(`SELECT generation FROM worker_runtime_generations WHERE kind='deployment' AND resource_id='${service.id}/production'`));
+ assert.equal(propagation.target_generation,stored);
+ return {protocol:2,target_generation:stored,applied:propagation.applied,unsubscribed:propagation.unsubscribed,ready_members:propagation.total};
 });
 await check('background GC removes indexed artifact files and preserves live assets',async()=>{
  const doomed=await api('/api/v1/orgs/'+org.id+'/workers','POST',{name:'gc-'+run},201);

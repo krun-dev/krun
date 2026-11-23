@@ -20,12 +20,16 @@ VictoriaMetrics 单节点版同时提供写入、存储和查询，集群版的 
 
 ## 配置收敛与业务入口
 
-**Runtime configuration convergence** 按 serving Pod 显示本地配置是否在有效期内、是否应用了
-配置流最近报告的 head，以及当前 revision 的 ACK 是否在最近 10 秒内被控制面接受。
-`krun_runtime_config_revision_lag` 是已应用 revision 与配置流最近报告的 head 的差值。
-`krun_runtime_config_fresh` 和 `krun_runtime_config_sync_age_seconds` 用于定位配置断连。
-`krun_runtime_config_ack_current` 表示当前已应用 revision 的 ACK 是否仍有效。
-发布操作的 `available` 记录该次发布的 Runtime 确认。
+**Runtime configuration convergence** 按 serving Pod 观测配置新鲜度与 ACK。
+v2 的 `krun_runtime_config_converged` 表示当前订阅工作集已安装、ACK 且主库证明仍新鲜，
+没有全局 revision head。`krun_config_agent_resources`、`krun_config_agent_cache_bytes`、
+`krun_config_agent_cold_reads_total`、`krun_config_agent_cold_rejected_total` 分别显示 Pod 资源数、
+配置字节占用、冷读取批次和拒绝数。`krun_runtime_config_fresh` 与同步年龄定位断连。
+v1 的 revision lag 和 `krun_runtime_config_ack_current` 仅用于旧 feed。
+
+部署 `available` 通过至少一个 serving Loader 的准备探测确认；全池目标代次状态使用控制台或
+`krun deployments propagation` 查询。Kubernetes Ready 成员的缺失连接记为 unknown。
+配置不新鲜不自动终止已有热服务。
 
 **Worker ingress probes** 每 30 秒通过配置的业务 HTTPS URL 请求专用 canary Worker。
 探测验证 DNS 和 TLS、HTTP 200、`X-Krun-Version` 及响应正文 `krun-ingress-ok`。
@@ -265,6 +269,6 @@ curl -fsSG http://127.0.0.1:8428/api/v1/query \
 
 | 指标现象 | 排查 |
 | --- | --- |
-| 配置收敛为 `0`，入口探测为 `1` | 检查 `krun_runtime_config_fresh`、`krun_runtime_config_revision_lag` 和 `krun_runtime_config_ack_current`。已加载的版本可以继续使用最后已确认的配置。 |
+| 配置收敛为 `0`，入口探测为 `1` | v2 检查 `krun_runtime_config_fresh`、agent 连接/容量和 propagation API；v1 再检查 revision lag 与 ACK。已加载的版本可以继续使用最后已确认的配置。 |
 | 配置收敛为 `1`，入口探测为 `0` | 检查 `probe_http_status_code`。值为 `0` 时查探测侧 DNS、TLS 和网络，HTTP 404 查业务域名与 Gateway 路由，HTTP 503 查 Gateway 后端和 Runtime。HTTP 200 时核对正文、响应头和 CDN 缓存。 |
 | 入口探测为空 | 检查 overlay 是否为 vmagent 配置了目标，并查询 `up{job="krun-worker-ingress"}`。有目标且为 `0` 时查同 Pod 的 blackbox-exporter 容器。 |

@@ -136,7 +136,7 @@ export class Metrics extends WorkerEntrypoint {
     }
 
     const samples = [
-      ...configMetricSamples(),
+      ...configMetricSamples(this.env),
       "# HELP krun_execution_slot_loaded Number of Loader entries tracked by the serving runtime.",
       "# TYPE krun_execution_slot_loaded gauge",
       `krun_execution_slot_loaded ${loadedWorkers.size}`,
@@ -379,6 +379,107 @@ const ROUTE_CACHE_MAX = 4096;
 // Sync age affects observability and retirement, not admission of known traffic.
 const CONFIG_FRESHNESS_MS = 60_000;
 const CONFIG_ACK_MAX_STALE_MS = 10_000;
+const agentBundles = new Map();
+let agentBundleBytes = 0;
+let lastAgentProof = 0;
+let lastAgentCurrent = false;
+let usingResourceProtocol = false;
+let agentFreshnessMillis = 5000;
+
+function resourceProtocol(env) {
+  return env.CONFIG_PROTOCOL === "2";
+}
+
+async function agentJSON(env, path, headers = {}) {
+  const response = await env.POOL_COORDINATOR.fetch("http://pool-coordinator/config/" + path, {
+    headers: { ...headers, authorization: `Bearer ${env.MANAGEMENT_TOKEN}` },
+    signal: AbortSignal.timeout(3500),
+  });
+  if (!response.ok) {
+    throw Object.assign(new Error("configuration agent " + response.status), {
+      status: response.status,
+    });
+  }
+  return response.json();
+}
+
+function applyAgentHead(head) {
+  usingResourceProtocol = true;
+  if (
+    Number.isSafeInteger(head.verify_millis) &&
+    head.verify_millis >= 100 &&
+    head.verify_millis <= 60000
+  ) {
+    agentFreshnessMillis = head.verify_millis;
+  }
+  if (!viewLoaded || head.config_epoch !== view.epoch) {
+    applyConfigHead(head);
+    agentBundles.clear();
+    agentBundleBytes = 0;
+    lastAgentProof = 0;
+  }
+  lastAgentCurrent = head.config_current === true;
+  configSyncHealthy = head.config_sync_healthy === true && head.config_fresh === true;
+  if (
+    Number.isSafeInteger(head.confirmed_unix_millis) &&
+    head.confirmed_unix_millis > lastAgentProof
+  ) {
+    lastAgentProof = head.confirmed_unix_millis;
+    lastSync = performance.now() - Math.max(0, Date.now() - lastAgentProof);
+  }
+}
+
+async function resolveAgentRoute(env, host, url, request) {
+  const handle = request?.headers.get("x-krun-config-handle");
+  let bundle = handle && agentBundles.get(handle);
+  if (!bundle) {
+    const data =
+      handle && /^[a-f0-9]{64}$/.test(handle)
+        ? await agentJSON(env, "bundle/" + handle)
+        : await agentJSON(env, "resolve", {
+            "x-krun-host": host,
+            "x-krun-path": url?.pathname || "/",
+          });
+    if (data.route?.host !== host || !data.handle || !/^[a-f0-9]{32}$/.test(data.config_epoch)) {
+      throw new Error("invalid local configuration bundle");
+    }
+    if (data.config_epoch !== view.epoch) {
+      applyAgentHead(await agentJSON(env, "head"));
+      if (data.config_epoch !== view.epoch) throw new Error("local configuration epoch changed");
+    }
+    const descriptors = routeVersionDescriptors(data.route, (id) => data.versions?.[id]);
+    data.route.config_generation = data.target_generation;
+    routeDescriptors.set(data.route, descriptors);
+    bundle = {
+      route: data.route,
+      epoch: data.config_epoch,
+      bytes: encoder.encode(JSON.stringify(data)).length,
+    };
+    if (!agentBundles.has(data.handle)) {
+      agentBundles.set(data.handle, bundle);
+      agentBundleBytes += bundle.bytes;
+    }
+    while (agentBundles.size > 1024 || agentBundleBytes > 16 * 1024 * 1024) {
+      const key = agentBundles.keys().next().value;
+      agentBundleBytes -= agentBundles.get(key).bytes;
+      agentBundles.delete(key);
+    }
+  }
+  if (bundle.epoch !== view.epoch) throw new Error("local configuration epoch mismatch");
+  return bundle.route;
+}
+
+async function followAgent(env) {
+  while (true) {
+    lastLoop = Date.now();
+    try {
+      applyAgentHead(await agentJSON(env, "head"));
+    } catch {
+      configSyncHealthy = false;
+    }
+    await sleep(1000);
+  }
+}
 let viewLoaded = false;
 let booting = null;
 let started = false;
@@ -729,6 +830,7 @@ async function platformResponse(env, path, init = {}, timeout = 2000) {
   const headers = new Headers(init.headers);
   headers.set("authorization", `Bearer ${env.RUNTIME_TOKEN}`);
   headers.set("x-runtime-pool", env.RUNTIME_POOL || "default");
+  if (resourceProtocol(env)) headers.set("x-krun-config-protocol", "2");
 
   if (init.body) {
     headers.set("content-type", "application/json");
@@ -888,18 +990,25 @@ function configDenied(status) {
 }
 
 function configFresh(now) {
-  return viewLoaded && now - lastSync < CONFIG_FRESHNESS_MS;
+  return (
+    viewLoaded &&
+    (!usingResourceProtocol || configSyncHealthy) &&
+    now - lastSync < (usingResourceProtocol ? agentFreshnessMillis : CONFIG_FRESHNESS_MS)
+  );
 }
 
-function configMetricSamples() {
+function configMetricSamples(env) {
   const now = performance.now();
   const fresh = configFresh(now);
   const lag = view.headRevision === null ? null : view.headRevision - view.revision;
   const currentACK =
+    !resourceProtocol(env) &&
     viewLoaded &&
     lastAcceptedAck?.revision === view.revision &&
     now - lastAcceptedAck.time <= CONFIG_ACK_MAX_STALE_MS;
-  const converged = fresh && lag === 0 && currentACK;
+  const converged = resourceProtocol(env)
+    ? fresh && lastAgentCurrent
+    : fresh && lag === 0 && currentACK;
   const samples = [
     "# HELP krun_runtime_config_fresh Whether the local configuration is within the freshness threshold.",
     "# TYPE krun_runtime_config_fresh gauge",
@@ -907,7 +1016,7 @@ function configMetricSamples() {
     "# HELP krun_runtime_config_ack_current Whether the control plane recently accepted an ACK for the applied revision.",
     "# TYPE krun_runtime_config_ack_current gauge",
     `krun_runtime_config_ack_current ${Number(currentACK)}`,
-    "# HELP krun_runtime_config_converged Whether the head reported by the configuration feed is applied and recently acknowledged.",
+    "# HELP krun_runtime_config_converged Whether the subscribed configuration is fresh and acknowledged; v1 also requires the global head.",
     "# TYPE krun_runtime_config_converged gauge",
     `krun_runtime_config_converged ${Number(converged)}`,
   ];
@@ -940,6 +1049,11 @@ function requireConfigView(epoch = view.epoch) {
 }
 
 async function bootstrapFromControl(env) {
+  if (resourceProtocol(env)) {
+    const head = await agentJSON(env, "head");
+    applyAgentHead(head);
+    return view;
+  }
   const head = await platform(env, "/config/snapshot");
 
   return applyConfigHead(head, env.RUNTIME_POOL || "default");
@@ -1139,7 +1253,8 @@ function matchManagedPath(routes, url) {
   return best;
 }
 
-async function resolveRoute(env, host, url) {
+async function resolveRoute(env, host, url, request) {
+  if (resourceProtocol(env)) return resolveAgentRoute(env, host, url, request);
   const routes = await resolveHostRoutes(env, host);
   if (!Array.isArray(routes)) {
     return routes;
@@ -1436,6 +1551,7 @@ async function follow(env) {
 }
 
 function ensureStarted(env, ctx) {
+  usingResourceProtocol = resourceProtocol(env);
   // A cancelled waitUntil callback may never run follow()'s finally; restart a
   // loop that has made no progress for two minutes.
   if (started && Date.now() - lastLoop < 120000) {
@@ -1443,7 +1559,7 @@ function ensureStarted(env, ctx) {
   }
 
   started = true;
-  const loop = follow(env).finally(() => {
+  const loop = (resourceProtocol(env) ? followAgent(env) : follow(env)).finally(() => {
     started = false;
   });
 
@@ -1699,6 +1815,7 @@ export class VersionAssets extends WorkerEntrypoint {
 }
 const bindingName = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const reservedBindings = new Set([
+  "CONFIG_PROTOCOL",
   "POOL_COORDINATOR",
   "POOL_SLOT",
   "PLATFORM",
@@ -2420,9 +2537,10 @@ const verifyAuthorization = "krun-workers-verify-authorization";
 const totalVersionWeight = 100000;
 
 function overrideVersion(header, script) {
-  if (!header || header.length > 4096 || !script) {
+  if (header === null) {
     return null;
   }
+  if (!header || header.length > 4096) return undefined;
   // Overrides are a structured dictionary with quoted version IDs.
   const entry = /\s*([a-z*][a-z0-9_.*-]*)\s*=\s*"((?:[ !#-\[\]-~]|\\["\\])*)"\s*/gy;
   const versions = new Map();
@@ -2431,7 +2549,7 @@ function overrideVersion(header, script) {
     entry.lastIndex = position;
     const match = entry.exec(header);
     if (!match || versions.has(match[1])) {
-      return null;
+      return undefined;
     }
     versions.set(match[1], match[2].replace(/\\(["\\])/g, "$1"));
     position = entry.lastIndex;
@@ -2439,10 +2557,10 @@ function overrideVersion(header, script) {
       return versions.get(script) ?? null;
     }
     if (header[position++] !== ",") {
-      return null;
+      return undefined;
     }
   }
-  return null;
+  return undefined;
 }
 
 function requestVersionKey(request) {
@@ -2643,11 +2761,14 @@ async function serveWorkerRequest(
   { directVersion, internalCall = false } = {},
 ) {
   const url = new URL(request.url);
-  const descriptors = routeDescriptors.get(route);
+  let descriptors = routeDescriptors.get(route);
   const override = internalCall
     ? null
     : overrideVersion(request.headers.get(versionOverrides), route.script_name);
   const verification = request.headers.get(verifyAuthorization);
+  if (request.headers.has(versionOverrides) && override === undefined) {
+    return withoutSharedCache(json({ error: "invalid version override" }, 400));
+  }
   if (override !== null) {
     const credential = verification ?? request.headers.get("authorization");
     if (!credential || route.match) {
@@ -2655,13 +2776,28 @@ async function serveWorkerRequest(
     }
     const result = await platformResponse(env, "/version-overrides/authorize", {
       method: "POST",
-      body: JSON.stringify({ host: route.host, credential }),
+      body: JSON.stringify({ host: route.host, credential, version: override }),
     });
-    if (!result.ok || (await result.json()).allowed !== true) {
+    const decision = result.ok ? await result.json() : null;
+    if (!result.ok || decision?.allowed !== true) {
       const status = result.status >= 500 ? 503 : 403;
       return withoutSharedCache(json({ error: "version override unavailable" }, status));
     }
     requireConfigView(epoch);
+    if (decision.route) {
+      if (
+        decision.config_epoch !== epoch ||
+        decision.route.host !== route.host ||
+        decision.route.worker_id !== route.worker_id
+      ) {
+        return withoutSharedCache(json({ error: "version override unavailable" }, 503));
+      }
+      route = decision.route;
+      descriptors = routeVersionDescriptors(route, (id) => decision.versions?.[id]);
+    }
+    if (override !== route.version && override !== route.candidate_version) {
+      return withoutSharedCache(json({ error: "version override unavailable" }, 404));
+    }
   }
 
   const versionID = directVersion?.id || (await selectedVersionID(route, request, override));
@@ -2679,6 +2815,7 @@ async function serveWorkerRequest(
     "x-forwarded-host",
     "x-internal",
     "x-krun-route",
+    "x-krun-config-handle",
     krunVersionKey,
     cloudflareVersionKey,
     versionOverrides,
@@ -2809,7 +2946,7 @@ export class Private extends WorkerEntrypoint {
       ensureStarted(this.env, this.ctx);
       await ensureBootstrap(this.env);
       requireConfigView();
-      const epoch = view.epoch;
+      let epoch = view.epoch;
       if (Object.hasOwn(staticDomains, url.hostname)) {
         const response = await staticDomainResponse(
           this.env,
@@ -2821,7 +2958,8 @@ export class Private extends WorkerEntrypoint {
         return response;
       }
 
-      const route = await resolveRoute(this.env, url.hostname.toLowerCase(), url);
+      const route = await resolveRoute(this.env, url.hostname.toLowerCase(), url, request);
+      if (resourceProtocol(this.env)) epoch = view.epoch;
       requireConfigView(epoch);
 
       if (route?.invalidPath) {
@@ -2877,6 +3015,55 @@ export class Management extends WorkerEntrypoint {
     }
 
     try {
+      if (path === "/config-probe") {
+        if (validatorOnly || !resourceProtocol(this.env))
+          return json({ error: "unsupported protocol" }, 409);
+        const input = await request.json();
+        if (typeof input.host !== "string" || input.host.length > 253)
+          return json({ error: "invalid host" }, 400);
+        await ensureBootstrap(this.env);
+        const route = await resolveRoute(
+          this.env,
+          input.host,
+          new URL("http://" + input.host + (input.path || "/")),
+        );
+        const epoch = view.epoch;
+        requireConfigView(epoch);
+        if (
+          !route?.enabled ||
+          route.worker_id !== input.worker_id ||
+          route.environment !== input.environment ||
+          !Number.isSafeInteger(route.config_generation) ||
+          route.config_generation < input.generation
+        ) {
+          return json({ error: "configuration pending" }, 409);
+        }
+        const descriptor = routeDescriptors.get(route)?.get(input.version_id);
+        if (!descriptor) return json({ error: "version pending" }, 409);
+        const manifest = await assetManifest(this.env, descriptor);
+        const entry = recordWorkerRequest(descriptor, this.ctx, manifest);
+        try {
+          const stub = await worker(this.env, this.ctx, descriptor, { entry, epoch });
+          const prepared = await retirementEntrypoint(stub, entry).fetch("http://retirement/", {
+            method: "HEAD",
+            signal: AbortSignal.timeout(2000),
+          });
+          if (prepared.status !== 204 && prepared.status !== 409) {
+            throw new Error("serving preparation probe failed");
+          }
+          requireConfigView(epoch);
+        } finally {
+          entry.forwarding--;
+        }
+        return json({
+          pod_uid: this.env.POD_UID,
+          pool: this.env.RUNTIME_POOL || "default",
+          config_epoch: epoch,
+          config_protocol: 2,
+          target_generation: route.config_generation,
+          version_id: descriptor.id,
+        });
+      }
       if (path === "/service-invoke") {
         if (validatorOnly) {
           return json({ error: "denied" }, 403);
@@ -2887,8 +3074,9 @@ export class Management extends WorkerEntrypoint {
         }
         await ensureBootstrap(this.env);
         requireConfigView();
-        const epoch = view.epoch;
+        let epoch = view.epoch;
         const route = await resolveRoute(this.env, host);
+        if (resourceProtocol(this.env)) epoch = view.epoch;
         requireConfigView(epoch);
         if (!route?.enabled || (route.expires_at && Date.parse(route.expires_at) <= Date.now())) {
           return json({ error: "service target unavailable" }, 404);
@@ -2966,6 +3154,7 @@ export class Management extends WorkerEntrypoint {
         pod_uid: this.env.POD_UID,
         pool: this.env.RUNTIME_POOL || "default",
         config_epoch: view.epoch,
+        config_protocol: resourceProtocol(this.env) ? 2 : 1,
         config_fresh: configFresh(performance.now()),
         revision: view.revision,
         stale_ms: performance.now() - lastSync,

@@ -225,6 +225,20 @@ krun workers invoke --worker WORKER_ID --env production --path /
 
 需要先审核版本再发布时，用 `versions upload --worker WORKER_ID --env production` 构建已绑定的仓库并上传版本，或附加 `--build BUILD_ID` 复用已有构建。上传版本不会改变流量。
 
+### 查看配置传播
+
+`deployments wait` 等待部署可用；`deployments propagation` 单独查询当前 Ready 成员的配置传播。
+输出包含 `target_generation`、`membership_confirmed`、`applied`、`unsubscribed`、`lagging`、`unknown`、`rejected`。
+`--wait` 仅在 `state: current` 时成功；未知或无法确认成员清单时继续等待，超时返回错误。
+尚未缓存目标的成员按需加载，不要求全池预热。
+
+```bash
+krun deployments propagation --org TEAM --worker WORKER --env production
+krun deployments propagation --org TEAM --worker WORKER --env production --wait --timeout 2m
+```
+
+控制台对应字段与截图见[查看配置传播](./component-workers/#查看配置传播)。
+
 ### 双版本灰度
 
 用 `krun versions list --worker WORKER_ID --env production` 获取同一环境的两个版本 ID。将下面的 `WORKER_ID`、`STABLE_VERSION` 和 `CANDIDATE_VERSION` 替换为实际值。沿用前文的浏览器登录，也可以在 CI 设置 `KRUN_ENDPOINT` 和 `KRUN_TOKEN`。发布与查询需要 `worker.publish`、`worker.read` 和 `worker.version.read`，回滚需要 `worker.rollback`。API Key 的 [策略示例](#管理-api-key) 可限制到目标 Worker 和环境。

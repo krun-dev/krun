@@ -104,6 +104,35 @@ func WorkerReplicaID() string {
 }
 
 func (w *Controller) Run(ctx context.Context) {
+	compatibilityDone := make(chan struct{})
+	go func() {
+		defer close(compatibilityDone)
+		if w.Config.RuntimeConfig.Protocol != 2 {
+			return
+		}
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				bounded, cancel := context.WithTimeout(ctx, 8*time.Second)
+				active, err := w.Service.Store.LegacyRuntimeActive(bounded)
+				if err == nil && active {
+					w.configMu.Lock()
+					_, err = w.PublishConfigDelta(bounded)
+					w.configMu.Unlock()
+				}
+				cancel()
+				if err != nil && ctx.Err() == nil {
+					fmt.Println("workers legacy compatibility:", err)
+				}
+			}
+		}
+	}()
+	defer func() { <-compatibilityDone }()
+
 	gcDone := make(chan struct{})
 	go func() {
 		defer close(gcDone)
