@@ -166,6 +166,14 @@ func (s *Service) Route(ctx context.Context, host, pool string) (workerapp.EdgeC
 	if len(host) > 253 || strings.ContainsAny(host, "/\\: ") {
 		return workerapp.EdgeConfigSnapshot{}, domain.NotFound()
 	}
+	if s.Config.RuntimeConfig.Protocol == 2 {
+		epoch, resources, err := s.Store.RuntimeResources(ctx, pool, []domain.ResourceRef{{Kind: "route", ID: pool + "/" + host}})
+		if err != nil {
+			return workerapp.EdgeConfigSnapshot{}, err
+		}
+		projection, err := ResourceSnapshot(resources)
+		return workerapp.NewEdgeConfigSnapshot(pool, domain.EdgeConfigCursor{Epoch: epoch}, projection), err
+	}
 	projection, position, err := s.Store.RuntimeConfigRoute(ctx, host, pool)
 	return workerapp.NewEdgeConfigSnapshot(pool, position, projection), err
 }

@@ -243,7 +243,14 @@ func (s *Server) workerRuntimeConfigRoute(w http.ResponseWriter, r *http.Request
 		s.writeError(w, r, forbidden())
 		return
 	}
-	out, err := s.runtimeApplication().Route(r.Context(), r.PathValue("host"), pool.ID)
+	application := s.runtimeApplication()
+	if s.Config.Workers.RuntimeConfig.Protocol == 2 && r.Header.Get("X-Krun-Config-Protocol") != "2" {
+		// Old Pods retain their revision cursor during a rolling upgrade.
+		copyConfig := *application.Config
+		copyConfig.RuntimeConfig.Protocol = 1
+		application.Config = &copyConfig
+	}
+	out, err := application.Route(r.Context(), r.PathValue("host"), pool.ID)
 	if out.Epoch != "" {
 		w.Header().Set("X-Krun-Config-Epoch", out.Epoch)
 		w.Header().Set("X-Krun-Config-Revision", strconv.FormatInt(out.Revision, 10))

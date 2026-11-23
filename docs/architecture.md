@@ -10,7 +10,7 @@
 | `internal/authorization` | Cedar 编译和评估、用户与 Key 权限交集、策略校验、目标解析和只读请求缓存 |
 | `internal/workers` | Worker、资源池放置、构建、环境、发布、回滚、密钥、制品生命周期、配置投影和后台收敛 |
 | `internal/repository` | 仓库配置、用户连接、OAuth 状态消费、凭据刷新租约与提交 |
-| `internal/runtimeconfig` | Runtime 增量 feed、制品和资产描述、密钥交付、路由查询与 ACK 校验 |
+| `internal/runtimeconfig` | Runtime 资源图缓存与主库复核、v1 兼容 feed、制品和资产描述、密钥交付与路由查询 |
 | `internal/audit` | 审计记录、范围过滤、稳定游标和分页 |
 | `internal/artifact` | 制品 manifest、归档、源码路径、资产和 Wrangler 配置校验 |
 | `internal/config` | 唯一应用配置的加载、默认值、校验和部署目录解析 |
@@ -45,3 +45,11 @@
 Bun 模型从 DDL 生成，ORM 和驱动只存在于存储层。业务对象不携带 ORM 标签，模型不负责自动建表或关联保存。
 
 数据库通过有序 SQL migration 初始化及升级，`internal/storage/schema.sql` 保存当前结构快照。旧库通过显式维护命令升级，启动时校验迁移历史。前端保持静态 SPA，所有请求仍使用同源 `/api/*`。
+
+## Runtime 配置
+
+默认 v2 将稳定绑定、发布目标与不可变 Version 分开；每个 Runtime Pod 的 Rust agent 持有一条资源 WebSocket，
+控制面各副本保留独立、有界且可丢弃的缓存。数据库事务更新源实体、逐资源代次和合并通知，不写全局 revision head。
+`internal/adapters/configstream` 定义 Protobuf 传输；HTTP 连接与认证属于 `internal/control`，
+缓存/复核属于 `internal/runtimeconfig`，SQL、通知和 session/ACK 账本属于 `internal/storage`。
+发布可用通过 serving Loader 准备探测确认，传播状态通过独立 API 观测。详见 [配置分发](workers-backend.md#边缘配置分发)。

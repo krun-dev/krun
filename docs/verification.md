@@ -16,6 +16,35 @@ make check-static-build
 
 通过 `KRUN_TEST_POSTGRES_URL` 提供专用 PostgreSQL 18 测试库。控制面和存储集成测试为每个用例创建独立 schema，并在结束后删除。测试账号须有创建 schema 的权限。`make test` 和只运行 Go 测试的 `make test-go` 在未提供连接串时立即报错，CI 使用专用 PostgreSQL service 运行 `make test-go`。如果只想快速运行纯逻辑测试，可以直接运行 `go test ./...`，此时数据库集成测试会跳过。
 
+## 资源配置协议 v2
+
+Go/PostgreSQL 测试覆盖稳定绑定、源代次、漏通知修复、最低代次、删除重建、旧会话 ACK 拒绝、
+传播成员分类、固定版本地址以及双版本 serving 准备确认。Rust 测试覆盖真实二进制 WebSocket、
+分块安装、固定版本、迟到配置、断连保留和回收。JS 测试执行实际入口代码，验证热 handle 无额外 RPC。
+
+```sh
+cargo test --manifest-path workers/runtime/supervisor/Cargo.toml --locked
+node workers/runtime/test/resource-config.test.mjs
+npx playwright test tests/ui/navigation.spec.mjs
+```
+
+真实 supervisor + 多 workerd + 资源 WebSocket 的集成测试需要 Linux cgroup。
+下面容器测试使用独立端口和临时目录，不访问业务数据库或对象存储；依赖先运行
+`npm ci --prefix workers/runtime` 安装测试用 WebSocket fixture。
+
+```sh
+docker build -t krun-runtime-resources:test workers/runtime
+docker run --rm --cpus=4 --memory=2g \
+  --mount "type=bind,source=$PWD,target=/workspace,readonly" --workdir /workspace \
+  --env KRUN_TEST_SUPERVISOR=/usr/local/bin/krun-runtime-supervisor \
+  --env KRUN_TEST_WORKERD=/app/node_modules/.bin/workerd \
+  --env KRUN_TEST_RESOURCE_AGENT=1 krun-runtime-resources:test \
+  node workers/runtime/test/r2-workerd-smoke.mjs
+```
+
+该用例验证 R2、流式响应、实际 serving 准备探测以及配置连接中断后的热请求。
+100,000 站点 / 10,000 活跃 Version 的真实 PostgreSQL 压测入口见[规模验证](performance-scaling.md#真实活跃版本负载)。
+
 ## 端到端与 UI
 
 独立 kind 栈的部署、故障注入和恢复步骤见 [kind E2E](../deploy/workers-kind/README.md)。

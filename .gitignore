@@ -2,6 +2,7 @@ node_modules/
 dist/
 bin/
 .data/
+workers/runtime/supervisor/target/
 *.tsbuildinfo
 .env
 .env.*

@@ -214,7 +214,10 @@ test("Worker creation sends its DNS-compatible name", async ({ page }) => {
     await dialog.getByRole("textbox", { name: /Worker 名称/ }).evaluate((input) => {
       input.style.outline = "3px solid #e44040";
       input.parentElement.style.position = "relative";
-      input.insertAdjacentHTML("afterend", '<span style="position:absolute;right:8px;top:8px;background:#e44040;color:white;border-radius:50%;width:24px;height:24px;text-align:center;line-height:24px;font-weight:bold">1</span>');
+      input.insertAdjacentHTML(
+        "afterend",
+        '<span style="position:absolute;right:8px;top:8px;background:#e44040;color:white;border-radius:50%;width:24px;height:24px;text-align:center;line-height:24px;font-weight:bold">1</span>',
+      );
     });
     await dialog.screenshot({ path: process.env.KRUN_WORKER_SCREENSHOT });
   }
@@ -965,5 +968,102 @@ for (const theme of ["light", "dark"]) {
     await dialog.getByRole("button", { name: "保存" }).click();
     await expect(page.getByRole("cell", { name: "orders", exact: true })).toBeVisible();
     await expect(page.getByText("fixture-password")).toHaveCount(0);
+  });
+}
+
+for (const mode of ["light", "dark", "mobile"]) {
+  test(`configuration propagation distinguishes availability and unknown members (${mode})`, async ({
+    page,
+  }) => {
+    await fixture(page, { actions: { "org-a": { ...admin, "worker.read": true } } });
+    if (mode === "mobile") await page.setViewportSize({ width: 390, height: 844 });
+    await page.addInitScript(
+      (theme) => localStorage.setItem("krun.theme", theme),
+      mode === "dark" ? "dark" : "light",
+    );
+    const base = "/api/v1/orgs/org-a/workers/site-a";
+    const environment = {
+      name: "production",
+      enabled: true,
+      version_id: "version-a",
+      confirmed_version_id: "version-a",
+      deployment_revision: 3,
+      domains: [],
+      hosts: [],
+      variables: {},
+    };
+    const operation = {
+      id: "operation-a",
+      kind: "deploy",
+      state: "available",
+      environment: "production",
+      version_id: "version-a",
+      created_at: "2026-11-23T04:00:00Z",
+      steps: [
+        { name: "artifact", state: "done" },
+        { name: "candidate", state: "done" },
+        { name: "commit", state: "done" },
+        { name: "synchronize", state: "done" },
+      ],
+    };
+    await page.route("**/api/v1/orgs/org-a/workers**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      let json = { items: [] };
+      if (path === "/api/v1/orgs/org-a/workers")
+        json = {
+          items: [
+            {
+              id: "site-a",
+              name: "配置分发演示",
+              organization_id: "org-a",
+              environments: [environment],
+            },
+          ],
+        };
+      if (path === base + "/domains") json = { catalog: [], network_profile: {} };
+      if (path === base + "/repository") json = { source: null, revision: 1 };
+      if (path === base + "/overview")
+        json = {
+          builds: [],
+          operations: [operation],
+          versions: {},
+          environments: [{ environment, history: [] }],
+        };
+      if (path === base + "/environments/production/propagation")
+        json = {
+          state: "unknown",
+          target_generation: 42,
+          membership_confirmed: true,
+          total: 4,
+          applied: 2,
+          unsubscribed: 1,
+          lagging: 0,
+          unknown: 1,
+          rejected: 0,
+        };
+      await route.fulfill({ json });
+    });
+    await page.goto(origin + "/?page=workers&workspace=org-a&worker=site-a");
+    const propagation = page.getByRole("region", { name: "配置传播状态" });
+    await expect(propagation).toBeVisible();
+    await expect(page.getByText("部署已可用，配置传播进度单独确认。")).toBeVisible();
+    await expect(propagation.getByText("传播状态未知")).toBeVisible();
+    await expect(propagation.locator("code")).toHaveText("42");
+    await expect(propagation.getByText("未知成员", { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    // Numbered annotations are attached to the actual rendered DOM before capture.
+    await propagation.evaluate((element) => {
+      element.style.outline = "2px solid #2563eb";
+      const note = document.createElement("p");
+      note.textContent = "① 发布可用单独确认　② 未知成员仍计入总数　③ 目标代次用于排查同步进度";
+      note.style.cssText =
+        "font: 12px sans-serif; line-height: 1.6; margin-top: 12px; color: #2563eb";
+      element.append(note);
+    });
+    await propagation.locator("xpath=../..").screenshot({
+      path: `user-docs/public/images/workers-propagation-${mode}.png`,
+    });
   });
 }

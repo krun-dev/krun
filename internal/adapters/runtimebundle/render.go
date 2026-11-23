@@ -125,13 +125,40 @@ func Render(workers *config.WorkersConfig, pool config.WorkerRuntimePool, contro
 		"__CONTROL_EXTERNAL__", controlExternal,
 		"__STORAGE_ALLOW__", strings.Join(allowed, ","),
 		"__POOL__", quote(pool.ID),
+		"__CONFIG_PROTOCOL__", quote(fmt.Sprint(workers.RuntimeConfig.Protocol)),
 		"__LOADER_ID__", quote(loader),
 		"__CONFIG_BASE__", quote(workers.ArtifactStorage.ConfigBaseURL+"/pools/"+pool.ID),
 		"__STORAGE_BINDINGS__", storageBindings(workers, pool),
 		"__OBJECT_STORAGE_BINDINGS__", bindings,
 		"__OBJECT_STORAGE_SERVICES__", services,
 	)
-	return replacer.Replace(string(raw)), nil
+	text := replacer.Replace(string(raw))
+	if !validator && workers.RuntimeConfig.Protocol == 2 {
+		controlURL := "http://" + controlAddress
+		if origin != nil {
+			controlURL = origin.String()
+		}
+		limits := workers.RuntimeConfig
+		if err := limits.Validate(); err != nil {
+			return "", err
+		}
+		staticHosts := []string{}
+		for _, domain := range workers.Domains {
+			if owner, err := workers.DomainRuntimePool(domain.ID); err == nil && owner.ID == pool.ID && domain.StaticDomain != "" {
+				staticHosts = append(staticHosts, domain.StaticDomain)
+			}
+		}
+		agent, err := json.Marshal(map[string]any{
+			"control_url": strings.TrimSuffix(controlURL, "/") + "/api/internal/workers/config/v2/watch",
+			"pool":        pool.ID, "token_file": "/secrets/KRUN_RUNTIME_TOKEN", "pod_file": "/pod/uid", "limits": limits,
+			"static_hosts": staticHosts,
+		})
+		if err != nil {
+			return "", err
+		}
+		text = "# krun-config-agent " + string(agent) + "\n" + text
+	}
+	return text, nil
 }
 
 // KJ gives a more-specific allow priority over a broader deny. Omit any

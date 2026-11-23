@@ -27,5 +27,8 @@ func EnsureWorkerConfigCatalogue(ctx context.Context, store *storage.Store, conf
 	if err != nil {
 		return err
 	}
+	if config.RuntimeConfig.Protocol == 2 {
+		return store.EnsureRuntimeCatalogue(ctx, workerartifact.BytesDigest(raw))
+	}
 	return store.EnsureWorkerConfigCatalogue(ctx, workerartifact.BytesDigest(raw))
 }

@@ -13,6 +13,9 @@ func (c *WorkersConfig) Validate() error {
 	if c == nil {
 		return nil
 	}
+	if err := c.RuntimeConfig.Validate(); err != nil {
+		return err
+	}
 	if origin, err := c.RuntimeAPIOrigin(); err != nil {
 		return err
 	} else if origin != nil {

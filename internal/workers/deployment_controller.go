@@ -51,7 +51,7 @@ func (w *Controller) ProcessOperation(ctx context.Context, op domain.WorkerOpera
 	if !committed {
 		return lost
 	}
-	if op.Kind == domain.WorkerVersionURLOperation {
+	if op.Kind == domain.WorkerVersionURLOperation && w.Config.RuntimeConfig.Protocol != 2 {
 		_, err = w.PublishConfig(context.WithValue(ctx, storage.WorkerConfigPriorityKey{}, op.Worker))
 		return err
 	}
@@ -242,7 +242,7 @@ func (w *Controller) validateOperation(ctx context.Context, op domain.WorkerOper
 		return fail("Version permission revoked")
 	}
 	if op.Kind == domain.WorkerVersionURLOperation {
-		return w.Service.Store.CommitVersionURL(ctx, claim)
+		return w.Service.Store.CommitVersionURL(ctx, claim, w.Config.RuntimeConfig.Protocol == 2)
 	}
 	retention := time.Duration(w.Config.GradualAssetRetentionSeconds) * time.Second
 	if retention == 0 {
@@ -252,6 +252,9 @@ func (w *Controller) validateOperation(ctx context.Context, op domain.WorkerOper
 }
 
 func (w *Controller) observeOperation(ctx context.Context, op domain.WorkerOperation, state domain.WorkerState, routesReady bool) error {
+	if w.Config.RuntimeConfig.Protocol == 2 {
+		return w.observeResourceOperation(ctx, op, state, routesReady)
+	}
 	revision := int64(op.EdgeRevision)
 	note := func(message string) error {
 		return w.Service.Store.NoteCommittedOperation(ctx, op.ID, revision, message)

@@ -139,7 +139,7 @@ Secret 的普通写操作会自动部署：`PUT`（新增或轮换）和 `DELETE
 | `queued` | 已持久化，尚未执行 |
 | `validating` | 正在检查制品并在选中成员的隔离实例中加载候选、执行顶层作用域和 `KrunValidation` |
 | `committed` | Version 已提交，正在等待 runtime 同步 |
-| `available` | 当前 serving 成员已采用包含该 Version 的配置 revision 并发送新鲜 Ack；不表示每个成员都已加载业务 isolate |
+| `available` | 至少一个 Ready serving Pod 已通过目标配置与实际 serving Loader 的准备探测；传播状态单独确认 |
 | `failed` | 提交前失败，或候选准备超过 deadline |
 | `superseded` | 后续已验证发布替换了尚未完成确认的 Version |
 
@@ -171,50 +171,73 @@ URI 路径、query、method、body 保留；网关和入口清除客户端伪造
 
 配置了资产的版本在入口 Worker 内多一层路径决策：`run_worker_first` 命中 → 业务 Worker；否则查资产表（含 `html_handling` 规范化）→ 命中直接返回（ETag/304）；未命中且是导航请求 → 按 `not_found_handling` 返回 `index.html`；其余交给业务 Worker。资产按文件从桶的 `pub/` 前缀懒加载并做进程内 LRU，归档（`v1/` 前缀）始终需要凭证。两个静态域各有一条共享 HTTPRoute，统一由可信入口 Runtime 本地签名读取。
 
-每个 Pod 只有一个 workerd 进程，可动态加载多个业务 Worker。入口通过固定 `PLATFORM` service binding 请求受限内部 API；内部制品接口校验资源权限后返回元数据及限定到不可变制品目录的只读存储授权，runtime 本地计算 S3 SigV4，直连对象存储下载并校验归档与模块 hash。静态资产同样使用目录级授权，不逐文件获取签名 URL。通过 `artifact_storage.credentials` 集中选择 AK/SK 或 STS 模式。凭据只进入可信入口内存，候选验证通过管理请求获得制品只读授权，不允许独立 validator 调用 serving 凭据接口。STS 模式下配置快照使用限定到本池当前代次的只读授权。当 Version 含 Secret 时，入口再按精确 Version ID 从内部接口取值，核对绑定摘要后仅在 Loader 创建业务 isolate 时注入内存；Secret 不进入对象存储快照、公开 Version JSON 或业务日志。平台的对象存储凭据只由可信入口持有。入口 Worker 的出网白名单使用 workerd 的 `network=(allow=[...])`，**只接受 CIDR**（`host:port` 会在启动时报 `invalid CIDR`），需覆盖对象存储 Service 的 ClusterIP 网段；Pod 级 NetworkPolicy 仍把实际目标钉在对象存储 Pod 的 :9000。Loader key 包含组织、Worker、环境、Version、runtime 版本和构建 profile，使用不可变模块及显式变量。业务 `globalOutbound` 根据 serving 池选择公网出口或关闭，候选始终关闭全局出网。
+每个 Pod 的 Rust supervisor 管理多个 workerd 执行槽，可动态加载多个业务 Worker。入口通过固定 `PLATFORM` service binding 请求受限内部 API；内部制品接口校验资源权限后返回元数据及限定到不可变制品目录的只读存储授权，runtime 本地计算 S3 SigV4，直连对象存储下载并校验归档与模块 hash。静态资产同样使用目录级授权，不逐文件获取签名 URL。通过 `artifact_storage.credentials` 集中选择 AK/SK 或 STS 模式。凭据只进入可信入口内存，候选验证通过管理请求获得制品只读授权，不允许独立 validator 调用 serving 凭据接口。仅兼容协议 v1 的 STS 配置快照使用限定到本池当前代次的只读授权。当 Version 含 Secret 时，入口再按精确 Version ID 从内部接口取值，核对绑定摘要后仅在 Loader 创建业务 isolate 时注入内存；Secret 不进入对象存储快照、公开 Version JSON 或业务日志。平台的对象存储凭据只由可信入口持有。入口 Worker 的出网白名单使用 workerd 的 `network=(allow=[...])`，**只接受 CIDR**（`host:port` 会在启动时报 `invalid CIDR`），需覆盖对象存储 Service 的 ClusterIP 网段；Pod 级 NetworkPolicy 仍把实际目标钉在对象存储 Pod 的 :9000。Loader key 包含组织、Worker、环境、Version、runtime 版本和构建 profile，使用不可变模块及显式变量。业务 `globalOutbound` 根据 serving 池选择公网出口或关闭，候选始终关闭全局出网。
 
 serving Pod 在本地按 Version 记录最近一次转发业务请求的时间、当前分钟调用次数和在途调用数。workerd 的本地流式 Tail 事件跟踪调用生命周期，覆盖流式响应、WebSocket、同 isolate 内的入口调用和 `waitUntil()`。管理探针异步触发回收，每轮最多检查 32 个缓存项、尝试回收 4 个。距上次转发满 5 分钟且没有在途工作时，入口通过动态 Worker 的内部入口移除 Loader 缓存项，无需查询控制面。5 分钟是可回收阈值，实际回收时间还取决于探针扫描与在途工作结束时间。路由继续有效，下次请求到该 Pod 时按需冷加载。workerd 不为名为 `test` 的入口发送 Tail 事件，导出该名称的版本跳过平台主动回收。
 
 ### 边缘配置分发
 
-入口 Worker 使用紧凑 head、不可变 shard checkpoint、增量 ops 和有界内存视图：
+默认使用资源协议 v2。PostgreSQL 主库是配置事实来源，控制面副本只保留可丢弃的有界缓存。
+Host/路径绑定、Worker/环境的发布目标和不可变 Version 分开读取；切换版本只更新目标，
+不会重写所有域名，也不提交全局 revision head 或等待对象存储 checkpoint。
 
-1. **启动**从控制面的 `config/snapshot` 确认 pool、`config_epoch` 和当前 revision，按需加载路由。
-2. **冷路由**通过内部 `config/routes/{host}` 查询 route/Version。控制面短暂不可用时，可以读取同代次的 host shard，前提是 checkpoint 的 revision 至少达到 Runtime 当前进度。Runtime 缓存最多 4096 个 host。
-3. **跟随**通过 `config/changes` 携带 epoch 和 revision。增量批次同时包含应用区间和读取时的 `config_head_revision`。代次变化或游标越界返回 409，Runtime 重新启动配置视图。204 心跳携带 `X-Krun-Config-Epoch`，用于确认配置仍然有效。
-4. **ACK** 每约 5 秒上报 epoch 和 revision。过期代次返回 409 `CONFIG_EPOCH_CHANGED`，Runtime 通过配置流重新同步。
+1. **Pod 连接**：Rust supervisor 使用 pool token，通过内部
+   `GET /api/internal/workers/config/v2/watch` 建立一条二进制 WebSocket。多个 workerd 共用该连接。
+   Protobuf 帧默认最多 256 KiB，较大响应分块后完整校验、原子安装，单条消息上限 4 MiB。
+2. **冷加载**：按 host 定向读取绑定及其依赖。Pod 合并同 host 的等待者，也可合并队列中的多个 host。
+   控制面使用 single-flight、批量 SQL、读取并发预算、请求超时和有界缓存；容量不足时拒绝新冷加载，保留已有订阅配置。
+3. **热请求**：Rust 在本地选择 host/path 绑定，附带可信不可变配置 handle；JS 按 handle 缓存描述符，
+   再按真实 Version ID 执行业务 Loader、灰度和资产选择。客户端传入的 handle 会被清除。
+4. **更新**：资源以 `epoch/kind/id/incarnation/generation` 标识；主库事务同时更新资源代次和合并通知行。
+   后台通过 PostgreSQL LISTEN/NOTIFY 提示各副本失效缓存。通知不是可靠日志：订阅资源定期向主库批量核对版本，
+   默认最迟 5 秒失去新鲜度，缓存命中和普通连接心跳不能延长这个期限。订阅发现依赖后再次主库校验，防止加载竞态。
+5. **恢复**：重连交换本地资源版本，只补当前状态和变化依赖，不回放积压的 op。
+   资源 ACK 绑定 Pod UID、连接 session、pool 和 epoch，旧连接不能覆盖新会话。
+   数据库只持久化传播查询需要的发布目标 ACK；不可变描述符的 ACK 保留在连接内，避免每次发布累积历史版本账本。
+   删除重建通过 incarnation/代次隔离。
 
-`config/` 前缀与 `pub/`、`int/` 一样通过签名授权读取，只能通过集群内 endpoint 访问（`artifact_storage.config_base_url` 必须指向私有地址）；生产应使用独立桶或带 VPC 条件的桶策略。对象存储快照只含 host → version 指针和不可变 Version 描述符，不含 Build、Operation、日志或 IAM 数据。PostgreSQL 不保存每个 revision 的全量投影，只保存一份归一化当前头和最近 512 个 revision 的逐实体 ops；Pod 的 revision 落后于保留窗口，或高于当前发布 head 时，通过 409 重置为紧凑 head，再按需读取 host。客户端 revision 超前不会被当作无更新而一直返回 204。
+`workers.runtime_config` 同时配置每个控制面副本的缓存、读取并发与连接数，以及每个 Pod 的缓存和冷加载上限。
+默认控制面缓存为 65,536 个资源 / 128 MiB，Pod 为 65,536 个资源 / 64 MiB，默认每 Pod 最多 4 个并行冷 host。
+新冷 host 按 75% 水位准入，为现有资源替换依赖保留空间；条目数和字节数任一达到水位即受限。
+实际 RSS 还包含 JSON 对象、索引、连接和业务 isolate。
+多副本部署须按副本总数分配数据库连接预算；增加副本不会自动增加主库容量。
 
-对象存储的 checkpoint 放在 `config/pools/<pool>/epochs/<epoch>/` 下。后台清理保留当前代次引用的快照，其他代次及旧路径对象满 24 小时后进入清理。恢复 PostgreSQL 后，按[备份恢复后的配置代次](../deploy/production/README.md#备份恢复后的配置代次)轮换配置代次。
+`available` 表示候选校验、提交与 Gateway 确认后，最多尝试两个 Ready serving Pod，至少一个
+通过可信 `/config-probe`（灰度时覆盖所有正权重版本）：确认目标代次、路由、Version 和 Pod 身份，在实际 serving Loader 中准备
+版本、所需资产清单并调用平台注入入口的只读 HEAD 探测。候选校验仍运行独立的 `KrunValidation`；
+准备探测不调用应用自己的验证入口或任意业务 `fetch()`，也不代表 DNS/TLS 的外部可达性。
+它不等待全池 ACK。控制台和 `deployments propagation` 单独显示传播状态：
 
-已确认代次的 serving Pod 在控制面断连时继续使用最后已加载的配置和版本。60 秒是配置新鲜度的观测阈值，
-超过后 `/ready` 仍可返回 200，且报告 `config_fresh: false`。断连时暂停主动回收已加载的 Worker。
-尚未缓存的代码、资产清单或 Secret 仍需控制面，存储操作仍受凭据租约和过期时间限制。
-新 Pod 在控制面确认代次后开始服务。配置流报告需要重新同步、代次不匹配或控制面明确拒绝认证时，
-Runtime 使旧视图失效并等待重新启动配置。
-
-| 断连时的请求 | 行为 |
+| 成员状态 | 含义 |
 | --- | --- |
-| 本地已有路由、所选版本及所需依赖 | 使用最后确认的配置继续服务；灰度权重保持最后确认值 |
-| 已缓存的资产或响应 | 按本地路由和原缓存规则服务；不会延长响应缓存 TTL |
-| 读取未缓存的资产或使用 R2 binding | 仅在原有目录授权或 binding 凭据租约内读取；到期后必须向控制面续签 |
-| 冷路由 | 尝试控制面和同代次、revision 足够新的 shard；这不能补齐缺失的代码、manifest、Secret 或其他绑定 |
-| 新 Pod、未加载的版本或缺失的绑定 | 仍需原有控制面授权和依赖；失败仅影响相关请求 |
-| 已知的环境停用、路由删除和部署过期 | 继续执行本地已应用的限制；过期时间到达后即使断连也停止服务 |
+| applied | 已确认当前目标代次 |
+| unsubscribed | 已确认订阅清单，但尚未缓存这个发布目标；首次访问时冷读取 |
+| lagging | 已缓存但尚未确认当前代次 |
+| unknown | Ready 成员没有有效连接/完整清单/新鲜证明，或无法确认 Kubernetes 成员清单 |
+| rejected | 当前会话拒绝安装配置 |
 
-停用、删除和 Secret 更新通过配置流传播，完全断连的 Pod 无法收到新撤销，不能保证立即生效。
-收到的配置认证拒绝会使整个本地视图失效；业务凭据仍受原授权租约约束，不因断连延长。
-已经发出的存储签名、在途请求和已经注入 isolate 的 Secret 不具备即时撤销保证。
-必须立即阻断的事件需要通过独立可操作的 Gateway、网络或底层存储权限执行，不能仅等待配置流。
+只有成员清单已确认、非空且没有 lagging/unknown/rejected 时，传播状态为 `current`；
+未缓存目标的成员不需要预加载全池。断连成员仍计入总数，不能从收敛分母中删除。
 
-路由和资产缓存仍有容量上限，进程退出、重启或缓存淘汰后可能需要重新加载依赖。
-断连期间应保留已就绪的 serving 副本；readiness 200 仅表示本地配置可承流，不表示控制面已恢复或所有站点均可冷启动。
-缺少可用依赖或配置视图失效的业务请求返回 HTTP 503、`{"error":"runtime unavailable"}`；
-恢复控制面连接及相应依赖后重试。已停用环境和过期部署分别返回 HTTP 410、
-`{"error":"environment disabled"}` 和 `{"error":"deployment expired"}`，需要恢复环境或重新发布。
+控制面断连时，已有路由、版本及依赖继续按最后确认状态服务；暂停主动回收。
+`config_fresh: false` 与 readiness 可承流分开，超过新鲜度期限不会自动停止热服务。
+原凭据租约、资产/响应缓存 TTL 和地址到期时间保持有效约束；已收到的停用、删除和过期继续执行。
+冷路由、新 Pod、缺失的代码/manifest/Secret、凭据到期后的续签可能返回 503。
+v2 不从 S3 checkpoint 恢复冷路由，也不提供离线重启保证。
+指定版本覆盖与 Service binding 的逐请求在线授权仍需控制面；这些调用不会因为已有缓存而跳过授权。
+收到明确配置认证拒绝或新的 epoch 时使旧视图失效；恢复备份后仍需轮换
+[配置代次](../deploy/production/README.md#备份恢复后的配置代次)。
+完全断连的 Pod 无法获知新的撤销，立即封禁须由 Gateway、网络或底层存储权限执行。
 
-controller 默认对业务 pool 的 Ready serving Pod 调用 `/validate`，配置 `validator_pool` 后改用独立 validator。该接口总是在校验专用的 WorkerLoader 实例中加载并运行 `KrunValidation`；commit 后由配置流传播，controller 通过 `worker_runtime_acks` 观察收敛，`available` 表示当前 serving 成员都已上报该 revision。Serving readiness 要求已加载可用的配置视图，Version 在首次请求时懒加载。Validator readiness 不启动配置跟随或 ACK，也没有业务 socket。业务域名的实际可达性由独立 HTTPS 探测记录，见[运行指标](../deploy/observability/README.md#配置收敛与业务入口)。
+固定 Version 地址始终指向该不可变 Version，不跟随默认发布；仍检查环境启停、有效 placement 和地址期限。
+显式版本覆盖头仅允许当前主/候选版本，仍逐请求在线鉴权；未知或不可用的指定版本不会回退到默认版本。
+`Cloudflare-Workers-Version-Key` 是灰度分桶键，不是精确版本 ID。缓存、Loader 和资产按真实 Version 与作用域隔离。
+
+协议 v1 仅用于过渡或显式 `protocol: 1`，保留原 head/ops/checkpoint 接口；
+检测到最近 15 秒内的旧 ACK 时，控制器独立兼容循环更新旧 feed，不把 checkpoint 放回 v2 发布临界路径。
+v2 的操作目标使用独立的 `resource_generation/resource_epoch/resource_pool` 列，不复用旧 `edge_revision` 游标。
+升级先执行增量数据库迁移，再更新所有控制面，最后更新 Runtime 镜像及其生成配置；新的 serving 准备确认语义在控制面升级完成后适用。
+Serving 与独立 validator 的入口、权限和候选 Loader 隔离保持一致。
 
 资源池和 Network Profile 来自主 YAML，使用有效 placement 限定路由和内部数据访问；
 当前模型见 [资源池配置](workers-pools.md)。Secret binding 已支持，Service/DB binding 不在当前范围。
@@ -248,6 +271,7 @@ controller 默认对业务 pool 的 Ready serving Pod 调用 `/validate`，配�
 | `GET /overview` | 控制台详情数据，包含当前可见活动的 `activity` |
 | `GET /activity` | 返回 HTTP 200 和 `active`、`token`，用于轮询可见的未完成构建和发布 |
 | `GET /operations/{id}` | 步骤、错误、提交与生效状态 |
+| `GET /environments/{env}/propagation` | 目标代次、可信成员清单与资源 ACK 分类 |
 
 内部 runtime 接口只监听 `internal_listen`，不进公开 mux，使用池级身份
 `Authorization: Bearer <pool.runtime_token>` + `X-Runtime-Pool: <pool-id>`。控制面同时校验
@@ -255,15 +279,16 @@ header 与该 pool 独立 token，不能只信任 header：
 
 | 方法与路径 | 用途 |
 | --- | --- |
-| `GET /api/internal/workers/config/snapshot` | 当前代次及紧凑配置 head |
+| `GET /api/internal/workers/config/v2/watch` | v2 Protobuf WebSocket，订阅/解析/恢复/资源 ACK |
+| `GET /api/internal/workers/config/snapshot` | v1 当前代次及紧凑配置 head |
 | `GET /api/internal/workers/config/routes/{host}` | 当前 pool 的单条路由与 Version |
-| `GET /api/internal/workers/config/changes?epoch=&since=&wait=5s` | 200 增量、204 同代次心跳、409 重新同步 |
+| `GET /api/internal/workers/config/changes?epoch=&since=&wait=5s` | v1 增量、同代次心跳与重新同步 |
 | `GET /api/internal/workers/versions/{id}/assets` | 资产 manifest |
 | `POST /api/internal/workers/versions/{id}/assets/credentials` | 续期本 Version 资产目录的只读授权 |
 | `POST /api/internal/workers/static-assets/{prefix}/{org}/{worker}/{digest}/credentials` | signed 静态域的目录级只读授权 |
 | `GET /api/internal/workers/versions/{id}/secrets` | 精确 Version 的 Secret 值，仅接受 serving runtime token，并校验本池 placement |
 | `GET /api/internal/workers/artifacts/{id}` | 制品元数据与目录级只读授权 |
-| `POST /api/internal/workers/ack` | 上报已应用的配置代次和 revision |
+| `POST /api/internal/workers/ack` | v1 上报已应用的配置代次和 revision |
 
 构建请求（静态资产随源码包进入，见 [静态资产设计](workers-assets.md)）：
 

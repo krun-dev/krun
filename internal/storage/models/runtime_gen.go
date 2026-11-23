@@ -28,3 +28,70 @@ type RuntimeAck struct {
 	Revision      int64     `bun:"revision"`
 	UpdatedAt     time.Time `bun:"updated_at"`
 }
+
+type RuntimeGeneration struct {
+	bun.BaseModel `bun:"table:worker_runtime_generations,alias:worker_runtime_generations"`
+	Kind          string     `bun:"kind,pk"`
+	ResourceID    string     `bun:"resource_id,pk"`
+	Incarnation   string     `bun:"incarnation"`
+	Generation    int64      `bun:"generation"`
+	ChangedAt     time.Time  `bun:"changed_at"`
+	DeletedAt     *time.Time `bun:"deleted_at"`
+}
+
+type RuntimeNotification struct {
+	bun.BaseModel `bun:"table:worker_runtime_notifications,alias:worker_runtime_notifications"`
+	Kind          string     `bun:"kind,pk"`
+	ResourceID    string     `bun:"resource_id,pk"`
+	Generation    int64      `bun:"generation"`
+	ClaimedBy     string     `bun:"claimed_by"`
+	ClaimedAt     *time.Time `bun:"claimed_at"`
+}
+
+type RuntimeRouteDirty struct {
+	bun.BaseModel `bun:"table:worker_runtime_route_dirty,alias:worker_runtime_route_dirty"`
+	WorkerID      string `bun:"worker_id,pk"`
+	Generation    int64  `bun:"generation"`
+}
+
+type RuntimeBinding struct {
+	bun.BaseModel  `bun:"table:worker_runtime_bindings,alias:worker_runtime_bindings"`
+	Host           string     `bun:"host,pk"`
+	RouteKey       string     `bun:"route_key,pk"`
+	Pool           string     `bun:"pool"`
+	WorkerID       string     `bun:"worker_id"`
+	EnvName        string     `bun:"env_name"`
+	MatchType      string     `bun:"match_type"`
+	Path           string     `bun:"path"`
+	Enabled        bool       `bun:"enabled"`
+	Public         bool       `bun:"public"`
+	ScriptName     string     `bun:"script_name"`
+	FixedVersionID string     `bun:"fixed_version_id"`
+	ExpiresAt      *time.Time `bun:"expires_at"`
+}
+
+type RuntimeResourceAck struct {
+	bun.BaseModel `bun:"table:worker_runtime_resource_acks,alias:worker_runtime_resource_acks"`
+	SessionID     string    `bun:"session_id"`
+	PodUID        string    `bun:"pod_uid,pk"`
+	Pool          string    `bun:"pool"`
+	ConfigEpoch   string    `bun:"config_epoch"`
+	Kind          string    `bun:"kind,pk"`
+	ResourceID    string    `bun:"resource_id,pk"`
+	Incarnation   string    `bun:"incarnation"`
+	Generation    int64     `bun:"generation"`
+	UpdatedAt     time.Time `bun:"updated_at"`
+}
+
+type RuntimeSession struct {
+	bun.BaseModel     `bun:"table:worker_runtime_sessions,alias:worker_runtime_sessions"`
+	PodUID            string    `bun:"pod_uid,pk"`
+	Pool              string    `bun:"pool"`
+	ConfigEpoch       string    `bun:"config_epoch"`
+	SessionID         string    `bun:"session_id"`
+	InventoryComplete bool      `bun:"inventory_complete"`
+	Connected         bool      `bun:"connected"`
+	Fresh             bool      `bun:"fresh"`
+	Rejected          bool      `bun:"rejected"`
+	UpdatedAt         time.Time `bun:"updated_at"`
+}
