@@ -94,11 +94,6 @@ func (k *Client) ensureHostnameRouteSpec(ctx context.Context, name string, revis
 	return err
 }
 
-func hostnameRouteSpec(host string, gateway config.WorkerGateway, rules []HostnameRule) map[string]any {
-	spec, _ := hostnameRouteSpecs(host, gateway, rules)
-	return spec
-}
-
 func hostnameRouteSpecs(host string, gateway config.WorkerGateway, rules []HostnameRule) (map[string]any, []any) {
 	entries := make([]any, 0, len(rules))
 	var streams []any

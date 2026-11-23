@@ -19,7 +19,7 @@ func NewWorkerS3Endpoint(c *appconfig.WorkersConfig, endpoint string) (Client, e
 	if err := c.ValidateArtifactSTSEndpoint(endpoint); err != nil {
 		return nil, err
 	}
-	manager, err := storagecredentials.NewArtifactClientManager(c)
+	manager, err := storagecredentials.NewArtifactManager(c)
 	if err != nil {
 		return nil, err
 	}

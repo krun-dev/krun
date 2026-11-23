@@ -42,13 +42,6 @@ func cloneStringMap(source map[string]string) map[string]string {
 	return out
 }
 
-func cloneStringMapNonNil(source map[string]string) map[string]string {
-	if source == nil {
-		return map[string]string{}
-	}
-	return cloneStringMap(source)
-}
-
 func cloneR2Bindings(source map[string]WorkerR2Binding) map[string]WorkerR2Binding {
 	if source == nil {
 		return nil
