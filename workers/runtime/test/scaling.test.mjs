@@ -9,7 +9,7 @@ const source = loadRuntimeSource();
 writeFileSync(
   join(directory, "entry.mjs"),
   source +
-    `export { bootstrapFromControl, applyBatch, resolveRoute, assetManifest, recordWorkerRequest };
+    `export { bootstrapFromControl, applyBatch, resolveRoute, assetManifest, recordWorkerRequest, canRetireWorker };
 export const inspect = () => ({ view, versionRefs, routeVersions, manifests });
 `,
 );
@@ -21,6 +21,33 @@ const environment = (fetch) => ({
   PLATFORM: { fetch },
 });
 try {
+  const retirement = await fresh();
+  const idleMs = 5 * 60 * 1000;
+  const lastAccessedAt = 1_000_000;
+  const idleWorker = {
+    observeCompletion: true,
+    retirementAllowed: true,
+    sourceFailed: false,
+    forwarding: 0,
+    inFlight: 0,
+    lastAccessedAt,
+    retryAt: 0,
+  };
+  const retireAt = lastAccessedAt + idleMs;
+  assert.equal(retirement.canRetireWorker(idleWorker, retireAt - 1), false);
+  assert.equal(retirement.canRetireWorker(idleWorker, retireAt), true);
+  for (const active of [
+    { forwarding: 1 },
+    { inFlight: 1 },
+    { observeCompletion: false },
+    { retirementAllowed: false },
+    { lastAccessedAt: retireAt - 1 },
+    { retryAt: retireAt + 1 },
+  ]) {
+    assert.equal(retirement.canRetireWorker({ ...idleWorker, ...active }, retireAt), false);
+  }
+  console.log("PASS five-minute retirement boundary and active-work guards");
+
   const shared = await fresh();
   const sharedHost = "shop.apps.test";
   let revision = 1;

@@ -629,7 +629,7 @@ const config :W.Config = (
       request.end();
     });
   }
-  const idleMs = 60 * 60 * 1000;
+  const idleMs = 5 * 60 * 1000;
   // Keep the simulated clock within the validity of the fixture's storage grants.
   const startedAt = Date.now() - 3 * idleMs - 120_000;
   const ready = (now, syncClockAdvance = 0) =>
@@ -668,7 +668,7 @@ const config :W.Config = (
   assert.equal(
     artifactDownloads,
     beforeRetirement,
-    "a Worker idle for less than an hour stays warm",
+    "a Worker idle for less than five minutes stays warm",
   );
 
   await ready(startedAt + idleMs);
@@ -721,7 +721,8 @@ const config :W.Config = (
       sweepAt += 5_000;
       return output.includes("krun isolate retired");
     },
-    () => "Worker with an enabled route was not retired after an hour without access\n" + output,
+    () =>
+      "Worker with an enabled route was not retired after five minutes without access\n" + output,
   );
   assert.equal(artifactDownloads, beforeRetirement, "retirement must not download user code");
   assert.equal((await requestWorker("/run", { host: untracedHost })).status, 200);
