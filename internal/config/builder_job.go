@@ -73,15 +73,38 @@ func (c *WorkersConfig) validateBuilderJob() error {
 			}
 		}
 	}
-	for key, value := range c.BuilderNodeSelector {
-		if len(kvalidation.IsQualifiedName(key)) != 0 || len(kvalidation.IsValidLabelValue(value)) != 0 {
-			return fmt.Errorf("invalid workers.builder_node_selector")
-		}
+	if !validKubernetesLabels(c.BuilderNodeSelector) {
+		return fmt.Errorf("invalid workers.builder_node_selector")
 	}
-	for _, t := range c.BuilderTolerations {
-		if (t.Key != "" && len(kvalidation.IsQualifiedName(t.Key)) != 0) || (t.Operator != "" && t.Operator != "Equal" && t.Operator != "Exists") || (t.Key == "" && t.Operator != "Exists") || (t.Operator == "Exists" && t.Value != "") || len(kvalidation.IsValidLabelValue(t.Value)) != 0 || (t.Effect != "" && t.Effect != "NoSchedule" && t.Effect != "PreferNoSchedule" && t.Effect != "NoExecute") || (t.TolerationSeconds != nil && (t.Effect != "NoExecute" || *t.TolerationSeconds < 0)) {
+	for _, toleration := range c.BuilderTolerations {
+		if !validKubernetesToleration(toleration) {
 			return fmt.Errorf("invalid workers.builder_tolerations")
 		}
 	}
 	return nil
+}
+
+func validKubernetesLabels(labels map[string]string) bool {
+	for key, value := range labels {
+		if len(kvalidation.IsQualifiedName(key)) != 0 || len(kvalidation.IsValidLabelValue(value)) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func validKubernetesToleration(t BuilderToleration) bool {
+	if (t.Key != "" && len(kvalidation.IsQualifiedName(t.Key)) != 0) ||
+		(t.Operator != "" && t.Operator != "Equal" && t.Operator != "Exists") ||
+		(t.Key == "" && t.Operator != "Exists") ||
+		(t.Operator == "Exists" && t.Value != "") ||
+		len(kvalidation.IsValidLabelValue(t.Value)) != 0 {
+		return false
+	}
+	switch t.Effect {
+	case "", "NoSchedule", "PreferNoSchedule", "NoExecute":
+		return t.TolerationSeconds == nil || (t.Effect == "NoExecute" && *t.TolerationSeconds >= 0)
+	default:
+		return false
+	}
 }

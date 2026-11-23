@@ -264,6 +264,18 @@ workers:
       private_egress: deny
       public_egress: direct
       runtime_service: runtime-default
+      # 可选。启用后可在系统配置中查看生成的 serving 清单。Secret 由部署方提供。
+      # deployment:
+      #   image: registry.example.com/krun/runtime:v1 # 省略时继承 deployment.runtime_image
+      #   replicas: 2
+      #   pod_labels: {team: runtime}
+      #   node_selector: {workload: runtime}
+      #   tolerations:
+      #     - {key: workload, operator: Equal, value: runtime, effect: NoSchedule}
+      #   dns_policy: ClusterFirst
+      #   dns_config:
+      #     options: [{name: ndots, value: "2"}]
+      #   secret_name: runtime-default
       # 仅当 validator_pool 选中此池时部署；不得与 runtime_service 相同。
       validator_service: runtime-validator-default
       runtime_token: ${KRUN_RUNTIME_TOKEN}

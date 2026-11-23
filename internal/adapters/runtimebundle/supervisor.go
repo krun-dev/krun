@@ -11,11 +11,6 @@ import (
 
 const ExecutionPort = 8082
 
-func ServingPeerName(pool config.WorkerRuntimePool) string {
-	digest := sha256.Sum256([]byte(pool.ID))
-	return fmt.Sprintf("krun-execution-%x", digest[:10])
-}
-
 func ServingPeerSpec(app string) map[string]any {
 	return map[string]any{
 		"clusterIP": "None",
@@ -61,14 +56,14 @@ func ServingCommand() []string {
 	return []string{"/usr/local/bin/krun-runtime-supervisor", "--serving", "/app/node_modules/.bin/workerd", "/config/runtime.capnp"}
 }
 
-func ServingEnvironment(pool config.WorkerRuntimePool, cpuReserve int) []any {
+func ServingEnvironment(pool config.WorkerRuntimePool, peerService string, cpuReserve int) []any {
 	settings := pool.Execution
 	compute := 2
 	if settings.ComputeProcesses != nil {
 		compute = *settings.ComputeProcesses
 	}
 	env := []any{
-		map[string]string{"name": "POOL_PEER_DNS", "value": ServingPeerName(pool)},
+		map[string]string{"name": "POOL_PEER_DNS", "value": peerService},
 		map[string]any{"name": "POOL_POD_IP", "valueFrom": map[string]any{"fieldRef": map[string]string{"fieldPath": "status.podIP"}}},
 		map[string]string{"name": "POOL_COMPUTE", "value": strconv.Itoa(compute)},
 		map[string]string{"name": "POOL_COMPUTE_HOSTS", "value": strings.Join(settings.ComputeHosts, ",")},

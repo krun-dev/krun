@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Empty, Loading, PageHeader } from "./common";
 import { DataTable, ErrorState, useData } from "./management";
+import { RuntimePoolManifests } from "./runtime-pool-manifests";
 
 type RuntimePool = {
   id: string;
@@ -13,6 +14,7 @@ type RuntimePool = {
   public_egress: string;
   validator_configured: boolean;
   network_profiles: string[];
+  manifests_configured?: boolean;
 };
 
 type SystemConfig = {
@@ -55,7 +57,7 @@ function WorkersConfig({
     { label: "每个 Worker 的预览环境上限", value: workers.preview_limit },
   ];
   if (deployment) {
-    summary.push({ label: "每池声明的运行副本数", value: deployment.runtime_replicas });
+    summary.push({ label: "默认运行副本数", value: deployment.runtime_replicas });
     if (workers.validator_pool) {
       summary.push({ label: "声明的独立校验副本数", value: deployment.validator_replicas });
     }
@@ -136,6 +138,15 @@ function WorkersConfig({
                   </div>
                 ) : (
                   <span className="text-muted-foreground">{t("无匹配档案")}</span>
+                ),
+            },
+            {
+              title: t("Kubernetes 清单"),
+              render: (pool) =>
+                pool.manifests_configured ? (
+                  <RuntimePoolManifests poolID={pool.id} />
+                ) : (
+                  <span className="text-muted-foreground">{t("未配置")}</span>
                 ),
             },
           ]}

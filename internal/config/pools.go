@@ -150,6 +150,11 @@ func (c *WorkersConfig) ConfiguredRuntimePools() []WorkerRuntimePool {
 	return c.RuntimePools
 }
 
+func (pool WorkerRuntimePool) DefaultPeerService() string {
+	digest := sha256.Sum256([]byte(pool.ID))
+	return "krun-execution-" + hex.EncodeToString(digest[:10])
+}
+
 func (pool WorkerRuntimePool) StreamService() string {
 	if pool.Execution.Streams == nil {
 		return ""

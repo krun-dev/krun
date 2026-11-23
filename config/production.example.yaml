@@ -88,6 +88,8 @@ workers:
       private_egress: deny
       public_egress: deny
       runtime_service: runtime-internal
+      # 从顶层 deployment 继承镜像和副本数。调度、DNS 等覆盖项见 config/example.yaml。
+      deployment: {}
       validator_service: validator-internal
       runtime_token: ${KRUN_RUNTIME_TOKEN}
       management_token: ${KRUN_MANAGEMENT_TOKEN}
