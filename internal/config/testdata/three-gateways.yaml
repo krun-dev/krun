@@ -1,3 +1,4 @@
+# 测试夹具：用于配置校验和拓扑回归，不是面向部署的配置示例。
 # 集群测试主配置模板；真实值保存在用户指定的私有 test.yaml。
 # 三个现有 selfManaged Gateway 均为 http:80，无 hostNetwork；Service/入口由部署侧另行准备。
 listen: 0.0.0.0:8080

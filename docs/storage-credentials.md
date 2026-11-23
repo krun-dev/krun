@@ -35,7 +35,7 @@ provider 错误只保留分类和经过过滤的 request ID，不保留上游错
 
 使用唯一主配置的 `workers.object_storage` 段，与制品存储的 `workers.artifact_storage` 分开。
 完整可加载模板见 `config/example.yaml` 的注释段；本地 static 模板见
-`config/development.example.yaml`。真实值只放 `.data/dev.yaml` 或该文件的环境变量引用。
+`config/example.yaml`。真实值只放 `.data/dev.yaml` 或该文件的环境变量引用。
 
 ```yaml
 workers:

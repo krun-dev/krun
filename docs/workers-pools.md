@@ -133,7 +133,7 @@ krun-server render-runtime-pool --config "$KRUN_CONFIG" --pool "$POOL_ID" > runt
 
 正式 serving Pod 使用单个 4 核、8 GiB 容器。Rust supervisor 管理两个普通 workerd 和
 两个默认常驻的计算 workerd。业务版本继续按需加载，独立 validator 直接运行 workerd。
-`workers.runtime_pools[].execution` 的参数及默认值见 [生产配置示例](../config/production.example.yaml)。
+`workers.runtime_pools[].execution` 的参数及默认值见 [生产配置示例](../config/example.yaml)。
 在 `compute_hosts` 里填写完整业务域名即可分配到计算组，其余域名进入普通组。
 `compute_processes: 0` 时该池所有请求进入普通组。
 

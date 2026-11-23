@@ -125,7 +125,7 @@ func TestYAMLServerExamples(t *testing.T) {
 	t.Setenv("KRUN_REPO_GITHUB_APP_SLUG", "test-app")
 	t.Setenv("KRUN_REPO_GITHUB_CLIENT_ID", "test-app-client")
 	t.Setenv("KRUN_REPO_GITHUB_CLIENT_SECRET", "test-app-secret")
-	for _, name := range []string{"development.example.yaml", "example.yaml"} {
+	for _, name := range []string{"example.yaml"} {
 		t.Run(name, func(t *testing.T) {
 			loaded, err := appconfig.LoadConfig(filepath.Join("..", "..", "config", name))
 			if err != nil {

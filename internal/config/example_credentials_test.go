@@ -35,7 +35,7 @@ func TestProductionExampleRejectsPublishedCredentials(t *testing.T) {
 	} {
 		t.Run(tc.env, func(t *testing.T) {
 			t.Setenv(tc.env, tc.value)
-			_, err := LoadConfig("../../config/production.example.yaml")
+			_, err := LoadConfig("testdata/production.yaml")
 			if err == nil || !strings.Contains(err.Error(), tc.field) {
 				t.Fatalf("expected rejection of %s, got %v", tc.field, err)
 			}

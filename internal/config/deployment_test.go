@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-func TestProductionExampleLoadsThroughMainConfig(t *testing.T) {
+func TestProductionFixtureLoadsThroughMainConfig(t *testing.T) {
 	setExampleCredentials(t)
-	c, err := LoadConfig(filepath.Join("..", "..", "config", "production.example.yaml"))
+	c, err := LoadConfig(filepath.Join("testdata", "production.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,7 +19,7 @@ func TestProductionExampleLoadsThroughMainConfig(t *testing.T) {
 	if c.Deployment.RuntimeReplicas != 2 || c.Deployment.ControlReplicas != 1 {
 		t.Fatal("incorrect initial replicas")
 	}
-	for _, filename := range []string{"example.yaml", "development.example.yaml"} {
+	for _, filename := range []string{"example.yaml"} {
 		raw, err := os.ReadFile(filepath.Join("..", "..", "config", filename))
 		if err != nil {
 			t.Fatal(err)
@@ -32,7 +32,7 @@ func TestProductionExampleLoadsThroughMainConfig(t *testing.T) {
 
 func TestLoadConfigRestrictsLocalBuilderToDevelopment(t *testing.T) {
 	setExampleCredentials(t)
-	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "production.example.yaml"))
+	raw, err := os.ReadFile(filepath.Join("testdata", "production.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestDeploymentValidationRejectsUnboundedOrInjectedInput(t *testing.T) {
 		{"empty egress", func(d *DeploymentConfig) { d.Network.Control = nil }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			c, err := LoadConfig(filepath.Join("..", "..", "config", "production.example.yaml"))
+			c, err := LoadConfig(filepath.Join("testdata", "production.yaml"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -102,9 +102,9 @@ func TestDeploymentValidationRejectsUnboundedOrInjectedInput(t *testing.T) {
 	}
 }
 
-func TestThreeGatewayExampleLoadsThroughMainConfig(t *testing.T) {
+func TestThreeGatewayFixtureLoadsThroughMainConfig(t *testing.T) {
 	setExampleCredentials(t)
-	c, err := LoadConfig(filepath.Join("..", "..", "config", "test.example.yaml"))
+	c, err := LoadConfig(filepath.Join("testdata", "three-gateways.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestThreeGatewayExampleLoadsThroughMainConfig(t *testing.T) {
 
 func TestPoolDeploymentValidation(t *testing.T) {
 	setExampleCredentials(t)
-	cfg, err := LoadConfig(filepath.Join("..", "..", "config", "production.example.yaml"))
+	cfg, err := LoadConfig(filepath.Join("testdata", "production.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,5 +155,23 @@ func TestPoolDeploymentValidation(t *testing.T) {
 				t.Fatalf("want error for %s, got %v", test.field, err)
 			}
 		})
+	}
+}
+
+// The key-policy examples describe a different document type, not server configuration.
+func TestOnlyOneServerConfigExample(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "..", "config", "*.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		switch filepath.Base(file) {
+		case "key-policy.example.yaml", "key-policy.wildcard.example.yaml":
+		default:
+			t.Errorf("server configuration examples must use config/example.yaml only: %s", file)
+		}
+	}
+	if _, err := os.Stat(filepath.Join("..", "..", "config", "example.yaml")); err != nil {
+		t.Fatal(err)
 	}
 }

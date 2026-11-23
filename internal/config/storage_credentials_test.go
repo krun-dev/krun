@@ -86,7 +86,7 @@ func TestObjectStorageValidation(t *testing.T) {
 func TestObjectStorageExamplesLoadThroughMainConfig(t *testing.T) {
 	setExampleCredentials(t)
 	t.Setenv("KRUN_DATABASE_URL", "postgres://test-only/krun_test")
-	for _, name := range []string{"example.yaml", "development.example.yaml"} {
+	for _, name := range []string{"example.yaml"} {
 		t.Run(name, func(t *testing.T) {
 			raw, err := os.ReadFile(filepath.Join("..", "..", "config", name))
 			if err != nil {
@@ -114,13 +114,7 @@ func TestObjectStorageExamplesLoadThroughMainConfig(t *testing.T) {
 				t.Fatal("missing usable object_storage example")
 			}
 			content := string(raw)
-			if name == "development.example.yaml" {
-				base, err := os.ReadFile(filepath.Join("..", "..", "config", "example.yaml"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				content = string(base)
-			}
+
 			// Append beneath the main workers mapping, before its repository list.
 			content = strings.Replace(content, "  repository_providers:", strings.Join(section, "\n")+"\n  repository_providers:", 1)
 			// Exercise the optional delivery provider through the single main

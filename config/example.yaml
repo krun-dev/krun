@@ -1,4 +1,15 @@
-# 服务端配置总示例：复制后修改地址、数据库和需要启用的登录来源。
+# 唯一服务端配置示例：复制本文件，在一份 YAML 中配置认证、Workers 和部署。
+# 本地：mkdir -p .data && cp config/example.yaml .data/dev.yaml
+# 在 .data/dev.yaml 中设置 development: true，将 listen/internal_listen 改为
+# 127.0.0.1:8080 / 127.0.0.1:8081，public_url 改为 http://127.0.0.1:8080
+# （使用 Vite 时为 http://127.0.0.1:5173），static_dir: dist，启用 local 登录。
+# 不使用 Workers 时删除 workers:；需要 local-first 时配置 kubeconfig、集群可达的
+# S3 runtime 地址，builder_mode: local 只用于可信仓库，validator_pool 与隧道一致。
+# 生产或测试：复制到私有配置位置，保持 development: false，填写真实 HTTPS origin、
+# 数据库、认证、镜像、网关、存储和密钥；不可将实际凭据提交到仓库。
+# 多入口：在 gateways、domains、runtime_pools、network_profiles 分别添加条目，
+# 使用 gateway 与 domain_selector/pool_selector 的 labels 将入口与运行池对应起来；
+# 多网关时 deployment.console_gateway 指定控制台入口。
 # 生产：development: false，public_url 使用真实 HTTPS origin。
 # 本地：development: true 时，listen 和 internal_listen 必须使用回环 IP，如 127.0.0.1。
 # Vite 本地入口可设 public_url: http://127.0.0.1:5173。
@@ -268,6 +279,26 @@ workers:
       # 省略 validator_token 时从 runtime_token 按 pool 派生，validator 只挂载派生凭据。
       management_token: ${KRUN_MANAGEMENT_TOKEN}
       default: true
+      # 可选：执行池容量参数；省略时使用程序默认值。
+      # execution:
+      #   compute_processes: 2
+      #   compute_hosts: []
+      #   cpu_high_millicores: 750
+      #   cpu_reserve_millicores: 1000
+      #   memory_reserve_mib: 1639
+      #   max_loaded_per_process: 650
+      #   max_cold_in_flight: 4
+      #   ordinary_in_flight: 32
+      #   streams:
+      #     sse_paths: []
+      #     per_process: 300
+      #     per_execution_pod: 600
+      #     per_ingress_pod: 600
+      #     per_peer: 128
+      #   compute_in_flight: 2
+      #   peer_ordinary_in_flight: 16
+      #   peer_compute_in_flight: 4
+      #   peer_cooldown_ms: 15
   # 组织用户只看到这里配置的产品档案名称和描述，不会看到 pool、access、selector
   # 或 Gateway。单一档案时控制台不显示选择器。
   network_profiles:
@@ -366,9 +397,9 @@ workers:
       client_id: ${KRUN_REPO_GITLAB_CLIENT_ID:-}
       client_secret: ${KRUN_REPO_GITLAB_CLIENT_SECRET:-}
 
-# 公司集群部署的可选信息仍放在同一主配置；完整内网示例见 production.example.yaml。
+# 公司集群部署的可选信息仍放在同一主配置；以下取消注释并填写真实值。
 # deployment:
-#   console_gateway: internal # 多网关时必须显式选择控制台入口；三入口模板见 test.example.yaml。
+#   console_gateway: internal # 多网关时必须显式选择控制台入口，对应 gateways[].id。
 #   control_image: registry.example.com/krun/krun-control:release-tag
 #   runtime_image: registry.example.com/krun/krun-runtime:release-tag
 #   dns_resolver: ${KRUN_CLUSTER_DNS:-192.0.2.53}

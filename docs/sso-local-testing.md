@@ -31,7 +31,9 @@ Access Token，也不会因为 scope 较大自动获得 krun 内权限。
 所有本地运行期配置只写在 gitignored 的 `.data/dev.yaml`：
 
 ```bash
-cp config/development.example.yaml .data/dev.yaml
+mkdir -p .data
+cp config/example.yaml .data/dev.yaml
+# 按 config/example.yaml 顶部的本地说明调整监听、登录来源和数据库配置
 ```
 
 按 [config/example.yaml](../config/example.yaml) 中的结构，把需要测试的 provider
