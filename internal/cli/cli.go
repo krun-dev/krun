@@ -328,6 +328,8 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		return c.versions(ctx, rest)
 	case "secret":
 		return c.secret(ctx, rest)
+	case "system":
+		return c.system(ctx, rest)
 	case "org":
 		return c.organization(ctx, rest)
 	case "members", "groups", "roles", "keys", "models":
@@ -551,6 +553,7 @@ Organizations and access
     Model catalog metadata only. Model execution is reserved.
 
 Diagnostics
+  krun system pool-manifests POOL_ID
   krun check --action ACTION --kind KIND --id ID [--env global]
   krun audit [--org ID | --system] [--limit 50] [--cursor CURSOR]
   krun api --method METHOD --path /api/v1/... [--file FILE]

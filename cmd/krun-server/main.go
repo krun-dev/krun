@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/krun-dev/krun/internal/adapters/runtimebundle"
 	"github.com/krun-dev/krun/internal/control"
 	"github.com/krun-dev/krun/internal/localize"
 	"github.com/krun-dev/krun/internal/storage"
@@ -36,15 +37,30 @@ func run() (result error) {
 	user := flags.String("user", "", localize.Text(lang, "Existing local user_id"))
 	source := flags.String("source", "", localize.Text(lang, "Identity source"))
 	subject := flags.String("subject", "", localize.Text(lang, "Stable external subject"))
+	var poolID string
+	if command == "render-runtime-pool" {
+		flags.StringVar(&poolID, "pool", "", localize.Text(lang, "Runtime pool ID"))
+	}
 	if e := flags.Parse(args); e != nil {
 		return e
 	}
 	if (command == "migrate" || command == "rotate-runtime-config-epoch") && flags.NArg() != 0 {
 		return fmt.Errorf("%s accepts no positional arguments", command)
 	}
+	if command == "render-runtime-pool" && (poolID == "" || flags.NArg() != 0) {
+		return errors.New("render-runtime-pool requires --pool and accepts no positional arguments")
+	}
 	c, e := control.LoadConfig(*config)
 	if e != nil {
 		return e
+	}
+	if command == "render-runtime-pool" {
+		manifests, err := runtimebundle.RenderPoolManifests(c, poolID)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprint(os.Stdout, manifests.YAML())
+		return err
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -83,7 +99,7 @@ func run() (result error) {
 	case "invite":
 		return control.Invite(ctx, s, *source, *subject)
 	default:
-		return fmt.Errorf("unknown command %q; use serve, bootstrap, invite, migrate or rotate-runtime-config-epoch", command)
+		return fmt.Errorf("unknown command %q; use serve, bootstrap, invite, migrate, rotate-runtime-config-epoch or render-runtime-pool", command)
 	}
 }
 func main() {

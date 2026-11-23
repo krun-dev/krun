@@ -4,7 +4,7 @@
 [配置示例](../config/example.yaml) 和 `WorkersConfig` 为准。系统管理员可在
 「平台管理 → 系统配置」只读查看当前控制面加载的资源池、默认池、入口与出口策略、
 候选校验方式及匹配的 Network Profile。页面显示配置声明，实际副本数和健康状态由集群提供。
-凭据、内部地址、服务名及标签和选择器原文仅保留在部署侧。
+配置概览隐藏凭据和集群细节。启用清单生成的池可在同一页面查看部署用 YAML。
 
 ## 资源池与服务分配
 
@@ -51,6 +51,84 @@ Version 固定代码和配置，不携带 pool；路由和内部制品访问根�
 在一个 Gateway 上伪造另一个 domain 的 Host 不会匹配路由。DNS、TLS 和部署侧代理
 必须覆盖 `*.<domain>`。细节见 [域名与路由](workers-domains.md)。
 
+## 生成 serving 清单
+
+在主 YAML 的 `workers.runtime_pools` 中为目标池添加 `deployment`。下面是该池内的配置片段，
+按集群实际节点标签、镜像和 DNS 设置替换示例值。
+
+```yaml
+deployment:
+  image: registry.example.com/krun/runtime:v1
+  replicas: 3
+  pod_labels:
+    team.example.com/owner: platform
+  node_selector:
+    workload: serving
+  tolerations:
+    - key: workload
+      operator: Equal
+      value: serving
+      effect: NoSchedule
+  dns_policy: None
+  dns_config:
+    nameservers: [192.0.2.53]
+    searches: [krun.svc.cluster.local, svc.cluster.local, cluster.local]
+    options:
+      - name: ndots
+        value: "2"
+  secret_name: runtime-internal
+```
+
+- `deployment: {}` 从顶层 `deployment.runtime_image` 和 `deployment.runtime_replicas` 继承镜像及副本数。也可在池内覆盖。未设置副本数时默认为 2，`resources.requests` 和 `resources.limits` 默认各为 4 核、8 GiB。
+- `pod_labels` 注入 Pod 标签。`app`、`pool`、`role` 和 `app.kubernetes.io/part-of` 由生成器维护。池原有的 `labels` 参与 Network Profile 匹配。节点标签和污点分别通过 `node_selector` 和 `tolerations` 配置。
+- `dns_policy` 省略时使用 Kubernetes 默认的 `ClusterFirst`。`dns_config` 支持 `nameservers`、`searches`、`options`。使用 `None` 时至少填写一个能解析集群 Service 的 nameserver，并将实际的 `<namespace>.svc.<cluster-domain>` 加入 search 列表，确保同池发现使用的短 Service 名可解析。
+- `peer_service` 可覆盖同池发现 Service 的名称。设为池的 `runtime_service` 时，两个用途共用一个 headless Service。接管存量资源时先核对 `clusterIP` 类型和 Deployment 选择器。
+- `pod_uid_annotation` 可改为从指定 Pod annotation 读取 UID，省略时用 `metadata.uid`。回调默认使用 `krun-control-internal.<namespace>.svc` 和 `internal_listen` 的端口。也可用 `workers.runtime_api_url` 指定 HTTPS origin，或者用池的 `control_address` 指定内部 host 和端口。
+- 私网制品端点对应的 IP 网段填到 `storage_egress_cidrs`，使可信入口的 workerd 网络放行这些网段。集群侧 NetworkPolicy 也需放行 DNS、控制面回调、制品存储、8081 入口、8083 管理和同池的 8082 转发。
+
+输出包含 Deployment、带内容哈希的 ConfigMap、Service 和 kgateway BackendConfigPolicy。`execution.streams` 启用时，
+会一起输出对应的长流 Service 和 BackendConfigPolicy。部署方维护 namespace、Gateway、网络策略及独立 validator。
+ConfigMap 内容变更会更新 Pod 模板引用。按回滚窗口保留旧 ConfigMap，再清理无引用的版本。
+
+在 `workers.namespace` 预先建立 `secret_name` 指定的 Secret，名称省略时使用 `runtime_service`。
+将控制面同 pool 的令牌写入 `KRUN_RUNTIME_TOKEN` 和 `KRUN_MANAGEMENT_TOKEN`。
+制品凭据模式为 `ak_sk` 时另外提供 `artifact-access` 和 `artifact-secret`。更新 Secret 后滚动重启对应的 Deployment。
+
+### 控制台和 CLI
+
+系统管理员打开「平台管理 → 系统配置 → 运行资源池」，点击目标池的「查看清单」。在 **Deployment**、
+**ConfigMap** 和「配套资源」标签之间切换，再用「复制 YAML」复制当前页签。
+
+![① 从运行资源池表格打开清单](./images/runtime-pool-manifests-entry.png)
+
+![② 切换资源类型并复制 YAML](./images/runtime-pool-manifests-preview.png)
+
+对运行中的控制面，用系统管理员 CLI 会话执行下面的命令。示例的 `POOL_ID` 和 `KRUN_ENDPOINT` 换成
+实际池 ID 和控制台 HTTPS origin。命令将整组多文档 YAML 写到标准输出。
+
+```sh
+POOL_ID=internal-a
+KRUN_ENDPOINT=https://console.example.com
+krun --endpoint "$KRUN_ENDPOINT" system pool-manifests "$POOL_ID" > runtime-pool.yaml
+```
+
+CI 或首次部署可使用同版本的 `krun-server` 从主配置离线生成。将 `KRUN_CONFIG` 替换为实际的主配置文件，
+并通过发布环境提供其中引用的变量。该命令只读取配置，输出到标准输出。
+
+```sh
+POOL_ID=internal-a
+KRUN_CONFIG=config/production.yaml
+krun-server render-runtime-pool --config "$KRUN_CONFIG" --pool "$POOL_ID" > runtime-pool.yaml
+```
+
+`404 RESOURCE_NOT_FOUND`（`Runtime pool not found`）时检查池 ID。
+`409 RUNTIME_POOL_DEPLOYMENT_NOT_CONFIGURED`（`Runtime pool deployment is not configured`）时，
+在主配置中启用该池的 `deployment` 并重载控制面。遇到 401 或 403 时，检查 CLI 会话和系统管理权限。
+
+发布前用 `kubectl apply --dry-run=server -f runtime-pool.yaml` 校验目标集群接受全部资源。发布后检查
+`kubectl -n "$NAMESPACE" rollout status "deployment/$RUNTIME_SERVICE"` 成功，并验证 Runtime Pod 内的
+同池 Service 能解析。这里的 `NAMESPACE` 和 `RUNTIME_SERVICE` 分别取自 `workers.namespace` 和该池的 `runtime_service`。
+
 ## 承流与容量
 
 正式 serving Pod 使用单个 4 核、8 GiB 容器。Rust supervisor 管理两个普通 workerd 和
@@ -80,8 +158,8 @@ Pod 开放，需要池认证和单跳标记；收到转发的 Pod 只在本地�
 在池的 `execution.streams` 配置启用后，WebSocket Upgrade、接受
 `text/event-stream` 的请求，以及 `sse_paths` 中的精确路径走同池的长流 Service。
 对于用普通 Accept 头的模型客户端，配置专用的 SSE 路径。
-kgateway 按活跃请求量选择长流入口，普通流量继续按域名亲和。部署清单会为关联的
-Gateway 生成 WebSocket Upgrade 策略。长流规则的
+kgateway 按活跃请求量选择长流入口，普通流量继续按域名亲和。在关联的
+Gateway 上配置支持 WebSocket Upgrade 的 ListenerPolicy。长流规则的
 `request` 和 `backendRequest` 超时设为 `0s`，让流的生命周期由服务和空闲超时管理。
 
 SSE 与 WebSocket 共享长流额度，短请求保有原来的独立额度。默认每 workerd

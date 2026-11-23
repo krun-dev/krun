@@ -86,6 +86,10 @@ async function fixture(page, options = {}) {
         revision: 1,
         workers_configured: true,
       };
+    } else if (path === "/api/v1/system/config" && state.systemConfig) {
+      data = state.systemConfig;
+    } else if (path === "/api/v1/system/config/runtime-pools/internal-a/manifests" && state.poolManifests) {
+      data = state.poolManifests;
     } else if (path === "/api/v1/roles" && state.permissionCatalog) {
       data = state.permissionCatalog;
     } else if (path === "/api/auth/csrf") {
@@ -967,3 +971,55 @@ for (const theme of ["light", "dark"]) {
     await expect(page.getByText("fixture-password")).toHaveCount(0);
   });
 }
+
+test("system administrators can open and copy generated pool manifests", async ({ page, context }) => {
+  const pool = {
+    id: "internal-a",
+    access: ["private"],
+    default: true,
+    private_egress: "direct",
+    public_egress: "deny",
+    validator_configured: false,
+    network_profiles: ["internal"],
+  };
+  const yaml = {
+    deployment: "kind: Deployment\nspec:\n  template:\n    spec:\n      dnsPolicy: None\n",
+    config_map: "kind: ConfigMap\ndata:\n  runtime.capnp: workerd configuration\n",
+    supporting_resources: "kind: Service\n---\nkind: BackendConfigPolicy\n",
+  };
+  const { requests } = await fixture(page, {
+    systemAdmin: true,
+    systemConfig: {
+      workers: {
+        runtime_pools: [
+          { ...pool, manifests_configured: true },
+          { ...pool, id: "external-a", default: false },
+        ],
+        runtime_api_override: false,
+        builder_mode: "kubernetes",
+        preview_limit: 32,
+      },
+    },
+    poolManifests: yaml,
+  });
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto(origin + "/?page=system-config&workspace=org-a&view=system");
+  const open = page.getByRole("button", { name: "查看清单 internal-a" });
+  await expect(open).toBeVisible();
+  await expect(page.getByRole("row", { name: /external-a/ }).getByRole("button")).toHaveCount(0);
+  expect(requests).not.toContain("/api/v1/system/config/runtime-pools/internal-a/manifests");
+  await open.click();
+
+  const dialog = page.getByRole("dialog", { name: /internal-a/ });
+  await expect(dialog.getByRole("tabpanel")).toContainText("dnsPolicy: None");
+  await dialog.getByRole("tab", { name: "ConfigMap" }).click();
+  await expect(dialog.getByRole("tabpanel")).toContainText("runtime.capnp");
+  await dialog.getByRole("button", { name: "复制 YAML" }).click();
+  await expect(dialog.getByText("YAML 已复制")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(yaml.config_map);
+  await dialog.getByRole("tab", { name: "配套资源" }).click();
+  await expect(dialog.getByRole("tabpanel")).toContainText("BackendConfigPolicy");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(open).toBeFocused();
+});

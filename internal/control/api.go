@@ -23,6 +23,7 @@ func (s *Server) apiRoutes(m *recordingMux) {
 	m.HandleFunc("GET /api/v1/orgs/{org}", s.protected(false, s.orgDetail))
 	m.HandleFunc("GET /api/v1/orgs/{org}/permissions", s.protected(false, s.orgPermissions))
 	m.HandleFunc("GET /api/v1/system/config", s.protected(true, s.systemConfig))
+	m.HandleFunc("GET /api/v1/system/config/runtime-pools/{pool}/manifests", s.protected(true, s.systemRuntimePoolManifests))
 	m.HandleFunc("GET /api/v1/system/inventory/{kind}", s.protected(true, s.systemInventory))
 	m.useScope(scopeNone)
 	m.HandleFunc("PATCH /api/v1/orgs/{org}", s.protected(true, s.orgUpdate))

@@ -145,6 +145,9 @@ func (c *Config) Validate() error {
 			return errors.New("internal_listen must differ from listen")
 		}
 	}
+	if err := c.validateRuntimeDeployments(); err != nil {
+		return err
+	}
 	if c.MergedDeployment {
 		if c.Workers == nil || c.InternalListen == "" {
 			return errors.New("merged_deployment requires Workers and internal_listen")
