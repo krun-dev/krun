@@ -117,6 +117,15 @@ CREATE TABLE IF NOT EXISTS krun_resources (
 
 CREATE UNIQUE INDEX IF NOT EXISTS krun_resources_locator ON krun_resources(org_id, kind, locator) WHERE locator <> '';
 
+CREATE TABLE IF NOT EXISTS krun_worker_address_claims (
+ label text PRIMARY KEY,
+ owner_kind text NOT NULL,
+ owner_id text NOT NULL,
+ expires_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS krun_worker_address_claims_owner ON krun_worker_address_claims(owner_kind, owner_id);
+CREATE INDEX IF NOT EXISTS krun_worker_address_claims_expiry ON krun_worker_address_claims(expires_at) WHERE expires_at IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS krun_resources_org_kind_cursor ON krun_resources (org_id, kind, resource_id COLLATE "C");
 
 CREATE TABLE IF NOT EXISTS krun_api_keys (
@@ -853,3 +862,13 @@ CREATE TABLE IF NOT EXISTS krun_worker_version_r2 (
 CREATE INDEX IF NOT EXISTS krun_worker_version_r2_bucket ON krun_worker_version_r2(bucket_id);
 
 CREATE OR REPLACE TRIGGER retained_assets_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_retained_assets FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
+CREATE TABLE IF NOT EXISTS krun_worker_cleanup (
+ worker_id text PRIMARY KEY,
+ org_id text NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ next_attempt_at timestamptz NOT NULL DEFAULT now() + interval '90 seconds',
+ completed_at timestamptz,
+ attempts integer NOT NULL DEFAULT 0,
+ last_error text NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS krun_worker_cleanup_pending ON krun_worker_cleanup(next_attempt_at);

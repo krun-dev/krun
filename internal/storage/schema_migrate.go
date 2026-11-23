@@ -8,159 +8,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-type schemaMigration struct {
-	from string
-	to   string
-	sql  string
-}
-
-// Each step records the exact schema.sql digests from the two releases.
-// Keep applied steps immutable and append new steps in release order.
-var schemaMigrations = []schemaMigration{
-	{
-		from: "8f802b41ccf74f398f6c4c8ede9c480ad29b7e29ae95d7febda6046baa3842ef",
-		to:   "791bb9ebf10e4652f69918635175574492833a5b55b53db9806f0a604b333a30",
-		sql:  `ALTER TABLE krun_worker_build_private ADD COLUMN config_path text NOT NULL DEFAULT ''`,
-	},
-	{
-		from: "791bb9ebf10e4652f69918635175574492833a5b55b53db9806f0a604b333a30",
-		to:   "f5ddb02a599235f4f87c218e94dcac41afa1212d8f8634f025254e9ab3f80877",
-		sql: `ALTER TABLE krun_worker_operations
-			ADD COLUMN claim_generation bigint NOT NULL DEFAULT 0,
-			ADD COLUMN edge_pool text NOT NULL DEFAULT '';
-			UPDATE krun_worker_operations o SET state='superseded', error='Deployment target is no longer current', finished_at=now()
-			WHERE o.state='committed' AND NOT EXISTS (
-				SELECT 1 FROM krun_worker_environments e WHERE e.worker_id=o.worker_id AND e.env_name=o.env_name
-					AND e.enabled AND e.version_id=o.version_id AND e.deployment_revision=o.deployment_revision
-			);
-			UPDATE krun_worker_operations SET edge_revision=0 WHERE state='committed' AND edge_revision<>0`,
-	},
-	{
-		from: "f5ddb02a599235f4f87c218e94dcac41afa1212d8f8634f025254e9ab3f80877",
-		to:   "5ec33847b55dc6a84dd405672d22b70ff4c90f5ebd6597ea709cc57e9b13900e",
-		sql: `INSERT INTO krun_meta(key,value) VALUES('worker_config_epoch',replace(gen_random_uuid()::text,'-',''));
-			DELETE FROM worker_runtime_acks;
-			ALTER TABLE worker_runtime_acks ADD COLUMN config_epoch text NOT NULL,
-				DROP CONSTRAINT worker_runtime_acks_pkey, ADD PRIMARY KEY(pod_uid,config_epoch);
-			UPDATE worker_config_checkpoints SET published_revision=0 WHERE published_revision<>0;
-			UPDATE krun_worker_operations SET edge_revision=0,edge_pool='' WHERE state='committed' AND edge_revision<>0`,
-	},
-	{
-		from: "5ec33847b55dc6a84dd405672d22b70ff4c90f5ebd6597ea709cc57e9b13900e",
-		to:   "0774eee652005060dfd1d3a5dc98e009808e98ec212ec21c8c7a07a8186ec760",
-		sql: `ALTER TABLE krun_worker_versions ADD COLUMN IF NOT EXISTS service_bindings jsonb NOT NULL DEFAULT '{}'::jsonb;
-		ALTER TABLE krun_worker_environments ADD COLUMN IF NOT EXISTS service_bindings jsonb NOT NULL DEFAULT '{}'::jsonb,
-			ADD COLUMN IF NOT EXISTS gradual_asset_retention_seconds integer CHECK (gradual_asset_retention_seconds BETWEEN 0 AND 7776000);
-		ALTER TABLE krun_worker_environments
-			ADD COLUMN IF NOT EXISTS candidate_version_id text NOT NULL DEFAULT '',
-			ADD COLUMN IF NOT EXISTS candidate_weight integer NOT NULL DEFAULT 0 CHECK (candidate_weight BETWEEN 0 AND 100000);
-		ALTER TABLE krun_worker_operations
-			ADD COLUMN IF NOT EXISTS candidate_version_id text NOT NULL DEFAULT '',
-			ADD COLUMN IF NOT EXISTS candidate_weight integer NOT NULL DEFAULT 0 CHECK (candidate_weight BETWEEN 0 AND 100000);
-		ALTER TABLE krun_worker_deployments
-			ADD COLUMN IF NOT EXISTS candidate_version_id text NOT NULL DEFAULT '',
-			ADD COLUMN IF NOT EXISTS candidate_weight integer NOT NULL DEFAULT 0 CHECK (candidate_weight BETWEEN 0 AND 100000),
-			ADD COLUMN IF NOT EXISTS message text NOT NULL DEFAULT '';
-		ALTER TABLE worker_config_routes
-			ADD COLUMN IF NOT EXISTS candidate_version_id text NOT NULL DEFAULT '',
-			ADD COLUMN IF NOT EXISTS candidate_weight integer NOT NULL DEFAULT 0 CHECK (candidate_weight BETWEEN 0 AND 100000),
-			ADD COLUMN IF NOT EXISTS script_name text NOT NULL DEFAULT '',
-			ADD COLUMN IF NOT EXISTS env_name text NOT NULL DEFAULT '',
-			ADD COLUMN IF NOT EXISTS public boolean NOT NULL DEFAULT false,
-			ADD COLUMN IF NOT EXISTS retained_versions jsonb NOT NULL DEFAULT '[]'::jsonb;
-		CREATE INDEX IF NOT EXISTS worker_config_routes_candidate ON worker_config_routes(candidate_version_id,pool) WHERE candidate_version_id<>'';
-		CREATE TABLE IF NOT EXISTS krun_worker_retained_assets (
-			worker_id text NOT NULL, env_name text NOT NULL, version_id text NOT NULL, expires_at timestamptz NOT NULL,
-			pending_seconds integer NOT NULL DEFAULT 0,
-			PRIMARY KEY(worker_id,env_name,version_id)
-		);
-		CREATE INDEX IF NOT EXISTS krun_worker_retained_assets_expiry ON krun_worker_retained_assets(expires_at);
-		CREATE OR REPLACE TRIGGER retained_assets_config_dirty AFTER INSERT OR UPDATE OR DELETE ON krun_worker_retained_assets
-			FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
-		CREATE OR REPLACE TRIGGER worker_env_config_dirty AFTER INSERT OR DELETE OR UPDATE OF enabled,version_id,candidate_version_id,candidate_weight
-			ON krun_worker_environments FOR EACH ROW EXECUTE FUNCTION krun_mark_worker_config_dirty();
-		INSERT INTO worker_config_dirty(worker_id) SELECT worker_id FROM krun_workers
-			ON CONFLICT(worker_id) DO UPDATE SET generation=nextval('worker_dirty_seq')`,
-	},
-	{
-		from: "0774eee652005060dfd1d3a5dc98e009808e98ec212ec21c8c7a07a8186ec760",
-		to:   "23c469b3647eb09d4a9e9355d92f4d9e70f230381b56c25408fc141c1927e5c3",
-		sql: `CREATE TABLE IF NOT EXISTS krun_worker_hostnames (
-	host text PRIMARY KEY,
-	org_id text NOT NULL,
-	suffix_id text NOT NULL,
-	revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
-	retired boolean NOT NULL DEFAULT false
-);
-CREATE INDEX IF NOT EXISTS krun_worker_hostnames_org ON krun_worker_hostnames(org_id, host) WHERE NOT retired;
-
-CREATE TABLE IF NOT EXISTS krun_worker_hostname_routes (
-	host text NOT NULL,
-	match_type text NOT NULL CHECK (match_type IN ('exact', 'prefix')),
-	path text NOT NULL,
-	worker_id text NOT NULL,
-	enabled boolean NOT NULL,
-	PRIMARY KEY (host, match_type, path)
-);
-CREATE INDEX IF NOT EXISTS krun_worker_hostname_routes_worker ON krun_worker_hostname_routes(worker_id, host);
-		ALTER TABLE worker_config_routes
-			ADD COLUMN route_key text NOT NULL DEFAULT '',
-			ADD COLUMN match_type text NOT NULL DEFAULT '' CHECK (match_type IN ('', 'exact', 'prefix')),
-			DROP CONSTRAINT worker_config_routes_pkey,
-			ADD PRIMARY KEY(host,route_key);
-		ALTER TABLE worker_config_ops ADD COLUMN route_key text NOT NULL DEFAULT ''`,
-	},
-	{
-		from: "23c469b3647eb09d4a9e9355d92f4d9e70f230381b56c25408fc141c1927e5c3",
-		to:   "5c08400c3a40273803d6423338e25adaade59c4db129072a0761113c9644b423",
-		sql: `ALTER TABLE krun_worker_hostnames ADD COLUMN IF NOT EXISTS gateway_managed boolean NOT NULL DEFAULT false;
-		ALTER TABLE krun_worker_hostname_routes
-			ADD COLUMN IF NOT EXISTS origin text NOT NULL DEFAULT '',
-			ADD COLUMN IF NOT EXISTS cf_pattern text NOT NULL DEFAULT '',
-			ADD COLUMN IF NOT EXISTS custom_domain boolean NOT NULL DEFAULT false,
-			ADD CHECK ((worker_id = '') <> (origin = ''));
-		ALTER TABLE krun_workers
-			ADD COLUMN IF NOT EXISTS workers_dev_disabled boolean NOT NULL DEFAULT false,
-			ADD COLUMN IF NOT EXISTS preview_urls_disabled boolean NOT NULL DEFAULT false`,
-	},
-	{
-		from: "5c08400c3a40273803d6423338e25adaade59c4db129072a0761113c9644b423",
-		to:   "7e29e1e830f0e70ccaa2fc3ced5e414d3e58c02f7a160820a40066a99586fabe",
-		sql: `ALTER TABLE krun_worker_hostnames ADD COLUMN domain_type text NOT NULL DEFAULT 'application';
-		UPDATE krun_worker_hostnames h SET domain_type='worker_custom'
-		FROM (
-			SELECT host FROM krun_worker_hostname_routes GROUP BY host
-			HAVING count(*)=1 AND bool_and(custom_domain AND match_type='prefix' AND path='/' AND worker_id <> '')
-		) custom
-		WHERE h.host=custom.host AND NOT h.gateway_managed;
-		UPDATE krun_worker_hostname_routes r SET custom_domain=false
-		FROM krun_worker_hostnames h
-		WHERE h.host=r.host AND h.domain_type='application' AND r.custom_domain;
-		ALTER TABLE krun_worker_hostnames
-			ALTER COLUMN domain_type DROP DEFAULT,
-			ADD CHECK (domain_type IN ('worker_custom', 'application'))`,
-	},
-
-	{
-		from: "7e29e1e830f0e70ccaa2fc3ced5e414d3e58c02f7a160820a40066a99586fabe",
-		to:   "82934894c84ba5a9ebef6ff99f2038684c8649d07d0bc79c30b27ea939d0f9a1",
-		sql: `ALTER TABLE krun_worker_hostname_routes
-			ADD COLUMN previews_enabled boolean NOT NULL DEFAULT false CHECK (NOT previews_enabled OR custom_domain);
-		UPDATE krun_worker_hostname_routes SET previews_enabled=true WHERE custom_domain AND enabled;
-		INSERT INTO worker_config_dirty(worker_id)
-			SELECT DISTINCT worker_id FROM krun_worker_hostname_routes WHERE previews_enabled
-			ON CONFLICT(worker_id) DO UPDATE SET generation=nextval('worker_dirty_seq');
-		ALTER TABLE krun_worker_versions ADD COLUMN version_url boolean NOT NULL DEFAULT false;
-		CREATE UNIQUE INDEX krun_worker_versions_url_prefix ON krun_worker_versions(worker_id,left(version_id,8)) WHERE version_url;
-		CREATE TRIGGER version_url_update_dirty AFTER UPDATE OF version_url ON krun_worker_versions
-			FOR EACH ROW WHEN (OLD.version_url IS DISTINCT FROM NEW.version_url) EXECUTE FUNCTION krun_mark_worker_config_dirty();
-		CREATE TRIGGER version_url_delete_dirty AFTER DELETE ON krun_worker_versions
-			FOR EACH ROW WHEN (OLD.version_url) EXECUTE FUNCTION krun_mark_worker_config_dirty()`,
-	},
-}
-
-// MigrateSchema upgrades an existing database while the control plane is
-// stopped. It reports whether this call applied changes.
+// MigrateSchema applies pending SQL migrations explicitly and reports changes.
+// Online safety depends on the compatibility of the migration SQL.
 func MigrateSchema(ctx context.Context, dsn string) (bool, error) {
 	pool, err := openPostgresPool(ctx, dsn)
 	if err != nil {
@@ -189,11 +38,6 @@ func MigrateSchema(ctx context.Context, dsn string) (bool, error) {
 		return false, errors.New("schema upgrade requires an existing krun database")
 	}
 
-	// Serialize maintenance within this schema before inspecting the migration ledger.
-	if _, err := tx.Exec(ctx, `LOCK TABLE krun_meta IN SHARE ROW EXCLUSIVE MODE`); err != nil {
-		return false, fmt.Errorf("lock schema migration: %w", err)
-	}
-
 	migrations, err := sqlMigrations()
 	if err != nil {
 		return false, err
@@ -202,47 +46,19 @@ func MigrateSchema(ctx context.Context, dsn string) (bool, error) {
 	if err := tx.QueryRow(ctx, `SELECT to_regclass(format('%I.krun_schema_migrations', $1::text)) IS NOT NULL`, schema).Scan(&ledger); err != nil {
 		return false, err
 	}
-	applied := false
-	count := 0
 	if !ledger {
-		// The old chain ends at the immutable first SQL migration.
-		var current string
-		err = tx.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='schema_baseline'`).Scan(&current)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, errors.New("schema upgrade requires an existing schema fingerprint")
-		}
-		if err != nil {
-			return false, fmt.Errorf("read schema fingerprint: %w", err)
-		}
-		target := migrations[0].checksum
-		if current != target {
-			steps, err := planSchemaMigration(current, target)
-			if err != nil {
-				return false, err
-			}
-			for _, step := range steps {
-				if _, err := tx.Exec(ctx, step.sql); err != nil {
-					return false, fmt.Errorf("apply schema upgrade %s to %s: %w", step.from, step.to, err)
-				}
-			}
-			if _, err := tx.Exec(ctx, `UPDATE krun_meta SET value=$1 WHERE key='schema_baseline'`, target); err != nil {
-				return false, fmt.Errorf("record schema fingerprint: %w", err)
-			}
-		}
-		if err := createMigrationLedger(ctx, tx); err != nil {
-			return false, err
-		}
-		if err := recordMigration(ctx, tx, migrations[0]); err != nil {
-			return false, err
-		}
-		count = 1
-		applied = true
-	} else {
-		count, err = validateMigrationLedger(ctx, tx, migrations)
-		if err != nil {
-			return false, err
-		}
+		return false, errors.New("schema migration history is missing; initialize a new database")
 	}
+	// Serialize migrations without blocking application metadata writes.
+	if _, err := tx.Exec(ctx, `LOCK TABLE krun_schema_migrations IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+		return false, fmt.Errorf("lock schema migration: %w", err)
+	}
+
+	count, err := validateMigrationLedger(ctx, tx, migrations)
+	if err != nil {
+		return false, err
+	}
+	applied := false
 	if count < len(migrations) {
 		if err := applyPendingMigrations(ctx, tx, migrations[count:]); err != nil {
 			return false, err
@@ -266,20 +82,4 @@ func scopeMaintenanceSchema(ctx context.Context, tx pgx.Tx) (string, error) {
 	// Keep maintenance statements in the selected schema.
 	_, err := tx.Exec(ctx, `SELECT set_config('search_path', quote_ident($1) || ', pg_temp', true)`, schema)
 	return schema, err
-}
-
-func planSchemaMigration(current, target string) ([]schemaMigration, error) {
-	var steps []schemaMigration
-	next := current
-	for _, step := range schemaMigrations {
-		if step.from != next {
-			continue
-		}
-		steps = append(steps, step)
-		next = step.to
-		if next == target {
-			return steps, nil
-		}
-	}
-	return nil, fmt.Errorf("no supported schema upgrade from %q to %q", current, target)
 }

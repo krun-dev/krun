@@ -62,8 +62,7 @@ local-first 渲染器对网络地址有以下约束：
 - 公网域名允许 DNS 和对应 HTTPS 端口；私有存储只放行指定 IP 和端口，不放行私有 DNS 网段。
 
 `dev-runtime-config.sh` 从主配置生成 workerd 配置、Secret 和 NetworkPolicy。Serving
-启动时需要通过本地控制面确认配置代次。先确保 PostgreSQL 已启动，已有旧库按[停写升级](../deploy/production/README.md#停写升级)
-执行显式迁移，本地使用 `.data/dev.yaml`。如果本地控制面还未运行，在独立终端启动它：
+启动时需要通过本地控制面确认配置代次。先确保 PostgreSQL 已启动，数据库升级按[手动在线迁移](storage.md#手动执行在线迁移)执行，本地使用 `.data/dev.yaml`。如果本地控制面还未运行，在独立终端启动它：
 
 ```sh
 mkdir -p bin

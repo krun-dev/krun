@@ -64,15 +64,7 @@ Runtime 同时校验 Gateway 命中的规则和目标。匹配不到的请求返
    [ReferenceGrant](https://gateway-api.sigs.k8s.io/api-types/referencegrant/)。
 3. 安装支持 [DirectResponse](https://kgateway.dev/docs/envoy/2.2.x/traffic-management/direct-response/)
    的 kgateway CRD，并赋予控制面的 Kubernetes 身份在 Workers 命名空间内读取、创建和更新该资源的权限。
-4. 升级已有数据库时，停服务后运行
-   `krun-server migrate --config "${KRUN_CONFIG}"`，其中 `KRUN_CONFIG` 为主 YAML 路径。
-   更新 serving Runtime 和控制面后再开放后缀。
-
-升级已有配置时，将 `type` 改为 `types` 列表。更早的配置需删除 `managed_subdomains`，
-并保持后缀 ID 和域名。原后缀同时提供默认地址、整域绑定和路径路由时，配置
-`types: [worker_default, worker_custom, application]` 可保留现有入口。迁移会把仅有一条
-整域绑定且未使用专用 Gateway 路由的主机名记为 `worker_custom`，其余已有申请记为
-`application`。混合主机名原有的整域绑定保留为应用域名的根路由。
+4. 通过[手动在线迁移](storage.md#手动执行在线迁移)完成所需数据库变更，再滚动部署控制面和 serving Runtime。
 
 组织的应用域名页管理完整路由表。Worker 详情页可以添加、修改和移除指向当前 Worker 的路由。
 两个入口使用同一个 Host revision、路由校验和权限检查，修改 Worker 路由需要组织的

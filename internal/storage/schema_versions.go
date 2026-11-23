@@ -16,6 +16,8 @@ import (
 var migrationFiles embed.FS
 
 var migrationName = regexp.MustCompile(`^([0-9]{4})_[a-z0-9_]+\.sql$`)
+var onlineMigrationName = regexp.MustCompile(`^([0-9]{4})_online_from_([0-9]{4})_[a-z0-9_]+\.sql$`)
+var migrationChecksum = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 type sqlMigration struct {
 	version             int
@@ -44,6 +46,17 @@ func sqlMigrations() ([]sqlMigration, error) {
 	for i, m := range result {
 		if m.version != i+1 {
 			return nil, fmt.Errorf("migration versions must be consecutive from 0001: %s", m.name)
+		}
+		// Every incremental migration declares its supported baseline.
+		if m.version > 1 {
+			match := onlineMigrationName.FindStringSubmatch(m.name)
+			if match == nil {
+				return nil, fmt.Errorf("migration must declare online compatibility: %s", m.name)
+			}
+			minimum, _ := strconv.Atoi(match[2])
+			if minimum < 1 || minimum >= m.version {
+				return nil, fmt.Errorf("invalid minimum online schema version: %s", m.name)
+			}
 		}
 	}
 	if len(result) == 0 {
@@ -104,6 +117,52 @@ func applyPendingMigrations(ctx context.Context, tx pgx.Tx, migrations []sqlMigr
 	return nil
 }
 
+// checkServingMigrationLedger accepts newer migrations only when each explicitly
+// declares compatibility with this binary's schema version. Known history is
+// still verified byte-for-byte. A marker is a release contract, not SQL analysis.
+func checkServingMigrationLedger(ctx context.Context, tx pgx.Tx, migrations []sqlMigration) error {
+	rows, err := tx.Query(ctx, `SELECT version, name, checksum FROM krun_schema_migrations ORDER BY version`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		var version int
+		var name, checksum string
+		if err := rows.Scan(&version, &name, &checksum); err != nil {
+			return err
+		}
+		count++
+		if version != count {
+			return fmt.Errorf("database migration history does not match this binary at version %d", version)
+		}
+		if count <= len(migrations) {
+			m := migrations[count-1]
+			if version != m.version || name != m.name || checksum != m.checksum {
+				return fmt.Errorf("database migration history does not match this binary at version %d", version)
+			}
+			continue
+		}
+		match := onlineMigrationName.FindStringSubmatch(name)
+		if match == nil || !migrationChecksum.MatchString(checksum) {
+			return fmt.Errorf("database migration history does not match this binary at version %d", version)
+		}
+		namedVersion, _ := strconv.Atoi(match[1])
+		minimum, _ := strconv.Atoi(match[2])
+		if namedVersion != version || minimum < 1 || minimum > len(migrations) || minimum >= version {
+			return fmt.Errorf("database migration %s is not compatible with this binary", name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if count < len(migrations) {
+		return errors.New("database has pending schema migrations; apply the SQL migrations manually")
+	}
+	return nil
+}
+
 // checkCurrentSchema verifies the SQL history, or the fingerprint of a legacy database.
 func checkCurrentSchema(ctx context.Context, tx pgx.Tx, migrations []sqlMigration) error {
 	var exists bool
@@ -111,25 +170,7 @@ func checkCurrentSchema(ctx context.Context, tx pgx.Tx, migrations []sqlMigratio
 		return err
 	}
 	if !exists {
-		var baseline string
-		err := tx.QueryRow(ctx, `SELECT value FROM krun_meta WHERE key='schema_baseline'`).Scan(&baseline)
-		if errors.Is(err, pgx.ErrNoRows) || err == nil && baseline != migrations[0].checksum {
-			return errors.New("database does not match the schema baseline; run krun-server migrate for a supported upgrade")
-		}
-		if err != nil {
-			return err
-		}
-		if len(migrations) > 1 {
-			return fmt.Errorf("database has pending schema migrations; run krun-server migrate")
-		}
-		return nil
+		return errors.New("database migration history is missing; initialize a new database")
 	}
-	count, err := validateMigrationLedger(ctx, tx, migrations)
-	if err != nil {
-		return err
-	}
-	if count != len(migrations) {
-		return fmt.Errorf("database has pending schema migrations; run krun-server migrate")
-	}
-	return nil
+	return checkServingMigrationLedger(ctx, tx, migrations)
 }

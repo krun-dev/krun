@@ -2,18 +2,21 @@ package storage
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/krun-dev/krun/internal/testpgx"
 )
 
-func TestInitialSQLMigrationMatchesLegacyBaseline(t *testing.T) {
+func TestInitialSQLMigrationIsImmutable(t *testing.T) {
 	migrations, err := sqlMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if migrations[0].checksum != "82934894c84ba5a9ebef6ff99f2038684c8649d07d0bc79c30b27ea939d0f9a1" {
-		t.Fatal("the initial migration must remain identical to the last legacy baseline")
+	if migrations[0].checksum != "c1e65e3bcc0c5e35326319c43ae534e63b18fd0f74e91aefafdeba73118af78f" {
+		t.Fatal("initial migration was modified")
 	}
 }
 
@@ -73,54 +76,110 @@ func TestPostgresMigrationHistoryAndRollback(t *testing.T) {
 	_ = tx.Rollback(ctx)
 }
 
-func TestPostgresRegisterLegacyBaseline(t *testing.T) {
+func TestPostgresOnlineMigrationCompatibility(t *testing.T) {
 	ctx := context.Background()
-	schema := testpgx.NewSchema(t, "krun_migration_legacy")
+	schema := testpgx.NewSchema(t, "krun_online_compat")
 	store, err := Open(ctx, schema.DSN, RepositoryTokenKeys{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.pool.Exec(ctx, `DROP TABLE krun_schema_migrations; DROP TABLE krun_worker_address_claims; DROP TABLE krun_worker_cleanup; INSERT INTO krun_meta(key,value) VALUES ('schema_baseline','82934894c84ba5a9ebef6ff99f2038684c8649d07d0bc79c30b27ea939d0f9a1'); INSERT INTO krun_users(user_id,source,subject,name,status) VALUES('legacy','local','legacy','Legacy','active')`); err != nil {
+	migrations, err := sqlMigrations()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if applied, err := MigrateSchema(ctx, schema.DSN); err != nil || !applied {
-		t.Fatalf("register legacy: %v %v", applied, err)
+	next := len(migrations) + 1
+	name := fmt.Sprintf("%04d_online_from_%04d_add_example.sql", next, len(migrations))
+	checksum := strings.Repeat("a", 64)
+	if _, err := store.pool.Exec(ctx, `CREATE TABLE online_migration_example (value text)`); err != nil {
+		t.Fatal(err)
 	}
-	if applied, err := MigrateSchema(ctx, schema.DSN); err != nil || applied {
-		t.Fatalf("retry: %v %v", applied, err)
+	if _, err := store.pool.Exec(ctx, `INSERT INTO krun_schema_migrations(version,name,checksum) VALUES($1,$2,$3)`, next, name, checksum); err != nil {
+		t.Fatal(err)
 	}
-	var count int
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM krun_users WHERE user_id='legacy'`).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("legacy data: %d %v", count, err)
+	reopened, err := Open(ctx, schema.DSN, RepositoryTokenKeys{})
+	if err != nil {
+		t.Fatalf("compatible newer schema: %v", err)
+	}
+	reopened.Close()
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newVersion := append(append([]sqlMigration(nil), migrations...), sqlMigration{version: next, name: name, checksum: checksum})
+	if err := checkCurrentSchema(ctx, tx, newVersion); err != nil {
+		t.Fatalf("new version rejected migrated schema: %v", err)
+	}
+	_ = tx.Rollback(ctx)
+	if _, err := store.pool.Exec(ctx, `INSERT INTO online_migration_example(value) VALUES('old instance still writing')`); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct{ name, checksum string }{
+		{fmt.Sprintf("%04d_online_from_%04d_breaking.sql", next, next), checksum},
+		{fmt.Sprintf("%04d_unmarked.sql", next), checksum},
+		{name, "bad-checksum"},
+		{fmt.Sprintf("%04d_online_from_0001_wrong.sql", next+1), checksum},
+	}
+	for _, tc := range cases {
+		if _, err := store.pool.Exec(ctx, `UPDATE krun_schema_migrations SET name=$1, checksum=$2 WHERE version=$3`, tc.name, tc.checksum, next); err != nil {
+			t.Fatal(err)
+		}
+		if old, err := Open(ctx, schema.DSN, RepositoryTokenKeys{}); err == nil {
+			old.Close()
+			t.Fatalf("accepted incompatible migration %q", tc.name)
+		}
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE krun_schema_migrations SET name=$1, checksum=$2 WHERE version=$3`, name, checksum, next); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE krun_schema_migrations SET checksum='modified' WHERE version=1`); err != nil {
+		t.Fatal(err)
+	}
+	if old, err := Open(ctx, schema.DSN, RepositoryTokenKeys{}); err == nil {
+		old.Close()
+		t.Fatal("accepted modified known migration")
 	}
 }
 
-func TestPostgresMigrationLedgerDoesNotRequireLegacyFingerprint(t *testing.T) {
+func TestPostgresMigrationLockDoesNotBlockMetadataWrites(t *testing.T) {
 	ctx := context.Background()
-	schema := testpgx.NewSchema(t, "krun_migration_no_fingerprint")
+	schema := testpgx.NewSchema(t, "krun_migration_lock")
 	store, err := Open(ctx, schema.DSN, RepositoryTokenKeys{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.pool.Exec(ctx, `INSERT INTO krun_meta(key,value) VALUES ('schema_baseline','obsolete') ON CONFLICT(key) DO UPDATE SET value='obsolete'`); err != nil {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if reopened, err := Open(ctx, schema.DSN, RepositoryTokenKeys{}); err != nil {
-		t.Fatal(err)
-	} else {
-		reopened.Close()
-	}
-	if _, err := store.pool.Exec(ctx, `DELETE FROM krun_meta WHERE key='schema_baseline'`); err != nil {
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `LOCK TABLE krun_schema_migrations IN SHARE ROW EXCLUSIVE MODE`); err != nil {
 		t.Fatal(err)
 	}
+	writeCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	if _, err := store.pool.Exec(writeCtx, `INSERT INTO krun_meta(key,value) VALUES('online-test','ok')`); err != nil {
+		t.Fatalf("metadata write blocked by migration lock: %v", err)
+	}
+}
+
+func TestPostgresMigrateCurrentOrMissingLedger(t *testing.T) {
+	ctx := context.Background()
+	schema := testpgx.NewSchema(t, "krun_migration_explicit")
+	store, err := Open(ctx, schema.DSN, RepositoryTokenKeys{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
 	if applied, err := MigrateSchema(ctx, schema.DSN); err != nil || applied {
-		t.Fatalf("current ledger without fingerprint: applied=%t err=%v", applied, err)
+		t.Fatalf("current migration: applied=%v err=%v", applied, err)
 	}
-	if reopened, err := Open(ctx, schema.DSN, RepositoryTokenKeys{}); err != nil {
+	if _, err := store.pool.Exec(ctx, `DROP TABLE krun_schema_migrations`); err != nil {
 		t.Fatal(err)
-	} else {
-		reopened.Close()
+	}
+	if applied, err := MigrateSchema(ctx, schema.DSN); err == nil || applied {
+		t.Fatalf("missing ledger accepted: applied=%v err=%v", applied, err)
 	}
 }
