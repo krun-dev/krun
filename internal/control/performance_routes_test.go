@@ -85,7 +85,7 @@ func TestSharedGatewayRouteCountIndependentOfSites(t *testing.T) {
 
 func TestFlatDomainRoutesUseTheirOwnPoolAndGateway(t *testing.T) {
 	setExampleCredentials(t)
-	c, err := appconfig.LoadConfig("../../config/test.example.yaml")
+	c, err := appconfig.LoadConfig("../config/testdata/three-gateways.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

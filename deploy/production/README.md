@@ -25,8 +25,7 @@ flowchart LR
 
 - `Dockerfile.control`：纯 Go 控制面，无测试 CA、开发登录或前端文件；构建上下文排除 `.data/`。
 - `workers/runtime/Dockerfile`、`workers/builder/Dockerfile`：固定依赖的实际运行/构建镜像。
-- `config/production.example.yaml`：完整主配置；deployment 输入也在这同一份文件。
-- `config/test.example.yaml`：内网、Office、公网三个独立网关/运行池的完整测试模板。
+- `config/example.yaml`：完整主配置；deployment 输入也在这同一份文件。
 - `scripts/build-deployment.sh`：构建三个镜像，只有显式 `--push` 才上传。
 - `scripts/package-console.sh`：静态检查并打包完整 `dist/console/`（含用户文档和 CLI 下载），不启动 Node 服务或自动上传。
 - `gateway.example.yaml`：可选的公司网关管理员参考配置，由部署方按需维护。
@@ -64,7 +63,7 @@ flowchart LR
 不需要这些构建工具。首次安装者需要创建专用 namespace、在其中管理清单资源，以及
 在 Gateway namespace 创建对应的只读 Role/RoleBinding；应用本身只获得所需的有限权限。
 
-在 CI/密钥平台维护一份主 YAML，以 `config/production.example.yaml` 为起点，填充公司
+在 CI/密钥平台维护一份主 YAML，以 `config/example.yaml` 为起点，填充公司
 实际变量。需要本地验证时使用唯一 `.data/dev.yaml`，不要新建第二份本地应用 YAML，
 也不要覆盖正在运行的开发配置。CI 可以用其挂载的单一主配置路径。
 
@@ -81,8 +80,8 @@ flowchart LR
 - 随机 Runtime/Management Token、32-byte Worker 加密 key ring、32-byte base64url cursor key。
 - 公司镜像名、镜像拉取 Secret、真实网络范围；静态源站由发布平台单独管理。
 
-`config/test.example.yaml` 提供 internal/office/public 三个入口与各自 pool 的主配置
-模板，控制台 API 默认挂在 office Gateway；模板中的真实值由密钥平台提供。静态发布
+多入口部署可按 `config/example.yaml` 中的说明增加 Gateway、域名、运行池和网络档案；
+通过 `deployment.console_gateway` 选择控制台入口。静态发布
 目录和 OSS key 前缀在发布平台配置，浏览器仍使用 `/` 和 `/assets/*`。
 
 可用 `openssl rand -base64 32` 生成 Worker 加密 key；cursor key 使用相同随机字节的
@@ -189,13 +188,12 @@ go run ./cmd/krun-server rotate-runtime-config-epoch --config "$KRUN_CONFIG"
 
 ## 三入口集群测试配置
 
-`config/test.example.yaml` 引用现有 `kgateway-system/krun-internal`、`krun-office`、
-`krun-public`，listener 均为 `http:80`。模板分别使用 `internal-a`、`office-a`、
-`public-a` 三个池，默认复用业务 Pod 校验；设置 `workers.validator_pool: office-a`
-可共用一个独立 validator。`pool_selector` 和 `domain_selector` 按 exposure
-匹配。Office 使用 private 访问类型。控制台 API 通过 `deployment.console_gateway: office`
-仅挂在 Office Gateway；业务 HTTPRoute 在控制面运行后协调产生。
-
+在 `config/example.yaml` 的 `workers.gateways`、`domains`、`runtime_pools` 和
+`network_profiles` 中分别添加 internal、office、public 条目，并用 labels 和对应 selector
+将每个域名匹配到自己的运行池。Office 使用 private 访问类型。设置
+`deployment.console_gateway: office` 可将控制台 API 挂到 Office Gateway；
+默认复用业务 Pod 校验，需要独立 validator 时设置 `workers.validator_pool` 为对应池 ID。
+业务 HTTPRoute 在控制面运行后协调产生。
 Gateway 的 base 是同名 Service 的预期集群地址。部署方负责 Gateway
 及其 Service；selfManaged Gateway 若暂未创建 Service，必须在实际验收前补齐。
 不使用 hostNetwork。仅有 Gateway `Programmed=True` 不表示外部入口已可访问。
@@ -203,7 +201,7 @@ Gateway 的 base 是同名 Service 的预期集群地址。部署方负责 Gatew
 静态发布平台可使用 `test/krun/console` 作为 OSS 对象 key 前缀。将静态构建产物
 放在该前缀内，并由入口映射为浏览器的 `/` 和 `/assets/*`。
 制品和业务数据分别用其他私有前缀，不能因静态回源而公开整个共享桶。
-测试模板所有真实值用占位符；用户指定的私有 `test.yaml` 只通过 `--config` 显式加载。
+示例中的值是占位符；用户指定的私有 `test.yaml` 只通过 `--config` 显式加载。
 实际发布前必须验证 CNI 的 NetworkPolicy 执行能力、Gateway Service、DNS/TLS、SSO
 回调白名单、静态回源权限和镜像 tag；数据库与存储的 CIDR 变化时应更新网络策略。
 

@@ -9,10 +9,7 @@ import (
 )
 
 func TestLoadConfigDevelopmentListenersRequireLoopback(t *testing.T) {
-	template, err := os.ReadFile(filepath.Join("..", "..", "config", "development.example.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	template := []byte("listen: 127.0.0.1:8080\npublic_url: http://127.0.0.1:8080\ndevelopment: true\ndb: postgres://test-only/krun_test\n")
 
 	for _, field := range []string{"listen", "internal_listen"} {
 		for _, tc := range []struct {

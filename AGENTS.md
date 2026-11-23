@@ -125,14 +125,22 @@
 
 ## 8. 配置与密钥收口（硬约束）
 
-1. **唯一应用配置**：本地开发只允许 `.data/dev.yaml`（已被 `.gitignore` 忽略）。禁止新增 `config/development.yaml`、`.data/development-*.yaml`、`.data/sso-local.yaml` 或按组件拆分的 YAML。新增配置项必须加到主 `Config` / `WorkersConfig`，并同步更新 `config/example.yaml`、`config/development.example.yaml` 以及加载测试。
+1. **唯一应用配置**：本地开发只允许 `.data/dev.yaml`（已被 `.gitignore` 忽略）。禁止新增 `config/development.yaml`、`.data/development-*.yaml`、`.data/sso-local.yaml` 或按组件拆分的 YAML。新增配置项必须加到主 `Config` / `WorkersConfig`，并同步更新唯一示例 `config/example.yaml` 以及加载测试；禁止新增按环境拆分的应用配置示例。
 2. **唯一 shell/基础设施变量文件**：`.data/dev.env`（gitignored），只放远端主机、控制面/MinIO IP、kind 集群名等脚本变量。`scripts/dev-*.sh` 自动读取，但命令行已设置的变量优先；tracked 脚本里不得写内网默认值。
 3. **tracked 文件只放占位符或环境变量引用**：token、密码、私钥、数据库/S3 凭据、真实内网 IP/主机名、SSO client id 一律不得出现在 `git ls-files` 能看到的内容里。示例用 `${KRUN_*}` 或 `replace-me`。
 4. **`.data/` 永远不提交**：不要 `git add -f .data/...`；不要为了“方便”把 secret 复制到 `config/` 或文档里。
 5. **提交前必须**：`make check-secrets` 通过。它会用 `.data/dev.yaml` / `.data/dev.env` 里的真实值扫描 tracked 文件，并检查私钥 / AWS key 模式；`make test` 也会执行。
 6. **配置加载只有一处**：所有运行期配置从 `LoadConfig` 进入；不要新增运行期读取非公开环境变量的开关。地址、profile、运行模式都必须显式出现在主 YAML。Workers 配置也在同一份 YAML 的 `workers:` 段，不允许独立文件或目录。
-7. **配置示例必须可加载**：`config/development.example.yaml` 和 `config/example.yaml` 由测试覆盖；示例只能使用占位符，不能写真实凭据。
+7. **配置示例必须可加载**：唯一应用配置示例 `config/example.yaml` 由测试覆盖；示例只能使用占位符，不能写真实凭据。
 8. **dev 拓扑保持一致**：local-first；控制面/Postgres/builder/Vite 在开发机；对象存储使用本地 MinIO 或主配置中声明的外部 S3/TOS。集群只保留 serving runtime、独立 validator + kgateway。变更拓扑时同步修改 `docs/local-dev.md` 和 `scripts/dev-*.sh`。
+
+**防止配置示例再次分叉**：
+
+- `config/example.yaml` 是唯一面向部署者复制和修改的应用配置示例。本地、测试、生产及不同拓扑的差异写在该文件的注释中，不得通过其他目录、文件名或格式另建一套示例。不同文档类型的示例（如 key policy）不属于应用配置示例。
+- 新增 YAML 或其他配置文件前，先确认它是实际运行配置、自动测试夹具，还是面向部署者的示例；仅为展示另一种环境或拓扑时，扩充唯一示例。测试夹具放在测试目录，仅供自动测试使用，不得在部署说明中作为配置模板引用。
+- 新增或修改配置项时，在同一变更中更新示例的含义、默认值、约束和环境差异，并更新加载测试；注释掉的可选配置也要在启用后验证，不能只检查默认示例能否加载。
+- 配置示例改名、合并或删除时，同步检查并修正文档、脚本和测试引用，确保不存在失效路径。评审时检查是否引入新的应用配置示例及重复的维护来源。
+- 使用接入 CI 的自动检查阻止新增其他应用配置示例，并检查文档中的配置示例引用；检查应覆盖其他目录、命名方式和格式，不依赖人工遵守。现有检查覆盖不足时，在相关变更中补齐，不得把未覆盖的情况视为已受保护。
 
 本地真实 TOS/STS 联调凭据保存在本仓库 `.data/dev.yaml`：制品使用 `workers.s3_*` 与
 `workers.s3_runtime_credentials`，业务存储使用 `workers.object_storage`。后续调试直接读取
