@@ -203,7 +203,8 @@ async function storageGrant(env, props) {
   if (env.VALIDATOR_ONLY === "true" || props.validation === true) {
     throw new Error("Storage access is unavailable during validation");
   }
-  requireFreshConfig();
+  const epoch = props.config_epoch;
+  requireConfigView(epoch);
   const key = view.epoch + "\0" + props.version_id + "\0" + props.binding + "\0" + props.bucket_id;
   const cached = storageGrants.get(key);
   if (
@@ -224,6 +225,7 @@ async function storageGrant(env, props) {
       "/credentials",
     { method: "POST" },
   );
+  requireConfigView(epoch);
   if (
     grant.version_id !== props.version_id ||
     grant.binding !== props.binding ||
@@ -374,12 +376,14 @@ const routeVersions = new Map();
 const routeFlights = new Map();
 const routeMisses = new Map();
 const ROUTE_CACHE_MAX = 4096;
-const CONFIG_MAX_STALE_MS = 60_000;
+// Sync age affects observability and retirement, not admission of known traffic.
+const CONFIG_FRESHNESS_MS = 60_000;
 const CONFIG_ACK_MAX_STALE_MS = 10_000;
 let viewLoaded = false;
 let booting = null;
 let started = false;
 let lastSync = 0;
+let configSyncHealthy = false;
 let lastAcceptedAck = null;
 let lastLoop = 0;
 const servingWorkers = new Map();
@@ -843,6 +847,9 @@ function applyConfigHead(head, pool) {
   }
 
   if (head.config_epoch !== view.epoch) {
+    for (const entry of servingWorkers.values()) {
+      entry.assetManifest = null;
+    }
     servingWorkers.clear();
     storageGrants.clear();
     readGrants.clear();
@@ -859,7 +866,7 @@ function applyConfigHead(head, pool) {
   routeVersions.clear();
   routeMisses.clear();
   viewLoaded = true;
-  lastSync = performance.now();
+  markConfigSynced();
   lastAcceptedAck = null;
 
   return view;
@@ -868,10 +875,20 @@ function applyConfigHead(head, pool) {
 function invalidateConfig() {
   viewLoaded = false;
   lastSync = 0;
+  configSyncHealthy = false;
+}
+
+function markConfigSynced() {
+  lastSync = performance.now();
+  configSyncHealthy = true;
+}
+
+function configDenied(status) {
+  return status === 401 || status === 403;
 }
 
 function configFresh(now) {
-  return viewLoaded && now - lastSync < CONFIG_MAX_STALE_MS;
+  return viewLoaded && now - lastSync < CONFIG_FRESHNESS_MS;
 }
 
 function configMetricSamples() {
@@ -884,7 +901,7 @@ function configMetricSamples() {
     now - lastAcceptedAck.time <= CONFIG_ACK_MAX_STALE_MS;
   const converged = fresh && lag === 0 && currentACK;
   const samples = [
-    "# HELP krun_runtime_config_fresh Whether the local configuration is within the serving freshness limit.",
+    "# HELP krun_runtime_config_fresh Whether the local configuration is within the freshness threshold.",
     "# TYPE krun_runtime_config_fresh gauge",
     `krun_runtime_config_fresh ${Number(fresh)}`,
     "# HELP krun_runtime_config_ack_current Whether the control plane recently accepted an ACK for the applied revision.",
@@ -911,9 +928,11 @@ function configMetricSamples() {
   return samples;
 }
 
-function requireFreshConfig(epoch = view.epoch) {
-  if (!configFresh(performance.now())) {
-    throw new Error("platform configuration feed is stale");
+function requireConfigView(epoch = view.epoch) {
+  // Transport failures retain the last confirmed view. Only an explicit reset,
+  // epoch mismatch or configuration authorization denial fences that view.
+  if (!viewLoaded) {
+    throw new Error("platform configuration is unconfirmed");
   }
   if (view.epoch !== epoch) {
     throw new Error("platform configuration epoch changed");
@@ -1077,7 +1096,7 @@ function applyBatch(batch) {
 
   view.revision = revision;
   view.headRevision = headRevision;
-  lastSync = performance.now();
+  markConfigSynced();
 
   return true;
 }
@@ -1160,6 +1179,11 @@ async function resolveHostRoutes(env, host) {
           {},
           2000,
         );
+
+        if (configDenied(response.status) && before === view) {
+          invalidateConfig();
+          throw new Error("route lookup authorization rejected");
+        }
 
         if (response.status === 404) {
           if (before !== view || revision !== view.revision || !viewLoaded) {
@@ -1310,8 +1334,11 @@ async function sendAck(env) {
       lastAcceptedAck = { revision, time: performance.now() };
     }
   } catch (e) {
-    if (e.status === 409 && acknowledged === view) {
-      invalidateConfig();
+    if (acknowledged === view) {
+      configSyncHealthy = false;
+      if (e.status === 409 || configDenied(e.status)) {
+        invalidateConfig();
+      }
     }
   }
 }
@@ -1360,7 +1387,7 @@ async function follow(env) {
           continue;
         }
         polled.headRevision = polled.revision;
-        lastSync = performance.now();
+        markConfigSynced();
         await sleep(250);
         backoff = 1000;
         continue;
@@ -1375,6 +1402,9 @@ async function follow(env) {
       }
 
       if (!response.ok) {
+        if (configDenied(response.status)) {
+          invalidateConfig();
+        }
         throw new Error("config changes " + response.status);
       }
 
@@ -1384,7 +1414,6 @@ async function follow(env) {
       }
 
       let applied = false;
-
       try {
         applied = applyBatch(batch);
       } catch (e) {
@@ -1399,6 +1428,7 @@ async function follow(env) {
 
       backoff = 1000;
     } catch (e) {
+      configSyncHealthy = false;
       await sleep(backoff);
       backoff = Math.min(backoff * 2, 15000);
     }
@@ -1507,6 +1537,12 @@ function coalesce(cache, key, load) {
 }
 
 async function assetManifest(env, version) {
+  // A loaded isolate may need its routing manifest after the shared LRU evicts it.
+  const loaded = servingWorkers.get(version.id)?.assetManifest;
+  if (loaded) {
+    return loaded;
+  }
+
   const key = view.epoch + "\0" + version.id;
   const cached = manifests.get(key);
 
@@ -1650,7 +1686,15 @@ export class VersionAssets extends WorkerEntrypoint {
       return json({ error: "asset binding unavailable" }, 404);
     }
 
-    return boundAssetResponse(this.env, { id: versionId }, request);
+    const epoch = this.ctx.props.config_epoch;
+    if (epoch !== undefined) {
+      requireConfigView(epoch);
+    }
+    const response = await boundAssetResponse(this.env, { id: versionId }, request);
+    if (epoch !== undefined) {
+      requireConfigView(epoch);
+    }
+    return response;
   }
 }
 const bindingName = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
@@ -1678,7 +1722,7 @@ function workerKey(version, mode) {
   return `${version.organization_id}/${version.worker_id}/${version.environment}/${version.id}/${mode}/workerd-20261116-krun2/workerd-bundle-v2`;
 }
 
-function recordWorkerRequest(version, ctx) {
+function recordWorkerRequest(version, ctx, manifest) {
   const now = Date.now();
   let entry = servingWorkers.get(version.id);
   if (!entry) {
@@ -1712,6 +1756,7 @@ function recordWorkerRequest(version, ctx) {
     loadedWorkers.set(entry.key, entry);
   }
 
+  entry.assetManifest = manifest;
   const minute = Math.floor(now / 60_000);
   if (entry.minute !== minute) {
     entry.minute = minute;
@@ -1819,6 +1864,7 @@ function inspectWorkerRetirement(ctx, stub, entry) {
 function scheduleWorkerRetirement(env, ctx) {
   const now = Date.now();
   if (
+    !configAllowsRetirement() ||
     typeof ctx?.waitUntil !== "function" ||
     loadedWorkers.size === 0 ||
     now < nextRetirementCheck ||
@@ -1842,6 +1888,11 @@ function scheduleWorkerRetirement(env, ctx) {
   );
 }
 
+function configAllowsRetirement() {
+  // A retired isolate would need the control plane to reload its code and secrets.
+  return configSyncHealthy && configFresh(performance.now());
+}
+
 async function retireIdleWorkers(env, ctx, startedAt) {
   const candidates = [];
   const scans = Math.min(loadedWorkers.size, RETIRE_SCAN_LIMIT);
@@ -1858,7 +1909,11 @@ async function retireIdleWorkers(env, ctx, startedAt) {
   candidates.sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
   let attempts = 0;
   for (const entry of candidates) {
-    if (retirementCheckStarted !== startedAt || attempts >= RETIRE_BATCH_LIMIT) {
+    if (
+      !configAllowsRetirement() ||
+      retirementCheckStarted !== startedAt ||
+      attempts >= RETIRE_BATCH_LIMIT
+    ) {
       break;
     }
     const now = Date.now();
@@ -1870,6 +1925,7 @@ async function retireIdleWorkers(env, ctx, startedAt) {
     if (servingWorkers.get(entry.version) === entry) {
       servingWorkers.delete(entry.version);
     }
+    entry.assetManifest = null;
     if (entry.sourceFailed) {
       // The Loader rejected before it received code for this key.
       loadedWorkers.delete(entry.key);
@@ -1920,6 +1976,7 @@ function trackWorkerSource(env, ctx, entry, prepare) {
     } catch (error) {
       observeDuration(bundleLoadDuration.error, (performance.now() - startedAt) / 1000);
       entry.sourceFailed = true;
+      entry.assetManifest = null;
       throw error;
     }
   };
@@ -2087,6 +2144,7 @@ Object.defineProperty(globalThis,'caches',{value:createCacheStorage(env.KRUN_CAC
                 version_id: d.id,
                 binding: name,
                 bucket_id: binding.bucket_id,
+                config_epoch: epoch,
                 validation: validating,
               },
             }),
@@ -2195,7 +2253,7 @@ for(const name of ${JSON.stringify(Object.keys(d.r2_buckets))}) {
         }
 
         Object.defineProperty(childEnv, assetBinding, {
-          value: ctx.exports.VersionAssets({ props: { version_id: d.id } }),
+          value: ctx.exports.VersionAssets({ props: { version_id: d.id, config_epoch: epoch } }),
           enumerable: true,
           writable: false,
           configurable: false,
@@ -2203,7 +2261,7 @@ for(const name of ${JSON.stringify(Object.keys(d.r2_buckets))}) {
       }
 
       if (!validating) {
-        requireFreshConfig(epoch);
+        requireConfigView(epoch);
         let suffix = 0;
         let retirementModule = RETIRE_MODULE;
         let wrapper = RETIRE_WRAPPER;
@@ -2545,7 +2603,7 @@ async function historicalAssetResponse(env, route, selected, request, url, epoch
   // Another Pod may already serve the new HTML. Resolve only hashed asset
   // misses against the current route without changing this request's selection.
   const latest = await platform(env, "/config/routes/" + encodeURIComponent(route.host));
-  requireFreshConfig(epoch);
+  requireConfigView(epoch);
   if (
     latest.config_epoch !== epoch ||
     latest.pool !== (env.RUNTIME_POOL || "default") ||
@@ -2603,11 +2661,11 @@ async function serveWorkerRequest(
       const status = result.status >= 500 ? 503 : 403;
       return withoutSharedCache(json({ error: "version override unavailable" }, status));
     }
-    requireFreshConfig(epoch);
+    requireConfigView(epoch);
   }
 
   const versionID = directVersion?.id || (await selectedVersionID(route, request, override));
-  requireFreshConfig(epoch);
+  requireConfigView(epoch);
   const d = directVersion || descriptors?.get(versionID);
 
   if (!d) {
@@ -2640,7 +2698,7 @@ async function serveWorkerRequest(
   const shared = responseCache(d, epoch, request, headers, route, privateResponse);
   if (shared) {
     const cached = await shared.cache.match(shared.key).catch(() => undefined);
-    requireFreshConfig(epoch);
+    requireConfigView(epoch);
     if (cached) {
       cached.headers.delete(coldRefusalHeader);
       cached.headers.set("x-krun-version", d.id);
@@ -2649,10 +2707,12 @@ async function serveWorkerRequest(
     }
   }
 
+  const manifest = await assetManifest(env, d);
+  requireConfigView(epoch);
   const forward = async () => {
-    requireFreshConfig(epoch);
+    requireConfigView(epoch);
     const forwarded = new Request(request, { headers, signal: request.signal });
-    const entry = recordWorkerRequest(d, ctx);
+    const entry = recordWorkerRequest(d, ctx, manifest);
     let finished = false;
     const finish = () => {
       if (!finished) {
@@ -2666,7 +2726,7 @@ async function serveWorkerRequest(
     let statusClass = "5xx";
     try {
       stub = await worker(env, ctx, d, { entry, epoch });
-      requireFreshConfig(epoch);
+      requireConfigView(epoch);
       const response = await stub.getEntrypoint().fetch(forwarded);
       const responseClass = `${Math.floor(response.status / 100)}xx`;
       statusClass = Object.hasOwn(requestsByStatusClass, responseClass) ? responseClass : "other";
@@ -2685,8 +2745,6 @@ async function serveWorkerRequest(
       }
     }
   };
-  const manifest = await assetManifest(env, d);
-  requireFreshConfig(epoch);
   const path = normalizePath(url.pathname);
   const staticRequest = request.method === "GET" || request.method === "HEAD";
   const immutable = staticRequest && immutableAssetName(path || "");
@@ -2714,7 +2772,7 @@ async function serveWorkerRequest(
   if (!response) {
     response = await forward();
   }
-  requireFreshConfig(epoch);
+  requireConfigView(epoch);
 
   const out = Object.keys(d.r2_buckets || {}).length
     ? storageResponse(request, response)
@@ -2750,7 +2808,7 @@ export class Private extends WorkerEntrypoint {
 
       ensureStarted(this.env, this.ctx);
       await ensureBootstrap(this.env);
-      requireFreshConfig();
+      requireConfigView();
       const epoch = view.epoch;
       if (Object.hasOwn(staticDomains, url.hostname)) {
         const response = await staticDomainResponse(
@@ -2759,12 +2817,12 @@ export class Private extends WorkerEntrypoint {
           staticDomains[url.hostname],
           epoch,
         );
-        requireFreshConfig(epoch);
+        requireConfigView(epoch);
         return response;
       }
 
       const route = await resolveRoute(this.env, url.hostname.toLowerCase(), url);
-      requireFreshConfig(epoch);
+      requireConfigView(epoch);
 
       if (route?.invalidPath) {
         return json({ error: "invalid path" }, 400);
@@ -2828,10 +2886,10 @@ export class Management extends WorkerEntrypoint {
           return json({ error: "invalid service host" }, 400);
         }
         await ensureBootstrap(this.env);
-        requireFreshConfig();
+        requireConfigView();
         const epoch = view.epoch;
         const route = await resolveRoute(this.env, host);
-        requireFreshConfig(epoch);
+        requireConfigView(epoch);
         if (!route?.enabled || (route.expires_at && Date.parse(route.expires_at) <= Date.now())) {
           return json({ error: "service target unavailable" }, 404);
         }
@@ -2843,7 +2901,7 @@ export class Management extends WorkerEntrypoint {
           directVersion =
             local ||
             (await platform(this.env, "/service-descriptor/" + encodeURIComponent(fixed))).version;
-          requireFreshConfig(epoch);
+          requireConfigView(epoch);
           if (
             !directVersion ||
             directVersion.id !== fixed ||
@@ -2896,7 +2954,7 @@ export class Management extends WorkerEntrypoint {
       // Readiness means the config view is loaded; versions are lazy-loaded on
       // first request so Pod start does not scale with the number of services.
       await ensureBootstrap(this.env);
-      requireFreshConfig();
+      requireConfigView();
       scheduleWorkerRetirement(this.env, this.ctx);
 
       const response = json({
@@ -2908,6 +2966,7 @@ export class Management extends WorkerEntrypoint {
         pod_uid: this.env.POD_UID,
         pool: this.env.RUNTIME_POOL || "default",
         config_epoch: view.epoch,
+        config_fresh: configFresh(performance.now()),
         revision: view.revision,
         stale_ms: performance.now() - lastSync,
       });
