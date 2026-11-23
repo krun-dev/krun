@@ -812,6 +812,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures-util",
+ "getrandom 0.3.4",
  "httparse",
  "libc",
  "pingora-core",

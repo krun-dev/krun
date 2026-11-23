@@ -113,11 +113,14 @@ func (s *Server) workerRuntimeResourceWatch(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	hello, err := configstream.Unmarshal(raw)
-	if err != nil || hello.Type != "hello" || hello.PodUID == "" || len(hello.Refs) > 256 {
+	if err != nil || hello.Type != "hello" || hello.PodUID == "" || len(hello.PodUID) > 128 || len(hello.Refs) > 256 {
 		return
 	}
 	initial, stopInitial := context.WithTimeout(ctx, 2*time.Second)
 	defer stopInitial()
+	if s.workers == nil || s.workers.VerifyRuntimeSession(initial, pool, hello.PodUID, hello.SessionProof) != nil {
+		return
+	}
 	confirmed := time.Now()
 	epoch, err := s.Store.RuntimeEpoch(initial)
 	if err != nil {

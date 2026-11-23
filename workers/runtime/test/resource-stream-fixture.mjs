@@ -63,7 +63,7 @@ const resource = (kind, id, payload, dependencies = []) => {
   };
 };
 
-export function resourceStreamFixture(server, descriptor, acknowledged) {
+export function resourceStreamFixture(server, descriptor, acknowledged, verifySession) {
   const websocket = new WebSocketServer({ noServer: true });
   let online = true;
   server.on("upgrade", (request, socket, head) => {
@@ -80,6 +80,7 @@ export function resourceStreamFixture(server, descriptor, acknowledged) {
   websocket.on("connection", (socket) => {
     let nonce = 0;
     let applied = false;
+    let welcomed = false;
     const send = (type, fields = []) =>
       socket.send(
         Buffer.concat([
@@ -90,13 +91,24 @@ export function resourceStreamFixture(server, descriptor, acknowledged) {
         ]),
       );
     const timer = setInterval(() => {
+      if (!welcomed) return;
       send("status", [number(8, Date.now()), number(9, 1), number(14, applied ? 1 : 0)]);
     }, 250);
     socket.on("close", () => clearInterval(timer));
-    socket.on("message", (raw) => {
+    socket.on("message", async (raw) => {
       const frame = decode(raw);
       const type = frame.get(1)?.[0].toString();
-      if (type === "hello") send("welcome", [number(8, Date.now()), number(9, 1)]);
+      if (type === "hello") {
+        const identity = {
+          pod_uid: frame.get(4)?.[0].toString(),
+          pool: "default",
+          session_proof: frame.get(15)?.[0].toString(),
+        };
+        assert.match(identity.session_proof, /^[a-f0-9]{64}$/);
+        await verifySession?.(identity);
+        send("welcome", [number(8, Date.now()), number(9, 1)]);
+        welcomed = true;
+      }
       if (type === "ack") {
         acknowledged();
         applied = true;

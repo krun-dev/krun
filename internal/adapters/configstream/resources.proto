@@ -31,4 +31,6 @@ message Frame {
   bytes chunk = 12;
   uint64 nonce = 13;
   bool applied = 14;
+  // Random per-connection proof, verified through the Pod management listener.
+  string session_proof = 15;
 }

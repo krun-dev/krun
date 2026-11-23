@@ -8,6 +8,9 @@ import (
 )
 
 func (s *Store) OpenRuntimeSession(ctx context.Context, pool, pod, epoch, session string) error {
+	if pod == "" || len(pod) > 128 {
+		return domain.Invalid("SESSION_INVALID", "Invalid runtime session identity")
+	}
 	_, err := s.pool.Exec(ctx, `INSERT INTO worker_runtime_sessions(pod_uid,pool,config_epoch,session_id) VALUES($1,$2,$3,$4)
 		ON CONFLICT(pod_uid) DO UPDATE SET pool=excluded.pool,config_epoch=excluded.config_epoch,session_id=excluded.session_id,
 		inventory_complete=false,connected=true,fresh=false,rejected=false,updated_at=now()`, pod, pool, epoch, session)
