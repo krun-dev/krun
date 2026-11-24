@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 async-trait = "0.1"
 httparse = "1"
+getrandom = "0.3"
 libc = "0.2"
 pingora-core = { version = "=0.9.1", default-features = false }
 pingora-http = "=0.9.1"

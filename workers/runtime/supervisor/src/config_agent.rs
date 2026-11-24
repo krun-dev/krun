@@ -88,6 +88,8 @@ pub struct Frame {
     pub nonce: u64,
     #[prost(bool, tag = "14")]
     pub applied: bool,
+    #[prost(string, tag = "15")]
+    pub session_proof: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -186,6 +188,7 @@ pub struct Agent {
     settings: Settings,
     token: String,
     pod: String,
+    session_proof: Mutex<String>,
     state: Mutex<State>,
     commands: mpsc::Sender<Resolve>,
     receiver: Mutex<Option<mpsc::Receiver<Resolve>>>,
@@ -230,6 +233,7 @@ impl Agent {
             settings,
             token,
             pod,
+            session_proof: Mutex::new(String::new()),
             state: Mutex::new(State {
                 verify_millis,
                 epoch: String::new(),
@@ -344,6 +348,7 @@ impl Agent {
         }
         let binding = bindings.get(route_index).ok_or(404u16)?;
         let mut route = binding.clone();
+        let route_object = route.as_object_mut().ok_or(503u16)?;
         let worker = text(binding, "worker_id");
         let environment = text(binding, "environment");
         let mut needed = vec![root_key];
@@ -375,12 +380,15 @@ impl Agent {
                 "retained_versions",
             ] {
                 if let Some(value) = deployment.value.get(field) {
-                    route[field] = value.clone();
+                    route_object.insert(field.into(), value.clone());
                 }
             }
-            route["enabled"] = Value::Bool(
-                binding.get("enabled") == Some(&Value::Bool(true))
-                    && deployment.value.get("enabled") == Some(&Value::Bool(true)),
+            route_object.insert(
+                "enabled".into(),
+                Value::Bool(
+                    binding.get("enabled") == Some(&Value::Bool(true))
+                        && deployment.value.get("enabled") == Some(&Value::Bool(true)),
+                ),
             );
         }
         needed.push(deployment_key);
@@ -601,12 +609,21 @@ impl Agent {
     }
 
     fn install(&self, frame: &Frame) -> std::result::Result<Vec<Ref>, String> {
+        // Bound decoded collection work before taking the serving lock. A snapshot
+        // may contain more than the 256 requested roots because it includes their graph.
+        if frame.encoded_len() > self.settings.limits.resource_bytes
+            || frame.resources.len() > self.settings.limits.pod_cache_entries
+            || frame.refs.len() > self.settings.limits.pod_cache_entries
+        {
+            return Err("configuration frame exceeds Pod budget".into());
+        }
         let mut state = self.state.lock().unwrap();
         if frame.epoch != state.epoch || !state.authorized {
             return Err("configuration epoch mismatch".into());
         }
         self.trim_bundles(&mut state);
-        let mut staged = Vec::new();
+        let mut staged = HashMap::new();
+        let mut resource_keys = HashSet::new();
         let mut bytes = state.bytes;
         for resource in &frame.resources {
             let version = resource
@@ -621,6 +638,9 @@ impl Agent {
                 return Err("invalid resource".into());
             }
             let key = version.key();
+            if !resource_keys.insert(key.clone()) {
+                return Err("duplicate configuration resource".into());
+            }
             if let Some(old) = state.resources.get(&key) {
                 let old_version = old.wire.version.as_ref().unwrap();
                 if old_version.incarnation == version.incarnation
@@ -637,14 +657,22 @@ impl Agent {
                 serde_json::from_slice(&resource.payload_json)
                     .map_err(|_| "invalid resource payload")?
             };
-            staged.push((
+            if version.kind == "route"
+                && !resource.deleted
+                && !value
+                    .as_array()
+                    .is_some_and(|bindings| bindings.iter().all(Value::is_object))
+            {
+                return Err("invalid route bindings".into());
+            }
+            staged.insert(
                 key,
                 Stored {
                     wire: resource.clone(),
                     value,
                     loaded: Instant::now(),
                 },
-            ));
+            );
         }
         let cold_host = staged.iter().any(|(key, value)| {
             value
@@ -668,7 +696,7 @@ impl Agent {
             || state.resources.len()
                 + staged
                     .iter()
-                    .filter(|(key, _)| !state.resources.contains_key(key))
+                    .filter(|(key, _)| !state.resources.contains_key(*key))
                     .count()
                 > entry_limit
         {
@@ -676,19 +704,18 @@ impl Agent {
         }
         for (_, value) in &staged {
             for dependency in &value.wire.dependencies {
-                if !state.resources.contains_key(&dependency.key())
-                    && !staged.iter().any(|(key, _)| key == &dependency.key())
-                {
+                let key = dependency.key();
+                if !state.resources.contains_key(&key) && !staged.contains_key(&key) {
                     return Err("configuration dependency missing".into());
                 }
             }
         }
         for reference in &frame.refs {
+            let key = reference.key();
             let actual = staged
-                .iter()
-                .find(|(key, _)| key == &reference.key())
-                .map(|(_, v)| &v.wire)
-                .or_else(|| state.resources.get(&reference.key()).map(|v| &v.wire));
+                .get(&key)
+                .or_else(|| state.resources.get(&key))
+                .map(|v| &v.wire);
             if actual.and_then(|r| r.version.as_ref()) != Some(reference) {
                 return Err("configuration version proof missing".into());
             }
@@ -816,10 +843,17 @@ impl Agent {
                     continue;
                 }
             };
+            let mut random = [0u8; 32];
+            if getrandom::fill(&mut random).is_err() {
+                continue;
+            }
+            let proof: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+            *self.session_proof.lock().unwrap() = proof.clone();
             let epoch = self.state.lock().unwrap().epoch.clone();
             let hello = Frame {
                 r#type: "hello".into(),
                 pod_uid: self.pod.clone(),
+                session_proof: proof,
                 epoch,
                 ..Frame::default()
             };
@@ -1364,6 +1398,20 @@ pub async fn coordinator(
     let path = session.req_header().uri.path().to_owned();
     let result = if !authorized {
         Err(403)
+    } else if path == "/config/session" || path == "/config-session" {
+        let proof = agent.session_proof.lock().unwrap();
+        let matches = proof.len() == 64
+            && session
+                .req_header()
+                .headers
+                .get("x-krun-session-proof")
+                .is_some_and(|value| bool::from(value.as_bytes().ct_eq(proof.as_bytes())));
+        if !matches {
+            Err(403)
+        } else {
+            serde_json::to_vec(&json!({"pod_uid": agent.pod, "pool": agent.settings.pool}))
+                .map_err(|_| 503u16)
+        }
     } else if path == "/config/head" {
         agent
             .head()
@@ -1506,6 +1554,118 @@ mod tests {
             })
             .unwrap();
     }
+    #[test]
+    fn malformed_bindings_are_rejected_without_poisoning_or_replacing_hot_routes() {
+        let agent = fixture();
+        install(&agent, graph(false));
+        let hot = agent.build_bundle("site.test", "/").unwrap().unwrap();
+        for invalid in [Value::Null, json!(true), json!(42), json!("bad"), json!([])] {
+            for payload in [invalid.clone(), json!([invalid])] {
+                let broken = resource("route", "test/site.test", 2, payload, vec![]);
+                // An empty binding array is a valid route removal.
+                if broken.payload_json == b"[]" {
+                    continue;
+                }
+                assert_eq!(
+                    agent
+                        .install(&Frame {
+                            epoch: "epoch".into(),
+                            resources: vec![broken],
+                            ..Frame::default()
+                        })
+                        .unwrap_err(),
+                    "invalid route bindings"
+                );
+                assert!(agent.head().is_ok());
+                assert!(Arc::ptr_eq(
+                    &hot,
+                    &agent.build_bundle("site.test", "/").unwrap().unwrap()
+                ));
+            }
+        }
+        // Defense in depth for malformed data already present in the cache.
+        agent.state.lock().unwrap().current_bundles.clear();
+        agent
+            .state
+            .lock()
+            .unwrap()
+            .resources
+            .get_mut("route:test/site.test")
+            .unwrap()
+            .value = json!([true]);
+        assert!(matches!(agent.build_bundle("site.test", "/"), Err(503)));
+        assert!(agent.head().is_ok());
+        install(&agent, graph(false));
+        assert!(agent.build_bundle("site.test", "/").unwrap().is_some());
+    }
+
+    #[test]
+    fn large_snapshot_uses_indexed_dependency_and_version_checks() {
+        let mut settings = fixture().settings.clone();
+        settings.limits.pod_cache_entries = 65536;
+        settings.limits.pod_cache_bytes = 16777216;
+        let agent = Agent::new(settings, "token".into(), "pod".into());
+        {
+            let mut state = agent.state.lock().unwrap();
+            state.epoch = "epoch".into();
+            state.authorized = true;
+        }
+        let resources: Vec<_> = (0..8192)
+            .map(|i| {
+                resource(
+                    "version",
+                    &format!("v{i}"),
+                    1,
+                    json!({}),
+                    (8184..8192)
+                        .map(|j| Ref::named("version", format!("v{j}")))
+                        .collect(),
+                )
+            })
+            .collect();
+        let refs: Vec<_> = resources
+            .iter()
+            .rev()
+            .filter_map(|r| r.version.clone())
+            .collect();
+        let frame = Frame {
+            epoch: "epoch".into(),
+            resources,
+            refs: refs.clone(),
+            ..Frame::default()
+        };
+        assert!(frame.encoded_len() < agent.settings.limits.resource_bytes);
+        assert_eq!(agent.install(&frame).unwrap(), refs);
+        assert_eq!(agent.state.lock().unwrap().resources.len(), 8192);
+    }
+
+    #[test]
+    fn duplicate_and_oversize_frames_leave_the_working_set_unchanged() {
+        let agent = fixture();
+        install(&agent, graph(false));
+        let duplicate = graph(false)[1].clone();
+        let frames = [
+            Frame {
+                resources: vec![duplicate.clone(), duplicate],
+                ..Frame::default()
+            },
+            Frame {
+                refs: vec![Ref::named("version", "one"); 129],
+                ..Frame::default()
+            },
+            Frame {
+                resources: vec![graph(false)[1].clone(); 129],
+                ..Frame::default()
+            },
+        ];
+        for mut frame in frames {
+            frame.epoch = "epoch".into();
+            assert!(agent.install(&frame).is_err());
+            assert_eq!(agent.state.lock().unwrap().resources.len(), 4);
+            assert!(agent.build_bundle("site.test", "/").unwrap().is_some());
+        }
+    }
+
     #[test]
     fn fixed_version_survives_default_switch_but_observes_disable() {
         let agent = fixture();

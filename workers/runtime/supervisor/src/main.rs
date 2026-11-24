@@ -666,6 +666,20 @@ impl ProxyHttp for Proxy {
         }
         if self.listener == Listener::Management {
             match session.req_header().uri.path() {
+                // Authenticate the stream before config bootstrap or slot readiness.
+                "/config-session" => {
+                    if let (Some(agent), Some(settings)) = (&self.config_agent, &self.pool.serving)
+                    {
+                        return config_agent::coordinator(
+                            session,
+                            agent,
+                            &settings.management_token,
+                        )
+                        .await;
+                    }
+                    respond(session, 503, String::new(), false).await?;
+                    return Ok(true);
+                }
                 "/ready" => {
                     serving::readiness(session, &self.pool).await?;
                     return Ok(true);

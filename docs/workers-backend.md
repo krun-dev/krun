@@ -183,7 +183,14 @@ Host/路径绑定、Worker/环境的发布目标和不可变 Version 分开读�
 
 1. **Pod 连接**：Rust supervisor 使用 pool token，通过内部
    `GET /api/internal/workers/config/v2/watch` 建立一条二进制 WebSocket。多个 workerd 共用该连接。
+   hello 携带每次连接随机生成的 256 位 `session_proof`。控制面按 pool 标签从 Kubernetes API
+   查找 Pod UID（包含尚未 Ready 的启动中 Pod），再使用独立的 management token 直连该 Pod 的
+   `POST /config-session`，核对 UID、pool 和连接凭证后才创建或替换会话；校验失败不改写会话或传播状态。
+   Pod UID 最长 128 字节；管理请求携带 `X-Krun-Session-Proof` 进行恒时比较，接口仅返回 UID/pool，不泄露凭证。
+   升级时先滚动更新全部 runtime，再更新控制面；旧 runtime 缺少连接凭证，升级后的控制面会拒绝其连接。
    Protobuf 帧默认最多 256 KiB，较大响应分块后完整校验、原子安装，单条消息上限 4 MiB。
+   路由绑定必须为对象数组；重复资源键或超预算的资源/引用集合会被拒绝。
+   依赖和版本证明通过哈希索引检查，避免在 serving 状态锁内执行二次方扫描。
 2. **冷加载**：按 host 定向读取绑定及其依赖。Pod 合并同 host 的等待者，也可合并队列中的多个 host。
    控制面使用 single-flight、批量 SQL、读取并发预算、请求超时和有界缓存；容量不足时拒绝新冷加载，保留已有订阅配置。
 3. **热请求**：Rust 在本地选择 host/path 绑定，附带可信不可变配置 handle；JS 按 handle 缓存描述符，

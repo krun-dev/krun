@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -148,7 +149,8 @@ func TestPostgresResourceCacheReplicasRepairMissedNotification(t *testing.T) {
 
 func TestPostgresResourceWebSocketColdResolveAndUpdate(t *testing.T) {
 	store, config, controller, host := seedRuntimeResourceSite(t)
-	s := &Server{Store: store, Config: appconfig.Config{Workers: config}}
+	configureResourceSessionIdentity(t, controller, config)
+	s := &Server{Store: store, Config: appconfig.Config{Workers: config}, workers: controller}
 	server := httptest.NewServer(http.HandlerFunc(s.workerRuntimeResourceWatch))
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -177,7 +179,7 @@ func TestPostgresResourceWebSocketColdResolveAndUpdate(t *testing.T) {
 		}
 		return f
 	}
-	write(configstream.Frame{Type: "hello", PodUID: "pod-resource"})
+	write(configstream.Frame{Type: "hello", PodUID: "pod-resource", SessionProof: strings.Repeat("a", 64)})
 	welcome := read()
 	if welcome.Type != "welcome" {
 		t.Fatalf("welcome=%+v", welcome)
@@ -463,5 +465,78 @@ func TestPostgresResourcePublicationPriorityDoesNotDrainUnrelatedBindings(t *tes
 	rows, err := store.RuntimeRouteDirty(context.WithValue(ctx, storage.WorkerConfigPriorityKey{}, "site-000002"), 128)
 	if err != nil || len(rows) != 1 || rows[0].ID != "site-000002" {
 		t.Fatalf("deployment drained unrelated bindings: %+v %v", rows, err)
+	}
+}
+
+// The API identity is deliberately not Ready: a new runtime needs its stream to bootstrap.
+func configureResourceSessionIdentity(t *testing.T, controller *workerapp.Controller, config *appconfig.WorkersConfig) {
+	t.Helper()
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("labelSelector") != "role=krun-runtime,pool=default" {
+			t.Errorf("unexpected Pod selector: %s", r.URL)
+		}
+		io.WriteString(w, `{"items":[{"metadata":{"name":"runtime-0","uid":"pod-resource"},"status":{"podIP":"127.0.0.2"}}]}`)
+	}))
+	t.Cleanup(api.Close)
+	controller.Kube = &kubernetes.Client{Base: api.URL, Namespace: "test", Client: api.Client()}
+	controller.Http = &http.Client{Transport: invokeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "http://127.0.0.2:8083/config-session" || r.Header.Get("Authorization") != "Bearer "+config.RuntimePools[0].ManagementToken {
+			t.Errorf("unexpected identity probe: %s", r.URL)
+		}
+		status := http.StatusOK
+		if r.Header.Get("X-Krun-Session-Proof") != strings.Repeat("a", 64) {
+			status = http.StatusForbidden
+		}
+		body, _ := json.Marshal(map[string]any{"pod_uid": "pod-resource", "pool": "default"})
+		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+	})}
+}
+
+func TestPostgresResourceWebSocketRejectsSessionImpersonation(t *testing.T) {
+	store, config, controller, _ := seedRuntimeResourceSite(t)
+	configureResourceSessionIdentity(t, controller, config)
+	s := &Server{Store: store, Config: appconfig.Config{Workers: config}, workers: controller}
+	server := httptest.NewServer(http.HandlerFunc(s.workerRuntimeResourceWatch))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	epoch, err := store.RuntimeEpoch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.OpenRuntimeSession(ctx, "default", "pod-resource", epoch, "victim-session"); err != nil {
+		t.Fatal(err)
+	}
+	for _, hello := range []configstream.Frame{
+		{Type: "hello", PodUID: "pod-resource", SessionProof: strings.Repeat("b", 64)},
+		{Type: "hello", PodUID: "pod-resource"},
+		{Type: "hello", PodUID: "unlisted-pod", SessionProof: strings.Repeat("a", 64)},
+		{Type: "hello", PodUID: strings.Repeat("p", 129), SessionProof: strings.Repeat("a", 64)},
+	} {
+		conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), &websocket.DialOptions{
+			HTTPHeader: http.Header{"X-Runtime-Pool": {"default"}, "Authorization": {"Bearer " + config.RuntimePools[0].RuntimeToken}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = conn.Write(ctx, websocket.MessageBinary, configstream.Marshal(hello)); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err = conn.Read(ctx); err == nil {
+			t.Fatal("impersonated stream received welcome")
+		}
+		conn.CloseNow()
+		if err = store.TouchRuntimeSession(ctx, "pod-resource", "victim-session", true, true); err != nil {
+			t.Fatalf("unverified connection replaced the victim: %v", err)
+		}
+	}
+	var sessions int
+	if err = postgresTestPool(store).QueryRow(ctx, `SELECT count(*) FROM worker_runtime_sessions`).Scan(&sessions); err != nil || sessions != 1 {
+		t.Fatalf("unverified connections created sessions: %d %v", sessions, err)
+	}
+	for _, pod := range []string{"", strings.Repeat("p", 129)} {
+		if err = store.OpenRuntimeSession(ctx, "default", pod, epoch, "invalid"); err == nil {
+			t.Fatal("storage accepted an invalid Pod UID")
+		}
 	}
 }

@@ -621,7 +621,41 @@ const platform = http.createServer((request, response) => {
 let resourceStream = null;
 if (resourceAgent) {
   const { resourceStreamFixture } = await import("./resource-stream-fixture.mjs");
-  resourceStream = resourceStreamFixture(platform, descriptor, () => servingAcknowledgements++);
+  resourceStream = resourceStreamFixture(
+    platform,
+    descriptor,
+    () => servingAcknowledgements++,
+    async (identity) => {
+      // Verify the real supervisor before welcome/config bootstrap or readiness.
+      const url = `http://127.0.0.1:${managementPort}/config-session`;
+      let denied;
+      for (let i = 0; i < 100; i++) {
+        try {
+          denied = await fetch(url, { headers: { authorization: "Bearer test" } });
+          break;
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+      }
+      assert.equal(denied?.status, 403, "pool runtime token must not expose session proof");
+      const missingProof = await fetch(url, {
+        headers: { authorization: "Bearer test-management" },
+      });
+      assert.equal(
+        missingProof.status,
+        403,
+        "management token alone must not expose session proof",
+      );
+      const response = await fetch(url, {
+        headers: {
+          authorization: "Bearer test-management",
+          "x-krun-session-proof": identity.session_proof,
+        },
+      });
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { pod_uid: identity.pod_uid, pool: identity.pool });
+    },
+  );
 }
 const platformPort = await listen(platform);
 const port = await freePort();

@@ -13,6 +13,7 @@ type Frame struct {
 	RequestID       uint64
 	Epoch           string
 	PodUID          string
+	SessionProof    string
 	Refs            []domain.ResourceRef
 	Resources       []domain.RuntimeResource
 	Error           string
@@ -84,6 +85,7 @@ func Marshal(f Frame) []byte {
 	if f.Applied {
 		b = intField(b, 14, 1)
 	}
+	b = bytesField(b, 15, []byte(f.SessionProof))
 	return b
 }
 
@@ -190,7 +192,7 @@ func unmarshalResource(b []byte) (domain.RuntimeResource, error) {
 func Unmarshal(b []byte) (Frame, error) {
 	var out Frame
 	err := fields(b, func(f field) error {
-		if f.number >= 1 && f.number <= 14 {
+		if f.number >= 1 && f.number <= 15 {
 			expected := protowire.BytesType
 			switch f.number {
 			case 2, 8, 9, 10, 11, 13, 14:
@@ -246,10 +248,12 @@ func Unmarshal(b []byte) (Frame, error) {
 			out.Nonce = f.integer
 		case 14:
 			out.Applied = f.integer != 0
+		case 15:
+			out.SessionProof = string(f.text)
 		}
 		return nil
 	})
-	if len(out.Type) > 32 || len(out.Epoch) > 128 || len(out.PodUID) > 128 {
+	if len(out.Type) > 32 || len(out.Epoch) > 128 || len(out.PodUID) > 128 || len(out.SessionProof) > 128 {
 		return out, errors.New("oversize protocol identity")
 	}
 	return out, err

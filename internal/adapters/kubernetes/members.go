@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"sort"
 	"time"
@@ -84,4 +85,19 @@ func (k *Client) RuntimeMembers(ctx context.Context, pool, service string) ([]Wo
 
 func (k *Client) ValidatorMembers(ctx context.Context, pool, service string) ([]WorkerPod, error) {
 	return k.Members(ctx, "krun-validator", pool, service)
+}
+
+// RuntimePod resolves identity from the API, including Pods still bootstrapping.
+// Requiring readiness here would prevent a new Pod from opening its config stream.
+func (k *Client) RuntimePod(ctx context.Context, pool, uid string) (WorkerPod, error) {
+	var pods WorkerPodList
+	if err := k.Call(ctx, "GET", k.Core("pods")+"?labelSelector="+url.QueryEscape("role=krun-runtime,pool="+pool), nil, &pods); err != nil {
+		return WorkerPod{}, err
+	}
+	for _, pod := range pods.Items {
+		if pod.Metadata.UID == uid && pod.Metadata.DeletionTimestamp == nil && pod.Status.PodIP != "" {
+			return WorkerPod{Name: pod.Metadata.Name, UID: pod.Metadata.UID, IP: pod.Status.PodIP}, nil
+		}
+	}
+	return WorkerPod{}, errors.New("runtime Pod identity not found")
 }

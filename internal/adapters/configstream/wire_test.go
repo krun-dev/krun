@@ -3,6 +3,7 @@ package configstream
 import (
 	"bytes"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/krun-dev/krun/internal/domain"
@@ -11,7 +12,7 @@ import (
 
 func TestResourceFrameRoundTrip(t *testing.T) {
 	ref := domain.ResourceRef{Kind: "deployment", ID: "worker/production", Incarnation: "inc", Generation: 42}
-	original := Frame{Type: "snapshot", RequestID: 7, Epoch: "epoch", PodUID: "pod", Refs: []domain.ResourceRef{ref}, Resources: []domain.RuntimeResource{{ResourceRef: ref, Payload: []byte(`{"enabled":true}`), Dependencies: []domain.ResourceRef{{Kind: "version", ID: "v1"}}}}, Fresh: true, Applied: true, ConfirmedMillis: 1700000000000, Nonce: 9}
+	original := Frame{Type: "snapshot", RequestID: 7, Epoch: "epoch", PodUID: "pod", SessionProof: strings.Repeat("a", 64), Refs: []domain.ResourceRef{ref}, Resources: []domain.RuntimeResource{{ResourceRef: ref, Payload: []byte(`{"enabled":true}`), Dependencies: []domain.ResourceRef{{Kind: "version", ID: "v1"}}}}, Fresh: true, Applied: true, ConfirmedMillis: 1700000000000, Nonce: 9}
 	raw := Marshal(original)
 	// Protobuf's stable field numbers are shared with the native agent.
 	if !bytes.HasPrefix(raw, []byte{0x0a, 0x08, 's', 'n', 'a', 'p', 's', 'h', 'o', 't'}) {
@@ -45,4 +46,18 @@ func FuzzResourceFrame(f *testing.F) {
 			}
 		}
 	})
+}
+
+func TestResourceFrameBoundsSessionIdentity(t *testing.T) {
+	for _, frame := range []Frame{
+		{Type: "hello", PodUID: strings.Repeat("p", 129)},
+		{Type: "hello", SessionProof: strings.Repeat("s", 129)},
+	} {
+		if _, err := Unmarshal(Marshal(frame)); err == nil {
+			t.Fatal("accepted oversized session identity")
+		}
+	}
+	if _, err := Unmarshal(protowire.AppendVarint(protowire.AppendTag(nil, 15, protowire.VarintType), 1)); err == nil {
+		t.Fatal("accepted wrong session proof wire type")
+	}
 }
