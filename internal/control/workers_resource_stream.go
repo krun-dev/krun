@@ -54,6 +54,9 @@ func (s *Server) runtimeResources() *runtimeconfig.ResourceHub {
 }
 
 func writeResourceFrame(ctx context.Context, conn *websocket.Conn, frame configstream.Frame, frameBytes, resourceBytes int) error {
+	if len(frame.Error) > configstream.MaxFrameErrorBytes {
+		return errors.New("configuration error exceeds protocol limit")
+	}
 	raw := configstream.Marshal(frame)
 	if len(raw) > resourceBytes {
 		return errors.New("configuration message exceeds resource budget")

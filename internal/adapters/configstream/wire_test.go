@@ -61,3 +61,15 @@ func TestResourceFrameBoundsSessionIdentity(t *testing.T) {
 		t.Fatal("accepted wrong session proof wire type")
 	}
 }
+
+func TestResourceFrameBoundsErrorText(t *testing.T) {
+	frame := Frame{Type: "error", Error: strings.Repeat("é", MaxFrameErrorBytes/2)}
+	decoded, err := Unmarshal(Marshal(frame))
+	if err != nil || decoded.Error != frame.Error {
+		t.Fatalf("error at byte limit: %v", err)
+	}
+	frame.Error += "a"
+	if _, err = Unmarshal(Marshal(frame)); err == nil {
+		t.Fatal("accepted error text above the byte limit")
+	}
+}
