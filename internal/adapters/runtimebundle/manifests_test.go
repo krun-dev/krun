@@ -26,10 +26,11 @@ func TestRenderPoolManifests(t *testing.T) {
 			Streams:          &config.WorkerStreamAdmission{SSEPaths: []string{"/events"}},
 		},
 		Deployment: &config.RuntimePoolDeployment{
-			Image:        "registry.example.com/runtime:v1",
-			Replicas:     3,
-			PodLabels:    map[string]string{"workload.example.com/tier": "serving"},
-			NodeSelector: map[string]string{"workload": "serving"},
+			Image:                "registry.example.com/runtime:v1",
+			Replicas:             3,
+			PodLabels:            map[string]string{"workload.example.com/tier": "serving"},
+			ConfigMapAnnotations: map[string]string{"kubeocean.io/sync-to-physical": "true"},
+			NodeSelector:         map[string]string{"workload": "serving"},
 			Tolerations: []config.BuilderToleration{{
 				Key: "workload", Operator: "Equal", Value: "serving", Effect: "NoExecute", TolerationSeconds: &seconds,
 			}},
@@ -85,6 +86,20 @@ func TestRenderPoolManifests(t *testing.T) {
 	name := documents[0]["metadata"].(map[string]any)["name"].(string)
 	if documents[0]["immutable"] != true || !strings.HasPrefix(name, "runtime-office-config-") {
 		t.Fatal("expected a content-addressed ConfigMap")
+	}
+	annotations := documents[0]["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if annotations["kubeocean.io/sync-to-physical"] != "true" {
+		t.Fatalf("unexpected ConfigMap annotations: %v", annotations)
+	}
+	for _, document := range documents[1:] {
+		if _, ok := document["metadata"].(map[string]any)["annotations"]; ok {
+			t.Fatalf("annotations unexpectedly added to %v", document["kind"])
+		}
+	}
+	cfg.Workers.RuntimePools[0].Deployment.ConfigMapAnnotations = nil
+	withoutAnnotations := render()
+	if strings.Contains(withoutAnnotations.ConfigMap, "annotations:") || withoutAnnotations.Deployment != rendered.Deployment {
+		t.Fatal("annotations should be optional and should not change the ConfigMap name or Deployment")
 	}
 	template := documents[1]["spec"].(map[string]any)["template"].(map[string]any)
 	labels := template["metadata"].(map[string]any)["labels"].(map[string]any)

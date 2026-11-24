@@ -52,16 +52,17 @@ func RenderPoolManifests(c config.Config, poolID string) (domain.RuntimePoolMani
 
 	hash := sha256.Sum256([]byte(text))
 	configName := fmt.Sprintf("%s-config-%x", name, hash[:8])
-	configMap, err := marshalManifest("v1", "ConfigMap", namespace, configName, map[string]any{
+	configFields := map[string]any{
 		"data":      map[string]string{"runtime.capnp": text},
 		"immutable": true,
-	})
+	}
+	configMap, err := marshalManifest("v1", "ConfigMap", namespace, configName, configFields, pool.Deployment.ConfigMapAnnotations)
 	if err != nil {
 		return domain.RuntimePoolManifests{}, err
 	}
 	deployment, err := marshalManifest("apps/v1", "Deployment", namespace, name, map[string]any{
 		"spec": poolDeploymentSpec(c, pool, configName),
-	})
+	}, nil)
 	if err != nil {
 		return domain.RuntimePoolManifests{}, err
 	}
@@ -72,7 +73,7 @@ func RenderPoolManifests(c config.Config, poolID string) (domain.RuntimePoolMani
 	return domain.RuntimePoolManifests{Deployment: deployment, ConfigMap: configMap, SupportingResources: supporting}, nil
 }
 
-func marshalManifest(apiVersion, kind, namespace, name string, fields map[string]any) (string, error) {
+func marshalManifest(apiVersion, kind, namespace, name string, fields map[string]any, annotations map[string]string) (string, error) {
 	manifest := map[string]any{
 		"apiVersion": apiVersion,
 		"kind":       kind,
@@ -81,6 +82,9 @@ func marshalManifest(apiVersion, kind, namespace, name string, fields map[string
 			"name":      name,
 			"labels":    map[string]string{"app.kubernetes.io/part-of": "krun"},
 		},
+	}
+	if len(annotations) > 0 {
+		manifest["metadata"].(map[string]any)["annotations"] = annotations
 	}
 	maps.Copy(manifest, fields)
 	raw, err := yaml.Marshal(manifest)
@@ -228,7 +232,7 @@ func renderPoolServices(namespace string, pool config.WorkerRuntimePool) (string
 	spec := poolServiceSpec(name, 8081, 8083)
 	var resources []string
 	appendManifest := func(api, kind, resourceName string, spec map[string]any) error {
-		manifest, err := marshalManifest(api, kind, namespace, resourceName, map[string]any{"spec": spec})
+		manifest, err := marshalManifest(api, kind, namespace, resourceName, map[string]any{"spec": spec}, nil)
 		if err != nil {
 			return err
 		}

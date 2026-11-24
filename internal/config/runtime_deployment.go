@@ -8,24 +8,27 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/resource"
+	metavalidation "k8s.io/apimachinery/pkg/api/validation"
 	kvalidation "k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 // RuntimePoolDeployment enables manifest generation for one serving pool.
 type RuntimePoolDeployment struct {
-	Image              string               `json:"image,omitempty"`
-	Replicas           int                  `json:"replicas,omitempty"`
-	PodLabels          map[string]string    `json:"pod_labels,omitempty"`
-	NodeSelector       map[string]string    `json:"node_selector,omitempty"`
-	Tolerations        []BuilderToleration  `json:"tolerations,omitempty"`
-	Resources          BuilderResources     `json:"resources,omitempty"`
-	SecretName         string               `json:"secret_name,omitempty"`
-	PeerService        string               `json:"peer_service,omitempty"`
-	PodUIDAnnotation   string               `json:"pod_uid_annotation,omitempty"`
-	ControlAddress     string               `json:"control_address,omitempty"`
-	DNSPolicy          string               `json:"dns_policy,omitempty"`
-	DNSConfig          *RuntimePodDNSConfig `json:"dns_config,omitempty"`
-	StorageEgressCIDRs []string             `json:"storage_egress_cidrs,omitempty"`
+	Image                string               `json:"image,omitempty"`
+	Replicas             int                  `json:"replicas,omitempty"`
+	PodLabels            map[string]string    `json:"pod_labels,omitempty"`
+	ConfigMapAnnotations map[string]string    `json:"config_map_annotations,omitempty"`
+	NodeSelector         map[string]string    `json:"node_selector,omitempty"`
+	Tolerations          []BuilderToleration  `json:"tolerations,omitempty"`
+	Resources            BuilderResources     `json:"resources,omitempty"`
+	SecretName           string               `json:"secret_name,omitempty"`
+	PeerService          string               `json:"peer_service,omitempty"`
+	PodUIDAnnotation     string               `json:"pod_uid_annotation,omitempty"`
+	ControlAddress       string               `json:"control_address,omitempty"`
+	DNSPolicy            string               `json:"dns_policy,omitempty"`
+	DNSConfig            *RuntimePodDNSConfig `json:"dns_config,omitempty"`
+	StorageEgressCIDRs   []string             `json:"storage_egress_cidrs,omitempty"`
 }
 
 type RuntimePodDNSConfig struct {
@@ -105,6 +108,9 @@ func (c *Config) validateRuntimeDeployment(pool WorkerRuntimePool) error {
 	}
 	if !validKubernetesLabels(d.PodLabels) {
 		return fmt.Errorf("invalid pod_labels")
+	}
+	if errs := metavalidation.ValidateAnnotations(d.ConfigMapAnnotations, field.NewPath("config_map_annotations")); len(errs) > 0 {
+		return fmt.Errorf("invalid config_map_annotations: %v", errs.ToAggregate())
 	}
 	for _, reserved := range []string{"app", "pool", "role", "app.kubernetes.io/part-of"} {
 		if _, found := d.PodLabels[reserved]; found {
