@@ -139,7 +139,8 @@ func loadRuntimeResources(ctx context.Context, tx pgx.Tx, pool string, refs []do
 		hosts := []string{}
 		for _, id := range ids {
 			prefix, host, ok := strings.Cut(id, "/")
-			if !ok || prefix != pool || host == "" || strings.ContainsAny(host, "/\\: ") {
+			if !ok || prefix != pool || host == "" ||
+				len(host) > domain.RuntimeRouteHostMaxBytes || strings.ContainsAny(host, "/\\: ") {
 				return nil, domain.Forbidden()
 			}
 			hosts = append(hosts, host)

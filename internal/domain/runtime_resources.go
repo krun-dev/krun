@@ -22,6 +22,9 @@ type RuntimeResource struct {
 	Dependencies []ResourceRef   `json:"dependencies,omitempty"`
 }
 
+// RuntimeRouteHostMaxBytes is the DNS hostname limit without a trailing dot.
+const RuntimeRouteHostMaxBytes = 253
+
 type RuntimeRouteBinding struct {
 	EdgeConfigRoute
 	Fixed bool `json:"fixed"`

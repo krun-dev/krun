@@ -109,6 +109,21 @@ func TestPostgresRuntimeResourcesSeparateDeploymentFromBindings(t *testing.T) {
 	}
 }
 
+func TestPostgresRuntimeResourcesEnforcesRouteHostLength(t *testing.T) {
+	store := postgresTestStore(t)
+	ctx := t.Context()
+	host := strings.Repeat(strings.Repeat("a", 63)+".", 3) + strings.Repeat("a", 61)
+	ref := domain.ResourceRef{Kind: "route", ID: "default/" + host}
+	_, resources, err := store.RuntimeResources(ctx, "default", []domain.ResourceRef{ref})
+	if err != nil || len(resources) != 1 || !resources[0].Deleted || resources[0].ID != ref.ID {
+		t.Fatalf("253-byte host: %+v, %v", resources, err)
+	}
+	ref.ID += "a"
+	if _, _, err = store.RuntimeResources(ctx, "default", []domain.ResourceRef{ref}); err == nil {
+		t.Fatal("accepted a 254-byte route host")
+	}
+}
+
 func TestPostgresResourceCacheReplicasRepairMissedNotification(t *testing.T) {
 	store, config, _, host := seedRuntimeResourceSite(t)
 	ctx := context.Background()
