@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"maps"
 	"time"
 )
 
@@ -183,6 +184,17 @@ type WorkerVersion struct {
 	SecretDigest   string            `json:"secret_digest,omitempty"`
 	SecretVersions map[string]string `json:"-"`
 	Created        time.Time         `json:"created_at"`
+}
+
+// WithoutServiceBindingGrants removes grant actors from a version view while
+// preserving the binding map used for authorization.
+func (version WorkerVersion) WithoutServiceBindingGrants() WorkerVersion {
+	version.ServiceBindings = maps.Clone(version.ServiceBindings)
+	for name, binding := range version.ServiceBindings {
+		binding.GrantedBy = nil
+		version.ServiceBindings[name] = binding
+	}
+	return version
 }
 
 // WorkerSecretVersion is immutable metadata. Ciphertext is intentionally not

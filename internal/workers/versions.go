@@ -36,7 +36,7 @@ func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p a
 	if id, err := WorkerIdempotent(st, key, in); err != nil {
 		return nil, Read, err
 	} else if id != "" {
-		return st.Workers.Versions[id], Read, nil
+		return st.Workers.Versions[id].WithoutServiceBindingGrants(), Read, nil
 	}
 	worker := s.Worker(st, target)
 	environment, ok := worker.Environments[ref.Environment]
@@ -93,7 +93,7 @@ func (s *Service) WorkerVersionUpload(ctx context.Context, st *domain.State, p a
 	st.Workers.Versions[version.ID] = version
 	WorkerRemember(st, key, in, version.ID)
 	s.audit(st, p, "workers.version.create", target.ID+"/"+ref.Environment, true)
-	return version, Created, nil
+	return version.WithoutServiceBindingGrants(), Created, nil
 }
 func SnapshotVersion(org, worker, environment string, artifact domain.WorkerArtifact, config domain.WorkerEnvironment) domain.WorkerVersion {
 	version := versionSnapshot(org, worker, environment, artifact, config)

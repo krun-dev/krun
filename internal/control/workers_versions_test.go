@@ -76,6 +76,72 @@ func TestVersionUploadFreezesConfigurationWithoutDeploying(t *testing.T) {
 	}
 }
 
+func TestVersionResponsesOmitServiceBindingGrantActor(t *testing.T) {
+	server, store, base := workerTestServer(t)
+	active := seedPublishedWorker(t, store)
+	if err := store.Update(t.Context(), PartitionWorkers, func(st *State) error {
+		worker := st.Workers.Workers[active.Worker]
+		env := worker.Environments[active.Environment]
+		env.ServiceBindings = map[string]domain.WorkerServiceBinding{
+			"UPSTREAM": {
+				Worker: "svc-a", Environment: "fix-demo",
+				GrantedBy: &domain.WorkerActor{User: "grant-user", Key: "grant-key"},
+			},
+		}
+		worker.Environments[active.Environment] = env
+		st.Workers.Workers[active.Worker] = worker
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	checkBinding := func(raw []byte) WorkerVersion {
+		t.Helper()
+		var version WorkerVersion
+		if err := json.Unmarshal(raw, &version); err != nil {
+			t.Fatal(err)
+		}
+		binding := version.ServiceBindings["UPSTREAM"]
+		if binding.Worker != "svc-a" || binding.Environment != "fix-demo" || strings.Contains(string(raw), `"granted_by"`) {
+			t.Fatalf("invalid public binding: %s", raw)
+		}
+		return version
+	}
+	input := `{"artifact_id":"art_secret","idempotency_key":"grant-version"}`
+	path := base + "/environments/production/versions"
+	response := request(server, "POST", path, "krun_cli_admin", input)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("upload: %d %s", response.Code, response.Body)
+	}
+	version := checkBinding(response.Body.Bytes())
+	response = request(server, "POST", path, "krun_cli_admin", input)
+	if response.Code != http.StatusOK {
+		t.Fatalf("retry: %d %s", response.Code, response.Body)
+	}
+	checkBinding(response.Body.Bytes())
+	response = request(server, "GET", base+"/versions/"+version.ID, "krun_cli_admin", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("detail: %d %s", response.Code, response.Body)
+	}
+	checkBinding(response.Body.Bytes())
+	response = request(server, "GET", base+"/versions?q="+url.QueryEscape(version.ID), "krun_cli_admin", "")
+	var page struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil || response.Code != http.StatusOK || len(page.Items) != 1 {
+		t.Fatalf("list: %d %s (%v)", response.Code, response.Body, err)
+	}
+	checkBinding(page.Items[0])
+	if err := store.View(t.Context(), PartitionWorkers, func(st *State) error {
+		grant := st.Workers.Versions[version.ID].ServiceBindings["UPSTREAM"].GrantedBy
+		if grant == nil || grant.User != "grant-user" || grant.Key != "grant-key" {
+			t.Fatalf("missing persisted grant: %+v", grant)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestVersionUploadChecksReviewedConfigurationAndRetriesIdempotently(t *testing.T) {
 	server, store, base := workerTestServer(t)
 	active := seedPublishedWorker(t, store)
