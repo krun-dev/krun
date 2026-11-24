@@ -134,6 +134,15 @@ pub struct Bundle {
     used: Mutex<Instant>,
 }
 
+impl Bundle {
+    fn check_expiry(&self) -> std::result::Result<(), u16> {
+        if self.expires.is_some_and(|expires| expires <= wall_millis()) {
+            return Err(410);
+        }
+        Ok(())
+    }
+}
+
 struct State {
     verify_millis: u64,
     epoch: String,
@@ -274,7 +283,9 @@ impl Agent {
         if !state.authorized {
             return Err(503);
         }
-        state.bundles.get(handle).cloned().ok_or(503)
+        let bundle = state.bundles.get(handle).ok_or(503u16)?;
+        bundle.check_expiry()?;
+        Ok(bundle.clone())
     }
 
     pub async fn resolve(&self, host: &str, path: &str) -> std::result::Result<Arc<Bundle>, u16> {
@@ -336,12 +347,7 @@ impl Agent {
         let route_key = (host.to_owned(), route_index);
         if let Some(handle) = state.current_bundles.get(&route_key) {
             if let Some(bundle) = state.bundles.get(handle) {
-                if bundle
-                    .expires
-                    .is_some_and(|expires| expires <= wall_millis())
-                {
-                    return Err(410);
-                }
+                bundle.check_expiry()?;
                 *bundle.used.lock().unwrap() = Instant::now();
                 return Ok(Some(bundle.clone()));
             }
@@ -1704,6 +1710,24 @@ mod tests {
         );
         assert!(matches!(agent.build_bundle("site.test", "/"), Err(410)));
     }
+
+    #[test]
+    fn expired_bundle_cannot_be_read_by_handle() {
+        let agent = fixture();
+        install(&agent, graph(true));
+        let bundle = agent.build_bundle("site.test", "/").unwrap().unwrap();
+        let handle = bundle.handle.clone();
+        assert!(Arc::ptr_eq(&bundle, &agent.get_bundle(&handle).unwrap()));
+        drop(bundle);
+        {
+            let mut state = agent.state.lock().unwrap();
+            let cached = state.bundles.get_mut(&handle).unwrap();
+            Arc::get_mut(cached).unwrap().expires = Some(wall_millis());
+        }
+        assert!(matches!(agent.get_bundle(&handle), Err(410)));
+        assert!(matches!(agent.build_bundle("site.test", "/"), Err(410)));
+    }
+
     #[test]
     fn fixed_route_does_not_require_the_current_default_descriptor() {
         let agent = fixture();
