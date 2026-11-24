@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, sleep, timeout};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{self, Message as WsMessage};
 
@@ -817,24 +818,24 @@ impl Agent {
                 self.retry_connection(&mut commands, &mut backoff).await;
                 continue;
             };
-            request.headers_mut().insert(
-                "authorization",
-                format!("Bearer {}", self.token).parse().unwrap(),
-            );
-            request
-                .headers_mut()
-                .insert("x-runtime-pool", self.settings.pool.parse().unwrap());
             let websocket_config = WebSocketConfig::default()
                 .max_message_size(Some(self.settings.limits.frame_bytes))
                 .max_frame_size(Some(self.settings.limits.frame_bytes));
-            let connected = timeout(
-                Duration::from_secs(3),
+            let connected = timeout(Duration::from_secs(3), async {
+                let mut authorization = HeaderValue::from_str(&format!("Bearer {}", self.token))
+                    .inspect_err(|_| eprintln!("configuration stream: invalid runtime token header"))?;
+                authorization.set_sensitive(true);
+                let pool = HeaderValue::from_str(&self.settings.pool)
+                    .inspect_err(|_| eprintln!("configuration stream: invalid runtime pool header"))?;
+                request.headers_mut().insert("authorization", authorization);
+                request.headers_mut().insert("x-runtime-pool", pool);
                 tokio_tungstenite::connect_async_with_config(
                     request,
                     Some(websocket_config),
                     false,
-                ),
-            )
+                )
+                .await
+            })
             .await;
             let mut socket = match connected {
                 Ok(Ok((socket, _))) => socket,
@@ -1472,6 +1473,36 @@ impl BackgroundService for AgentService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn invalid_configuration_stream_headers_use_retry_path() {
+        for (token, pool) in [("invalid\ntoken", "test"), ("token", "invalid\rpool")] {
+            let mut settings = fixture().settings.clone();
+            settings.pool = pool.into();
+            let agent = Agent::new(settings, token.into(), "pod".into());
+            let runner = {
+                let agent = agent.clone();
+                tokio::spawn(async move { agent.run().await })
+            };
+            for _ in 0..2 {
+                let (reply, receive) = oneshot::channel();
+                assert!(
+                    agent
+                        .commands
+                        .try_send(Resolve {
+                            host: "site.test".into(),
+                            reply,
+                        })
+                        .is_ok()
+                );
+                assert_eq!(
+                    timeout(Duration::from_secs(2), receive).await.unwrap().unwrap(),
+                    Err(503)
+                );
+            }
+            runner.abort();
+        }
+    }
 
     fn fixture() -> Arc<Agent> {
         let agent = Agent::new(
