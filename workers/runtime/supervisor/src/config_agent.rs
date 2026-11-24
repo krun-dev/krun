@@ -21,6 +21,7 @@ use tokio_tungstenite::tungstenite::{self, Message as WsMessage};
 
 pub const CONFIG_HEADER: &str = "x-krun-config-handle";
 const MARKER: &str = "# krun-config-agent ";
+const MAX_FRAME_ERROR_BYTES: usize = 256;
 
 #[derive(Clone, PartialEq, Message)]
 pub struct Ref {
@@ -91,6 +92,13 @@ pub struct Frame {
     pub applied: bool,
     #[prost(string, tag = "15")]
     pub session_proof: String,
+}
+
+impl Frame {
+    fn decode_wire(data: impl prost::bytes::Buf) -> Option<Self> {
+        let frame = Self::decode(data).ok()?;
+        (frame.error.len() <= MAX_FRAME_ERROR_BYTES).then_some(frame)
+    }
 }
 
 #[derive(Clone, Deserialize)]
@@ -977,7 +985,7 @@ impl Agent {
                         Some(Ok(WsMessage::Pong(_))) => continue,
                         _ => break,
                     };
-                    let Ok(mut frame) = Frame::decode(data) else {
+                    let Some(mut frame) = Frame::decode_wire(data) else {
                         break;
                     };
                     if chunk_index > 0 && frame.r#type != "chunk" {
@@ -1005,7 +1013,7 @@ impl Agent {
                         if chunk_index < chunk_parts {
                             continue;
                         }
-                        let Ok(decoded) = Frame::decode(chunks.as_slice()) else {
+                        let Some(decoded) = Frame::decode_wire(chunks.as_slice()) else {
                             break;
                         };
                         frame = decoded;
@@ -1585,6 +1593,23 @@ mod tests {
             })
             .unwrap();
     }
+    #[test]
+    fn wire_frame_limits_error_text_by_bytes() {
+        let mut frame = Frame {
+            r#type: "error".into(),
+            error: "é".repeat(MAX_FRAME_ERROR_BYTES / 2),
+            ..Frame::default()
+        };
+        let encoded = frame.encode_to_vec();
+        assert_eq!(
+            Frame::decode_wire(encoded.as_slice()).unwrap().error,
+            frame.error
+        );
+        frame.error.push('a');
+        let encoded = frame.encode_to_vec();
+        assert!(Frame::decode_wire(encoded.as_slice()).is_none());
+    }
+
     #[test]
     fn malformed_bindings_are_rejected_without_poisoning_or_replacing_hot_routes() {
         let agent = fixture();

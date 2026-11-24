@@ -8,6 +8,9 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
+// MaxFrameErrorBytes bounds the error field independently of the frame budget.
+const MaxFrameErrorBytes = 256
+
 type Frame struct {
 	Type            string
 	RequestID       uint64
@@ -233,6 +236,9 @@ func Unmarshal(b []byte) (Frame, error) {
 			}
 			out.Resources = append(out.Resources, r)
 		case 7:
+			if len(f.text) > MaxFrameErrorBytes {
+				return errors.New("oversize protocol error")
+			}
 			out.Error = string(f.text)
 		case 8:
 			out.ConfirmedMillis = int64(f.integer)
