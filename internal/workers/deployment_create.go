@@ -24,7 +24,7 @@ type WorkerDeploymentCreateInput struct {
 
 func PublicWorkerVersion(version domain.WorkerVersion) domain.WorkerVersion {
 	version.SecretNames = domain.WorkerSecretNames(version.SecretVersions)
-	return version
+	return version.WithoutServiceBindingGrants()
 }
 
 func WorkerBusy(st *domain.State, worker, env string) bool {

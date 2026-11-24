@@ -2,7 +2,6 @@ package domain
 
 import (
 	"encoding/json"
-	"maps"
 )
 
 // ResourceRef is scoped by the authenticated pool. Generation is independent
@@ -59,10 +58,5 @@ type RuntimePropagation struct {
 // the immutable bindings referenced by a version.
 func RuntimeVersionDescriptor(version WorkerVersion) WorkerVersion {
 	version.VersionURL = false
-	version.ServiceBindings = maps.Clone(version.ServiceBindings)
-	for name, binding := range version.ServiceBindings {
-		binding.GrantedBy = nil
-		version.ServiceBindings[name] = binding
-	}
-	return version
+	return version.WithoutServiceBindingGrants()
 }
