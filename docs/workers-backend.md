@@ -209,9 +209,9 @@ Host/路径绑定、Worker/环境的发布目标和不可变 Version 分开读�
 实际 RSS 还包含 JSON 对象、索引、连接和业务 isolate。
 多副本部署须按副本总数分配数据库连接预算；增加副本不会自动增加主库容量。
 
-`available` 表示候选校验、提交与 Gateway 确认后，最多尝试两个 Ready serving Pod，至少一个
+`available` 表示候选校验、提交与 Gateway 确认后，每轮从 Ready serving Pod 中选择最多两个成员进行探测，至少一个
 通过可信 `/config-probe`（灰度时覆盖所有正权重版本）：确认目标代次、路由、Version 和 Pod 身份，在实际 serving Loader 中准备
-版本、所需资产清单并调用平台注入入口的只读 HEAD 探测。候选校验仍运行独立的 `KrunValidation`；
+版本、所需资产清单并调用平台注入入口的只读 HEAD 探测。Ready 成员超过两个时，每轮随机选择起点。候选校验仍运行独立的 `KrunValidation`；
 准备探测不调用应用自己的验证入口或任意业务 `fetch()`，也不代表 DNS/TLS 的外部可达性。
 它不等待全池 ACK。控制台和 `deployments propagation` 单独显示传播状态：
 

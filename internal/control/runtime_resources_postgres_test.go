@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -398,7 +399,8 @@ func TestPostgresResourceDeploymentRequiresAllPositiveWeightServingProbes(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	rejectCandidate := true
+	var rejectCandidate atomic.Bool
+	rejectCandidate.Store(true)
 	management := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/config-probe" || r.Header.Get("Authorization") != "Bearer "+config.RuntimePools[0].ManagementToken {
 			t.Errorf("unexpected management request: %s", r.URL.Path)
@@ -409,7 +411,7 @@ func TestPostgresResourceDeploymentRequiresAllPositiveWeightServingProbes(t *tes
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			t.Error(err)
 		}
-		if input["version_id"] == "version-b" && rejectCandidate {
+		if input["version_id"] == "version-b" && rejectCandidate.Load() {
 			w.WriteHeader(409)
 			_, _ = w.Write([]byte(`{}`))
 			return
@@ -417,16 +419,42 @@ func TestPostgresResourceDeploymentRequiresAllPositiveWeightServingProbes(t *tes
 		_ = json.NewEncoder(w).Encode(map[string]any{"pod_uid": "pod-serving", "pool": "default", "config_epoch": epoch, "config_protocol": 2, "version_id": input["version_id"], "target_generation": input["generation"]})
 	}))
 	defer management.Close()
+	var expandPool atomic.Bool
 	kube := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "endpointslices") {
+		switch {
+		case strings.Contains(r.URL.Path, "endpointslices") && expandPool.Load():
+			_, _ = w.Write([]byte(`{"items":[{"endpoints":[
+				{"conditions":{"ready":true},"targetRef":{"uid":"pod-a"}},
+				{"conditions":{"ready":true},"targetRef":{"uid":"pod-b"}},
+				{"conditions":{"ready":true},"targetRef":{"uid":"pod-serving"}}
+			]}]}`))
+		case strings.Contains(r.URL.Path, "endpointslices"):
 			_, _ = w.Write([]byte(`{"items":[{"endpoints":[{"conditions":{"ready":true},"targetRef":{"uid":"pod-serving"}}]}]}`))
-			return
+		case expandPool.Load():
+			_, _ = w.Write([]byte(`{"items":[
+				{"metadata":{"name":"a","uid":"pod-a"},"status":{"podIP":"127.0.0.2","conditions":[{"type":"Ready","status":"True"}]}},
+				{"metadata":{"name":"b","uid":"pod-b"},"status":{"podIP":"127.0.0.3","conditions":[{"type":"Ready","status":"True"}]}},
+				{"metadata":{"name":"serving","uid":"pod-serving"},"status":{"podIP":"127.0.0.1","conditions":[{"type":"Ready","status":"True"}]}}
+			]}`))
+		default:
+			_, _ = w.Write([]byte(`{"items":[{"metadata":{"name":"serving","uid":"pod-serving"},"status":{"podIP":"127.0.0.1","conditions":[{"type":"Ready","status":"True"}]}}]}`))
 		}
-		_, _ = w.Write([]byte(`{"items":[{"metadata":{"name":"serving","uid":"pod-serving"},"status":{"podIP":"127.0.0.1","conditions":[{"type":"Ready","status":"True"}]}}]}`))
 	}))
 	defer kube.Close()
 	controller.Kube = &kubernetes.Client{Base: kube.URL, Client: kube.Client(), Namespace: "test"}
-	controller.Http = &http.Client{Transport: validationTransport{target: management.URL, base: http.DefaultTransport}}
+	transport := validationTransport{target: management.URL, base: http.DefaultTransport}
+	probed := map[string]bool{}
+	controller.Http = &http.Client{Transport: invokeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		podIP := r.URL.Hostname()
+		probed[podIP] = true
+		if podIP != "127.0.0.1" {
+			return &http.Response{
+				StatusCode: http.StatusServiceUnavailable,
+				Body:       io.NopCloser(strings.NewReader("{}")),
+			}, nil
+		}
+		return transport.RoundTrip(r)
+	})}
 	op := domain.WorkerOperation{ID: "probe-release", Kind: "publish", Organization: "tenant", Worker: "site-000002", Environment: "production", Version: "version-a", State: "committed", WorkerGradualRelease: domain.WorkerGradualRelease{Candidate: "version-b", CandidateWeight: 50000}}
 	state, err := store.EdgeConfigState(ctx, []string{op.Worker})
 	if err != nil {
@@ -439,12 +467,24 @@ func TestPostgresResourceDeploymentRequiresAllPositiveWeightServingProbes(t *tes
 	if err = postgresTestPool(store).QueryRow(ctx, `SELECT state FROM krun_worker_operations WHERE operation_id='probe-release'`).Scan(&status); err != nil || status != "committed" {
 		t.Fatalf("candidate preparation bypassed: %s %v", status, err)
 	}
-	rejectCandidate = false
-	if _, err = postgresTestPool(store).Exec(ctx, `UPDATE krun_worker_operations SET reconcile_after=now(),edge_revision=999,edge_pool='default' WHERE operation_id='probe-release'`); err != nil {
-		t.Fatal(err)
-	}
-	if err = controller.ProcessOperation(ctx, op, *state.Workers, true); err != nil {
-		t.Fatal(err)
+	rejectCandidate.Store(false)
+	expandPool.Store(true)
+	// With three Ready members, at most one of the three starting positions
+	// skips the serving Pod. Retry without waiting for the schedule in this test.
+	for range 32 {
+		clear(probed)
+		if _, err = postgresTestPool(store).Exec(ctx, `UPDATE krun_worker_operations SET reconcile_after=now(),edge_revision=999,edge_pool='default' WHERE operation_id='probe-release'`); err != nil {
+			t.Fatal(err)
+		}
+		if err = controller.ProcessOperation(ctx, op, *state.Workers, true); err != nil {
+			t.Fatal(err)
+		}
+		if len(probed) == 0 || len(probed) > 2 {
+			t.Fatalf("expected one or two serving Pod probes: %v", probed)
+		}
+		if probed["127.0.0.1"] {
+			break
+		}
 	}
 	if err = postgresTestPool(store).QueryRow(ctx, `SELECT state FROM krun_worker_operations WHERE operation_id='probe-release'`).Scan(&status); err != nil || status != "available" {
 		t.Fatalf("serving probes did not confirm without legacy ACK: %s %v", status, err)
