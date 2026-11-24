@@ -782,6 +782,16 @@ impl Agent {
         )
     }
 
+    async fn retry_connection(&self, commands: &mut mpsc::Receiver<Resolve>, backoff: &mut Duration) {
+        self.state.lock().unwrap().connected = false;
+        while let Ok(command) = commands.try_recv() {
+            let _ = command.reply.send(Err(503));
+        }
+        let jitter = (wall_millis() as u64 + self.pod.bytes().map(u64::from).sum::<u64>()) % 250;
+        sleep(*backoff + Duration::from_millis(jitter)).await;
+        *backoff = (*backoff * 2).min(Duration::from_secs(5));
+    }
+
     async fn run(&self) {
         let mut commands = self
             .receiver
@@ -797,7 +807,9 @@ impl Agent {
                 .replacen("https://", "wss://", 1)
                 .replacen("http://", "ws://", 1);
             let Ok(mut request) = url.into_client_request() else {
-                return;
+                eprintln!("configuration stream: invalid control URL");
+                self.retry_connection(&mut commands, &mut backoff).await;
+                continue;
             };
             request.headers_mut().insert(
                 "authorization",
@@ -821,25 +833,15 @@ impl Agent {
             let mut socket = match connected {
                 Ok(Ok((socket, _))) => socket,
                 other => {
+                    if let Ok(Err(tungstenite::Error::Url(_))) = &other {
+                        eprintln!("configuration stream: invalid control URL");
+                    }
                     if let Ok(Err(tungstenite::Error::Http(response))) = &other {
                         if response.status() == 401 || response.status() == 403 {
                             self.fence(None);
                         }
                     }
-                    self.state.lock().unwrap().connected = false;
-                    while let Ok(command) = commands.try_recv() {
-                        let _ = command.reply.send(Err(503));
-                    }
-                    sleep(
-                        backoff
-                            + Duration::from_millis(
-                                (wall_millis() as u64
-                                    + self.pod.bytes().map(u64::from).sum::<u64>())
-                                    % 250,
-                            ),
-                    )
-                    .await;
-                    backoff = (backoff * 2).min(Duration::from_secs(5));
+                    self.retry_connection(&mut commands, &mut backoff).await;
                     continue;
                 }
             };
@@ -1286,20 +1288,12 @@ impl Agent {
                 }
                         }
             }
-            self.state.lock().unwrap().connected = false;
             for (_, request) in pending {
                 for reply in request.replies {
                     let _ = reply.send(Err(503));
                 }
             }
-            sleep(
-                backoff
-                    + Duration::from_millis(
-                        (wall_millis() as u64 + self.pod.bytes().map(u64::from).sum::<u64>()) % 250,
-                    ),
-            )
-            .await;
-            backoff = (backoff * 2).min(Duration::from_secs(5));
+            self.retry_connection(&mut commands, &mut backoff).await;
         }
     }
 }
@@ -1947,6 +1941,34 @@ mod tests {
                 .contains_key("route:test/new.test")
         );
         assert!(!bundle.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn invalid_configuration_stream_url_retries_and_rejects_queued_reads() {
+        let mut settings = fixture().settings.clone();
+        settings.control_url = "invalid control URL".into();
+        let agent = Agent::new(settings, "token".into(), "pod".into());
+        let runner = {
+            let agent = agent.clone();
+            tokio::spawn(async move { agent.run().await })
+        };
+        for _ in 0..2 {
+            let (reply, receive) = oneshot::channel();
+            assert!(
+                agent
+                    .commands
+                    .try_send(Resolve {
+                        host: "site.test".into(),
+                        reply,
+                    })
+                    .is_ok()
+            );
+            assert_eq!(
+                timeout(Duration::from_secs(2), receive).await.unwrap().unwrap(),
+                Err(503)
+            );
+        }
+        runner.abort();
     }
 
     #[tokio::test]
