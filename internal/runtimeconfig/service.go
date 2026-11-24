@@ -163,7 +163,7 @@ func (s *Service) AssetCredentials(ctx context.Context, version, poolID string) 
 
 func (s *Service) Route(ctx context.Context, host, pool string) (workerapp.EdgeConfigSnapshot, error) {
 	host = strings.ToLower(host)
-	if len(host) > 253 || strings.ContainsAny(host, "/\\: ") {
+	if len(host) > domain.RuntimeRouteHostMaxBytes || strings.ContainsAny(host, "/\\: ") {
 		return workerapp.EdgeConfigSnapshot{}, domain.NotFound()
 	}
 	if s.Config.RuntimeConfig.Protocol == 2 {
