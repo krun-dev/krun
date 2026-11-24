@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"math/rand/v2"
 
 	"github.com/krun-dev/krun/internal/domain"
 	"github.com/krun-dev/krun/internal/storage"
@@ -47,7 +48,13 @@ func (w *Controller) observeResourceOperation(ctx context.Context, op domain.Wor
 			versions = append(versions, op.Candidate)
 		}
 	}
-	for _, pod := range pods[:min(len(pods), 2)] {
+	const maxProbePods = 2
+	start := 0
+	if len(pods) > maxProbePods {
+		start = rand.IntN(len(pods))
+	}
+	for i := range min(len(pods), maxProbePods) {
+		pod := pods[(start+i)%len(pods)]
 		prepared := true
 		for _, version := range versions {
 			probe, status, err := w.Management(ctx, pool, pod, "", "/config-probe", map[string]any{
