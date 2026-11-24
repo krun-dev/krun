@@ -137,6 +137,10 @@ func TestPoolDeploymentValidation(t *testing.T) {
 		change func(*RuntimePoolDeployment)
 	}{
 		{"pod_labels", func(d *RuntimePoolDeployment) { d.PodLabels = map[string]string{"app": "conflict"} }},
+		{"config_map_annotations", func(d *RuntimePoolDeployment) { d.ConfigMapAnnotations = map[string]string{"bad key": "value"} }},
+		{"config_map_annotations", func(d *RuntimePoolDeployment) {
+			d.ConfigMapAnnotations = map[string]string{"example.com/key": strings.Repeat("x", 256*1024)}
+		}},
 		{"node_selector", func(d *RuntimePoolDeployment) { d.NodeSelector = map[string]string{"invalid key": "node"} }},
 		{"tolerations", func(d *RuntimePoolDeployment) { d.Tolerations = []BuilderToleration{{Operator: "Equal"}} }},
 		{"dns_policy", func(d *RuntimePoolDeployment) { d.DNSPolicy = "Invalid" }},
@@ -155,6 +159,26 @@ func TestPoolDeploymentValidation(t *testing.T) {
 				t.Fatalf("want error for %s, got %v", test.field, err)
 			}
 		})
+	}
+}
+
+func TestPoolConfigMapAnnotationsLoadFromYAML(t *testing.T) {
+	setExampleCredentials(t)
+	raw, err := os.ReadFile(filepath.Join("testdata", "production.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := strings.Replace(string(raw), "deployment: {}", "deployment:\n        config_map_annotations:\n          kubeocean.io/sync-to-physical: \"true\"", 1)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Workers.RuntimePools[0].Deployment.ConfigMapAnnotations["kubeocean.io/sync-to-physical"]; got != "true" {
+		t.Fatalf("annotation = %q, want true", got)
 	}
 }
 

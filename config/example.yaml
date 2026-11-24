@@ -280,6 +280,7 @@ workers:
       #   image: registry.example.com/krun/runtime:v1 # 省略时继承 deployment.runtime_image
       #   replicas: 2
       #   pod_labels: {team: runtime}
+      #   config_map_annotations: {kubeocean.io/sync-to-physical: "true"}
       #   node_selector: {workload: runtime}
       #   tolerations:
       #     - {key: workload, operator: Equal, value: runtime, effect: NoSchedule}
