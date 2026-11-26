@@ -15,20 +15,28 @@ import (
 
 // RuntimePoolDeployment enables manifest generation for one serving pool.
 type RuntimePoolDeployment struct {
-	Image                string               `json:"image,omitempty"`
-	Replicas             int                  `json:"replicas,omitempty"`
-	PodLabels            map[string]string    `json:"pod_labels,omitempty"`
-	ConfigMapAnnotations map[string]string    `json:"config_map_annotations,omitempty"`
-	NodeSelector         map[string]string    `json:"node_selector,omitempty"`
-	Tolerations          []BuilderToleration  `json:"tolerations,omitempty"`
-	Resources            BuilderResources     `json:"resources,omitempty"`
-	SecretName           string               `json:"secret_name,omitempty"`
-	PeerService          string               `json:"peer_service,omitempty"`
-	PodUIDAnnotation     string               `json:"pod_uid_annotation,omitempty"`
-	ControlAddress       string               `json:"control_address,omitempty"`
-	DNSPolicy            string               `json:"dns_policy,omitempty"`
-	DNSConfig            *RuntimePodDNSConfig `json:"dns_config,omitempty"`
-	StorageEgressCIDRs   []string             `json:"storage_egress_cidrs,omitempty"`
+	Image                string                 `json:"image,omitempty"`
+	Replicas             int                    `json:"replicas,omitempty"`
+	PodLabels            map[string]string      `json:"pod_labels,omitempty"`
+	ConfigMapAnnotations map[string]string      `json:"config_map_annotations,omitempty"`
+	NodeSelector         map[string]string      `json:"node_selector,omitempty"`
+	Tolerations          []BuilderToleration    `json:"tolerations,omitempty"`
+	Resources            BuilderResources       `json:"resources,omitempty"`
+	SecretName           string                 `json:"secret_name,omitempty"`
+	PeerService          string                 `json:"peer_service,omitempty"`
+	PodUIDAnnotation     string                 `json:"pod_uid_annotation,omitempty"`
+	ControlAddress       string                 `json:"control_address,omitempty"`
+	DNSPolicy            string                 `json:"dns_policy,omitempty"`
+	DNSConfig            *RuntimePodDNSConfig   `json:"dns_config,omitempty"`
+	StorageEgressCIDRs   []string               `json:"storage_egress_cidrs,omitempty"`
+	TopologySpread       *RuntimeTopologySpread `json:"topology_spread,omitempty"`
+	MinAvailable         *int                   `json:"min_available,omitempty"`
+}
+
+type RuntimeTopologySpread struct {
+	TopologyKey       string `json:"topology_key"`
+	MaxSkew           int    `json:"max_skew"`
+	WhenUnsatisfiable string `json:"when_unsatisfiable"`
 }
 
 type RuntimePodDNSConfig struct {
@@ -100,6 +108,14 @@ func (c *Config) validateRuntimeDeployment(pool WorkerRuntimePool) error {
 	}
 	if d.Replicas < 1 || d.Replicas > 100 {
 		return fmt.Errorf("replicas must be between 1 and 100")
+	}
+	if d.MinAvailable != nil && (*d.MinAvailable < 0 || *d.MinAvailable > d.Replicas) {
+		return fmt.Errorf("min_available must be between 0 and replicas")
+	}
+	if s := d.TopologySpread; s != nil {
+		if len(kvalidation.IsQualifiedName(s.TopologyKey)) != 0 || s.MaxSkew < 1 || (s.WhenUnsatisfiable != "DoNotSchedule" && s.WhenUnsatisfiable != "ScheduleAnyway") {
+			return fmt.Errorf("invalid topology_spread")
+		}
 	}
 	if len(kvalidation.IsDNS1123Label(c.Workers.Namespace)) != 0 ||
 		len(kvalidation.IsDNS1035Label(pool.RuntimeService)) != 0 ||

@@ -143,6 +143,16 @@ func TestPoolDeploymentValidation(t *testing.T) {
 		}},
 		{"node_selector", func(d *RuntimePoolDeployment) { d.NodeSelector = map[string]string{"invalid key": "node"} }},
 		{"tolerations", func(d *RuntimePoolDeployment) { d.Tolerations = []BuilderToleration{{Operator: "Equal"}} }},
+		{"topology_spread", func(d *RuntimePoolDeployment) {
+			d.TopologySpread = &RuntimeTopologySpread{TopologyKey: "bad key", MaxSkew: 1, WhenUnsatisfiable: "ScheduleAnyway"}
+		}},
+		{"topology_spread", func(d *RuntimePoolDeployment) {
+			d.TopologySpread = &RuntimeTopologySpread{TopologyKey: "kubernetes.io/hostname", MaxSkew: 0, WhenUnsatisfiable: "ScheduleAnyway"}
+		}},
+		{"topology_spread", func(d *RuntimePoolDeployment) {
+			d.TopologySpread = &RuntimeTopologySpread{TopologyKey: "kubernetes.io/hostname", MaxSkew: 1, WhenUnsatisfiable: "invalid"}
+		}},
+		{"min_available", func(d *RuntimePoolDeployment) { n := d.Replicas + 1; d.MinAvailable = &n }},
 		{"dns_policy", func(d *RuntimePoolDeployment) { d.DNSPolicy = "Invalid" }},
 		{"dns_config.nameservers", func(d *RuntimePoolDeployment) { d.DNSPolicy = "None" }},
 		{"dns_config.nameservers", func(d *RuntimePoolDeployment) {
