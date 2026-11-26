@@ -76,3 +76,68 @@ func TestBuildJobUsesConfiguredResourcesAndScheduling(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildJobEnvInputSeparatesPhases(t *testing.T) {
+	for _, repository := range []bool{false, true} {
+		t.Run(map[bool]string{false: "direct", true: "repository"}[repository], func(t *testing.T) {
+			var job map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/jobs/"):
+					http.NotFound(w, r)
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/jobs"):
+					if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
+						t.Error(err)
+					}
+					w.WriteHeader(http.StatusCreated)
+					_, _ = w.Write([]byte(`{"metadata":{"uid":"id"}}`))
+				default:
+					t.Errorf("unexpected Kubernetes call: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusInternalServerError)
+				}
+			}))
+			defer server.Close()
+			k := &Client{Base: server.URL, Namespace: "test", Client: server.Client(), builderInputMode: "env"}
+			b := domain.WorkerBuild{Job: "build", Worker: "worker-id", Organization: "org-id", Entrypoint: "index.js"}
+			if repository {
+				b.Repository = &domain.WorkerBuildRepository{ConfigPath: "wrangler.jsonc"}
+			}
+			if err := k.EnsureBuildJob(context.Background(), b, domain.WorkerBuildPrivate{}, "https://source", "https://upload", "builder:test", "Never"); err != nil {
+				t.Fatal(err)
+			}
+			pod := job["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+			for _, v := range pod["volumes"].([]any) {
+				if _, ok := v.(map[string]any)["secret"]; ok {
+					t.Fatal("env mode must not mount a Secret")
+				}
+			}
+			input := func(c map[string]any) map[string]any {
+				t.Helper()
+				for _, v := range c["env"].([]any) {
+					e := v.(map[string]any)
+					if e["name"] == "KRUN_BUILD_INPUT_JSON" {
+						var value map[string]any
+						if err := json.Unmarshal([]byte(e["value"].(string)), &value); err != nil {
+							t.Fatal(err)
+						}
+						return value
+					}
+				}
+				t.Fatal("missing input")
+				return nil
+			}
+			pack := input(pod["containers"].([]any)[0].(map[string]any))
+			if pack["upload_url"] != "https://upload" {
+				t.Fatal("missing upload URL")
+			}
+			if repository {
+				build := input(pod["initContainers"].([]any)[0].(map[string]any))
+				if build["source_url"] != "https://source" || build["upload_url"] != nil || pack["source_url"] != nil {
+					t.Fatal("phase inputs are not separated")
+				}
+			} else if pack["source_url"] != "https://source" {
+				t.Fatal("direct input missing source")
+			}
+		})
+	}
+}

@@ -76,6 +76,8 @@ Kubernetes、S3 和 runtime HTTP 请求均在 IAM 状态事务外进行。执行
 
 Kubernetes builder 的 `workers.builder_build_resources` 和 `workers.builder_pack_resources` 分别控制构建和打包容器的 `requests` / `limits`（CPU、内存和临时存储），可以只覆盖需要的字段。直接上传使用 build 资源，仓库构建先执行 build 再执行 pack；省略时保留原有默认值。`workers.builder_node_selector` 和 `workers.builder_tolerations` 控制 build Job 的节点调度，格式和默认值见 [配置示例](../config/example.yaml)。节点须具备匹配标签，容忍规则须匹配目标污点；这些配置与 serving runtime 的调度配置独立。修改配置并重启控制面后，新建 Job 生效；已有 Job 不会改变。local builder 不使用这些 Kubernetes 配置。
 
+`workers.builder_input_mode` 默认为 `secret`。在不支持同步 Secret 的集群，可设置为 `env`，将每个阶段的短期源码下载或产物上传 URL 写入对应容器的 Pod 环境变量。Pod、Job 规格及其审计和备份可读取这些链接，应限制读取范围；链接仍会过期。仓库构建阶段不接收上传 URL，用户构建脚本的子进程不继承输入变量。使用此模式前须先升级 builder 镜像到支持 `KRUN_BUILD_INPUT_JSON` 的版本，再更新并重启控制面；已创建的 Job 不会改变，需重新发起构建。
+
 内联源码使用固定的 `esbuild` profile；仓库构建使用项目中的 Wrangler 配置和固定
 版本的 `deploy --dry-run`，产出统一制品。构建输入、模块类型与隔离边界见
 [构建兼容](workers-build-compatibility.md)，对外 Wrangler 部署与登录接口见

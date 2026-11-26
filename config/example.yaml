@@ -202,6 +202,8 @@ workers:
     limits: {cpu: "1", memory: "512Mi", ephemeral-storage: "512Mi"}
   builder_node_selector: {}
   builder_tolerations: []
+  # 默认 secret；env 模式用于不支持同步 Secret 的集群，短期授权 URL 会出现在 Pod 规格中。
+  builder_input_mode: secret
   # 所有包管理器只允许从这个无凭据的 HTTPS registry / 代理安装依赖。
   npm_registry: https://registry.npmjs.org/
   # 网关实例清单。路由按域名所属的 gateway 分组下发：一个实例的路由表里只会有

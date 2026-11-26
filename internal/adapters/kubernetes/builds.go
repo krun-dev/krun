@@ -34,6 +34,7 @@ func BuildResourceLabels(b domain.WorkerBuild) map[string]string {
 }
 
 func (k *Client) EnsureBuildJob(ctx context.Context, b domain.WorkerBuild, private domain.WorkerBuildPrivate, sourceURL, uploadURL, image, pullPolicy string) error {
+	envInput := k.builderInputMode == "env"
 	buildMode := "direct"
 	configPath := private.ConfigPath
 	assets := b.Assets
@@ -105,6 +106,9 @@ func (k *Client) EnsureBuildJob(ctx context.Context, b domain.WorkerBuild, priva
 	var job WorkerJob
 	e = k.Call(ctx, "GET", k.Jobs()+"/"+b.Job, nil, &job)
 	if e == nil {
+		if envInput {
+			return nil
+		}
 		if createErr := k.Call(ctx, "POST", k.Core("secrets"), secret, nil); createErr != nil && !KubeConflict(createErr) {
 			return createErr
 		}
@@ -113,13 +117,15 @@ func (k *Client) EnsureBuildJob(ctx context.Context, b domain.WorkerBuild, priva
 	if !KubeMissing(e) {
 		return e
 	}
-	if e = k.Call(ctx, "POST", k.Core("secrets"), secret, nil); KubeConflict(e) {
-		// A previous reconcile may have created the input before failing to
-		// create the Job. Refresh the short-lived presigned URLs in that case.
-		e = k.Call(ctx, http.MethodPatch, k.Core("secrets")+"/"+b.Job, map[string]any{"stringData": secret["stringData"]}, nil)
-	}
-	if e != nil {
-		return e
+	if !envInput {
+		if e = k.Call(ctx, "POST", k.Core("secrets"), secret, nil); KubeConflict(e) {
+			// A previous reconcile may have created the input before failing to
+			// create the Job. Refresh the short-lived presigned URLs in that case.
+			e = k.Call(ctx, http.MethodPatch, k.Core("secrets")+"/"+b.Job, map[string]any{"stringData": secret["stringData"]}, nil)
+		}
+		if e != nil {
+			return e
+		}
 	}
 	registry := k.NpmRegistry
 	if registry == "" {
@@ -211,6 +217,19 @@ func (k *Client) EnsureBuildJob(ctx context.Context, b domain.WorkerBuild, priva
 			map[string]any{"name": "build-tmp", "emptyDir": map[string]any{"sizeLimit": WorkerBuilderTmpSize}},
 		}
 	}
+	if envInput {
+		if buildMode == "wrangler" {
+			buildContainer["env"] = append(buildContainer["env"].([]map[string]string), map[string]string{"name": "KRUN_BUILD_INPUT_JSON", "value": string(buildInput)})
+			packContainer["env"] = append(packContainer["env"].([]map[string]string), map[string]string{"name": "KRUN_BUILD_INPUT_JSON", "value": string(packInput)})
+			buildContainer["volumeMounts"] = buildContainer["volumeMounts"].([]any)[1:]
+			packContainer["volumeMounts"] = packContainer["volumeMounts"].([]any)[1:]
+			spec["volumes"] = spec["volumes"].([]any)[2:]
+		} else {
+			buildContainer["env"] = append(buildContainer["env"].([]map[string]string), map[string]string{"name": "KRUN_BUILD_INPUT_JSON", "value": secretData["input.json"]})
+			buildContainer["volumeMounts"] = buildContainer["volumeMounts"].([]any)[1:]
+			spec["volumes"] = spec["volumes"].([]any)[1:]
+		}
+	}
 	if len(k.builderNodeSelector) > 0 {
 		spec["nodeSelector"] = k.builderNodeSelector
 	}
@@ -229,8 +248,13 @@ func (k *Client) EnsureBuildJob(ctx context.Context, b domain.WorkerBuild, priva
 	} else if e != nil {
 		// The Secret cannot have an ownerReference until the Job has a UID. Do
 		// not leak it forever when Job creation fails permanently.
-		_ = k.Call(ctx, http.MethodDelete, k.Core("secrets")+"/"+b.Job, nil, nil)
+		if !envInput {
+			_ = k.Call(ctx, http.MethodDelete, k.Core("secrets")+"/"+b.Job, nil, nil)
+		}
 		return e
+	}
+	if envInput {
+		return nil
 	}
 	return k.AdoptBuildInput(ctx, b.Job, job)
 }

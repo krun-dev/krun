@@ -38,6 +38,7 @@ func TestBuilderJobValidation(t *testing.T) {
 		{"bad quantity", WorkersConfig{BuilderBuildResources: BuilderResources{Limits: BuilderResourceValues{CPU: "wrong"}}}},
 		{"request exceeds limit", WorkersConfig{BuilderPackResources: BuilderResources{Requests: BuilderResourceValues{Memory: "1Gi"}}}},
 		{"invalid selector", WorkersConfig{BuilderNodeSelector: map[string]string{"bad key": "value"}}},
+		{"invalid input mode", WorkersConfig{BuilderInputMode: "invalid"}},
 		{"invalid toleration", WorkersConfig{BuilderTolerations: []BuilderToleration{{Key: "workload", Operator: "Exists", Value: "build"}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -29,6 +29,7 @@ type Client struct {
 	builderPackResources  appconfig.BuilderResources
 	builderNodeSelector   map[string]string
 	builderTolerations    []appconfig.BuilderToleration
+	builderInputMode      string
 }
 
 type WorkerKubeError struct {
@@ -70,6 +71,7 @@ func New(config *appconfig.WorkersConfig) (*Client, error) {
 		builderPackResources:  config.BuilderPackResources,
 		builderNodeSelector:   config.BuilderNodeSelector,
 		builderTolerations:    config.BuilderTolerations,
+		builderInputMode:      config.BuilderInputMode,
 		Client: &http.Client{
 			Timeout: 10 * time.Second,
 			Transport: &http.Transport{

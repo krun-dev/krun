@@ -57,5 +57,6 @@ func newKubeconfigClient(config *appconfig.WorkersConfig) (*Client, error) {
 		builderPackResources:  config.BuilderPackResources,
 		builderNodeSelector:   config.BuilderNodeSelector,
 		builderTolerations:    config.BuilderTolerations,
+		builderInputMode:      config.BuilderInputMode,
 	}, nil
 }
