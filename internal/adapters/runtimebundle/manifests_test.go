@@ -13,6 +13,7 @@ import (
 
 func TestRenderPoolManifests(t *testing.T) {
 	zero := 0
+	minimum := 1
 	seconds := int64(60)
 	ndots := "2"
 	const secretValue = "fixture-value-kept-out-of-manifests"
@@ -44,6 +45,8 @@ func TestRenderPoolManifests(t *testing.T) {
 			PeerService:        "runtime-office",
 			PodUIDAnnotation:   "example.com/pod-uid",
 			StorageEgressCIDRs: []string{"192.0.2.0/24"},
+			TopologySpread:     &config.RuntimeTopologySpread{TopologyKey: "kubernetes.io/hostname", MaxSkew: 1, WhenUnsatisfiable: "ScheduleAnyway"},
+			MinAvailable:       &minimum,
 		},
 	}
 	cfg := config.Config{
@@ -79,7 +82,7 @@ func TestRenderPoolManifests(t *testing.T) {
 	for _, document := range documents {
 		kinds = append(kinds, document["kind"].(string))
 	}
-	wantKinds := []string{"ConfigMap", "Deployment", "Service", "BackendConfigPolicy", "Service", "BackendConfigPolicy"}
+	wantKinds := []string{"ConfigMap", "Deployment", "Service", "BackendConfigPolicy", "PodDisruptionBudget", "Service", "BackendConfigPolicy"}
 	if !reflect.DeepEqual(kinds, wantKinds) {
 		t.Fatalf("kinds = %v, want %v", kinds, wantKinds)
 	}
@@ -107,6 +110,14 @@ func TestRenderPoolManifests(t *testing.T) {
 		t.Fatalf("unexpected Pod labels: %v", labels)
 	}
 	pod := template["spec"].(map[string]any)
+	spread := pod["topologySpreadConstraints"].([]any)[0].(map[string]any)
+	if spread["topologyKey"] != "kubernetes.io/hostname" || spread["maxSkew"] != 1 || spread["whenUnsatisfiable"] != "ScheduleAnyway" || spread["labelSelector"].(map[string]any)["matchLabels"].(map[string]any)["app"] != pool.RuntimeService {
+		t.Fatalf("unexpected topology spread: %v", spread)
+	}
+	pdb := documents[4]["spec"].(map[string]any)
+	if pdb["minAvailable"] != 1 || pdb["selector"].(map[string]any)["matchLabels"].(map[string]any)["app"] != pool.RuntimeService {
+		t.Fatalf("unexpected disruption budget: %v", pdb)
+	}
 	if pod["dnsPolicy"] != "None" || pod["automountServiceAccountToken"] != false ||
 		pod["nodeSelector"].(map[string]any)["workload"] != "serving" {
 		t.Fatalf("unexpected Pod settings: %v", pod)

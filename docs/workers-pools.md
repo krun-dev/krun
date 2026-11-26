@@ -79,10 +79,16 @@ deployment:
       - name: ndots
         value: "2"
   secret_name: runtime-internal
+  topology_spread:
+    topology_key: kubernetes.io/hostname
+    max_skew: 1
+    when_unsatisfiable: ScheduleAnyway
+  min_available: 1
 ```
 
 - `deployment: {}` 从顶层 `deployment.runtime_image` 和 `deployment.runtime_replicas` 继承镜像及副本数。也可在池内覆盖。未设置副本数时默认为 2，`resources.requests` 和 `resources.limits` 默认各为 4 核、8 GiB。
 - `pod_labels` 注入 Pod 标签。`app`、`pool`、`role` 和 `app.kubernetes.io/part-of` 由生成器维护。池原有的 `labels` 参与 Network Profile 匹配。节点标签和污点分别通过 `node_selector` 和 `tolerations` 配置。
+- `topology_spread` 可选，按指定的节点拓扑键分散该池 Pod；选择器固定匹配该池的 Runtime Service。`min_available` 可选，生成同名 PodDisruptionBudget；它必须在 0 到副本数之间。
 - `config_map_annotations` 将字符串键值写入该池生成的 ConfigMap 的 `metadata.annotations`，例如上例启用 KubeOcean 同步；不影响其他资源。键和总大小须符合 Kubernetes annotation 规则，值须为字符串。仅更改 annotation 不会改变内容哈希或触发 Pod 滚动；重新生成并应用清单以更新已有 ConfigMap 的 metadata。
 - `dns_policy` 省略时使用 Kubernetes 默认的 `ClusterFirst`。`dns_config` 支持 `nameservers`、`searches`、`options`。使用 `None` 时至少填写一个能解析集群 Service 的 nameserver，并将实际的 `<namespace>.svc.<cluster-domain>` 加入 search 列表，确保同池发现使用的短 Service 名可解析。
 - `peer_service` 可覆盖同池发现 Service 的名称。设为池的 `runtime_service` 时，两个用途共用一个 headless Service。接管存量资源时先核对 `clusterIP` 类型和 Deployment 选择器。

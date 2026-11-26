@@ -145,6 +145,12 @@ func poolDeploymentSpec(c config.Config, pool config.WorkerRuntimePool, configNa
 	if len(d.Tolerations) != 0 {
 		pod["tolerations"] = d.Tolerations
 	}
+	if s := d.TopologySpread; s != nil {
+		pod["topologySpreadConstraints"] = []any{map[string]any{
+			"maxSkew": s.MaxSkew, "topologyKey": s.TopologyKey, "whenUnsatisfiable": s.WhenUnsatisfiable,
+			"labelSelector": map[string]any{"matchLabels": selector},
+		}}
+	}
 	if d.DNSPolicy != "" {
 		pod["dnsPolicy"] = d.DNSPolicy
 	}
@@ -255,6 +261,14 @@ func renderPoolServices(namespace string, pool config.WorkerRuntimePool) (string
 	const kgatewayAPI = "gateway.kgateway.dev/v1alpha1"
 	if err := appendManifest(kgatewayAPI, "BackendConfigPolicy", name, ServingHashSpec(name)); err != nil {
 		return "", err
+	}
+	if pool.Deployment.MinAvailable != nil {
+		if err := appendManifest("policy/v1", "PodDisruptionBudget", name, map[string]any{
+			"minAvailable": *pool.Deployment.MinAvailable,
+			"selector":     map[string]any{"matchLabels": map[string]string{"app": name}},
+		}); err != nil {
+			return "", err
+		}
 	}
 	if streams := pool.StreamService(); streams != "" {
 		if err := appendManifest("v1", "Service", streams, poolServiceSpec(name, 8081)); err != nil {
