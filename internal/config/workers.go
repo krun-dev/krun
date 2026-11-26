@@ -22,6 +22,7 @@ type WorkersConfig struct {
 	BuilderPackResources  BuilderResources           `json:"builder_pack_resources,omitempty"`
 	BuilderNodeSelector   map[string]string          `json:"builder_node_selector,omitempty"`
 	BuilderTolerations    []BuilderToleration        `json:"builder_tolerations,omitempty"`
+	BuilderInputMode      string                     `json:"builder_input_mode,omitempty"`
 	// BuilderRuntimeClass selects an optional Kubernetes RuntimeClass for
 	// untrusted project builds (for example gVisor or Kata Containers).
 	BuilderRuntimeClass string `json:"builder_runtime_class"`

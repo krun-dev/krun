@@ -160,13 +160,14 @@ function untarSource(raw){
  return {files,assets};
 }
 const dispatchInputPath=process.env.KRUN_BUILD_INPUT||'/input/input.json';
+const inputJSON=process.env.KRUN_BUILD_INPUT_JSON;
+delete process.env.KRUN_BUILD_INPUT_JSON;
 let dispatchInput;
-try{dispatchInput=JSON.parse(await readFile(dispatchInputPath,'utf8'));}catch(error){console.error('Build failed:',error.message);process.exit(1);}
+try{dispatchInput=JSON.parse(inputJSON===undefined?await readFile(dispatchInputPath,'utf8'):inputJSON);}catch{console.error('Build failed: invalid or missing input');process.exit(1);}
 if(dispatchInput.build_mode==='wrangler'){
  try{await runWranglerMode(dispatchInput,dispatchInputPath,process.env.KRUN_BUILD_WORK||'/work',process.env.KRUN_BUILD_PHASE||'all');}
  catch(error){console.error('Build failed:',error.message);process.exitCode=1;}
 }else try {
- const inputPath=process.env.KRUN_BUILD_INPUT||'/input/input.json';
  const rawWorkDir=process.env.KRUN_BUILD_WORK||'/work';
  mkdirSync(rawWorkDir,{recursive:true});
  // macOS /var is a symlink to /private/var; esbuild resolves real paths, so the
@@ -174,7 +175,7 @@ if(dispatchInput.build_mode==='wrangler'){
  const workDir=realpathSync(rawWorkDir);
  const sourceRoot=path.join(workDir,'src');
  const entryStub=path.join(sourceRoot,'__krun_entry__.mjs');
- const input=JSON.parse(await readFile(inputPath,'utf8'));
+ const input=dispatchInput;
  const compatibilityDate=input.compatibility_date||'2026-09-28';
  if(!/^\d{4}-\d{2}-\d{2}$/.test(compatibilityDate)||compatibilityDate<'2021-11-02'||compatibilityDate>'2026-09-28'||!validDate(compatibilityDate))throw new Error('Valid supported compatibility_date required');
  if(input.compatibility_flags!=null&&(!Array.isArray(input.compatibility_flags)||input.compatibility_flags.length>32||input.compatibility_flags.some(flag=>typeof flag!=='string'||!/^[a-z][a-z0-9_]{0,63}$/.test(flag))))throw new Error('Invalid compatibility_flags');

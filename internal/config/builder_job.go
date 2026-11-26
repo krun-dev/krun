@@ -56,6 +56,9 @@ func (r BuilderResources) WithDefaults(d BuilderResources) BuilderResources {
 }
 
 func (c *WorkersConfig) validateBuilderJob() error {
+	if c.BuilderInputMode != "" && c.BuilderInputMode != "secret" && c.BuilderInputMode != "env" {
+		return fmt.Errorf("workers.builder_input_mode must be secret or env")
+	}
 	c.BuilderBuildResources = c.BuilderBuildResources.WithDefaults(DefaultBuilderBuildResources())
 	c.BuilderPackResources = c.BuilderPackResources.WithDefaults(DefaultBuilderPackResources())
 	for name, resources := range map[string]BuilderResources{"builder_build_resources": c.BuilderBuildResources, "builder_pack_resources": c.BuilderPackResources} {

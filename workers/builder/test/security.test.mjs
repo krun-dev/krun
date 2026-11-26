@@ -55,7 +55,7 @@ const port = server.address().port;
 const scratch = mkdtempSync(path.join(tmpdir(), 'krun-builder-security-'));
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-async function rejected(name, expected) {
+async function rejected(name, expected, envInput = false) {
   const root = path.join(scratch, name);
   const inputDir = path.join(root, 'input');
   mkdirSync(inputDir, {recursive: true});
@@ -71,7 +71,7 @@ async function rejected(name, expected) {
   const result = await new Promise(resolve => {
     const child = spawn('node', [path.join(here, '..', 'build-worker.mjs')], {
       cwd: path.join(here, '..'),
-      env: {...process.env, KRUN_BUILD_INPUT: inputPath, KRUN_BUILD_WORK: path.join(root, 'work')},
+      env: {...process.env, KRUN_BUILD_INPUT: inputPath, KRUN_BUILD_WORK: path.join(root, 'work'), ...(envInput ? {KRUN_BUILD_INPUT_JSON: JSON.stringify(input)} : {})},
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
@@ -86,6 +86,7 @@ async function rejected(name, expected) {
 
 try {
   await rejected('duplicate', /unique regular files/);
+  await rejected('duplicate', /unique regular files/, true);
   await rejected('bomb', /Cannot create a Buffer larger than|larger than maxOutputLength|buffer too large/i);
   await rejected('oversized-length', /Source bundle download is too large/);
   await rejected('stream-overflow', /Source bundle download is too large/);

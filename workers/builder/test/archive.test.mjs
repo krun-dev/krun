@@ -110,7 +110,7 @@ writeFileSync(inputPath, JSON.stringify(input));
 const exitCode = await new Promise((resolve) => {
   const child = spawn(process.execPath, [join(here, '..', 'build-worker.mjs')], {
     cwd: join(here, '..'),
-    env: {...process.env, PATH: emptyPath, HOME: hostileHome, npm_config_userconfig: hostileNpmrc, KRUN_NPM_CLI: join(scratch, 'must-not-run'), KRUN_BUILD_INPUT: inputPath, KRUN_BUILD_WORK: workDir, KRUN_NPM_REGISTRY: `http://127.0.0.1:${port}/registry/`},
+    env: {...process.env, PATH: emptyPath, HOME: hostileHome, npm_config_userconfig: hostileNpmrc, KRUN_NPM_CLI: join(scratch, 'must-not-run'), KRUN_BUILD_INPUT: inputPath, KRUN_BUILD_WORK: workDir, KRUN_NPM_REGISTRY: `http://127.0.0.1:${port}/registry/`, ...(process.env.KRUN_TEST_ENV_INPUT ? {KRUN_BUILD_INPUT_JSON: JSON.stringify(input)} : {})},
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '', stderr = '';
