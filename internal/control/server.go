@@ -58,7 +58,6 @@ type Server struct {
 	bucketObjects      *bucketobjects.Client
 	storageCredentials *storagecredentials.Registry
 	workers            *workerapp.Controller
-	workerInvokeClient *http.Client
 	Config             appconfig.Config
 	Store              *Store
 	mux                *http.ServeMux
@@ -82,7 +81,6 @@ func NewServer(ctx context.Context, c appconfig.Config, store *Store) (*Server, 
 		_, network, _ := net.ParseCIDR(cidr) // Config.Validate already checked it.
 		s.trustedProxies = append(s.trustedProxies, network)
 	}
-	s.workerInvokeClient = newWorkerInvokeClient()
 	s.sendEmail = mailer.New(c).Send
 	client := identityprovider.NewHTTPClient(c)
 	for _, pc := range c.Providers {

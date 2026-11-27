@@ -513,22 +513,6 @@ func TestWorkerConsoleReadsRespectServiceAndEnvironment(t *testing.T) {
 	}
 }
 
-func TestWorkerConsoleInvocationRejectsUnauthorizedAndUnpublishedTargets(t *testing.T) {
-	s, _, base := workerTestServer(t)
-	for _, path := range []string{"https://attacker.test/", "//attacker.test/"} {
-		payload, _ := json.Marshal(map[string]string{"path": path})
-		if r := request(s, "POST", base+"/environments/fix-demo/invoke", "krun_cli_admin", string(payload)); r.Code != 422 {
-			t.Fatal(r.Code, r.Body.String())
-		}
-	}
-	if r := request(s, "POST", base+"/environments/fix-demo/invoke", "krun_cli_viewer", `{"path":"/"}`); r.Code != 403 {
-		t.Fatal(r.Code, r.Body.String())
-	}
-	if r := request(s, "POST", base+"/environments/fix-demo/invoke", "krun_cli_admin", `{"path":"/"}`); r.Code != 409 {
-		t.Fatal(r.Code, r.Body.String())
-	}
-}
-
 // testWorkersConfig is a minimal catalog: one Gateway, one default domain.
 func testWorkersConfig() *appconfig.WorkersConfig {
 	return &appconfig.WorkersConfig{

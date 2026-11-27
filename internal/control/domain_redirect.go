@@ -19,8 +19,8 @@ func (s *Server) initRedirectServer() {
 	alternate := Server{
 		Config: s.Config, Store: s.Store, workers: s.workers,
 		bucketObjects: s.bucketObjects, storageCredentials: s.storageCredentials,
-		workerInvokeClient: s.workerInvokeClient, trustedProxies: s.trustedProxies,
-		sendEmail: s.sendEmail,
+		trustedProxies: s.trustedProxies,
+		sendEmail:      s.sendEmail,
 	}
 	alternate.Config = s.Config
 	alternate.Config.PublicURL = strings.TrimSuffix(s.Config.DomainRedirect.TargetURL, "/")

@@ -32,7 +32,7 @@ Workers 列表接口 `GET /api/v1/orgs/{org}/workers` 接受 `q`、`limit`（1�
 7. 「环境管理 → 创建预览环境 → 新建预览默认配置」提供新建 Preview 的默认环境变量、Secrets 和对象
    存储绑定，三个区域独立保存。创建时复制一次；修改只影响之后新建的 Preview，已有
    Preview 和生产环境不受影响。
-8. 从历史中查看 Version，在“调用测试”中经配置好的 kgateway 验证业务响应。
+8. 从历史中查看 Version，通过环境展示的 Worker 地址直接验证业务响应。
 
 ## 命名配置版本
 

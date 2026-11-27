@@ -2,10 +2,8 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 )
@@ -21,7 +19,6 @@ const workersHelp = `Usage: krun workers COMMAND [--org ID]
   network                           List and select network profiles
   repository                        Manage Git repository access and bindings
   metrics                           Get the Worker metrics dashboard URL
-  invoke                            Send a test request to a deployed Worker
 `
 
 func (c *Client) workers(ctx context.Context, args []string) error {
@@ -45,8 +42,6 @@ func (c *Client) workers(ctx context.Context, args []string) error {
 		return c.routing(ctx, action, rest)
 	case "repository":
 		return c.repository(ctx, rest)
-	case "invoke":
-		return c.invoke(ctx, rest)
 	case "metrics":
 		f := flags("workers metrics", c.Err)
 		target := c.workerFlags(f)
@@ -186,46 +181,4 @@ func (c *Client) routing(ctx context.Context, group string, args []string) error
 		input["domains"] = strings.Split(*selected, ",")
 	}
 	return c.call(ctx, "PUT", path, input)
-}
-
-func (c *Client) invoke(ctx context.Context, args []string) error {
-	f := flags("workers invoke", c.Err)
-	target := c.workerFlags(f)
-	env := environmentFlag(f)
-	path := f.String("path", "/", "Request path and optional query")
-	method := f.String("method", http.MethodGet, "HTTP method")
-	file := f.String("file", "", "File to send as the request body")
-	base, err := target.path(f, args)
-	if err != nil {
-		return err
-	}
-	scope, err := environmentPath(base, *env)
-	if err != nil {
-		return err
-	}
-	input := map[string]string{"path": *path, "method": *method}
-	if *file != "" {
-		data, err := readInputFile(*file, 64<<10)
-		if err != nil {
-			return err
-		}
-		input["body"] = string(data)
-	}
-	var raw json.RawMessage
-	if err := c.request(ctx, "POST", scope+"/invoke", input, &raw, false); err != nil {
-		return err
-	}
-	var response struct {
-		Status int `json:"status"`
-	}
-	if err := json.Unmarshal(raw, &response); err != nil {
-		return err
-	}
-	if err := c.outputJSON(raw); err != nil {
-		return err
-	}
-	if response.Status >= 400 {
-		return fmt.Errorf("Worker returned HTTP %d", response.Status)
-	}
-	return nil
 }

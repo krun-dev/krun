@@ -152,8 +152,7 @@ type WorkerGateway struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
 	Section   string `json:"section"`
-	// Base overrides the address console invoke uses for this instance, e.g. an
-	// SSH tunnel. Empty means <name>.<namespace>.svc:8080.
+	// Base is retained for compatibility with existing configurations; it is unused.
 	Base string `json:"base"`
 }
 

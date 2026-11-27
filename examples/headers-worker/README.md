@@ -65,7 +65,7 @@ tar 里**不能有目录条目**（`src/`、`assets/` 本身），builder 只接
 5. `GET .../workers/{worker}/environments` 取 production 的 `deployment_revision`。
 6. `POST .../workers/{worker}/environments/production/versions`，body 为 `{build_id, expected_revision, idempotency_key}`。
 7. 轮询 `GET .../workers/{worker}/operations/{id}` 到 `available`。
-8. 打开 production 的 host（形如 `w-xxxxxxxx-production.workers.test`），或者用控制台的 invoke 调用 `/headers`。
+8. 直接访问 production 的 host（形如 `w-xxxxxxxx-production.workers.test`）下的 `/headers`。
 
 ## 验证点
 

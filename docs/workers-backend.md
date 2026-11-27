@@ -276,7 +276,6 @@ Serving 与独立 validator 的入口、权限和候选 Loader 隔离保持一�
 | `GET /environments/{env}/history` | 成功生效历史 |
 | `GET /operations` | 当前 Worker可见环境的发布操作，最多 100 条 |
 | `GET /versions/{id}` | 不可变 Version 配置与制品引用 |
-| `POST /environments/{env}/invoke` | 鉴权后经 Gateway 调用业务 Worker，返回文本响应封装 |
 | `GET /overview` | 控制台详情数据，包含当前可见活动的 `activity` |
 | `GET /activity` | 返回 HTTP 200 和 `active`、`token`，用于轮询可见的未完成构建和发布 |
 | `GET /operations/{id}` | 步骤、错误、提交与生效状态 |
@@ -337,7 +336,7 @@ header 与该 pool 独立 token，不能只信任 header：
 {"version_id": "rel-...", "expected_revision": 1, "idempotency_key": "rollback-001"}
 ```
 
-`build.start` 控制构建，`worker.publish` / `worker.rollback` 控制目标环境发布；队列提交时及执行时均检查。控制台调用需要目标环境的 `worker.invoke`，内置 member 角色具有构建、发布、回滚和调用权限，viewer 只读；不转发平台 Cookie 或 Authorization。集合 API 支持只拥有某个环境权限的 Key，隐藏其他环境。
+`build.start` 控制构建，`worker.publish` / `worker.rollback` 控制目标环境发布；队列提交时及执行时均检查。Worker 服务绑定需要目标环境的 `worker.invoke`；内置 member 角色具有构建、发布、回滚和调用权限，viewer 只读。集合 API 支持只拥有某个环境权限的 Key，隐藏其他环境。
 
 ## 支持范围
 

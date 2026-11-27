@@ -18,13 +18,14 @@ description: 选择 Git 仓库或上传部署，构建项目并发布到 krun Wo
 2. 检查部署状态。输出中的 `confirmed_version_id` 应等于本次部署的 `version_id`。
 3. 调用业务路由。以下命令以 `/` 为例，换成你的应用预期返回 HTTP 200 的路由。静态首页可核对返回正文的标题。
 
-先[安装 krun CLI](/docs/guides/krun-cli.html#安装)，[配置控制台地址](/docs/guides/krun-cli.html#配置-endpoint)并[登录](/docs/guides/krun-cli.html#登录和退出)。无人值守环境使用 [API Key 登录](/docs/guides/krun-cli.html#自动化与非交互登录)。把 `ORG_ID` 换成 `krun org list` 返回的组织 ID，把 `WORKER_ID` 换成 `krun workers list --org "$ORG_ID"` 返回的 Worker ID。验证预览环境时，把 `TARGET_ENV` 改成对应的预览环境名。
+先[安装 krun CLI](/docs/guides/krun-cli.html#安装)，[配置控制台地址](/docs/guides/krun-cli.html#配置-endpoint)并[登录](/docs/guides/krun-cli.html#登录和退出)。无人值守环境使用 [API Key 登录](/docs/guides/krun-cli.html#自动化与非交互登录)。把 `ORG_ID` 换成 `krun org list` 返回的组织 ID，把 `WORKER_ID` 换成 `krun workers list --org "$ORG_ID"` 返回的 Worker ID。验证预览环境时，把 `TARGET_ENV` 改成对应的预览环境名；把 `WORKER_URL` 替换为控制台环境页面显示的地址。
 
 ```sh
 ORG_ID=replace-with-organization-id
 WORKER_ID=replace-with-worker-id
 TARGET_ENV=production
+WORKER_URL=https://replace-with-worker-host
 
 krun deployments status --org "$ORG_ID" --worker "$WORKER_ID" --env "$TARGET_ENV"
-krun workers invoke --org "$ORG_ID" --worker "$WORKER_ID" --env "$TARGET_ENV" --path /
+curl --fail --show-error "$WORKER_URL/"
 ```

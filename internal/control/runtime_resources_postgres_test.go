@@ -21,6 +21,12 @@ import (
 	workerapp "github.com/krun-dev/krun/internal/workers"
 )
 
+type runtimeRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn runtimeRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return fn(r)
+}
+
 func seedRuntimeResourceSite(t *testing.T) (*Store, *appconfig.WorkersConfig, *workerapp.Controller, string) {
 	t.Helper()
 	store := postgresTestStore(t)
@@ -459,7 +465,7 @@ func TestPostgresResourceDeploymentRequiresAllPositiveWeightServingProbes(t *tes
 	controller.Kube = &kubernetes.Client{Base: kube.URL, Client: kube.Client(), Namespace: "test"}
 	transport := validationTransport{target: management.URL, base: http.DefaultTransport}
 	probed := map[string]bool{}
-	controller.Http = &http.Client{Transport: invokeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+	controller.Http = &http.Client{Transport: runtimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		podIP := r.URL.Hostname()
 		probed[podIP] = true
 		if podIP != "127.0.0.1" {
@@ -534,7 +540,7 @@ func configureResourceSessionIdentity(t *testing.T, controller *workerapp.Contro
 	}))
 	t.Cleanup(api.Close)
 	controller.Kube = &kubernetes.Client{Base: api.URL, Namespace: "test", Client: api.Client()}
-	controller.Http = &http.Client{Transport: invokeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+	controller.Http = &http.Client{Transport: runtimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.String() != "http://127.0.0.2:8083/config-session" || r.Header.Get("Authorization") != "Bearer "+config.RuntimePools[0].ManagementToken {
 			t.Errorf("unexpected identity probe: %s", r.URL)
 		}

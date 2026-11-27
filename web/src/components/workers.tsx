@@ -73,7 +73,7 @@ import { VersionConfiguration } from "./workers/version-configuration";
 import { OperationPanel, VersionSummary } from "./workers/version";
 import { WorkerDomains } from "./workers/domains";
 import { WorkerHostnameBindings } from "./workers/managed-hostnames";
-import { EnvironmentSettings, Invocation } from "./workers/environment";
+import { EnvironmentSettings } from "./workers/environment";
 
 function initialNetworkProfile(profiles: WorkerNetworkProfile[]) {
   return (
@@ -622,15 +622,7 @@ function WorkerDetail({
   );
   const [tab, setTab] = useState(() => {
     const value = new URLSearchParams(location.search).get("worker_tab") || "delivery";
-    const tabs = [
-      "delivery",
-      "versions",
-      "source",
-      "routing",
-      "configurations",
-      "invoke",
-      "metrics",
-    ];
+    const tabs = ["delivery", "versions", "source", "routing", "configurations", "metrics"];
     return tabs.includes(value) ? value : "delivery";
   });
   const [versionDraft, setVersionDraft] = useState<{
@@ -1064,7 +1056,6 @@ function WorkerDetail({
               <TabsTrigger value="routing">{t("路由与域名")}</TabsTrigger>
               <TabsTrigger value="configurations">{t("配置版本")}</TabsTrigger>
               <TabsTrigger value="metrics">{t("指标")}</TabsTrigger>
-              <TabsTrigger value="invoke">{t("调用测试")}</TabsTrigger>
             </TabsList>
           </div>
           <TabsContent
@@ -1381,16 +1372,6 @@ function WorkerDetail({
               key={base}
               base={base}
               environment={env.name}
-            />
-          </TabsContent>
-          <TabsContent
-            value="invoke"
-            className="mt-5"
-          >
-            <Invocation
-              key={env.name}
-              base={base}
-              env={env}
             />
           </TabsContent>
         </Tabs>
