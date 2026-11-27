@@ -1302,7 +1302,22 @@ fn count(name: &str, default: usize, min: usize, max: usize) -> usize {
     count
 }
 
+fn configure_tls() {
+    // TLS is used by the configuration agent. Select a provider explicitly so
+    // feature unification cannot leave rustls without a process-wide provider.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("install rustls ring crypto provider");
+}
+
+#[test]
+fn configuration_agent_tls_has_a_crypto_provider() {
+    configure_tls();
+    let _ = rustls::ClientConfig::builder();
+}
+
 fn main() {
+    configure_tls();
     let supervised = env::args_os().nth(1).is_some_and(|arg| arg == "--serving");
     let bench_upstream = env::var("POOL_BENCH_UPSTREAM").ok().map(|value| {
         let address: SocketAddr = value.parse().expect("benchmark upstream address");
