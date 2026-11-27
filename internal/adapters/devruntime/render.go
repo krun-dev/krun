@@ -73,7 +73,11 @@ func Render(c config.Config, controlHost, outputDirectory string) error {
 	if err := writeResource(outputDirectory, "runtime-execution.json", options.executionResources()); err != nil {
 		return err
 	}
-	if err := options.renderNetworkPolicies(outputDirectory, replacements); err != nil {
+	if c.Workers.ManageNetworkPolicies {
+		if err := options.renderNetworkPolicies(outputDirectory, replacements); err != nil {
+			return err
+		}
+	} else if err := os.Remove(filepath.Join(outputDirectory, "networkpolicy.json")); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 

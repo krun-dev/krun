@@ -86,7 +86,7 @@ func TestRenderedServingAndValidatorStartInRealWorkerd(t *testing.T) {
 			if !validator && !strings.Contains(text, `allow = ["public","10.0.0.0/8","100.64.0.0/10","172.16.0.0/12","fc00::/7"]`) {
 				t.Fatal("database egress must match the pool policy")
 			}
-			if !validator && (!strings.Contains(text, `deny = ["192.0.2.0/24","192.0.0.0/8"]`) || !strings.Contains(text, `deny = ["192.0.2.0/24","192.0.0.0/8","local"`)) {
+			if !validator && !strings.Contains(text, `deny = ["192.0.2.0/24","192.0.0.0/8","local"`) {
 				t.Fatal("egress does not block deployment-owned or local addresses")
 			}
 			directory := t.TempDir()
@@ -206,5 +206,40 @@ func TestRuntimeAPIURLRendersTLSIdentity(t *testing.T) {
 				t.Fatal("explicit origin did not replace Service")
 			}
 		}
+	}
+}
+
+func TestServingEgressFollowsPoolWithoutHyperdriveBinding(t *testing.T) {
+	for _, tc := range []struct {
+		name, public, private, service string
+	}{
+		{"closed", "deny", "deny", ""},
+		{"public", "direct", "deny", "worker-public-egress"},
+		{"private", "deny", "direct", "worker-hyperdrive-egress"},
+		{"both", "direct", "direct", "worker-hyperdrive-egress"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := config.WorkerRuntimePool{ID: "default", PublicEgress: tc.public, PrivateEgress: tc.private}
+			text, err := Render(&config.WorkersConfig{}, pool, "control.example:8081", nil, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			binding := `name = "PUBLIC_EGRESS"`
+			if tc.service == "" {
+				if strings.Contains(text, binding) {
+					t.Fatal("closed pool has worker egress")
+				}
+				return
+			}
+			if !strings.Contains(text, binding+`, service = "`+tc.service+`"`) {
+				t.Fatal("worker egress does not match pool policy")
+			}
+			if tc.private == "direct" && !strings.Contains(text, `"10.0.0.0/8"`) {
+				t.Fatal("private network missing")
+			}
+			if tc.public == "deny" && strings.Contains(text, `allow = ["public",`) {
+				t.Fatal("private-only pool allows public")
+			}
+		})
 	}
 }

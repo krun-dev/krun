@@ -396,7 +396,9 @@ deployment('runtime-validator-default',[{'name':'workerd','image':f'krun-worker-
 deployment('tester',[{'name':'tester','image':f'krun-worker-builder:{tag}','imagePullPolicy':'Never','command':['node','-e','setInterval(()=>{},100000)'],'resources':limits('128Mi')}])
 def selector(app):return {'podSelector':{'matchLabels':{'app':app}}}
 def tcp(port):return {'protocol':'TCP','port':port}
-def policy(name,labels,ingress=None,egress=None):items.append(resource('NetworkPolicy',name,apiVersion='networking.k8s.io/v1',spec={'podSelector':{'matchLabels':labels},'policyTypes':['Ingress','Egress'],'ingress':ingress or [],'egress':egress or []}))
+def policy(name,labels,ingress=None,egress=None):
+ if os.environ.get('KRUN_MANAGE_NETWORK_POLICIES', 'false') == 'true':
+  items.append(resource('NetworkPolicy',name,apiVersion='networking.k8s.io/v1',spec={'podSelector':{'matchLabels':labels},'policyTypes':['Ingress','Egress'],'ingress':ingress or [],'egress':egress or []}))
 policy('deny',{})
 policy('dns',{},egress=[{'to':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kube-system'}},'podSelector':{'matchLabels':{'k8s-app':'kube-dns'}}}],'ports':[{'protocol':'UDP','port':53},tcp(53)]}])
 policy('backend',{'app':'backend'},ingress=[{'from':[{'podSelector':{'matchExpressions':[{'key':'role','operator':'In','values':['krun-runtime','krun-validator']}]}}],'ports':[tcp(9001)]}],egress=[{'to':[selector('postgres')],'ports':[tcp(5432)]},{'to':[selector('minio')],'ports':[tcp(9000)]},{'to':[{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kgateway-system'}},'podSelector':{'matchLabels':{'gateway.networking.k8s.io/gateway-name':'workers-mvp'}}}],'ports':[tcp(8080)]},{'to':[{'podSelector':{'matchExpressions':[{'key':'role','operator':'In','values':['krun-runtime','krun-validator']}]}}],'ports':[tcp(8083)]},{'to':[{'ipBlock':{'cidr':ip+('/32' if ':' not in ip else '/128')}} for ip in api_ips],'ports':[tcp(443),tcp(6443)]}])

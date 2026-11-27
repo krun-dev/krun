@@ -3,6 +3,8 @@ package config
 // Workers is opt-in: existing authentication deployments keep their current behavior.
 type WorkersConfig struct {
 	RuntimeConfig WorkerRuntimeConfig `json:"runtime_config"`
+	// ManageNetworkPolicies enables local-first NetworkPolicy generation and application.
+	ManageNetworkPolicies bool `json:"manage_network_policies,omitempty"`
 	// LocalDatabaseEgress configures PostgreSQL destinations in the local-first
 	// serving pods' Kubernetes NetworkPolicy.
 	LocalDatabaseEgress []WorkerDatabaseEgress `json:"local_database_egress,omitempty"`

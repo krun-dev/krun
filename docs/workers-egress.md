@@ -10,14 +10,13 @@ Worker。Worker 使用 PostgreSQL 驱动直接连接源库，连接串要求 `ss
 
 池省略 `public_egress` 和 `private_egress` 时默认 `deny`。显式 `public_egress: direct`
 给 serving Worker 开放公网 HTTP、HTTPS 和 TCP。显式 `private_egress: direct`
-给同池**绑定了 Hyperdrive 的版本**开放私网 HTTP、HTTPS 和 TCP。workerd 按连接目的地址
+给同池所有 serving Worker 开放私网 HTTP、HTTPS 和 TCP，无须绑定 Hyperdrive。workerd 按连接目的地址
 执行池规则，含域名解析后的地址。私网规则覆盖允许的网段，超出已绑定数据库的单个地址。
 独立 validator 和 serving 中的候选校验均关闭出网，使用占位连接串。
 
 `workers.protected_egress_cidrs` 禁止访问部署方指定的网段。启用私网出网时，将控制面、
 集群管理端点、对象存储管理端点和其他平台专用网段列入该配置。workerd 还拒绝
-回环、链路本地和其他保留地址。Kubernetes 部署的 Runtime NetworkPolicy
-也须允许目标网段及 PostgreSQL 端口。本地开发见 [local-first 配置](local-dev.md)。
+回环、链路本地和其他保留地址。若部署方启用了 Kubernetes NetworkPolicy，也须允许目标网段和端口。本地开发见 [local-first 配置](local-dev.md)。
 
 ## 升级与凭据
 

@@ -12,7 +12,8 @@ import (
 func TestObjectStoragePinsTransportWithoutRenderingIssuerCredentials(t *testing.T) {
 	t.Chdir(filepath.Join("..", "..", ".."))
 	cfg := config.Config{InternalListen: "0.0.0.0:9001", Workers: &config.WorkersConfig{
-		ValidatorPool: "default",
+		ManageNetworkPolicies: true,
+		ValidatorPool:         "default",
 		ArtifactStorage: config.WorkerArtifactStorageConfig{
 			RuntimeEndpoint: "http://192.0.2.20:9000",
 			ConfigBaseURL:   "http://192.0.2.20:9000/artifacts/config",
