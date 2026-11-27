@@ -210,15 +210,16 @@ krun deploy --worker WORKER_ID --env production --path ./project.zip
 
 归档有多个项目时，用 `--project-root` 指定相对于上传根部的目录。`--path` 和 `--ref`、`--repository-revision`、`--build`、`--dry-run` 各自选择不同的输入方式。发布响应丢失时，可用相同内容、目标和 `--idempotency-key` 重试，并用 `--revision` 传回原命令打印的 Deployment revision。已有 Operation ID 时，直接用 `krun deployments wait --worker WORKER_ID --operation OPERATION_ID` 查询。[部署本地项目](/docs/guides/deploy-local-project.html)
 
-要从本地源文件构建，先得到 Build ID，再通过 `--build` 复用。将下面的 `WORKER_ID` 替换成 `workers create` 返回的 `id`。
+要从本地源文件构建，先得到 Build ID，再通过 `--build` 复用。将下面的 `WORKER_ID` 替换成 `workers create` 返回的 `id`，将 `WORKER_URL` 设为控制台环境页面显示的 Worker 地址。
 
 ```sh
+WORKER_URL=https://replace-with-worker-host
 krun workers create --name hello-worker
 krun build start --worker WORKER_ID --env production --file ./index.js
 krun build logs --worker WORKER_ID --build BUILD_ID --follow
 krun build wait --worker WORKER_ID --build BUILD_ID
 krun deploy --worker WORKER_ID --env production --build BUILD_ID
-krun workers invoke --worker WORKER_ID --env production --path /
+curl --fail --show-error "$WORKER_URL/"
 ```
 
 `build start` 返回构建 ID，`build wait` 在构建失败时以非零状态退出。使用返回的操作 ID 执行 `deployments wait --worker WORKER_ID --operation OPERATION_ID`，可以继续等待。用 `deployments status` 查询目标环境当前提交与已确认的版本。
@@ -430,31 +431,22 @@ CLI 会显示构建和发布进度。最后返回的 JSON 中，`state` 为 `ava
 
 ### 6. 验证 Worker 与 R2 双向读写
 
-先用 Worker 读取刚才上传的对象。
+先将 `WORKER_URL` 设为控制台环境页面显示的 Worker 地址，再用 Worker 读取刚才上传的对象。
 
 ```sh frame="terminal" title="Worker 读取 CLI 上传的对象"
-krun workers invoke --worker WORKER_ID --env production --path /cli-e2e/from-cli.txt
-```
-
-输出中的 `status` 应为 `200`，`body` 应为刚上传的内容。
-
-```json
-{
-  "status": 200,
-  "body": "cli-to-worker\n"
-}
+WORKER_URL=https://replace-with-worker-host
+curl --fail --show-error "$WORKER_URL/cli-e2e/from-cli.txt"
 ```
 
 再让 Worker 写入另一个对象，并用 CLI 直接显示对象内容。
 
 ```sh frame="terminal" title="CLI 读取 Worker 写入的对象"
 printf 'worker-to-cli-a1b2c3d4' > from-worker.txt
-krun workers invoke --worker WORKER_ID --env production \
-  --method PUT --path /cli-e2e/from-worker.txt --file from-worker.txt
+curl --fail --show-error -X PUT --data-binary @from-worker.txt "$WORKER_URL/cli-e2e/from-worker.txt"
 krun r2 object get cli-private-demo/cli-e2e/from-worker.txt --pipe
 ```
 
-写入命令返回 `status: 201`，读取命令输出 `worker-to-cli-a1b2c3d4`。这条流程已用真实 GitHub 私库验证，两条读写路径的对象内容均逐字节一致。
+写入命令返回 HTTP 201，读取命令输出 `worker-to-cli-a1b2c3d4`。这条流程已用真实 GitHub 私库验证，两条读写路径的对象内容均逐字节一致。
 
 ### 7. 清理测试资源
 
@@ -473,7 +465,7 @@ krun r2 bucket update cli-private-demo --enabled=false
 krun deploy --org ORG_ID --worker WORKER_ID --env production
 ```
 
-将构建与发布的 API Key 限定到目标 Worker，授予 `worker.read`、`build.start`、`worker.version.read`、`worker.publish`。如需查看构建日志或调用 Worker，再分别授予 `log.read`、`worker.invoke`。对象存储读写另需对象权限。
+将构建与发布的 API Key 限定到目标 Worker，授予 `worker.read`、`build.start`、`worker.version.read`、`worker.publish`。如需查看构建日志，授予 `log.read`；配置 Worker 服务绑定时按需授予 `worker.invoke`。对象存储读写另需对象权限。
 
 ## 配置 Worker
 

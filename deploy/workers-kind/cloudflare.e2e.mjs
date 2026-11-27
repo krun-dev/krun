@@ -10,6 +10,9 @@ const origin = process.env.KRUN_UI_ORIGIN;
 assert(origin, "KRUN_UI_ORIGIN must identify the isolated same-origin E2E console");
 const directory = path.resolve(process.env.KRUN_CF_E2E_DIR || ".data/cf-api-e2e");
 mkdirSync(directory, { recursive: true });
+const gatewayOrigin = process.env.KRUN_CF_E2E_GATEWAY_ORIGIN;
+assert(gatewayOrigin, "KRUN_CF_E2E_GATEWAY_ORIGIN must identify the test Gateway");
+const gatewayAgent = new Agent({ keepAlive: true, maxSockets: 32 });
 const cookies = new Map();
 let csrf = "";
 let token = "";
@@ -204,10 +207,7 @@ async function wrangler(args, input = "", account = org.short_name) {
 async function invoke(environment, expected) {
   let last;
   for (let i = 0; i < 60; i++) {
-    last = await api(native + "/environments/" + environment + "/invoke", "POST", {
-      path: "/",
-      method: "GET",
-    });
+    last = await invokePath("/", environment);
     if (last.status === 200) {
       let out;
       try {
@@ -327,7 +327,6 @@ await check(
 // Bindings must survive the complete official upload/deploy/rollback path.
 let bindingsVersion;
 let bindingsConfig;
-const gatewayAgent = new Agent({ keepAlive: true, maxSockets: 32 });
 async function workerGateway(worker, environment, domain, gatewayOrigin) {
   assert(gatewayOrigin, "Expose the " + domain + " test Gateway");
   const env = (await api(worker + "/environments")).items.find((e) => e.name === environment);
@@ -356,12 +355,6 @@ function gatewayRequest(gateway, url, headers = {}, method = "GET", body = null)
   });
 }
 async function invokePath(url, environment = "production") {
-  if (!process.env.KRUN_CF_E2E_GATEWAY_ORIGIN) {
-    return api(native + "/environments/" + environment + "/invoke", "POST", {
-      path: url,
-      method: "GET",
-    });
-  }
   const gateway = await workerGateway(
     native,
     environment,
@@ -639,10 +632,8 @@ await check("official Wrangler deploy supports an assets-only Worker", async () 
   const details = (await api(cf + "/workers/workers/" + other)).result;
   const base = "/api/v1/orgs/" + org.id + "/workers/" + details.tag;
   await assertEventually(async () => {
-    const r = await api(base + "/environments/production/invoke", "POST", {
-      path: "/",
-      method: "GET",
-    });
+    const gateway = await workerGateway(base, "production", "internal", gatewayOrigin);
+    const r = await gatewayRequest(gateway, "/");
     assert.equal(r.status, 200);
     assert(r.body.includes("assets-two"));
   });

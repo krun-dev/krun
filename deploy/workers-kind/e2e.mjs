@@ -141,9 +141,9 @@ await check('candidate validator is isolated from the serving Service',async()=>
 // at a specific instance so cross-scope Host forgery can be asserted.
 const gateway=JSON.parse(kubectl('get','service','workers-mvp','-n','kgateway-system','-o','json')).spec.clusterIP;
 const publicGateway=JSON.parse(kubectl('get','service','workers-public','-n','kgateway-system','-o','json')).spec.clusterIP;
-async function invokeAt(address,host,pathname='/',headers={}){
- const script=`const http=require('http');http.get('http://${address}:8080'+process.argv[1],{headers:{...JSON.parse(process.argv[3]||'{}'),host:process.argv[2]}},r=>{let s='';r.on('data',x=>s+=x);r.on('end',()=>{let body;try{body=JSON.parse(s)}catch{body=s};console.log(JSON.stringify({status:r.statusCode,body,headers:r.headers}));});}).on('error',e=>{console.error(e.message);process.exitCode=1;});`;
- return JSON.parse(kubectl('exec','-n','workers-mvp','deploy/tester','--','node','-e',script,pathname,host,JSON.stringify(headers)));
+async function invokeAt(address,host,pathname='/',headers={},method='GET',body=''){
+ const script=`const http=require('http');http.request('http://${address}:8080'+process.argv[1],{method:process.argv[4],headers:{...JSON.parse(process.argv[3]||'{}'),host:process.argv[2]}},r=>{let s='';r.on('data',x=>s+=x);r.on('end',()=>{let body;try{body=JSON.parse(s)}catch{body=s};console.log(JSON.stringify({status:r.statusCode,body,headers:r.headers}));});}).on('error',e=>{console.error(e.message);process.exitCode=1;}).end(process.argv[5]);`;
+ return JSON.parse(kubectl('exec','-n','workers-mvp','deploy/tester','--','node','-e',script,pathname,host,JSON.stringify(headers),method,body));
 }
 async function invoke(host,pathname='/',headers={}){return invokeAt(gateway,host,pathname,headers)}
 function environmentHost(environment,domain='internal'){
@@ -359,8 +359,8 @@ await check('full-stack page, API, SPA, HTML, and cache behavior work through ru
  assert.equal(health.status,200);assert.equal(health.body.ok,true);assert.equal(health.body.service,'krun-workers-fullstack');assert.equal(health.body.environment,'production');assert.equal(health.body.version_id,assetVersion.version_id);
  const assetBinding=await invoke(hostProd,'/api/asset-check');
  assert.equal(assetBinding.status,200);assert.deepEqual(assetBinding.body,{status:200,about_page:true});
- const echoResult=await api(base+'/environments/production/invoke','POST',{path:'/api/echo',method:'POST',body:JSON.stringify({message:'browser to Worker round trip'})});
- assert.equal(echoResult.status,200);const echo=JSON.parse(echoResult.body);assert.equal(echo.echo,'browser to Worker round trip');assert.equal(echo.environment,'production');
+ const echoResult=await invokeAt(gateway,hostProd,'/api/echo',{'content-type':'application/json'},'POST',JSON.stringify({message:'browser to Worker round trip'}));
+ assert.equal(echoResult.status,200);const echo=echoResult.body;assert.equal(echo.echo,'browser to Worker round trip');assert.equal(echo.environment,'production');
  const missing=await invoke(hostProd,'/api/missing');assert.equal(missing.status,404);assert.equal(missing.body.error,'not_found');
  const navigate=await invoke(hostProd,'/dashboard',{'sec-fetch-mode':'navigate'});
  assert.equal(navigate.status,200);assert(String(navigate.body).includes('data-app="krun-workers-fullstack"'));

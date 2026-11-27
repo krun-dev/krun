@@ -183,7 +183,7 @@ test("deep link opens a service outside the first page", async ({ page }) => {
     page.getByRole("tab", { name: "配置版本", exact: true }),
   ).toBeVisible();
 });
-test("UI binds repository, builds, publishes and invokes a real Worker", async ({
+test("UI binds repository, builds and publishes a real Worker", async ({
   page,
   context,
 }) => {
@@ -218,12 +218,6 @@ test("UI binds repository, builds, publishes and invokes a real Worker", async (
     )
     .toBe("succeeded");
   await publishUI(page, context, 1);
-  await page.getByRole("tab", { name: "调用测试", exact: true }).click();
-  await page
-    .getByRole("textbox", { name: "请求路径", exact: true })
-    .fill("/ui-flow?run=" + run);
-  await page.getByRole("button", { name: "发送请求", exact: true }).click();
-  await expect(page.getByText(/repository-wrangler/)).toBeVisible();
   await page.screenshot({
     path: ".data/performance-ui-workflow.png",
     fullPage: true,

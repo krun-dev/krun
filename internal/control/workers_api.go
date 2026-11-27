@@ -127,7 +127,6 @@ func (s *Server) workersRoutes(m *recordingMux) {
 	m.HandleFunc("GET "+base+"/deployments", protect(false, s.workerDeploymentList))
 	m.HandleFunc("GET "+base+"/deployments/{deployment}", protect(false, s.workerDeploymentList))
 	m.HandleFunc("GET "+base+"/versions/{version}", protect(false, s.workerVersionGet))
-	m.HandleFunc("POST "+base+"/environments/{environment}/invoke", s.workerInvoke)
 	m.HandleFunc("GET "+base+"/operations/{operation}", protect(false, s.workerOperationGet))
 	m.HandleFunc("GET "+base+"/artifacts/{artifact}", protect(false, s.workerArtifactGet))
 }

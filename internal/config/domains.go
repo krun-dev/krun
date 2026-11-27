@@ -232,19 +232,6 @@ func HostFor(slug, env, suffix string) string {
 	return label + "." + suffix
 }
 
-// gatewayBase returns the address console invoke uses for a Gateway instance.
-// An explicit base (SSH tunnel) wins; otherwise the in-cluster service is used.
-func (g WorkerGateway) GatewayBase() string {
-	if g.Base != "" {
-		return g.Base
-	}
-	return ""
-}
-
-func (g WorkerGateway) InClusterAddress() string {
-	return g.Name + "." + g.Namespace + ".svc:8080"
-}
-
 // A service has one durable baseline ("production") plus any number of
 // short-lived preview environments identified by a slug.
 const WorkerBaseline = "production"

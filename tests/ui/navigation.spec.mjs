@@ -766,7 +766,7 @@ test("system administration lists Workers, buckets, and keys across organization
   expect(requests.some((path) => path.startsWith("/api/v1/orgs/org-b/"))).toBe(false);
 });
 
-test("platform detail reuses Worker invocation and Bucket controls for the owning organization", async ({
+test("platform detail opens Worker and Bucket controls for the owning organization", async ({
   page,
 }) => {
   await fixture(page, {
@@ -837,11 +837,6 @@ test("platform detail reuses Worker invocation and Bucket controls for the ownin
             ],
           };
           break;
-        case workerBase + "/environments/production/invoke":
-          expect(request.method()).toBe("POST");
-          calls.push(url.pathname);
-          json = { status: 200, body: "worker-response", headers: {}, truncated: false };
-          break;
         case bucketBase + bucket.id:
           json = bucket;
           break;
@@ -872,14 +867,9 @@ test("platform detail reuses Worker invocation and Bucket controls for the ownin
   await page.getByRole("link", { name: worker.name }).click();
   await expect(page).toHaveURL(/view=system.*inventory_org=org-owner.*workspace=org-current/);
   await expect(page.getByRole("heading", { name: worker.name })).toBeVisible();
-  await page.getByRole("tab", { name: "调用测试" }).click();
-  await page.getByRole("button", { name: "发送请求" }).click();
-  await expect(page.getByText("worker-response")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "调用测试" })).toHaveCount(0);
   await page.reload();
-  await expect(page.getByRole("tab", { name: "调用测试" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
+  await expect(page.getByRole("heading", { name: worker.name })).toBeVisible();
   await page.getByRole("button", { name: "返回Worker列表" }).click();
   await expect(page.getByRole("heading", { name: "全平台 Workers" })).toBeVisible();
   await expect(page).not.toHaveURL(/inventory_resource|worker_tab|environment/);
@@ -893,7 +883,7 @@ test("platform detail reuses Worker invocation and Bucket controls for the ownin
   await expect(page.getByText("目录为空")).toBeVisible();
   await page.getByRole("button", { name: "返回桶列表" }).click();
   await expect(page.getByRole("heading", { name: "全平台 Bucket" })).toBeVisible();
-  expect(calls).toEqual([workerBase + "/environments/production/invoke", bucketBase + bucket.name]);
+  expect(calls).toEqual([bucketBase + bucket.name]);
 });
 
 test("system administrators can read runtime pool configuration without an organization", async ({
