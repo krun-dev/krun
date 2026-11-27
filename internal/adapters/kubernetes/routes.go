@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	appconfig "github.com/krun-dev/krun/internal/config"
@@ -108,6 +109,7 @@ func (k *Client) EnsureRoute(ctx context.Context, name, runtimeService string, g
 		"hostnames": hosts,
 		"rules": []any{
 			map[string]any{
+				"timeouts": map[string]string{"request": k.workerRequestTimeout()},
 				"filters": []any{
 					map[string]any{
 						"type": "RequestHeaderModifier",
@@ -180,6 +182,9 @@ func (k *Client) EnsureRoute(ctx context.Context, name, runtimeService string, g
 			Section   string `json:"sectionName"`
 		} `json:"parentRefs"`
 		Rules []struct {
+			Timeouts struct {
+				Request string `json:"request"`
+			} `json:"timeouts"`
 			BackendRefs []struct {
 				Name string `json:"name"`
 			} `json:"backendRefs"`
@@ -198,7 +203,8 @@ func (k *Client) EnsureRoute(ctx context.Context, name, runtimeService string, g
 		old.Parent[0].Namespace != gatewayNamespace || old.Parent[0].Section != section
 	backendDrift := len(old.Rules) != 1 || len(old.Rules[0].BackendRefs) != 1 || old.Rules[0].BackendRefs[0].Name != runtimeService
 	markerDrift := len(old.Rules) != 1 || len(old.Rules[0].Filters) != 1 || !slices.Contains(old.Rules[0].Filters[0].HeaderModifier.Remove, "x-krun-route")
-	drift := parentDrift || backendDrift || markerDrift || strings.Join(old.Hosts, "\n") != strings.Join(hosts, "\n")
+	timeoutDrift := len(old.Rules) != 1 || old.Rules[0].Timeouts.Request != k.workerRequestTimeout()
+	drift := parentDrift || backendDrift || markerDrift || timeoutDrift || strings.Join(old.Hosts, "\n") != strings.Join(hosts, "\n")
 	if streaming {
 		var actual, expected map[string]any
 		_ = json.Unmarshal(current.Spec, &actual)
@@ -356,4 +362,12 @@ func (k *Client) EnsureStaticRoute(ctx context.Context, c *appconfig.WorkersConf
 		return k.Call(ctx, "PATCH", base+"/"+name, map[string]any{"spec": spec}, nil)
 	}
 	return nil
+}
+
+func (k *Client) workerRequestTimeout() string {
+	seconds := k.requestTimeoutSeconds
+	if seconds == 0 {
+		seconds = 15
+	}
+	return strconv.Itoa(seconds) + "s"
 }

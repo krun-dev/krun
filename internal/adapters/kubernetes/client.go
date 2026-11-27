@@ -25,6 +25,7 @@ type Client struct {
 	NpmRegistry           string
 	runtimeClass          string
 	timeoutSeconds        int
+	requestTimeoutSeconds int
 	builderBuildResources appconfig.BuilderResources
 	builderPackResources  appconfig.BuilderResources
 	builderNodeSelector   map[string]string
@@ -67,6 +68,7 @@ func New(config *appconfig.WorkersConfig) (*Client, error) {
 		NpmRegistry:           config.NPMRegistry,
 		runtimeClass:          config.BuilderRuntimeClass,
 		timeoutSeconds:        config.BuilderTimeoutSeconds,
+		requestTimeoutSeconds: config.GatewayRequestTimeoutSeconds,
 		builderBuildResources: config.BuilderBuildResources,
 		builderPackResources:  config.BuilderPackResources,
 		builderNodeSelector:   config.BuilderNodeSelector,

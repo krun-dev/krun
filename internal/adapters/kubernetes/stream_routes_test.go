@@ -14,17 +14,29 @@ func TestManagedStreamRulesPreserveOriginsAndExactPath(t *testing.T) {
 		{Match: "prefix", Path: "/assets", Service: "origin", Port: 8081},
 		{Match: "exact", Path: "/exact", Service: "runtime", Port: 8081, Worker: "exact-site", StreamService: "stream", SSEPaths: []string{"/exact"}},
 	}
-	base, supplemental := hostnameRouteSpecs("host.example.test", config.WorkerGateway{}, rules)
+	base, supplemental := hostnameRouteSpecs("host.example.test", config.WorkerGateway{}, rules, "300s")
 	entries := base["rules"].([]any)
 	if len(entries) != 3 || len(supplemental) != 2 {
 		t.Fatalf("want three base rules and two streaming rules, got %v and %v", entries, supplemental)
 	}
 	exact := entries[2].(map[string]any)
+	if got := entries[0].(map[string]any)["timeouts"].(map[string]string)["request"]; got != "300s" {
+		t.Fatalf("Worker request timeout = %q", got)
+	}
+	if _, ok := entries[1].(map[string]any)["timeouts"]; ok {
+		t.Fatal("origin timeout was unexpectedly changed")
+	}
+	if got := exact["timeouts"].(map[string]string); got["request"] != "0s" || got["backendRequest"] != "0s" {
+		t.Fatalf("stream timeout changed: %v", got)
+	}
 	exactBackend := exact["backendRefs"].([]any)[0].(map[string]any)["name"]
 	if exactBackend != "stream" {
 		t.Fatalf("configured exact path should move the base rule to streams: %v", exact)
 	}
 	headerRule := supplemental[0].(map[string]any)
+	if got := headerRule["timeouts"].(map[string]string); got["request"] != "0s" || got["backendRequest"] != "0s" {
+		t.Fatalf("stream header timeout changed: %v", got)
+	}
 	options := headerRule["matches"].([]any)
 	if len(options) != 2 {
 		t.Fatalf("want Upgrade and Accept alternatives: %v", options)

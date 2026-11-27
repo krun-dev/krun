@@ -53,6 +53,7 @@ func newKubeconfigClient(config *appconfig.WorkersConfig) (*Client, error) {
 		NpmRegistry:           config.NPMRegistry,
 		runtimeClass:          config.BuilderRuntimeClass,
 		timeoutSeconds:        config.BuilderTimeoutSeconds,
+		requestTimeoutSeconds: config.GatewayRequestTimeoutSeconds,
 		builderBuildResources: config.BuilderBuildResources,
 		builderPackResources:  config.BuilderPackResources,
 		builderNodeSelector:   config.BuilderNodeSelector,
