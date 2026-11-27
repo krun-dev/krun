@@ -19,7 +19,8 @@ func TestExternalRenderSeparatesRuntimeCredentialsAndEnablesVerifiedTLS(t *testi
 	cfg := config.Config{
 		InternalListen: "0.0.0.0:9001",
 		Workers: &config.WorkersConfig{
-			ValidatorPool: "default",
+			ManageNetworkPolicies: true,
+			ValidatorPool:         "default",
 			ArtifactStorage: config.WorkerArtifactStorageConfig{
 				RuntimeEndpoint: "https://storage.example.com",
 				BucketMode:      "external",
@@ -119,7 +120,8 @@ func TestRenderStorageModes(t *testing.T) {
 			cfg := config.Config{
 				InternalListen: "0.0.0.0:9001",
 				Workers: &config.WorkersConfig{
-					ValidatorPool: "default",
+					ManageNetworkPolicies: true,
+					ValidatorPool:         "default",
 					ArtifactStorage: config.WorkerArtifactStorageConfig{
 						RuntimeEndpoint: test.endpoint,
 						BucketMode:      test.bucketMode,
@@ -242,7 +244,8 @@ func TestLocalDatabaseEgressIsOnlyGrantedToServingPods(t *testing.T) {
 			cfg := config.Config{
 				InternalListen: "0.0.0.0:9001",
 				Workers: &config.WorkersConfig{
-					ValidatorPool: "default",
+					ManageNetworkPolicies: true,
+					ValidatorPool:         "default",
 					ArtifactStorage: config.WorkerArtifactStorageConfig{
 						RuntimeEndpoint: "http://192.0.2.20:9000",
 						BucketMode:      "external",
@@ -299,5 +302,28 @@ func TestLocalDatabaseEgressIsOnlyGrantedToServingPods(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestNetworkPolicyDefaultsOffAndRemovesStaleOutput(t *testing.T) {
+	t.Chdir(filepath.Join("..", "..", ".."))
+	out := t.TempDir()
+	cfg := config.Config{InternalListen: "0.0.0.0:9001", Workers: &config.WorkersConfig{
+		ValidatorPool: "default", ArtifactStorage: config.WorkerArtifactStorageConfig{RuntimeEndpoint: "https://storage.example.com"},
+		RuntimePools: []config.WorkerRuntimePool{{ID: "default", Default: true}},
+	}}
+	cfg.Workers.ManageNetworkPolicies = true
+	if err := Render(cfg, "192.0.2.10", out); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "networkpolicy.json")); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Workers.ManageNetworkPolicies = false
+	if err := Render(cfg, "192.0.2.10", out); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "networkpolicy.json")); !os.IsNotExist(err) {
+		t.Fatal("disabled policy output must be absent")
 	}
 }

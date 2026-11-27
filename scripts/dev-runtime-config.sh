@@ -45,7 +45,7 @@ ssh -o ConnectTimeout=8 "$REMOTE" "set -e
   kubectl -n workers-mvp create configmap runtime-config --from-file=runtime.capnp='$remote_tmp/runtime.capnp' --dry-run=client -o yaml | kubectl apply -f -
   kubectl -n workers-mvp create configmap validator-config --from-file=runtime.capnp='$remote_tmp/validator.capnp' --dry-run=client -o yaml | kubectl apply -f -
   kubectl apply -f '$remote_tmp/validator.yaml'
-  kubectl apply -f '$remote_tmp/networkpolicy.json'
+  if [[ -f '$remote_tmp/networkpolicy.json' ]]; then kubectl apply -f '$remote_tmp/networkpolicy.json'; fi
   kubectl apply -f '$remote_tmp/runtime-execution.json'
   kubectl -n workers-mvp patch deployment/runtime-default --type=strategic --patch-file '$remote_tmp/runtime-patch.json'
   kubectl -n workers-mvp set image deployment/runtime-default deployment/runtime-validator-default workerd='$IMAGE'

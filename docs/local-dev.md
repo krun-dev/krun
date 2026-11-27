@@ -61,7 +61,7 @@ local-first 渲染器对网络地址有以下约束：
 - 存储端点支持公网 HTTPS，或显式 IPv4 地址的私有 HTTP/HTTPS 源站；端口来自 endpoint。
 - 公网域名允许 DNS 和对应 HTTPS 端口；私有存储只放行指定 IP 和端口，不放行私有 DNS 网段。
 
-`dev-runtime-config.sh` 从主配置生成 workerd 配置、Secret 和 NetworkPolicy。Serving
+`dev-runtime-config.sh` 从主配置生成 workerd 配置和 Secret。`workers.manage_network_policies` 默认 `false`，不生成或下发 NetworkPolicy；设为 `true` 才生成并下发本地开发策略。关闭开关不会删除集群已有策略，需由部署方自行检查和清理。Serving
 启动时需要通过本地控制面确认配置代次。先确保 PostgreSQL 已启动，数据库升级按[手动在线迁移](storage.md#手动执行在线迁移)执行，本地使用 `.data/dev.yaml`。如果本地控制面还未运行，在独立终端启动它：
 
 ```sh
@@ -161,7 +161,7 @@ KRUN_DEV_CONTROL_HOST=<new-control-host> ./scripts/dev-runtime-config.sh
 ```
 
 该脚本会写入 `runtime-config` 和不启动配置跟随/Ack 的 `validator-config`，确保独立
-validator Deployment/Service 存在，更新 runtime/validator NetworkPolicy，并把 in-cluster 的
+validator Deployment/Service 存在；启用策略管理时更新 runtime/validator NetworkPolicy，并把 in-cluster 的
 backend/postgres/minio/tester 缩到 0。业务 runtime 下载制品时使用
 `artifact_storage.runtime_endpoint` 的开发机地址。
 
@@ -212,9 +212,9 @@ curl -o /dev/null -w '%{http_code}\n' -H "Host: $INTERNAL_WORKER_HOST" "http://$
 - `platform` 地址：`<control-host>:9001`（开发机控制面的 internal listener）。
 - `CONFIG_BASE`：`http://<minio-host>:9000/<bucket>/config/pools/default`。
 - `storage` network allow：`<minio-host>/32`、`<control-host>/32`。
-- NetworkPolicy：允许 runtime 到上述两个地址的 9000/9001，以及本地管理隧道访问 8083。
+- 启用 NetworkPolicy 管理时，检查策略允许 runtime 到上述地址的 9000/9001，以及本地管理隧道访问 8083。
 
-如果开发机 IP 变了，需要同步改 runtime ConfigMap 里的 `<control-host>`、`CONFIG_BASE` 的 MinIO 地址（如果 MinIO 主机也变了）和 NetworkPolicy，然后重启 runtime。
+如果开发机 IP 变了，需要同步改 runtime ConfigMap 里的 `<control-host>`、`CONFIG_BASE` 的 MinIO 地址（如果 MinIO 主机也变了）以及已启用的 NetworkPolicy，然后重启 runtime。
 
 ## 构建与发布流程
 

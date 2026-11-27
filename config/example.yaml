@@ -263,7 +263,9 @@ workers:
   runtime_api_url: ""
   # 禁止业务访问的平台地址。公网可路由的管理地址也应显式列出。
   protected_egress_cidrs: []
-  # local-first serving Pod 的 PostgreSQL NetworkPolicy 允许目标，填实际源库网段和 TCP 端口。
+  # 默认不下发 local-first NetworkPolicy；设为 true 时才生成并应用。
+  # manage_network_policies: false
+  # 启用 NetworkPolicy 时允许的其他 PostgreSQL 目标。
   # local_database_egress:
   #   - cidr: 192.0.2.0/24
   #     port: 5432
@@ -425,14 +427,3 @@ workers:
 #   validator_replicas: 1
 #   runtime_class: ""
 #   image_pull_secrets: []
-#   network:
-#     control:
-#       - cidrs: ["${KRUN_DATABASE_CIDR:-192.0.2.0/24}"]
-#         ports: [5432]
-#       - cidrs: ["${KRUN_KUBERNETES_API_CIDR:-198.51.100.0/24}"]
-#         ports: [443, 6443]
-#       - public_https: true
-#     runtime:
-#       - public_https: true
-#     builder:
-#       - public_https: true

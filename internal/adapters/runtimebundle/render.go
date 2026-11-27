@@ -64,7 +64,7 @@ func Render(workers *config.WorkersConfig, pool config.WorkerRuntimePool, contro
 	for _, cidr := range workers.ProtectedEgressCIDRs {
 		denied = append(denied, quote(cidr))
 	}
-	if !validator && pool.PublicEgress == "direct" {
+	if !validator && pool.PublicEgress == "direct" && pool.PrivateEgress != "direct" {
 		egressBinding = `          (name = "PUBLIC_EGRESS", service = "worker-public-egress"),`
 		egressService = fmt.Sprintf(`    (
       name = "worker-public-egress",
@@ -76,6 +76,9 @@ func Render(workers *config.WorkersConfig, pool config.WorkerRuntimePool, contro
     ),`, strings.Join(denied, ","))
 	}
 	if !validator && (pool.PublicEgress == "direct" || pool.PrivateEgress == "direct") {
+		if pool.PrivateEgress == "direct" {
+			egressBinding = `          (name = "PUBLIC_EGRESS", service = "worker-hyperdrive-egress"),`
+		}
 		egressBinding += "\n          (name = \"HYPERDRIVE_DIRECT_EGRESS\", service = \"worker-hyperdrive-egress\"),"
 		var allow []string
 		if pool.PublicEgress == "direct" {

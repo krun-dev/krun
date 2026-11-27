@@ -179,20 +179,3 @@ deployment:
   validator_replicas: 1
   runtime_class: ${KRUN_RUNTIME_CLASS:-}
   image_pull_secrets: [] # 填已在目标 namespace 创建的公司镜像拉取 Secret 名。
-  network:
-    control:
-      # PostgreSQL 所在网段、Kubernetes API、公司 SSO/Git 的真实范围必须显式填写。
-      - cidrs: ["${KRUN_DATABASE_CIDR:-192.0.2.0/24}"]
-        ports: [5432]
-      - cidrs: ["${KRUN_KUBERNETES_API_CIDR:-198.51.100.0/24}"]
-        ports: [443, 6443]
-      - cidrs: ["${KRUN_IDENTITY_GIT_CIDR:-203.0.113.0/24}"]
-        ports: [443]
-      # 显式允许云存储和 STS 公网 HTTPS，排除常见私有、loopback 和 link-local 段。
-      - public_https: true
-    runtime:
-      - public_https: true
-    builder:
-      - cidrs: ["${KRUN_NPM_PROXY_CIDR:-203.0.113.0/24}"]
-        ports: [443]
-      - public_https: true

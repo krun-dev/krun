@@ -7,7 +7,7 @@
 ## 前置条件
 
 - Docker、kubectl、Python 3、Node.js、Go 1.26、OpenSSL
-- 已安装 Gateway API、kgateway、支持 NetworkPolicy 的 CNI 和默认 StorageClass
+- 已安装 Gateway API、kgateway 和默认 StorageClass；启用 NetworkPolicy 时 CNI 必须支持它
 - 明确指定的 kind kubeconfig 与集群名
 
 实际主机、路径和集群名只放在 `.data/dev.env` 或当前 shell，不写入 tracked 文件：
@@ -133,3 +133,5 @@ KRUN_UI_ORIGIN=http://127.0.0.1:4380 npm run test:ui
 设置 `KRUN_E2E_DATABASE` / `KRUN_E2E_BUCKET` 选择另一套专用数据。数据库与对象桶必须
 成对使用，避免从其他测试库读取配置 head。部署只创建不存在的测试库，不清空已有库。
 基线不匹配时应由测试环境所有者显式重建专用数据库，或选择新的库和桶。
+
+NetworkPolicy 默认不生成或下发。需要在独立 E2E 环境启用时，执行 `KRUN_MANAGE_NETWORK_POLICIES=true deploy/workers-kind/deploy.sh`。关闭后不会删除集群里已有的策略，需由部署方自行检查和清理。

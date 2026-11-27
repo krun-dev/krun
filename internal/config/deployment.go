@@ -10,30 +10,15 @@ import (
 // DeploymentConfig is infrastructure input in the same main YAML. Rendering is
 // explicit; loading this section never contacts or changes a cluster.
 type DeploymentConfig struct {
-	ConsoleGateway    string            `json:"console_gateway,omitempty"`
-	ControlImage      string            `json:"control_image"`
-	RuntimeImage      string            `json:"runtime_image"`
-	DNSResolver       string            `json:"dns_resolver"`
-	ControlReplicas   int               `json:"control_replicas"`
-	RuntimeReplicas   int               `json:"runtime_replicas"`
-	ValidatorReplicas int               `json:"validator_replicas"`
-	RuntimeClass      string            `json:"runtime_class,omitempty"`
-	ImagePullSecrets  []string          `json:"image_pull_secrets,omitempty"`
-	Network           DeploymentNetwork `json:"network"`
-}
-
-type DeploymentNetwork struct {
-	Control []DeploymentEgress `json:"control"`
-	Runtime []DeploymentEgress `json:"runtime"`
-	Builder []DeploymentEgress `json:"builder"`
-}
-
-// PublicHTTPS is an explicit portable-policy tradeoff for dynamic cloud IPs.
-// Private destinations always require CIDRs. Nothing resolves DNS at render time.
-type DeploymentEgress struct {
-	CIDRs       []string `json:"cidrs,omitempty"`
-	Ports       []int    `json:"ports,omitempty"`
-	PublicHTTPS bool     `json:"public_https,omitempty"`
+	ConsoleGateway    string   `json:"console_gateway,omitempty"`
+	ControlImage      string   `json:"control_image"`
+	RuntimeImage      string   `json:"runtime_image"`
+	DNSResolver       string   `json:"dns_resolver"`
+	ControlReplicas   int      `json:"control_replicas"`
+	RuntimeReplicas   int      `json:"runtime_replicas"`
+	ValidatorReplicas int      `json:"validator_replicas"`
+	RuntimeClass      string   `json:"runtime_class,omitempty"`
+	ImagePullSecrets  []string `json:"image_pull_secrets,omitempty"`
 }
 
 func (d *DeploymentConfig) validate() error {
@@ -68,41 +53,7 @@ func (d *DeploymentConfig) validate() error {
 			return fmt.Errorf("invalid deployment Kubernetes resource name")
 		}
 	}
-	for _, rules := range [][]DeploymentEgress{
-		d.Network.Control,
-		d.Network.Runtime,
-		d.Network.Builder,
-	} {
-		if len(rules) == 0 || len(rules) > 64 {
-			return fmt.Errorf("each deployment component requires explicit network egress")
-		}
-		for _, rule := range rules {
-			if rule.PublicHTTPS {
-				if len(rule.CIDRs) != 0 || len(rule.Ports) != 0 {
-					return fmt.Errorf("public_https does not accept CIDRs or ports")
-				}
-				continue
-			}
-			if len(rule.CIDRs) == 0 || len(rule.Ports) == 0 {
-				return fmt.Errorf("deployment egress requires CIDRs and ports")
-			}
-			for _, value := range rule.CIDRs {
-				_, block, err := net.ParseCIDR(value)
-				if err != nil {
-					return fmt.Errorf("invalid deployment egress CIDR")
-				}
-				ones, _ := block.Mask.Size()
-				if ones == 0 {
-					return fmt.Errorf("use public_https for public cloud destinations; unrestricted egress is not accepted")
-				}
-			}
-			for _, port := range rule.Ports {
-				if port < 1 || port > 65535 {
-					return fmt.Errorf("invalid deployment egress port")
-				}
-			}
-		}
-	}
+
 	return nil
 }
 

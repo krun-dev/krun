@@ -81,13 +81,6 @@ func TestDeploymentValidationRejectsUnboundedOrInjectedInput(t *testing.T) {
 	}{
 		{"unresolved DNS", func(d *DeploymentConfig) { d.DNSResolver = "dns.example.com" }},
 		{"untagged image with registry port", func(d *DeploymentConfig) { d.ControlImage = "registry.example.com:5000/krun" }},
-		{"unrestricted CIDR", func(d *DeploymentConfig) {
-			d.Network.Builder = []DeploymentEgress{{CIDRs: []string{"0.0.0.0/0"}, Ports: []int{443}}}
-		}},
-		{"mixed public and private", func(d *DeploymentConfig) {
-			d.Network.Runtime = []DeploymentEgress{{PublicHTTPS: true, CIDRs: []string{"192.0.2.0/24"}}}
-		}},
-		{"empty egress", func(d *DeploymentConfig) { d.Network.Control = nil }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			c, err := LoadConfig(filepath.Join("testdata", "production.yaml"))

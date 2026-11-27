@@ -53,7 +53,7 @@ flowchart LR
 5. 部署方配置控制台 `/api` 到 Go 的 HTTPRoute。公司
    CDN / 入口代理在同一个 origin 下将 `/`、`/assets/*` 回源 OSS，其他静态路径返回 404。
 6. 静态发布平台负责 OSS 的访问权限与私有回源。不要把制品桶当作控制台公开静态桶。
-7. 集群 CNI 必须执行 NetworkPolicy，控制面到 Kubernetes API、数据库、SSO/Git、STS、
+7. 如果部署方使用 NetworkPolicy，集群 CNI 必须执行策略；控制面到 Kubernetes API、数据库、SSO/Git、STS、
    存储的 CIDR/端口，以及 builder 到 npm/存储的网络范围必须在主 YAML 显式声明。
    DNS IP 必须是本集群真实的 CoreDNS/NodeLocal DNS IP，示例中的 TEST-NET 地址不能照抄。
 
@@ -142,10 +142,8 @@ Go 独占 DB、公司登录/仓库凭据、业务存储的 STS issuer 和 CDN ke
 Validator 只有自己的 Runtime Token 和 Management Token，不接业务 Service/Gateway。
 R2 数据由 serving 内可信 signer 直连存储，临时凭据在该进程缓存；文件字节不走 Go。
 
-默认拒绝 namespace 入站/出站；按角色和目的地放行。`public_https: true` 显式允许
-常见私有/loopback/link-local 段以外的 IPv4 TCP/443，用于 IP 会变化的云存储；它不是
-FQDN 白名单。需要更严的目的域限制时，使用公司 CNI 的 FQDN 策略或受控出口代理，
-不要把可移植 NetworkPolicy 的端口限制当作域名限制。公司内试用先限可信项目；构建
+生产清单不创建 NetworkPolicy；部署方可自行配置并维护网络策略。
+公司内试用先限可信项目；构建
 会执行仓库脚本，面向不可信代码时配置 builder/runtime 的沙箱 RuntimeClass。
 
 ## 更新与恢复
@@ -202,7 +200,7 @@ Gateway 的 base 是同名 Service 的预期集群地址。部署方负责 Gatew
 放在该前缀内，并由入口映射为浏览器的 `/` 和 `/assets/*`。
 制品和业务数据分别用其他私有前缀，不能因静态回源而公开整个共享桶。
 示例中的值是占位符；用户指定的私有 `test.yaml` 只通过 `--config` 显式加载。
-实际发布前必须验证 CNI 的 NetworkPolicy 执行能力、Gateway Service、DNS/TLS、SSO
+实际发布前应验证已启用的网络策略、Gateway Service、DNS/TLS、SSO
 回调白名单、静态回源权限和镜像 tag；数据库与存储的 CIDR 变化时应更新网络策略。
 
 控制面运行时支持主 YAML 中的 `workers.kubernetes_kubeconfig_file` 和可选
