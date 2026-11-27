@@ -43,7 +43,7 @@ func TestHostnameRouteUsesSpecificBackendAndProtectsNewerRevision(t *testing.T) 
 	}))
 	defer kube.Close()
 
-	client := Client{Base: kube.URL, Namespace: "workers", Client: kube.Client()}
+	client := Client{Base: kube.URL, Namespace: "workers", Client: kube.Client(), requestTimeoutSeconds: 300}
 	gateway := config.WorkerGateway{Name: "web", Namespace: "gateway", Section: "https"}
 	rules := []HostnameRule{
 		{Match: "prefix", Path: "/", Service: "shop", Namespace: "static", Port: 80, HostHeader: "shop.origin.example.com"},
@@ -60,6 +60,10 @@ func TestHostnameRouteUsesSpecificBackendAndProtectsNewerRevision(t *testing.T) 
 	spec := obj["spec"].(map[string]any)
 	if got := spec["hostnames"].([]any)[0]; got != host {
 		t.Fatalf("route host = %v; want %s", got, host)
+	}
+	routeEntries := spec["rules"].([]any)
+	if got := routeEntries[1].(map[string]any)["timeouts"].(map[string]any)["request"]; got != "300s" {
+		t.Fatalf("Worker timeout = %v", got)
 	}
 	wire, err := json.Marshal(spec["rules"])
 	if err != nil {

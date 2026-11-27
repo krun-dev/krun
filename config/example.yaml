@@ -160,6 +160,8 @@ providers:
 # 省略 workers: 段时服务仍可启动，但 Workers 接口返回 WORKERS_NOT_CONFIGURED，
 # 控制台显示“Workers 未配置”。删除此段即可关闭 Workers。
 workers:
+  # 普通 Worker HTTP 请求的网关超时；SSE / WebSocket 使用独立策略。
+  gateway_request_timeout_seconds: 300
   # 每个控制面副本与 Runtime Pod 都有独立的有界缓存；所有副本共用 PostgreSQL 主库。
   runtime_config:
     protocol: 2

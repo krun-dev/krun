@@ -27,7 +27,7 @@ type HostnameRule struct {
 const hostnameRevision = "krun.dev/hostname-revision"
 
 func (k *Client) EnsureHostnameRoute(ctx context.Context, name, host string, revision int, gateway config.WorkerGateway, rules []HostnameRule, desired ...map[string]bool) error {
-	spec, streams := hostnameRouteSpecs(host, gateway, rules)
+	spec, streams := hostnameRouteSpecs(host, gateway, rules, k.workerRequestTimeout())
 	if err := k.ensureHostnameRouteSpec(ctx, name, revision, spec); err != nil {
 		return err
 	}
@@ -94,7 +94,7 @@ func (k *Client) ensureHostnameRouteSpec(ctx context.Context, name string, revis
 	return err
 }
 
-func hostnameRouteSpecs(host string, gateway config.WorkerGateway, rules []HostnameRule) (map[string]any, []any) {
+func hostnameRouteSpecs(host string, gateway config.WorkerGateway, rules []HostnameRule, requestTimeout string) (map[string]any, []any) {
 	entries := make([]any, 0, len(rules))
 	var streams []any
 	for index, rule := range rules {
@@ -118,6 +118,7 @@ func hostnameRouteSpecs(host string, gateway config.WorkerGateway, rules []Hostn
 			remove := []string{"x-krun-scope", "x-krun-version", "x-forwarded-host", "x-internal", "x-krun-route"}
 			modifier := map[string]any{"remove": remove}
 			if rule.Worker != "" {
+				entry["timeouts"] = map[string]string{"request": requestTimeout}
 				modifier["remove"] = remove[:len(remove)-1]
 				modifier["set"] = []any{map[string]string{"name": "x-krun-route", "value": rule.Worker + ":" + rule.Match + ":" + rule.Path}}
 			}

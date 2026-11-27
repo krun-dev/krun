@@ -24,6 +24,12 @@ func (c *WorkersConfig) Validate() error {
 	if err := c.ObjectStorage.Validate(); err != nil {
 		return err
 	}
+	if c.GatewayRequestTimeoutSeconds == 0 {
+		c.GatewayRequestTimeoutSeconds = 15
+	}
+	if c.GatewayRequestTimeoutSeconds < 1 || c.GatewayRequestTimeoutSeconds > 3600 {
+		return fmt.Errorf("Workers gateway request timeout must be between 1 and 3600 seconds")
+	}
 	if c.ReconcileConcurrency == 0 {
 		c.ReconcileConcurrency = 8
 	}
